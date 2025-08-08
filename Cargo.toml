@@ -1,0 +1,16 @@
+[package]
+name = "markdown-preview"
+version = "0.1.0"
+authors = ["kohdice <kohdice.biz@gmail.com>"]
+edition = "2024"
+rust-version = "1.89"
+license = "MIT"
+repository = "https://github.com/kohdice/markdown-preview"
+
+[[bin]]
+name = "mp"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.98"
+clap = { version = "4.5.43", features = ["derive"] }

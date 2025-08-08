@@ -1,0 +1,26 @@
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    target-branch: "develop"
+    schedule:
+      interval: "weekly"
+      day: "friday"
+      time: "21:00"
+      timezone: "Asia/Tokyo"
+    assignees:
+      - "kohdice"
+    commit-message:
+      prefix: "cargo"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "develop"
+    schedule:
+      interval: "weekly"
+      day: "friday"
+      time: "21:00"
+      timezone: "Asia/Tokyo"
+    assignees:
+      - "kohdice"
+    commit-message:
+      prefix: "actions"
