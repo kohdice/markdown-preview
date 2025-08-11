@@ -4,94 +4,54 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-markdown-preview is a Rust CLI tool for previewing Markdown files in the terminal. The binary is provided as `mp`.
+A CLI tool for previewing Markdown files in the terminal. Executed as the `mp` command.
 
 ## Development Commands
 
 ### Build
 ```bash
-# Debug build
-cargo build
-
-# Release build (optimized)
-cargo build --release
+cargo build              # Debug build
+cargo build --release    # Release build
 ```
 
 ### Test
 ```bash
-# Run all tests
-cargo test --verbose
-
-# Run a single test
-cargo test <test_name>
-
-# Run tests with output displayed
-cargo test -- --nocapture
+cargo test              # Run all tests
+cargo test <TEST_NAME>  # Run specific test
 ```
 
-### Linting & Formatting
+### Quality Checks
 ```bash
-# Format code
-cargo fmt
-
-# Check formatting (used in CI)
-cargo fmt --all --check
-
-# Lint with Clippy
-cargo clippy --all-targets --all-features
-```
-
-### Run
-```bash
-# Run development version
-cargo run -- <markdown_file>
-
-# Run with release optimization
-cargo run --release -- <markdown_file>
-
-# Or run binary directly
-./target/debug/mp <markdown_file>
-./target/release/mp <markdown_file>  # Release binary
+cargo fmt               # Format code
+cargo clippy            # Lint check
+cargo clippy -- -D warnings  # Treat warnings as errors
 ```
 
 ## Architecture
 
-### Module Design
-- `src/main.rs`: Entry point. Handles error handling and exit codes
-- `src/cli.rs`: CLI parser and command execution logic. Uses clap v4
+### Module Structure
 
-### Error Handling
-- Error management using anyhow crate
-- Unified error output and exit code handling in main function
+- **cli.rs**: CLI parser and entry point (`Args` struct, `run` function)
+- **renderer/**: Core rendering implementation
+  - `markdown.rs`: MarkdownRenderer implementation
+  - `base.rs`: BaseRenderer base implementation
+  - `terminal.rs`: Terminal output interface
+  - `theme.rs`: Theme configuration (SolarizedOsaka)
+  - `state.rs`: Parser and rendering state management
+  - `handlers.rs`: Event handler interface
+  - `traits.rs`: MarkdownProcessor, TableRenderer traits
+- **html_entity.rs**: HTML entity decoding
 
-### Dependencies
-Core dependencies used in this project:
-- `clap` v4: Command-line argument parsing with derive macros
-- `anyhow`: Simplified error handling and propagation
+### Key Dependencies
 
-## Commit Convention
+- `pulldown-cmark`: Markdown parsing
+- `colored`: Terminal color output
+- `clap`: CLI parsing
+- `anyhow`: Error handling
 
-Use commit types defined in CONTRIBUTING.md:
-- `feat`: New feature
-- `fix`: Bug fix
-- `refactor`: Code refactoring
-- `test`: Adding or modifying tests
-- `style`: Code style changes
-- `chore`: Build process or tool changes
-- `docs`: Documentation changes
+## Running
 
-## CI/CD Configuration
-
-GitHub Actions automatically runs:
-- Build verification (`cargo build --release`)
-- Test execution (`cargo test`)
-- Clippy lint (`cargo clippy`)
-- Format verification (`cargo fmt --check`)
-
-All CI jobs run with `RUSTFLAGS: -Dwarnings`, treating warnings as errors.
-
-## Text Linting Configuration
-
-`.textlintrc.json` configures Japanese technical documentation linting:
-- preset-ja-technical-writing
-- textlint-rule-preset-ai-writing
+```bash
+cargo run -- <FILE>     # Run during development
+mp <FILE>              # Run after installation
+```
