@@ -1,0 +1,180 @@
+#![allow(dead_code)]
+
+use markdown_preview::MarkdownRenderer;
+
+/// Create a test renderer
+pub fn create_test_renderer() -> MarkdownRenderer {
+    MarkdownRenderer::new()
+}
+
+/// Test case struct for data-driven testing
+#[derive(Debug, Clone)]
+pub struct TestCase {
+    pub name: String,
+    pub input: String,
+    pub description: Option<String>,
+}
+
+impl TestCase {
+    pub fn new(name: impl Into<String>, input: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            input: input.into(),
+            description: None,
+        }
+    }
+
+    pub fn with_description(mut self, desc: impl Into<String>) -> Self {
+        self.description = Some(desc.into());
+        self
+    }
+}
+
+/// Test Markdown rendering in data-driven format
+pub fn run_data_driven_tests(test_cases: Vec<TestCase>) {
+    for case in test_cases {
+        let mut renderer = create_test_renderer();
+        let result = renderer.render_content(&case.input);
+
+        assert!(
+            result.is_ok(),
+            "Test '{}' failed: {:?}. Input: '{}'. Description: {}",
+            case.name,
+            result.err(),
+            case.input.trim(),
+            case.description
+                .as_ref()
+                .unwrap_or(&"No description".to_string())
+        );
+    }
+}
+
+/// Helper for HTML entities testing
+pub fn create_html_entity_test_cases() -> Vec<TestCase> {
+    vec![
+        TestCase::new("less_than", "&lt;").with_description("Less than symbol"),
+        TestCase::new("greater_than", "&gt;").with_description("Greater than symbol"),
+        TestCase::new("ampersand", "&amp;").with_description("Ampersand"),
+        TestCase::new("quote", "&quot;").with_description("Double quote"),
+        TestCase::new("apostrophe", "&#39;").with_description("Apostrophe"),
+        TestCase::new("nbsp", "&nbsp;").with_description("Non-breaking space"),
+        TestCase::new("copyright", "&copy;").with_description("Copyright symbol"),
+        TestCase::new("registered", "&reg;").with_description("Registered trademark"),
+        TestCase::new("euro", "&euro;").with_description("Euro symbol"),
+        TestCase::new(
+            "mixed_entities",
+            "Text with &lt;tags&gt; and &amp;symbols&amp;",
+        )
+        .with_description("Mixed HTML entities in text"),
+    ]
+}
+
+/// Helper for CommonMark compliance testing
+pub fn create_commonmark_test_cases() -> Vec<(String, Vec<&'static str>)> {
+    vec![
+        (
+            "headings".to_string(),
+            vec![
+                "# H1\n",
+                "## H2\n",
+                "### H3\n",
+                "#### H4\n",
+                "##### H5\n",
+                "###### H6\n",
+                "####### H7\n",
+            ],
+        ),
+        (
+            "emphasis".to_string(),
+            vec![
+                "*italic*",
+                "_italic_",
+                "**bold**",
+                "__bold__",
+                "***bold italic***",
+                "___bold italic___",
+            ],
+        ),
+        (
+            "code_spans".to_string(),
+            vec!["`code`", "``code with ` backtick``", "` code with spaces `"],
+        ),
+        (
+            "links".to_string(),
+            vec![
+                "[link](http://example.com)",
+                "[link with title](http://example.com \"title\")",
+                "<http://example.com>",
+            ],
+        ),
+        (
+            "lists".to_string(),
+            vec![
+                "- item 1\n- item 2",
+                "* item 1\n* item 2",
+                "+ item 1\n+ item 2",
+                "1. first\n2. second",
+                "1) first\n2) second",
+            ],
+        ),
+        (
+            "blockquotes".to_string(),
+            vec!["> quote", "> line 1\n> line 2", "> > nested"],
+        ),
+        (
+            "code_blocks".to_string(),
+            vec![
+                "```\ncode\n```",
+                "```rust\nfn main() {}\n```",
+                "    indented code",
+            ],
+        ),
+        (
+            "horizontal_rules".to_string(),
+            vec!["---", "***", "___", "- - -", "* * *"],
+        ),
+    ]
+}
+
+/// Helper for large file testing
+pub fn generate_large_markdown_content(lines: usize) -> String {
+    // Pre-allocate memory assuming ~40 chars per line
+    let mut content = String::with_capacity(lines * 40);
+    for i in 0..lines {
+        content.push_str(&format!("## Heading {}\n\nParagraph text {}\n\n", i, i));
+    }
+    content
+}
+
+/// Helper for performance testing
+pub fn measure_render_performance<F>(
+    name: &str,
+    content: &str,
+    mut test_fn: F,
+) -> std::time::Duration
+where
+    F: FnMut(&str) -> anyhow::Result<()>,
+{
+    use std::time::Instant;
+
+    let start = Instant::now();
+    let result = test_fn(content);
+    let duration = start.elapsed();
+
+    assert!(
+        result.is_ok(),
+        "Performance test '{}' failed: {:?}",
+        name,
+        result.err()
+    );
+
+    println!(
+        "Performance: {} - {} chars in {:?} ({:.2} chars/ms)",
+        name,
+        content.len(),
+        duration,
+        content.len() as f64 / duration.as_millis() as f64
+    );
+
+    duration
+}
