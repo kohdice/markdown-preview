@@ -10,7 +10,6 @@ Thank you for considering contributing to **markdown-preview**! Your contributio
    - [Documentation](#documentation)
 2. [Git Commit Guidelines](#git-commit-guidelines)
    - [Type](#type)
-3. [Code of Conduct](#code-of-conduct)
 
 ## How to Contribute
 
@@ -52,12 +51,6 @@ Commit messages must follow one of the following types:
 - **style**: Changes that do not affect the meaning of the code (e.g., white-space, formatting, missing semi-colons)
 - **chore**: Changes to the build process or auxiliary tools and libraries such as documentation generation
 - **docs**: Documentation only changes
-
-## Code of Conduct
-
-Please remember to be respectful and considerate.
-Everyone is welcome here, so let’s keep our interactions constructive and positive.
-Disrespectful behavior will not be tolerated.
 
 ---
 
