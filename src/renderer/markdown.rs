@@ -91,6 +91,7 @@ impl MarkdownRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     fn assert_render_success(content: &str) {
         let mut renderer = MarkdownRenderer::new();
@@ -98,54 +99,40 @@ mod tests {
         assert!(result.is_ok(), "Failed to render: {:?}", result);
     }
 
-    #[test]
-    fn test_basic_markdown_elements() {
-        let test_cases = vec![
-            "# Heading 1",
-            "## Heading 2",
-            "### Heading 3",
-            "**Bold text**",
-            "*Italic text*",
-            "[Link](https://example.com)",
-            "`inline code`",
-            "Plain text",
-        ];
-
-        for content in test_cases {
-            assert_render_success(content);
-        }
+    // Use rstest for parameterized tests to reduce duplication
+    #[rstest]
+    #[case("# Heading 1")]
+    #[case("## Heading 2")]
+    #[case("### Heading 3")]
+    #[case("**Bold text**")]
+    #[case("*Italic text*")]
+    #[case("[Link](https://example.com)")]
+    #[case("`inline code`")]
+    #[case("Plain text")]
+    fn test_basic_markdown_elements(#[case] content: &str) {
+        assert_render_success(content);
     }
 
-    #[test]
-    fn test_list_elements() {
-        let test_cases = vec![
-            "- Item 1\n- Item 2",
-            "* Item 1\n* Item 2",
-            "1. Item 1\n2. Item 2",
-            "- Item 1\n  - Nested 1\n  - Nested 2",
-            "1. Item 1\n   1. Nested 1\n   2. Nested 2",
-            "- [ ] Unchecked task\n- [x] Checked task",
-        ];
-
-        for content in test_cases {
-            assert_render_success(content);
-        }
+    #[rstest]
+    #[case("- Item 1\n- Item 2")]
+    #[case("* Item 1\n* Item 2")]
+    #[case("1. Item 1\n2. Item 2")]
+    #[case("- Item 1\n  - Nested 1\n  - Nested 2")]
+    #[case("1. Item 1\n   1. Nested 1\n   2. Nested 2")]
+    #[case("- [ ] Unchecked task\n- [x] Checked task")]
+    fn test_list_elements(#[case] content: &str) {
+        assert_render_success(content);
     }
 
-    #[test]
-    fn test_block_elements() {
-        let test_cases = vec![
-            "```rust\nfn main() {}\n```",
-            "```\nplain code\n```",
-            "> Blockquote",
-            "> Multi\n> Line\n> Quote",
-            "---",
-            "***",
-        ];
-
-        for content in test_cases {
-            assert_render_success(content);
-        }
+    #[rstest]
+    #[case("```rust\nfn main() {}\n```")]
+    #[case("```\nplain code\n```")]
+    #[case("> Blockquote")]
+    #[case("> Multi\n> Line\n> Quote")]
+    #[case("---")]
+    #[case("***")]
+    fn test_block_elements(#[case] content: &str) {
+        assert_render_success(content);
     }
 
     #[test]

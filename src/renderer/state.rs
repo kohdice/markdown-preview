@@ -13,6 +13,51 @@ pub enum StateChange {
     ClearTable,
 }
 
+impl StateChange {
+    /// Apply this state change to the given render state
+    pub fn apply_to(self, state: &mut RenderState) {
+        match self {
+            StateChange::SetStrongEmphasis(value) => state.emphasis.strong = value,
+            StateChange::SetItalicEmphasis(value) => state.emphasis.italic = value,
+            StateChange::SetLink { url } => {
+                state.link = Some(LinkState {
+                    text: String::new(),
+                    url,
+                });
+            }
+            StateChange::SetImage { url } => {
+                state.image = Some(ImageState {
+                    alt_text: String::new(),
+                    url,
+                });
+            }
+            StateChange::SetCodeBlock { language } => {
+                state.code_block = Some(CodeBlockState {
+                    language,
+                    content: String::new(),
+                });
+            }
+            StateChange::SetTable { alignments } => {
+                let expected_cells = alignments.len();
+                let current_row = Vec::with_capacity(expected_cells);
+
+                state.table = Some(TableState {
+                    alignments,
+                    current_row,
+                    is_header: true,
+                });
+            }
+            StateChange::PushList(list_type) => {
+                state.list_stack.push(list_type);
+            }
+            StateChange::PopList => {
+                state.list_stack.pop();
+            }
+            StateChange::ClearTable => state.table = None,
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct RenderState {
     pub link: Option<LinkState>,

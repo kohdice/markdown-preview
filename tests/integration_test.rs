@@ -1,10 +1,64 @@
-// Import common test utilities
+// Import common test utilities and test helpers
 mod common;
+mod test_helpers;
 
 use common::{TestCase, generate_large_markdown_content, run_data_driven_tests};
+use rstest::rstest;
 
+// Parameterized test for basic markdown elements
+#[rstest]
+#[case::heading1("# Heading 1")]
+#[case::heading2("## Heading 2")]
+#[case::heading3("### Heading 3")]
+#[case::bold("**bold text**")]
+#[case::italic("*italic text*")]
+#[case::code("`inline code`")]
+#[case::list_unordered("- Item 1\n- Item 2")]
+#[case::list_ordered("1. First\n2. Second")]
+#[case::blockquote("> This is a quote")]
+#[case::horizontal_rule("---")]
+#[case::link("[Link text](https://example.com)")]
+#[case::code_block("```\ncode block\n```")]
+#[case::code_block_rust("```rust\nfn main() {}\n```")]
+fn test_basic_markdown_rendering(#[case] content: &str) {
+    let test_case =
+        TestCase::new("basic_markdown", content).with_description("Testing basic markdown element");
+    run_data_driven_tests(vec![test_case]);
+}
+
+// Parameterized test for complex markdown combinations
+#[rstest]
+#[case::nested_lists("- Item 1\n  - Nested 1\n    - Double nested\n  - Nested 2")]
+#[case::mixed_emphasis("**Bold _and italic_ text**")]
+#[case::simple_table("| Col1 | Col2 |\n|------|------|\n| A    | B    |")]
+#[case::aligned_table(
+    "| Left | Center | Right |\n|:-----|:------:|------:|\n| A    | B      | C     |"
+)]
+#[case::combined_features("# Title\n\n**Bold** and *italic* with `code`.\n\n> Quote\n\n- List")]
+fn test_complex_markdown_features(#[case] content: &str) {
+    let test_case = TestCase::new("complex_markdown", content)
+        .with_description("Testing complex markdown combinations");
+    run_data_driven_tests(vec![test_case]);
+}
+
+// Parameterized test for edge cases
+#[rstest]
+#[case::empty("")]
+#[case::whitespace_only("   \n\t\n   ")]
+#[case::single_char("a")]
+#[case::unicode("こんにちは 🦀 Rust")]
+#[case::html_entities("&lt;div&gt; &amp; &quot;text&quot;")]
+#[case::unclosed_emphasis("**unclosed bold")]
+#[case::deeply_nested("- 1\n  - 2\n    - 3\n      - 4\n        - 5")]
+fn test_edge_cases(#[case] content: &str) {
+    let test_case =
+        TestCase::new("edge_case", content).with_description("Testing edge case scenarios");
+    run_data_driven_tests(vec![test_case]);
+}
+
+// Test for comprehensive markdown document
 #[test]
-fn test_render_complex_markdown_file() {
+fn test_comprehensive_markdown_document() {
     let content = r#"# Test Document
 
 This is a test with **bold** and *italic* text.
@@ -33,26 +87,28 @@ fn main() {
 
 Final paragraph."#;
 
-    let test_case = TestCase::new("complex_markdown_file", content)
-        .with_description("Complex markdown document with all features");
+    let test_case = TestCase::new("comprehensive_document", content)
+        .with_description("Comprehensive markdown document with all features");
 
     run_data_driven_tests(vec![test_case]);
 }
 
+// Test for large file handling
 #[test]
-fn test_empty_file() {
-    let test_case = TestCase::new("empty_file", "").with_description("Empty markdown file");
+fn test_large_file_performance() {
+    let sizes = vec![100, 500, 1000];
+    let test_cases: Vec<TestCase> = sizes
+        .into_iter()
+        .map(|size| {
+            TestCase::new(
+                format!("large_file_{}_lines", size),
+                generate_large_markdown_content(size),
+            )
+            .with_description(format!("Large markdown file with {} lines", size))
+        })
+        .collect();
 
-    run_data_driven_tests(vec![test_case]);
-}
-
-#[test]
-fn test_large_file_handling() {
-    let content = generate_large_markdown_content(1000);
-    let test_case = TestCase::new("large_file_1000_lines", content)
-        .with_description("Large markdown file with 1000 lines");
-
-    run_data_driven_tests(vec![test_case]);
+    run_data_driven_tests(test_cases);
 }
 
 #[test]
