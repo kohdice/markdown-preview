@@ -4,6 +4,7 @@
 //! corresponding characters. It uses the AhoCorasick algorithm for
 //! efficient string replacement.
 
+use std::borrow::Cow;
 use std::sync::LazyLock;
 
 use aho_corasick::AhoCorasick;
@@ -56,10 +57,11 @@ static ENTITY_DECODER: LazyLock<EntityDecoder> = LazyLock::new(|| {
 ///
 /// This function uses the AhoCorasick algorithm for O(n) time complexity
 /// instead of the previous O(n*m) approach with multiple replace calls.
-pub fn decode_html_entities(text: &str) -> String {
+/// Returns Cow<str> to avoid unnecessary allocations when no entities are present.
+pub fn decode_html_entities(text: &str) -> Cow<'_, str> {
     // Fast path: if no '&' character, no entities to decode
     if !text.contains('&') {
-        return text.to_string();
+        return Cow::Borrowed(text);
     }
 
     // Use AhoCorasick for efficient named entity replacement
@@ -78,7 +80,7 @@ pub fn decode_html_entities(text: &str) -> String {
     result.push_str(&text[last_end..]);
 
     // Decode numeric entities (&#nnnn; and &#xhhhh;)
-    decode_numeric_entities(&result)
+    Cow::Owned(decode_numeric_entities(&result))
 }
 
 /// Decode numeric entities with optimized string building

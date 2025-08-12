@@ -1,13 +1,13 @@
 use anyhow::Result;
 use pulldown_cmark::Options;
 
-use super::state::{CodeBlockState, RenderState, StateChange};
+use super::state::{CodeBlockState, RenderContext, StateChange};
 use super::theme::{MarkdownTheme, SolarizedOsaka, styled_text, styled_text_with_bg};
 
 #[derive(Debug)]
 pub struct BaseRenderer {
     pub theme: SolarizedOsaka,
-    pub state: RenderState,
+    pub state: RenderContext,
     pub options: Options,
 }
 
@@ -27,7 +27,7 @@ impl BaseRenderer {
 
         Self {
             theme: SolarizedOsaka,
-            state: RenderState::default(),
+            state: RenderContext::default(),
             options,
         }
     }
@@ -194,9 +194,7 @@ mod tests {
         assert!(renderer.state.emphasis.italic);
 
         // Test link
-        renderer.apply_state_change(StateChange::SetLink {
-            url: "https://example.com".to_string(),
-        });
+        renderer.apply_state_change(StateChange::SetLink("https://example.com".to_string()));
         assert!(renderer.state.link.is_some());
         assert_eq!(
             renderer.state.link.as_ref().unwrap().url,
@@ -204,7 +202,7 @@ mod tests {
         );
 
         // Test clear table
-        renderer.apply_state_change(StateChange::SetTable { alignments: vec![] });
+        renderer.apply_state_change(StateChange::SetTable(vec![]));
         assert!(renderer.state.table.is_some());
         renderer.apply_state_change(StateChange::ClearTable);
         assert!(renderer.state.table.is_none());

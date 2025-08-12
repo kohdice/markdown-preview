@@ -1,65 +1,82 @@
-use pulldown_cmark::Alignment;
+use pulldown_cmark::{Alignment, CodeBlockKind};
 
 #[derive(Debug, Clone)]
 pub enum StateChange {
     SetStrongEmphasis(bool),
     SetItalicEmphasis(bool),
-    SetLink { url: String },
-    SetImage { url: String },
-    SetCodeBlock { language: Option<String> },
-    SetTable { alignments: Vec<Alignment> },
-    PushList(ListType),
+    SetLink(String),
+    SetImage(String),
+    SetCodeBlock(CodeBlockKind<'static>),
+    SetTable(Vec<Alignment>),
+    PushList(Option<u64>),
     PopList,
     ClearTable,
 }
 
 impl StateChange {
-    /// Apply this state change to the given render state
-    pub fn apply_to(self, state: &mut RenderState) {
+    /// Apply this state change to the given render context
+    pub fn apply_to(self, context: &mut RenderContext) {
         match self {
-            StateChange::SetStrongEmphasis(value) => state.emphasis.strong = value,
-            StateChange::SetItalicEmphasis(value) => state.emphasis.italic = value,
-            StateChange::SetLink { url } => {
-                state.link = Some(LinkState {
+            StateChange::SetStrongEmphasis(value) => context.emphasis.strong = value,
+            StateChange::SetItalicEmphasis(value) => context.emphasis.italic = value,
+            StateChange::SetLink(url) => {
+                context.link = Some(LinkState {
                     text: String::new(),
                     url,
                 });
             }
-            StateChange::SetImage { url } => {
-                state.image = Some(ImageState {
+            StateChange::SetImage(url) => {
+                context.image = Some(ImageState {
                     alt_text: String::new(),
                     url,
                 });
             }
-            StateChange::SetCodeBlock { language } => {
-                state.code_block = Some(CodeBlockState {
+            StateChange::SetCodeBlock(kind) => {
+                let language = match kind {
+                    CodeBlockKind::Indented => None,
+                    CodeBlockKind::Fenced(lang) => {
+                        if lang.is_empty() {
+                            None
+                        } else {
+                            Some(lang.to_string())
+                        }
+                    }
+                };
+                context.code_block = Some(CodeBlockState {
                     language,
                     content: String::new(),
                 });
             }
-            StateChange::SetTable { alignments } => {
+            StateChange::SetTable(alignments) => {
                 let expected_cells = alignments.len();
                 let current_row = Vec::with_capacity(expected_cells);
 
-                state.table = Some(TableState {
+                context.table = Some(TableState {
                     alignments,
                     current_row,
                     is_header: true,
                 });
             }
-            StateChange::PushList(list_type) => {
-                state.list_stack.push(list_type);
+            StateChange::PushList(start) => {
+                let list_type = if let Some(n) = start {
+                    ListType::Ordered {
+                        current: n as usize,
+                    }
+                } else {
+                    ListType::Unordered
+                };
+                context.list_stack.push(list_type);
             }
             StateChange::PopList => {
-                state.list_stack.pop();
+                context.list_stack.pop();
             }
-            StateChange::ClearTable => state.table = None,
+            StateChange::ClearTable => context.table = None,
         }
     }
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct RenderState {
+pub struct RenderContext {
     pub link: Option<LinkState>,
     pub image: Option<ImageState>,
     pub emphasis: EmphasisState,

@@ -2,14 +2,14 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use super::state::RenderState;
+use super::state::RenderContext;
 use super::theme::MarkdownTheme;
 
 /// Main trait for Markdown processing
 pub trait MarkdownProcessor {
     fn render_file(&mut self, path: &Path) -> Result<()>;
-    fn render_state(&self) -> &RenderState;
-    fn render_state_mut(&mut self) -> &mut RenderState;
+    fn render_state(&self) -> &RenderContext;
+    fn render_state_mut(&mut self) -> &mut RenderContext;
     fn theme(&self) -> &dyn MarkdownTheme;
 }
 
