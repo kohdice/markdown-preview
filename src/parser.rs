@@ -1,5 +1,16 @@
 use pulldown_cmark::{Alignment, CodeBlockKind};
 
+/// Text content types
+pub enum ContentType<'a> {
+    Text(&'a str),
+    Code(&'a str),
+    Html(&'a str),
+    SoftBreak,
+    HardBreak,
+    Rule,
+    TaskMarker(bool),
+}
+
 #[derive(Debug, Clone)]
 pub enum StateChange {
     SetStrongEmphasis(bool),

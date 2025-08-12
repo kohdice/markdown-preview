@@ -1,6 +1,5 @@
-//! Terminal output types
-//!
-//! This module defines types for terminal output.
+use anyhow::Result;
+use pulldown_cmark::Alignment;
 
 /// Terminal output types
 pub enum OutputType {
@@ -21,4 +20,10 @@ pub enum TableVariant {
     HeadStart,
     HeadEnd,
     RowEnd,
+}
+
+/// Table rendering helper trait
+pub trait TableRenderer {
+    fn render_table_row(&mut self, row: &[String], is_header: bool) -> Result<()>;
+    fn render_table_separator(&mut self, alignments: &[Alignment]) -> Result<()>;
 }
