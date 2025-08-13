@@ -19,7 +19,7 @@ pub mod state;
 mod styling;
 
 // Re-export commonly used types
-pub use state::{ElementType, RenderContext, RenderState, StateFrame};
+pub use state::{ActiveElement, RenderContext, RenderState};
 pub use styling::TextStyle;
 
 /// Main Markdown renderer struct
@@ -86,6 +86,86 @@ impl MarkdownRenderer {
 
     pub fn clear_image(&mut self) {
         self.state.image = None;
+    }
+
+    // New RenderState accessor methods (for gradual migration)
+    pub fn set_link_new(&mut self, url: String) {
+        let new_state = self.state.to_render_state();
+        self.state = RenderContext::from_render_state(&RenderState {
+            emphasis: new_state.emphasis,
+            active_element: Some(ActiveElement::Link(state::LinkState {
+                text: String::new(),
+                url,
+            })),
+            list_stack: new_state.list_stack,
+            current_line: new_state.current_line,
+        });
+    }
+
+    pub fn set_image_new(&mut self, url: String) {
+        let new_state = self.state.to_render_state();
+        self.state = RenderContext::from_render_state(&RenderState {
+            emphasis: new_state.emphasis,
+            active_element: Some(ActiveElement::Image(state::ImageState {
+                alt_text: String::new(),
+                url,
+            })),
+            list_stack: new_state.list_stack,
+            current_line: new_state.current_line,
+        });
+    }
+
+    pub fn set_code_block_new(&mut self, language: Option<String>) {
+        let new_state = self.state.to_render_state();
+        self.state = RenderContext::from_render_state(&RenderState {
+            emphasis: new_state.emphasis,
+            active_element: Some(ActiveElement::CodeBlock(state::CodeBlockState {
+                language,
+                content: String::new(),
+            })),
+            list_stack: new_state.list_stack,
+            current_line: new_state.current_line,
+        });
+    }
+
+    pub fn set_table_new(&mut self, alignments: Vec<pulldown_cmark::Alignment>) {
+        let new_state = self.state.to_render_state();
+        self.state = RenderContext::from_render_state(&RenderState {
+            emphasis: new_state.emphasis,
+            active_element: Some(ActiveElement::Table(state::TableState {
+                alignments,
+                current_row: Vec::new(),
+                is_header: false,
+            })),
+            list_stack: new_state.list_stack,
+            current_line: new_state.current_line,
+        });
+    }
+
+    pub fn clear_active_element(&mut self) {
+        let new_state = self.state.to_render_state();
+        self.state = RenderContext::from_render_state(&RenderState {
+            emphasis: new_state.emphasis,
+            active_element: None,
+            list_stack: new_state.list_stack,
+            current_line: new_state.current_line,
+        });
+    }
+
+    pub fn get_link(&self) -> Option<state::LinkState> {
+        self.state.link.clone()
+    }
+
+    pub fn get_image(&self) -> Option<state::ImageState> {
+        self.state.image.clone()
+    }
+
+    pub fn get_code_block(&self) -> Option<state::CodeBlockState> {
+        self.state.code_block.clone()
+    }
+
+    pub fn get_table(&self) -> Option<state::TableState> {
+        self.state.table.clone()
     }
 
     pub fn set_code_block(&mut self, kind: pulldown_cmark::CodeBlockKind<'static>) {
