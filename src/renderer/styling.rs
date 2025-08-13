@@ -2,9 +2,6 @@ use super::MarkdownRenderer;
 use crate::theme::MarkdownTheme;
 use colored::ColoredString;
 
-// Re-export styling functions from theme module
-pub use crate::theme::styled_text;
-
 /// Unified text styling options
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TextStyle {
@@ -17,6 +14,11 @@ pub enum TextStyle {
     ListMarker,
     Delimiter,
     CodeBlock,
+    /// Custom style with specific color and formatting
+    Custom {
+        color: (u8, u8, u8),
+        bold: bool,
+    },
 }
 
 impl MarkdownRenderer {
@@ -44,6 +46,7 @@ impl MarkdownRenderer {
             TextStyle::CodeBlock => {
                 styled_text_with_bg(text, self.theme.code_color(), self.theme.code_background())
             }
+            TextStyle::Custom { color, bold } => styled_text(text, color, bold, false, false),
         }
     }
 
@@ -73,19 +76,12 @@ impl MarkdownRenderer {
             TextStyle::ListMarker
         } else if color == self.theme.delimiter_color() {
             TextStyle::Delimiter
-        } else if bold {
-            // For heading markers
-            TextStyle::Normal // Will use the color directly with bold
         } else {
-            TextStyle::Normal
+            // Use custom style for specific color/bold combinations
+            TextStyle::Custom { color, bold }
         };
 
-        if style == TextStyle::Normal {
-            // Fallback to direct styled_text for custom colors
-            styled_text(marker, color, bold, false, false).to_string()
-        } else {
-            self.apply_text_style(marker, style).to_string()
-        }
+        self.apply_text_style(marker, style).to_string()
     }
 
     /// Helper method to create styled URL text
