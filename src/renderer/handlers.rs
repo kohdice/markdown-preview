@@ -93,7 +93,7 @@ impl MarkdownRenderer {
                     let _ = self.print_output(OutputType::ListItem { is_end: false });
                 }
                 Tag::CodeBlock(kind) => {
-                    // Convert lifetime to 'static by cloning if necessary
+                    // Convert lifetime to 'static for state management
                     let static_kind = match kind {
                         pulldown_cmark::CodeBlockKind::Indented => {
                             pulldown_cmark::CodeBlockKind::Indented

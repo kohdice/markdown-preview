@@ -110,7 +110,6 @@ mod tests {
     fn test_solarized_osaka_theme_colors() {
         let theme = SolarizedOsaka;
 
-        // Heading colors by level
         assert_eq!(theme.heading_color(1), SolarizedOsaka::BLUE);
         assert_eq!(theme.heading_color(2), SolarizedOsaka::GREEN);
         assert_eq!(theme.heading_color(3), SolarizedOsaka::CYAN);
@@ -118,14 +117,12 @@ mod tests {
         assert_eq!(theme.heading_color(5), SolarizedOsaka::ORANGE);
         assert_eq!(theme.heading_color(6), SolarizedOsaka::MAGENTA);
 
-        // Text style colors
         assert_eq!(theme.strong_color(), SolarizedOsaka::ORANGE);
         assert_eq!(theme.emphasis_color(), SolarizedOsaka::GREEN);
         assert_eq!(theme.link_color(), SolarizedOsaka::CYAN);
         assert_eq!(theme.code_color(), SolarizedOsaka::GREEN);
         assert_eq!(theme.code_background(), SolarizedOsaka::BASE02);
 
-        // UI element colors
         assert_eq!(theme.list_marker_color(), SolarizedOsaka::BLUE);
         assert_eq!(theme.delimiter_color(), SolarizedOsaka::BASE01);
         assert_eq!(theme.text_color(), SolarizedOsaka::BASE0);
@@ -134,21 +131,17 @@ mod tests {
 
     #[test]
     fn test_styled_text_functions() {
-        // Test basic styled_text with &str
         let text = "test";
         let result = styled_text(text, (255, 0, 0), true, false, false);
         assert!(result.to_string().contains("test"));
 
-        // Test styled_text with String
         let string = String::from("test");
         let result = styled_text(string, (0, 255, 0), false, true, false);
         assert!(result.to_string().contains("test"));
 
-        // Test styled_text_with_bg with &str
         let result = styled_text_with_bg("test", (255, 255, 255), (0, 0, 0));
         assert!(result.to_string().contains("test"));
 
-        // Test styled_text_with_bg with String
         let string = String::from("test");
         let result = styled_text_with_bg(string, (255, 255, 255), (0, 0, 0));
         assert!(result.to_string().contains("test"));

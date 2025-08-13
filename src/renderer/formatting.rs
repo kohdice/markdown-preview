@@ -115,14 +115,12 @@ impl MarkdownRenderer {
                 }
                 TableVariant::HeadEnd => {
                     if let Some(table) = &self.state.table {
-                        // Clone the data to avoid borrow issues
                         let current_row = table.current_row.clone();
                         let alignments = table.alignments.clone();
                         self.render_table_row(&current_row, true)?;
                         self.render_table_separator(&alignments)?;
                     }
 
-                    // Reset table state
                     if let Some(ref mut table) = self.state.table {
                         table.current_row.clear();
                         table.is_header = false;
@@ -130,7 +128,6 @@ impl MarkdownRenderer {
                 }
                 TableVariant::RowEnd => {
                     if let Some(table) = &self.state.table {
-                        // Clone to avoid borrow issues
                         let current_row = table.current_row.clone();
                         self.render_table_row(&current_row, false)?;
                     }
@@ -187,7 +184,7 @@ impl MarkdownRenderer {
 
     /// Render a table row
     pub fn render_table_row(&mut self, row: &[String], is_header: bool) -> Result<()> {
-        // Calculate estimated size for table row (character count per cell + separators)
+        // Pre-allocate string capacity for performance
         let estimated_size: usize = row.iter().map(|s| s.len() + 4).sum::<usize>() + 1;
         let mut output = String::with_capacity(estimated_size);
         output.push('|');
@@ -207,7 +204,7 @@ impl MarkdownRenderer {
 
     /// Render table separator
     pub fn render_table_separator(&mut self, alignments: &[Alignment]) -> Result<()> {
-        // Each separator is max 7 chars (":---:" + " |") + starting "|"
+        // Pre-allocate capacity: max 7 chars per column plus delimiters
         let mut output = String::with_capacity(alignments.len() * 8 + 1);
         output.push('|');
         for alignment in alignments {

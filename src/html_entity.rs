@@ -19,29 +19,21 @@ struct EntityDecoder {
 
 /// Lazy-initialized entity decoder
 static ENTITY_DECODER: LazyLock<EntityDecoder> = LazyLock::new(|| {
-    // Define entity patterns and their replacements
     let patterns = vec![
-        // Basic entities
-        "&lt;", "&gt;", "&amp;", "&quot;", "&apos;", "&#39;",
-        // Common special characters
-        "&nbsp;", "&copy;", "&reg;", "&trade;", "&euro;", "&pound;", "&yen;", "&cent;", "&sect;",
-        "&para;", "&bull;", "&middot;", "&hellip;", "&mdash;", "&ndash;", "&lsquo;", "&rsquo;",
-        "&ldquo;", "&rdquo;", "&laquo;", "&raquo;", // Mathematical symbols
-        "&times;", "&divide;", "&plusmn;", "&ne;", "&le;", "&ge;", "&infin;", "&sum;", "&prod;",
-        "&radic;", // Arrows
-        "&larr;", "&rarr;", "&uarr;", "&darr;", "&harr;",
+        "&lt;", "&gt;", "&amp;", "&quot;", "&apos;", "&#39;", "&nbsp;", "&copy;", "&reg;",
+        "&trade;", "&euro;", "&pound;", "&yen;", "&cent;", "&sect;", "&para;", "&bull;",
+        "&middot;", "&hellip;", "&mdash;", "&ndash;", "&lsquo;", "&rsquo;", "&ldquo;", "&rdquo;",
+        "&laquo;", "&raquo;", "&times;", "&divide;", "&plusmn;", "&ne;", "&le;", "&ge;", "&infin;",
+        "&sum;", "&prod;", "&radic;", "&larr;", "&rarr;", "&uarr;", "&darr;", "&harr;",
     ];
 
     let replacements = vec![
-        // Basic entities
-        "<", ">", "&", "\"", "'", "'", // Common special characters
-        " ", "©", "®", "™", "€", "£", "¥", "¢", "§", "¶", "•", "·", "…", "—", "–", "'", "'",
-        "\u{201C}", "\u{201D}", "«", "»", // Mathematical symbols
-        "×", "÷", "±", "≠", "≤", "≥", "∞", "∑", "∏", "√", // Arrows
-        "←", "→", "↑", "↓", "↔",
+        "<", ">", "&", "\"", "'", "'", " ", "©", "®", "™", "€", "£", "¥", "¢", "§", "¶", "•", "·",
+        "…", "—", "–", "'", "'", "\u{201C}", "\u{201D}", "«", "»", "×", "÷", "±", "≠", "≤", "≥",
+        "∞", "∑", "∏", "√", "←", "→", "↑", "↓", "↔",
     ];
 
-    // Build AhoCorasick matcher with optimizations
+    // AhoCorasick provides O(n) pattern matching vs O(n*m) for multiple replaces
     let matcher = AhoCorasick::builder()
         .match_kind(aho_corasick::MatchKind::LeftmostFirst)
         .build(patterns)
@@ -59,33 +51,29 @@ static ENTITY_DECODER: LazyLock<EntityDecoder> = LazyLock::new(|| {
 /// instead of the previous O(n*m) approach with multiple replace calls.
 /// Returns Cow<str> to avoid unnecessary allocations when no entities are present.
 pub fn decode_html_entities(text: &str) -> Cow<'_, str> {
-    // Fast path: if no '&' character, no entities to decode
+    // Fast path optimization: skip processing when no entities present
     if !text.contains('&') {
         return Cow::Borrowed(text);
     }
 
-    // Use AhoCorasick for efficient named entity replacement
     let mut result = String::with_capacity(text.len());
     let mut last_end = 0;
 
     for mat in ENTITY_DECODER.matcher.find_iter(text) {
-        // Add text before the match
         result.push_str(&text[last_end..mat.start()]);
-        // Add the replacement
         result.push_str(ENTITY_DECODER.replacements[mat.pattern().as_usize()]);
         last_end = mat.end();
     }
 
-    // Add remaining text
     result.push_str(&text[last_end..]);
 
-    // Decode numeric entities (&#nnnn; and &#xhhhh;)
+    // Handle numeric entities (&#nnnn; and &#xhhhh;) separately
     Cow::Owned(decode_numeric_entities(&result))
 }
 
 /// Decode numeric entities with optimized string building
 fn decode_numeric_entities(text: &str) -> String {
-    // Fast path: if no numeric entities, return as-is
+    // Fast path optimization: avoid processing when no numeric entities
     if !text.contains("&#") {
         return text.to_string();
     }
@@ -95,21 +83,20 @@ fn decode_numeric_entities(text: &str) -> String {
 
     while let Some(ch) = chars.next() {
         if ch == '&' && chars.peek() == Some(&'#') {
-            chars.next(); // Skip '#'
+            chars.next();
 
-            let mut entity = String::with_capacity(10); // Most numeric entities are short
+            let mut entity = String::with_capacity(10);
             let is_hex = if chars.peek() == Some(&'x') || chars.peek() == Some(&'X') {
-                chars.next(); // Skip 'x' or 'X'
+                chars.next();
                 true
             } else {
                 false
             };
 
-            // Collect digits
             let mut valid_entity = true;
             while let Some(&next_ch) = chars.peek() {
                 if next_ch == ';' {
-                    chars.next(); // Skip ';'
+                    chars.next();
                     break;
                 } else if (is_hex && next_ch.is_ascii_hexdigit())
                     || (!is_hex && next_ch.is_ascii_digit())
@@ -122,7 +109,6 @@ fn decode_numeric_entities(text: &str) -> String {
                 }
             }
 
-            // Decode entity
             if valid_entity && !entity.is_empty() {
                 if let Ok(code) = if is_hex {
                     u32::from_str_radix(&entity, 16)
@@ -132,7 +118,6 @@ fn decode_numeric_entities(text: &str) -> String {
                     if let Some(decoded_char) = char::from_u32(code) {
                         result.push(decoded_char);
                     } else {
-                        // Invalid Unicode code point, restore original
                         result.push('&');
                         result.push('#');
                         if is_hex {
@@ -142,7 +127,6 @@ fn decode_numeric_entities(text: &str) -> String {
                         result.push(';');
                     }
                 } else {
-                    // Parse error, restore original
                     result.push('&');
                     result.push('#');
                     if is_hex {
@@ -152,7 +136,6 @@ fn decode_numeric_entities(text: &str) -> String {
                     result.push(';');
                 }
             } else {
-                // Invalid entity format, restore original
                 result.push('&');
                 result.push('#');
                 if is_hex {
@@ -216,7 +199,6 @@ mod tests {
 
     #[test]
     fn test_no_entities() {
-        // Fast path test - no '&' character
         assert_eq!(decode_html_entities("Hello World"), "Hello World");
         assert_eq!(
             decode_html_entities("Simple text without entities"),
@@ -226,7 +208,6 @@ mod tests {
 
     #[test]
     fn test_multiple_entities() {
-        // Test efficiency with multiple entities
         let input = "&lt;div&gt;&lt;p&gt;Hello &amp; welcome to &ldquo;testing&rdquo;&lt;/p&gt;&lt;/div&gt;";
         let expected = "<div><p>Hello & welcome to \u{201C}testing\u{201D}</p></div>";
         assert_eq!(decode_html_entities(input), expected);
@@ -234,11 +215,9 @@ mod tests {
 
     #[test]
     fn test_performance_edge_cases() {
-        // Test with consecutive entities
         assert_eq!(decode_html_entities("&lt;&lt;&lt;"), "<<<");
         assert_eq!(decode_html_entities("&amp;&amp;&amp;"), "&&&");
 
-        // Test with entities at boundaries
         assert_eq!(decode_html_entities("&lt;text&gt;"), "<text>");
         assert_eq!(decode_html_entities("start&lt;"), "start<");
         assert_eq!(decode_html_entities("&gt;end"), ">end");

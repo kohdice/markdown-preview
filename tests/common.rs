@@ -138,7 +138,7 @@ pub fn create_commonmark_test_cases() -> Vec<(String, Vec<&'static str>)> {
 
 /// Helper for large file testing
 pub fn generate_large_markdown_content(lines: usize) -> String {
-    // Pre-allocate memory assuming ~40 chars per line
+    // Performance optimization: pre-allocate based on estimated line length
     let mut content = String::with_capacity(lines * 40);
     for i in 0..lines {
         content.push_str(&format!("## Heading {}\n\nParagraph text {}\n\n", i, i));

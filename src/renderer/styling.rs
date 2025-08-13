@@ -7,7 +7,6 @@ pub use crate::theme::{styled_text, styled_text_with_bg};
 impl MarkdownRenderer {
     /// Apply state change
     pub fn apply_state(&mut self, change: StateChange) {
-        // Handle special cases before applying state change
         match &change {
             StateChange::PopList => {
                 self.apply_state_change(change);

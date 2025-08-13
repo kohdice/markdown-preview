@@ -1,4 +1,3 @@
-// Import common test utilities
 mod common;
 
 use common::{
@@ -13,7 +12,6 @@ fn test_all_commonmark_features() {
 
     for (group_name, cases) in test_groups {
         println!("Testing group: {}", group_name);
-        // Convert to TestCase for consistent handling
         let test_cases: Vec<TestCase> = cases
             .into_iter()
             .enumerate()
@@ -37,55 +35,45 @@ fn test_html_entities_comprehensive() {
 #[test]
 fn test_advanced_markdown_features() {
     let test_cases = vec![
-        // Nested structures
         TestCase::new(
             "deeply_nested_lists",
             "- Level 1\n  - Level 2\n    - Level 3\n      - Level 4\n        - Level 5",
         )
         .with_description("Testing deeply nested lists"),
-        // Complex blockquotes
         TestCase::new(
             "nested_blockquotes_with_content",
             "> First level\n> > Second level\n> > > Third level with **bold** text",
         )
         .with_description("Nested blockquotes with formatting"),
-        // Mixed content
         TestCase::new(
             "blockquote_with_code",
             "> Quote with code:\n> ```rust\n> fn example() {}\n> ```",
         )
         .with_description("Blockquote containing code block"),
-        // Tables with various alignments
         TestCase::new(
             "aligned_table",
             "| Left | Center | Right |\n|:-----|:------:|------:|\n| A    |   B    |     C |",
         )
         .with_description("Table with column alignments"),
-        // Task lists
         TestCase::new(
             "task_list_mixed",
             "- [x] Completed task\n- [ ] Pending task\n- Regular item\n- [x] Another completed",
         )
         .with_description("Mixed task list and regular items"),
-        // Strikethrough
         TestCase::new(
             "strikethrough_with_emphasis",
             "~~deleted text~~ and **~~bold deleted~~**",
         )
         .with_description("Strikethrough with other formatting"),
-        // Complex links
         TestCase::new(
             "reference_style_links",
             "[link text][1]\n\n[1]: http://example.com \"Optional Title\"",
         )
         .with_description("Reference-style links"),
-        // Inline HTML (if supported)
         TestCase::new("inline_html", "This is <span>inline HTML</span> text")
             .with_description("Inline HTML elements"),
-        // Escaped characters
         TestCase::new("various_escapes", r"\* \_ \` \~ \[ \] \( \) \# \+ \- \. \!")
             .with_description("Various escaped special characters"),
-        // Unicode support
         TestCase::new(
             "unicode_content",
             "Unicode: 日本語 • Émojis: 🎉 🚀 • Math: ∑ ∫ √",
@@ -100,20 +88,15 @@ fn test_advanced_markdown_features() {
 #[test]
 fn test_edge_cases() {
     let test_cases = vec![
-        // Empty elements
         TestCase::new("empty_emphasis", "****").with_description("Empty bold"),
         TestCase::new("empty_link", "[]()").with_description("Empty link"),
         TestCase::new("empty_code", "``").with_description("Empty inline code"),
-        // Unclosed elements
         TestCase::new("unclosed_emphasis", "**unclosed").with_description("Unclosed bold"),
         TestCase::new("unclosed_code_block", "```\nunclosed")
             .with_description("Unclosed code block"),
-        // Very long lines
         TestCase::new("long_line", "a".repeat(1000).as_str()).with_description("Very long line"),
-        // Special characters
         TestCase::new("null_chars", "Text\0with\0nulls").with_description("Null characters"),
         TestCase::new("tabs", "\t\tTabbed\tcontent").with_description("Tab characters"),
-        // Consecutive elements
         TestCase::new("consecutive_hrs", "---\n---\n---").with_description("Multiple HRs"),
         TestCase::new("consecutive_quotes", "> Quote 1\n\n> Quote 2")
             .with_description("Consecutive blockquotes"),
@@ -135,7 +118,7 @@ fn test_performance_with_large_content() {
                 renderer.render_content(c)
             });
 
-        // Basic performance assertion - should handle 100 lines in under 1 second
+        // Performance target: 100 lines should complete within 1 second
         if size == 100 {
             assert!(
                 duration.as_secs() < 1,

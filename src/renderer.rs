@@ -68,7 +68,7 @@ impl MarkdownRenderer {
         let file = File::open(path)
             .map_err(|e| anyhow::anyhow!("Failed to open file '{}': {}", path.display(), e))?;
 
-        // Pre-allocate memory based on file size
+        // Performance optimization: pre-allocate based on file size
         let metadata = file.metadata()?;
         let file_size = metadata.len() as usize;
 
@@ -126,7 +126,6 @@ mod tests {
 
         let mut renderer = MarkdownRenderer::new();
 
-        // Test emphasis state changes
         renderer.apply_state(StateChange::SetStrongEmphasis(true));
         assert!(renderer.state.emphasis.strong);
 
@@ -160,7 +159,7 @@ mod tests {
         }
 
         let _color = renderer.get_text_color();
-        // u8型は定義上0-255の範囲なので、範囲チェックは不要
+        // RGB values are u8 type, no bounds checking needed
     }
 
     #[test]
@@ -169,18 +168,15 @@ mod tests {
 
         let mut renderer = MarkdownRenderer::new();
 
-        // Test adding text to link
         renderer.state.link = Some(LinkState::default());
         assert!(renderer.add_text_to_state("link text"));
         assert_eq!(renderer.state.link.as_ref().unwrap().text, "link text");
 
-        // Clear link and test image
         renderer.state.link = None;
         renderer.state.image = Some(ImageState::default());
         assert!(renderer.add_text_to_state("alt text"));
         assert_eq!(renderer.state.image.as_ref().unwrap().alt_text, "alt text");
 
-        // Test code block
         renderer.state.image = None;
         renderer.state.code_block = Some(state::CodeBlockState {
             language: None,
@@ -192,7 +188,6 @@ mod tests {
             "code content"
         );
 
-        // Test table
         renderer.state.code_block = None;
         renderer.state.table = Some(state::TableState {
             alignments: vec![],
@@ -205,7 +200,6 @@ mod tests {
             "cell content"
         );
 
-        // Test no special state
         renderer.state.table = None;
         assert!(!renderer.add_text_to_state("regular text"));
     }
@@ -214,11 +208,9 @@ mod tests {
     fn test_code_fence_creation() {
         let renderer = MarkdownRenderer::new();
 
-        // Test fence without language
         let fence = renderer.create_code_fence(None);
         assert!(fence.contains("```"));
 
-        // Test fence with language
         let fence_with_lang = renderer.create_code_fence(Some("rust"));
         assert!(fence_with_lang.contains("```"));
         assert!(fence_with_lang.contains("rust"));

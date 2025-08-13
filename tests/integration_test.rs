@@ -1,11 +1,9 @@
-// Import common test utilities and test helpers
 mod common;
 mod test_helpers;
 
 use common::{TestCase, generate_large_markdown_content, run_data_driven_tests};
 use rstest::rstest;
 
-// Parameterized test for basic markdown elements
 #[rstest]
 #[case::heading1("# Heading 1")]
 #[case::heading2("## Heading 2")]
@@ -26,7 +24,6 @@ fn test_basic_markdown_rendering(#[case] content: &str) {
     run_data_driven_tests(vec![test_case]);
 }
 
-// Parameterized test for complex markdown combinations
 #[rstest]
 #[case::nested_lists("- Item 1\n  - Nested 1\n    - Double nested\n  - Nested 2")]
 #[case::mixed_emphasis("**Bold _and italic_ text**")]
@@ -41,7 +38,6 @@ fn test_complex_markdown_features(#[case] content: &str) {
     run_data_driven_tests(vec![test_case]);
 }
 
-// Parameterized test for edge cases
 #[rstest]
 #[case::empty("")]
 #[case::whitespace_only("   \n\t\n   ")]
@@ -56,7 +52,6 @@ fn test_edge_cases(#[case] content: &str) {
     run_data_driven_tests(vec![test_case]);
 }
 
-// Test for comprehensive markdown document
 #[test]
 fn test_comprehensive_markdown_document() {
     let content = r#"# Test Document
@@ -93,7 +88,6 @@ Final paragraph."#;
     run_data_driven_tests(vec![test_case]);
 }
 
-// Test for large file handling
 #[test]
 fn test_large_file_performance() {
     let sizes = vec![100, 500, 1000];

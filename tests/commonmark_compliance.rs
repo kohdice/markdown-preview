@@ -1,4 +1,3 @@
-// Import common test utilities
 mod common;
 
 use common::{TestCase, run_data_driven_tests};
@@ -19,7 +18,6 @@ macro_rules! data_driven_test {
     };
 }
 
-// Test headings using data-driven approach for better clarity
 data_driven_test!(
     test_headings,
     [
@@ -37,7 +35,6 @@ data_driven_test!(
     ]
 );
 
-// Test emphasis and strong emphasis
 data_driven_test!(
     test_emphasis,
     [
@@ -58,7 +55,6 @@ data_driven_test!(
     ]
 );
 
-// Test inline code spans
 data_driven_test!(
     test_code_spans,
     [
@@ -76,7 +72,6 @@ data_driven_test!(
     ]
 );
 
-// Test links
 data_driven_test!(
     test_links,
     [
@@ -90,7 +85,6 @@ data_driven_test!(
     ]
 );
 
-// Test lists
 data_driven_test!(
     test_lists,
     [
@@ -122,7 +116,6 @@ data_driven_test!(
     ]
 );
 
-// Test blockquotes
 data_driven_test!(
     test_blockquotes,
     [
@@ -136,7 +129,6 @@ data_driven_test!(
     ]
 );
 
-// Test code blocks
 data_driven_test!(
     test_code_blocks,
     [
@@ -154,7 +146,6 @@ data_driven_test!(
     ]
 );
 
-// Test horizontal rules
 data_driven_test!(
     test_horizontal_rules,
     [
@@ -174,7 +165,6 @@ data_driven_test!(
     ]
 );
 
-// Test line breaks
 data_driven_test!(
     test_line_breaks,
     [
@@ -192,7 +182,6 @@ data_driven_test!(
     ]
 );
 
-// Test escape sequences
 data_driven_test!(
     test_escape_sequences,
     [
@@ -211,7 +200,6 @@ data_driven_test!(
     ]
 );
 
-// Test GFM extensions
 data_driven_test!(
     test_gfm_extensions,
     [
@@ -230,7 +218,6 @@ data_driven_test!(
     ]
 );
 
-// Test image processing
 data_driven_test!(
     test_images,
     [
@@ -247,7 +234,6 @@ data_driven_test!(
     ]
 );
 
-// Test HTML entity processing using data-driven approach
 data_driven_test!(
     test_html_entities,
     [

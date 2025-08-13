@@ -131,12 +131,12 @@ impl RenderState {
         let has_link = self.has_link();
 
         match (has_strong, has_italic, has_link) {
-            (true, true, _) => (181, 137, 0),       // Yellow for bold italic
-            (true, false, _) => (203, 75, 22),      // Orange for bold
-            (false, true, false) => (133, 153, 0),  // Bright green for italic
-            (false, true, true) => (38, 139, 210),  // Blue for italic links
-            (false, false, true) => (38, 139, 210), // Blue for links
-            _ => (147, 161, 161),                   // Default base1
+            (true, true, _) => (181, 137, 0),
+            (true, false, _) => (203, 75, 22),
+            (false, true, false) => (133, 153, 0),
+            (false, true, true) => (38, 139, 210),
+            (false, false, true) => (38, 139, 210),
+            _ => (147, 161, 161),
         }
     }
 
@@ -375,12 +375,12 @@ impl RenderContext {
     /// Get text color based on current emphasis state
     pub fn get_text_color(&self) -> (u8, u8, u8) {
         match (self.emphasis.strong, self.emphasis.italic, self.has_link()) {
-            (true, true, _) => (181, 137, 0),       // Yellow for bold italic
-            (true, false, _) => (203, 75, 22),      // Orange for bold
-            (false, true, false) => (133, 153, 0),  // Bright green for italic
-            (false, true, true) => (38, 139, 210),  // Blue for italic links
-            (false, false, true) => (38, 139, 210), // Blue for links
-            _ => (147, 161, 161),                   // Default base1
+            (true, true, _) => (181, 137, 0),
+            (true, false, _) => (203, 75, 22),
+            (false, true, false) => (133, 153, 0),
+            (false, true, true) => (38, 139, 210),
+            (false, false, true) => (38, 139, 210),
+            _ => (147, 161, 161),
         }
     }
 
@@ -388,7 +388,6 @@ impl RenderContext {
     pub fn from_state(state: &RenderState) -> Self {
         let mut context = RenderContext::default();
 
-        // Restore emphasis states
         if state.has_element(&ElementType::StrongEmphasis) {
             context.emphasis.strong = true;
         }
@@ -396,7 +395,6 @@ impl RenderContext {
             context.emphasis.italic = true;
         }
 
-        // Restore link state
         if let Some(link_frame) = state.get_frame(&ElementType::Link).and_then(|frame| {
             match (frame.attributes.get("url"), frame.attributes.get("text")) {
                 (Some(url), Some(text)) => Some(LinkState {
@@ -409,7 +407,6 @@ impl RenderContext {
             context.link = Some(link_frame);
         }
 
-        // Restore image state
         if let Some(image_frame) = state.get_frame(&ElementType::Image).and_then(|frame| {
             match (
                 frame.attributes.get("url"),
@@ -425,7 +422,6 @@ impl RenderContext {
             context.image = Some(image_frame);
         }
 
-        // Restore code block state
         if let Some(code_frame) = state.get_frame(&ElementType::CodeBlock) {
             let language = code_frame.attributes.get("language").cloned();
             let content = code_frame
@@ -436,10 +432,8 @@ impl RenderContext {
             context.code_block = Some(CodeBlockState { language, content });
         }
 
-        // Restore table state
         if let Some(table_frame) = state.get_frame(&ElementType::Table) {
-            // For now, create a simple default table state
-            // In production, you'd parse the alignments from the stored string
+            // Parse alignments from stored string in production
             context.table = Some(TableState {
                 alignments: Vec::new(),
                 current_row: Vec::new(),
@@ -451,7 +445,6 @@ impl RenderContext {
             });
         }
 
-        // Copy list stack and current line
         context.list_stack = state.list_stack.clone();
         context.current_line = state.current_line.clone();
 
@@ -462,7 +455,6 @@ impl RenderContext {
     pub fn to_state(&self) -> RenderState {
         let mut state = RenderState::new();
 
-        // Convert emphasis states
         if self.emphasis.strong {
             state.push(StateFrame::new(ElementType::StrongEmphasis));
         }
@@ -470,7 +462,6 @@ impl RenderContext {
             state.push(StateFrame::new(ElementType::ItalicEmphasis));
         }
 
-        // Convert link state
         if let Some(ref link) = self.link {
             let mut attrs = HashMap::new();
             attrs.insert("url".to_string(), link.url.clone());
@@ -478,7 +469,6 @@ impl RenderContext {
             state.push(StateFrame::with_attributes(ElementType::Link, attrs));
         }
 
-        // Convert image state
         if let Some(ref image) = self.image {
             let mut attrs = HashMap::new();
             attrs.insert("url".to_string(), image.url.clone());
@@ -486,7 +476,6 @@ impl RenderContext {
             state.push(StateFrame::with_attributes(ElementType::Image, attrs));
         }
 
-        // Convert code block state
         if let Some(ref code_block) = self.code_block {
             let mut attrs = HashMap::new();
             if let Some(ref lang) = code_block.language {
@@ -496,7 +485,6 @@ impl RenderContext {
             state.push(StateFrame::with_attributes(ElementType::CodeBlock, attrs));
         }
 
-        // Convert table state
         if let Some(ref table) = self.table {
             let mut attrs = HashMap::new();
             attrs.insert("alignments".to_string(), format!("{:?}", table.alignments));
@@ -504,7 +492,6 @@ impl RenderContext {
             state.push(StateFrame::with_attributes(ElementType::Table, attrs));
         }
 
-        // Copy list stack and current line
         state.list_stack = self.list_stack.clone();
         state.current_line = self.current_line.clone();
 
