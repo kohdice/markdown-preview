@@ -61,7 +61,7 @@ impl MarkdownRenderer {
             TextStyle::Strong
         } else if self.state.emphasis.italic {
             TextStyle::Emphasis
-        } else if self.state.link.is_some() {
+        } else if self.has_link() {
             TextStyle::Link
         } else {
             TextStyle::Normal
@@ -92,22 +92,22 @@ impl MarkdownRenderer {
 
     /// Add text to the appropriate state container
     pub fn add_text_to_state(&mut self, text: &str) -> bool {
-        if let Some(ref mut link) = self.state.link {
+        if let Some(ref mut link) = self.get_link_mut() {
             link.text.push_str(text);
             return true;
         }
 
-        if let Some(ref mut image) = self.state.image {
+        if let Some(ref mut image) = self.get_image_mut() {
             image.alt_text.push_str(text);
             return true;
         }
 
-        if let Some(ref mut code_block) = self.state.code_block {
+        if let Some(ref mut code_block) = self.get_code_block_mut() {
             code_block.content.push_str(text);
             return true;
         }
 
-        if let Some(ref mut table) = self.state.table {
+        if let Some(ref mut table) = self.get_table_mut() {
             if let Some(last_cell) = table.current_row.last_mut() {
                 last_cell.push_str(text);
             } else {

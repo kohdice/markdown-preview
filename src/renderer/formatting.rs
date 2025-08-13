@@ -82,14 +82,16 @@ impl MarkdownRenderer {
                 }
             }
             OutputType::Link => {
-                if let Some(link) = self.state.link.take() {
+                if let Some(link) = self.get_link() {
+                    self.clear_link();
                     let styled_link = self.apply_text_style(&link.text, TextStyle::Link);
                     let url_text = self.create_styled_url(&link.url);
                     print!("{}{}", styled_link, url_text);
                 }
             }
             OutputType::Image => {
-                if let Some(image) = self.state.image.take() {
+                if let Some(image) = self.get_image() {
+                    self.clear_image();
                     let display_text = if image.alt_text.is_empty() {
                         "[Image]"
                     } else {
@@ -102,36 +104,37 @@ impl MarkdownRenderer {
             }
             OutputType::Table { ref variant } => match variant {
                 TableVariant::HeadStart => {
-                    if let Some(ref mut table) = self.state.table {
+                    if let Some(ref mut table) = self.get_table_mut() {
                         table.is_header = true;
                     }
                 }
                 TableVariant::HeadEnd => {
-                    if let Some(table) = &self.state.table {
+                    if let Some(table) = self.get_table() {
                         let current_row = table.current_row.clone();
                         let alignments = table.alignments.clone();
                         self.render_table_row(&current_row, true)?;
                         self.render_table_separator(&alignments)?;
                     }
 
-                    if let Some(ref mut table) = self.state.table {
+                    if let Some(ref mut table) = self.get_table_mut() {
                         table.current_row.clear();
                         table.is_header = false;
                     }
                 }
                 TableVariant::RowEnd => {
-                    if let Some(table) = &self.state.table {
+                    if let Some(table) = self.get_table() {
                         let current_row = table.current_row.clone();
                         self.render_table_row(&current_row, false)?;
                     }
 
-                    if let Some(ref mut table) = self.state.table {
+                    if let Some(ref mut table) = self.get_table_mut() {
                         table.current_row.clear();
                     }
                 }
             },
             OutputType::CodeBlock => {
-                if let Some(code_block) = self.state.code_block.take() {
+                if let Some(code_block) = self.get_code_block() {
+                    self.clear_code_block();
                     self.render_code_block(&code_block)?;
                 }
             }

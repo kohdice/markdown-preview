@@ -184,10 +184,8 @@ impl MarkdownRenderer {
                 }
             }
             ContentType::Code(code) => {
-                if self.state.code_block.is_some() {
-                    if let Some(ref mut cb) = self.state.code_block {
-                        cb.content.push_str(code);
-                    }
+                if let Some(ref mut cb) = self.get_code_block_mut() {
+                    cb.content.push_str(code);
                 } else {
                     let _ = self.print_output(OutputType::InlineCode {
                         code: code.to_string(),

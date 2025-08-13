@@ -67,25 +67,26 @@ impl MarkdownRenderer {
     }
 
     pub fn set_link(&mut self, url: String) {
-        self.state.link = Some(state::LinkState {
-            text: String::new(),
-            url,
-        });
+        self.set_link_new(url);
     }
 
     pub fn clear_link(&mut self) {
-        self.state.link = None;
+        self.clear_active_element();
+    }
+
+    pub fn has_link(&self) -> bool {
+        matches!(
+            self.state.to_render_state().active_element,
+            Some(state::ActiveElement::Link(_))
+        )
     }
 
     pub fn set_image(&mut self, url: String) {
-        self.state.image = Some(state::ImageState {
-            alt_text: String::new(),
-            url,
-        });
+        self.set_image_new(url);
     }
 
     pub fn clear_image(&mut self) {
-        self.state.image = None;
+        self.clear_active_element();
     }
 
     // New RenderState accessor methods (for gradual migration)
@@ -135,7 +136,7 @@ impl MarkdownRenderer {
             active_element: Some(ActiveElement::Table(state::TableState {
                 alignments,
                 current_row: Vec::new(),
-                is_header: false,
+                is_header: true, // Tables start with header row
             })),
             list_stack: new_state.list_stack,
             current_line: new_state.current_line,
@@ -168,6 +169,22 @@ impl MarkdownRenderer {
         self.state.table.clone()
     }
 
+    pub fn get_table_mut(&mut self) -> Option<&mut state::TableState> {
+        self.state.table.as_mut()
+    }
+
+    pub fn get_link_mut(&mut self) -> Option<&mut state::LinkState> {
+        self.state.link.as_mut()
+    }
+
+    pub fn get_image_mut(&mut self) -> Option<&mut state::ImageState> {
+        self.state.image.as_mut()
+    }
+
+    pub fn get_code_block_mut(&mut self) -> Option<&mut state::CodeBlockState> {
+        self.state.code_block.as_mut()
+    }
+
     pub fn set_code_block(&mut self, kind: pulldown_cmark::CodeBlockKind<'static>) {
         let language = match kind {
             pulldown_cmark::CodeBlockKind::Indented => None,
@@ -179,29 +196,19 @@ impl MarkdownRenderer {
                 }
             }
         };
-        self.state.code_block = Some(state::CodeBlockState {
-            language,
-            content: String::new(),
-        });
+        self.set_code_block_new(language);
     }
 
     pub fn clear_code_block(&mut self) {
-        self.state.code_block = None;
+        self.clear_active_element();
     }
 
     pub fn set_table(&mut self, alignments: Vec<pulldown_cmark::Alignment>) {
-        let expected_cells = alignments.len();
-        let current_row = Vec::with_capacity(expected_cells);
-
-        self.state.table = Some(state::TableState {
-            alignments,
-            current_row,
-            is_header: true,
-        });
+        self.set_table_new(alignments);
     }
 
     pub fn clear_table(&mut self) {
-        self.state.table = None;
+        self.clear_active_element();
     }
 
     pub fn push_list(&mut self, start: Option<u64>) {
@@ -262,7 +269,8 @@ impl MarkdownRenderer {
 
     /// Flush any remaining buffers
     pub fn flush(&mut self) -> Result<()> {
-        if let Some(code_block) = self.state.code_block.take() {
+        if let Some(code_block) = self.get_code_block() {
+            self.clear_active_element();
             self.render_code_block(&code_block)?;
         }
         Ok(())
@@ -320,48 +328,33 @@ mod tests {
         // Test that the state was set correctly
         assert_eq!(renderer.state.emphasis.strong, strong);
         assert_eq!(renderer.state.emphasis.italic, italic);
-        assert_eq!(renderer.state.link.is_some(), has_link);
+        assert_eq!(renderer.has_link(), has_link);
     }
 
     #[test]
     fn test_add_text_to_state() {
-        use state::{ImageState, LinkState};
-
         let mut renderer = MarkdownRenderer::new();
 
-        renderer.state.link = Some(LinkState::default());
+        renderer.set_link("".to_string());
         assert!(renderer.add_text_to_state("link text"));
-        assert_eq!(renderer.state.link.as_ref().unwrap().text, "link text");
+        assert_eq!(renderer.get_link().unwrap().text, "link text");
 
-        renderer.state.link = None;
-        renderer.state.image = Some(ImageState::default());
+        renderer.clear_link();
+        renderer.set_image("".to_string());
         assert!(renderer.add_text_to_state("alt text"));
-        assert_eq!(renderer.state.image.as_ref().unwrap().alt_text, "alt text");
+        assert_eq!(renderer.get_image().unwrap().alt_text, "alt text");
 
-        renderer.state.image = None;
-        renderer.state.code_block = Some(state::CodeBlockState {
-            language: None,
-            content: String::new(),
-        });
+        renderer.clear_image();
+        renderer.set_code_block(pulldown_cmark::CodeBlockKind::Indented);
         assert!(renderer.add_text_to_state("code content"));
-        assert_eq!(
-            renderer.state.code_block.as_ref().unwrap().content,
-            "code content"
-        );
+        assert_eq!(renderer.get_code_block().unwrap().content, "code content");
 
-        renderer.state.code_block = None;
-        renderer.state.table = Some(state::TableState {
-            alignments: vec![],
-            current_row: vec![],
-            is_header: false,
-        });
+        renderer.clear_code_block();
+        renderer.set_table(vec![]);
         assert!(renderer.add_text_to_state("cell content"));
-        assert_eq!(
-            renderer.state.table.as_ref().unwrap().current_row[0],
-            "cell content"
-        );
+        assert_eq!(renderer.get_table().unwrap().current_row[0], "cell content");
 
-        renderer.state.table = None;
+        renderer.clear_table();
         assert!(!renderer.add_text_to_state("regular text"));
     }
 
