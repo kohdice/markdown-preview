@@ -4,7 +4,7 @@ use pulldown_cmark::Alignment;
 use super::{
     MarkdownRenderer,
     state::{CodeBlockState, ListType},
-    styling::{styled_text, styled_text_with_bg},
+    styling::TextStyle,
 };
 use crate::{
     output::{OutputType, TableVariant},
@@ -33,16 +33,11 @@ impl MarkdownRenderer {
             }
             OutputType::HorizontalRule => {
                 let line = "─".repeat(40);
-                let styled_line =
-                    styled_text(&line, self.theme.delimiter_color(), false, false, false);
+                let styled_line = self.apply_text_style(&line, TextStyle::Delimiter);
                 println!("\n{}\n", styled_line);
             }
             OutputType::InlineCode { ref code } => {
-                let styled_code = styled_text_with_bg(
-                    code,
-                    self.theme.code_color(),
-                    self.theme.code_background(),
-                );
+                let styled_code = self.apply_text_style(code, TextStyle::CodeBlock);
                 print!("{}", styled_code);
             }
             OutputType::TaskMarker { checked } => {
@@ -88,8 +83,7 @@ impl MarkdownRenderer {
             }
             OutputType::Link => {
                 if let Some(link) = self.state.link.take() {
-                    let styled_link =
-                        styled_text(&link.text, self.theme.link_color(), false, false, true);
+                    let styled_link = self.apply_text_style(&link.text, TextStyle::Link);
                     let url_text = self.create_styled_url(&link.url);
                     print!("{}{}", styled_link, url_text);
                 }
@@ -101,8 +95,7 @@ impl MarkdownRenderer {
                     } else {
                         &image.alt_text
                     };
-                    let styled_alt =
-                        styled_text(display_text, self.theme.code_color(), false, true, false);
+                    let styled_alt = self.apply_text_style(display_text, TextStyle::Emphasis);
                     let url_text = self.create_styled_url(&image.url);
                     print!("{}{}", styled_alt, url_text);
                 }
@@ -179,7 +172,8 @@ impl MarkdownRenderer {
 
     /// Create styled code line without printing it
     pub(super) fn create_styled_code_line(&self, line: &str) -> String {
-        styled_text_with_bg(line, self.theme.code_color(), self.theme.code_background()).to_string()
+        self.apply_text_style(line, TextStyle::CodeBlock)
+            .to_string()
     }
 
     /// Render a table row
@@ -191,8 +185,8 @@ impl MarkdownRenderer {
         for cell in row {
             output.push(' ');
             if is_header {
-                let styled = styled_text(cell, self.theme.heading_color(1), true, false, false);
-                output.push_str(&styled);
+                let styled = self.apply_text_style(cell, TextStyle::Heading(1));
+                output.push_str(&styled.to_string());
             } else {
                 output.push_str(cell);
             }

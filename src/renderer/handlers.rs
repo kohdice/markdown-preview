@@ -5,7 +5,6 @@ use super::{MarkdownRenderer, state::ContentType};
 use crate::{
     html_entity::decode_html_entities,
     output::{OutputType, TableVariant},
-    theme::MarkdownTheme,
 };
 
 impl MarkdownRenderer {
@@ -203,13 +202,8 @@ impl MarkdownRenderer {
             }
             ContentType::Rule => {
                 let line = "─".repeat(40);
-                let styled_line = super::styling::styled_text(
-                    &line,
-                    self.theme.delimiter_color(),
-                    false,
-                    false,
-                    false,
-                );
+                let styled_line =
+                    self.apply_text_style(&line, super::styling::TextStyle::Delimiter);
                 println!("\n{}\n", styled_line);
             }
             ContentType::TaskMarker(checked) => {

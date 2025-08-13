@@ -20,6 +20,7 @@ mod styling;
 
 // Re-export commonly used types
 pub use state::{ElementType, RenderContext, RenderState, StateFrame};
+pub use styling::TextStyle;
 
 /// Main Markdown renderer struct
 ///
@@ -236,8 +237,10 @@ mod tests {
             renderer.set_link("test".to_string());
         }
 
-        let _color = renderer.get_text_color();
-        // RGB values are u8 type, no bounds checking needed
+        // Test that the state was set correctly
+        assert_eq!(renderer.state.emphasis.strong, strong);
+        assert_eq!(renderer.state.emphasis.italic, italic);
+        assert_eq!(renderer.state.link.is_some(), has_link);
     }
 
     #[test]
