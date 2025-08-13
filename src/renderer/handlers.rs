@@ -84,7 +84,13 @@ impl MarkdownRenderer {
                 Tag::Link { dest_url, .. } => {
                     self.set_link(dest_url.to_string());
                 }
-                Tag::List(start) => self.push_list(start),
+                Tag::List(start) => {
+                    // Add newline before nested list if we're already in a list
+                    if !self.state.list_stack.is_empty() {
+                        println!();
+                    }
+                    self.push_list(start);
+                }
                 Tag::Item => {
                     let _ = self.print_output(OutputType::ListItem { is_end: false });
                 }
