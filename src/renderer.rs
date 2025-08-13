@@ -12,13 +12,13 @@ use pulldown_cmark::{Options, Parser};
 
 use crate::theme::SolarizedOsaka;
 
-// Sub-modules
+// Internal modules for separating rendering concerns
 mod formatting;
 mod handlers;
 pub mod state;
 mod styling;
 
-// Re-export commonly used types
+// Public API exports for external module usage
 pub use state::{ActiveElement, RenderState};
 pub use styling::TextStyle;
 
@@ -57,7 +57,9 @@ impl MarkdownRenderer {
         }
     }
 
-    // Direct state modification methods
+    // State management methods for tracking active Markdown elements during parsing.
+    // These methods provide a clean API for state transitions without exposing
+    // the internal state structure directly.
     pub fn set_strong_emphasis(&mut self, value: bool) {
         self.state.emphasis.strong = value;
     }
@@ -215,7 +217,8 @@ impl MarkdownRenderer {
         let file = File::open(path)
             .map_err(|e| anyhow::anyhow!("Failed to open file '{}': {}", path.display(), e))?;
 
-        // Performance optimization: pre-allocate based on file size
+        // Pre-allocating string capacity based on file size reduces memory
+        // reallocations during file reading, improving performance for large files
         let metadata = file.metadata()?;
         let file_size = metadata.len() as usize;
 
@@ -302,7 +305,6 @@ mod tests {
             renderer.set_link("test".to_string());
         }
 
-        // Test that the state was set correctly
         assert_eq!(renderer.state.emphasis.strong, strong);
         assert_eq!(renderer.state.emphasis.italic, italic);
         assert_eq!(renderer.has_link(), has_link);

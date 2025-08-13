@@ -11,13 +11,13 @@ use aho_corasick::AhoCorasick;
 
 /// Structure for efficient HTML entity replacement
 struct EntityDecoder {
-    /// AhoCorasick pattern matcher for entity names
+    /// Pre-compiled pattern matcher using AhoCorasick for O(n) complexity
     matcher: AhoCorasick,
-    /// Replacement values for each pattern
+    /// Character replacements corresponding to each HTML entity pattern
     replacements: Vec<&'static str>,
 }
 
-/// Lazy-initialized entity decoder
+/// Global entity decoder initialized once at first use to avoid repeated compilation
 static ENTITY_DECODER: LazyLock<EntityDecoder> = LazyLock::new(|| {
     let patterns = vec![
         "&lt;", "&gt;", "&amp;", "&quot;", "&apos;", "&#39;", "&nbsp;", "&copy;", "&reg;",
@@ -33,7 +33,8 @@ static ENTITY_DECODER: LazyLock<EntityDecoder> = LazyLock::new(|| {
         "∞", "∑", "∏", "√", "←", "→", "↑", "↓", "↔",
     ];
 
-    // AhoCorasick provides O(n) pattern matching vs O(n*m) for multiple replaces
+    // Using AhoCorasick instead of multiple string::replace calls reduces
+    // complexity from O(n*m) to O(n) where n=text length, m=pattern count
     let matcher = AhoCorasick::builder()
         .match_kind(aho_corasick::MatchKind::LeftmostFirst)
         .build(patterns)
@@ -51,7 +52,8 @@ static ENTITY_DECODER: LazyLock<EntityDecoder> = LazyLock::new(|| {
 /// instead of the previous O(n*m) approach with multiple replace calls.
 /// Returns Cow<str> to avoid unnecessary allocations when no entities are present.
 pub fn decode_html_entities(text: &str) -> Cow<'_, str> {
-    // Fast path optimization: skip processing when no entities present
+    // Early return when no '&' character exists avoids unnecessary processing
+    // for the common case of plain text without HTML entities
     if !text.contains('&') {
         return Cow::Borrowed(text);
     }
@@ -67,13 +69,15 @@ pub fn decode_html_entities(text: &str) -> Cow<'_, str> {
 
     result.push_str(&text[last_end..]);
 
-    // Handle numeric entities (&#nnnn; and &#xhhhh;) separately
+    // Numeric entities require dynamic parsing and cannot be pre-compiled
+    // into the AhoCorasick matcher, so they're handled in a second pass
     Cow::Owned(decode_numeric_entities(&result))
 }
 
 /// Decode numeric entities with optimized string building
 fn decode_numeric_entities(text: &str) -> String {
-    // Fast path optimization: avoid processing when no numeric entities
+    // Skip processing if no numeric entity prefix exists, improving performance
+    // for text that only contains named entities or plain text
     if !text.contains("&#") {
         return text.to_string();
     }

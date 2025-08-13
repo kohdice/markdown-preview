@@ -12,7 +12,8 @@ use crate::{
 };
 
 impl MarkdownRenderer {
-    /// Unified output method
+    /// Central output dispatcher that handles all Markdown element rendering.
+    /// Maintains consistent formatting and styling across all element types.
     pub fn print_output(&mut self, output_type: OutputType) -> Result<()> {
         match output_type {
             OutputType::Heading { level, is_end } => {
@@ -142,7 +143,8 @@ impl MarkdownRenderer {
         Ok(())
     }
 
-    /// Render a code block with fence and content
+    /// Renders complete code block with opening fence, content, and closing fence.
+    /// Language identifier is included in opening fence if specified.
     pub(super) fn render_code_block(&self, code_block: &CodeBlockState) -> Result<()> {
         self.render_code_fence(code_block.language.as_deref());
         self.render_code_content(&code_block.content);
@@ -150,12 +152,12 @@ impl MarkdownRenderer {
         Ok(())
     }
 
-    /// Render code fence
     pub(super) fn render_code_fence(&self, language: Option<&str>) {
         println!("{}", self.create_code_fence(language));
     }
 
-    /// Create code fence without printing it
+    /// Creates styled code fence marker with optional language identifier.
+    /// Used for both opening (with language) and closing (without) fences.
     pub(super) fn create_code_fence(&self, language: Option<&str>) -> String {
         let fence = self.create_styled_marker("```", self.theme.delimiter_color(), false);
         if let Some(lang) = language {
@@ -166,22 +168,22 @@ impl MarkdownRenderer {
         }
     }
 
-    /// Render code content
     pub(super) fn render_code_content(&self, content: &str) {
         for line in content.lines() {
             println!("{}", self.create_styled_code_line(line));
         }
     }
 
-    /// Create styled code line without printing it
     pub(super) fn create_styled_code_line(&self, line: &str) -> String {
         self.apply_text_style(line, TextStyle::CodeBlock)
             .to_string()
     }
 
-    /// Render a table row
+    /// Formats and renders a table row with proper column separators.
+    /// Header rows receive special styling for visual distinction.
     pub fn render_table_row(&mut self, row: &[String], is_header: bool) -> Result<()> {
-        // Pre-allocate string capacity for performance
+        // Pre-allocation reduces memory reallocations during string building,
+        // improving performance for tables with many columns
         let estimated_size: usize = row.iter().map(|s| s.len() + 4).sum::<usize>() + 1;
         let mut output = String::with_capacity(estimated_size);
         output.push('|');
@@ -199,9 +201,11 @@ impl MarkdownRenderer {
         Ok(())
     }
 
-    /// Render table separator
+    /// Creates alignment-aware separator row between header and body.
+    /// Alignment indicators (:) show column text alignment visually.
     pub fn render_table_separator(&mut self, alignments: &[Alignment]) -> Result<()> {
-        // Pre-allocate capacity: max 7 chars per column plus delimiters
+        // Each column needs up to 7 chars for alignment markers plus delimiters.
+        // Pre-allocation avoids growth during string building
         let mut output = String::with_capacity(alignments.len() * 8 + 1);
         output.push('|');
         for alignment in alignments {

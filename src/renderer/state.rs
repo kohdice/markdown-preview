@@ -1,6 +1,7 @@
 use pulldown_cmark::Alignment;
 
-/// Text content types
+/// Represents different types of content that can appear in Markdown.
+/// Used to differentiate handling between plain text, code, HTML, and structural elements.
 pub enum ContentType<'a> {
     Text(&'a str),
     Code(&'a str),
@@ -11,35 +12,40 @@ pub enum ContentType<'a> {
     TaskMarker(bool),
 }
 
-/// Emphasis state management
+/// Tracks text emphasis states for proper rendering.
+/// Both strong and italic can be active simultaneously.
 #[derive(Debug, Default, Clone)]
 pub struct EmphasisState {
     pub strong: bool,
     pub italic: bool,
 }
 
-/// Link state
+/// Stores link element data during parsing.
+/// Text is accumulated as parsing progresses, URL is set at link start.
 #[derive(Debug, Clone, Default)]
 pub struct LinkState {
     pub text: String,
     pub url: String,
 }
 
-/// Image state
+/// Stores image element data during parsing.
+/// Alt text is accumulated as parsing progresses, URL is set at image start.
 #[derive(Debug, Clone, Default)]
 pub struct ImageState {
     pub alt_text: String,
     pub url: String,
 }
 
-/// Code block state
+/// Accumulates code block content and tracks language for syntax highlighting.
+/// Content is built incrementally as text events are received.
 #[derive(Debug, Clone)]
 pub struct CodeBlockState {
     pub language: Option<String>,
     pub content: String,
 }
 
-/// Table state
+/// Manages table parsing state including column alignments and current row data.
+/// Rows are built cell by cell, then rendered when row ends.
 #[derive(Debug, Clone)]
 pub struct TableState {
     pub alignments: Vec<Alignment>,
@@ -47,14 +53,16 @@ pub struct TableState {
     pub is_header: bool,
 }
 
-/// List type
+/// Distinguishes between ordered and unordered lists.
+/// Ordered lists track current item number for proper numbering.
 #[derive(Debug, Clone)]
 pub enum ListType {
     Ordered { current: usize },
     Unordered,
 }
 
-/// Active element type
+/// Represents the currently active complex element being parsed.
+/// Only one complex element can be active at a time to maintain parsing context.
 #[derive(Debug, Clone)]
 pub enum ActiveElement {
     Link(LinkState),
@@ -63,29 +71,31 @@ pub enum ActiveElement {
     Table(TableState),
 }
 
-/// Simple and clear state management structure
+/// Central state management for the rendering process.
+/// Tracks emphasis, active elements, list nesting, and current line buffer.
 #[derive(Debug, Default, Clone)]
 pub struct RenderState {
-    /// Text decoration state
+    /// Current text emphasis (bold/italic) that applies to all text rendering
     pub emphasis: EmphasisState,
 
-    /// Active element (only one can be active at a time)
+    /// Currently active complex element that requires text accumulation.
+    /// Enforces single-context parsing - only one of link/image/code/table can be active
     pub active_element: Option<ActiveElement>,
 
-    /// List management
+    /// Stack tracking nested list contexts for proper indentation and numbering
     pub list_stack: Vec<ListType>,
 
-    /// Current line being processed
+    /// Buffer for accumulating text within the current line
     pub current_line: String,
 }
 
 impl RenderState {
-    /// Create a new render state
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Add text to the appropriate state container
+    /// Routes text to the active element's text buffer.
+    /// Returns true if text was consumed by an active element, false otherwise.
     pub fn add_text(&mut self, text: &str) -> bool {
         match &mut self.active_element {
             Some(ActiveElement::Link(link)) => {
@@ -100,12 +110,12 @@ impl RenderState {
         }
     }
 
-    /// Check if currently inside a link
     pub fn has_link(&self) -> bool {
         matches!(self.active_element, Some(ActiveElement::Link(_)))
     }
 
-    /// Get text color based on current emphasis state
+    /// Determines text color based on emphasis combination and link context.
+    /// Priority: strong+italic > strong > italic, with link state affecting color choices.
     pub fn get_text_color(&self) -> (u8, u8, u8) {
         match (self.emphasis.strong, self.emphasis.italic, self.has_link()) {
             (true, true, _) => (181, 137, 0),

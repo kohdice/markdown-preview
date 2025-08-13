@@ -8,7 +8,8 @@ use crate::{
 };
 
 impl MarkdownRenderer {
-    /// Main method for processing events
+    /// Process pulldown_cmark events and route them to appropriate handlers.
+    /// Converts Tag events to handle_tag and content events to handle_content.
     pub fn process_event(&mut self, event: Event) -> Result<()> {
         match event {
             Event::Start(tag) => self.handle_tag(tag, true),
@@ -66,7 +67,8 @@ impl MarkdownRenderer {
         }
     }
 
-    /// Handle tag start and end
+    /// Process opening and closing tags to manage state transitions and output.
+    /// Opening tags set up state, closing tags trigger rendering and cleanup.
     pub(super) fn handle_tag(&mut self, tag: Tag, is_start: bool) -> Result<()> {
         if is_start {
             match tag {
@@ -85,7 +87,8 @@ impl MarkdownRenderer {
                     self.set_link(dest_url.to_string());
                 }
                 Tag::List(start) => {
-                    // Add newline before nested list if we're already in a list
+                    // Nested lists need visual separation from their parent list items
+                    // to maintain readability in terminal output
                     if !self.state.list_stack.is_empty() {
                         println!();
                     }
@@ -95,7 +98,8 @@ impl MarkdownRenderer {
                     let _ = self.print_output(OutputType::ListItem { is_end: false });
                 }
                 Tag::CodeBlock(kind) => {
-                    // Convert lifetime to 'static for state management
+                    // Convert borrowed language string to owned for state storage.
+                    // Required because state outlives the parsing event lifetime
                     let static_kind = match kind {
                         pulldown_cmark::CodeBlockKind::Indented => {
                             pulldown_cmark::CodeBlockKind::Indented
@@ -174,7 +178,8 @@ impl MarkdownRenderer {
         Ok(())
     }
 
-    /// Handle text-related events
+    /// Process content events including text, code, HTML, and breaks.
+    /// Routes content to active elements or renders directly based on state.
     pub(super) fn handle_content(&mut self, content: ContentType) -> Result<()> {
         match content {
             ContentType::Text(text) => {
