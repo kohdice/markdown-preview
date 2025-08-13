@@ -56,6 +56,88 @@ impl MarkdownRenderer {
         }
     }
 
+    // Direct state modification methods
+    pub fn set_strong_emphasis(&mut self, value: bool) {
+        self.state.emphasis.strong = value;
+    }
+
+    pub fn set_italic_emphasis(&mut self, value: bool) {
+        self.state.emphasis.italic = value;
+    }
+
+    pub fn set_link(&mut self, url: String) {
+        self.state.link = Some(state::LinkState {
+            text: String::new(),
+            url,
+        });
+    }
+
+    pub fn clear_link(&mut self) {
+        self.state.link = None;
+    }
+
+    pub fn set_image(&mut self, url: String) {
+        self.state.image = Some(state::ImageState {
+            alt_text: String::new(),
+            url,
+        });
+    }
+
+    pub fn clear_image(&mut self) {
+        self.state.image = None;
+    }
+
+    pub fn set_code_block(&mut self, kind: pulldown_cmark::CodeBlockKind<'static>) {
+        let language = match kind {
+            pulldown_cmark::CodeBlockKind::Indented => None,
+            pulldown_cmark::CodeBlockKind::Fenced(lang) => {
+                if lang.is_empty() {
+                    None
+                } else {
+                    Some(lang.to_string())
+                }
+            }
+        };
+        self.state.code_block = Some(state::CodeBlockState {
+            language,
+            content: String::new(),
+        });
+    }
+
+    pub fn clear_code_block(&mut self) {
+        self.state.code_block = None;
+    }
+
+    pub fn set_table(&mut self, alignments: Vec<pulldown_cmark::Alignment>) {
+        let expected_cells = alignments.len();
+        let current_row = Vec::with_capacity(expected_cells);
+
+        self.state.table = Some(state::TableState {
+            alignments,
+            current_row,
+            is_header: true,
+        });
+    }
+
+    pub fn clear_table(&mut self) {
+        self.state.table = None;
+    }
+
+    pub fn push_list(&mut self, start: Option<u64>) {
+        let list_type = if let Some(n) = start {
+            state::ListType::Ordered {
+                current: n as usize,
+            }
+        } else {
+            state::ListType::Unordered
+        };
+        self.state.list_stack.push(list_type);
+    }
+
+    pub fn pop_list(&mut self) {
+        self.state.list_stack.pop();
+    }
+
     /// Load and render Markdown content from a file
     ///
     /// # Performance Optimizations
@@ -122,17 +204,15 @@ mod tests {
 
     #[test]
     fn test_state_change_application() {
-        use state::StateChange;
-
         let mut renderer = MarkdownRenderer::new();
 
-        renderer.apply_state(StateChange::SetStrongEmphasis(true));
+        renderer.set_strong_emphasis(true);
         assert!(renderer.state.emphasis.strong);
 
-        renderer.apply_state(StateChange::SetItalicEmphasis(true));
+        renderer.set_italic_emphasis(true);
         assert!(renderer.state.emphasis.italic);
 
-        renderer.apply_state(StateChange::SetStrongEmphasis(false));
+        renderer.set_strong_emphasis(false);
         assert!(!renderer.state.emphasis.strong);
         assert!(renderer.state.emphasis.italic);
     }
@@ -147,15 +227,13 @@ mod tests {
         #[case] italic: bool,
         #[case] has_link: bool,
     ) {
-        use state::StateChange;
-
         let mut renderer = MarkdownRenderer::new();
 
         renderer.state.emphasis.strong = strong;
         renderer.state.emphasis.italic = italic;
 
         if has_link {
-            renderer.apply_state(StateChange::SetLink("test".to_string()));
+            renderer.set_link("test".to_string());
         }
 
         let _color = renderer.get_text_color();

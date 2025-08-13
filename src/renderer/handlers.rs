@@ -1,10 +1,7 @@
 use anyhow::Result;
 use pulldown_cmark::{Event, Tag, TagEnd};
 
-use super::{
-    MarkdownRenderer,
-    state::{ContentType, StateChange},
-};
+use super::{MarkdownRenderer, state::ContentType};
 use crate::{
     html_entity::decode_html_entities,
     output::{OutputType, TableVariant},
@@ -83,12 +80,12 @@ impl MarkdownRenderer {
                 Tag::Paragraph => {
                     let _ = self.print_output(OutputType::Paragraph { is_end: false });
                 }
-                Tag::Strong => self.apply_state(StateChange::SetStrongEmphasis(true)),
-                Tag::Emphasis => self.apply_state(StateChange::SetItalicEmphasis(true)),
+                Tag::Strong => self.set_strong_emphasis(true),
+                Tag::Emphasis => self.set_italic_emphasis(true),
                 Tag::Link { dest_url, .. } => {
-                    self.apply_state(StateChange::SetLink(dest_url.to_string()));
+                    self.set_link(dest_url.to_string());
                 }
-                Tag::List(start) => self.apply_state(StateChange::PushList(start)),
+                Tag::List(start) => self.push_list(start),
                 Tag::Item => {
                     let _ = self.print_output(OutputType::ListItem { is_end: false });
                 }
@@ -102,10 +99,10 @@ impl MarkdownRenderer {
                             pulldown_cmark::CodeBlockKind::Fenced(lang.to_string().into())
                         }
                     };
-                    self.apply_state(StateChange::SetCodeBlock(static_kind));
+                    self.set_code_block(static_kind);
                 }
                 Tag::Table(alignments) => {
-                    self.apply_state(StateChange::SetTable(alignments));
+                    self.set_table(alignments);
                 }
                 Tag::TableHead => {
                     let _ = self.print_output(OutputType::Table {
@@ -116,7 +113,7 @@ impl MarkdownRenderer {
                     let _ = self.print_output(OutputType::BlockQuote { is_end: false });
                 }
                 Tag::Image { dest_url, .. } => {
-                    self.apply_state(StateChange::SetImage(dest_url.to_string()));
+                    self.set_image(dest_url.to_string());
                 }
                 _ => {}
             }
@@ -131,17 +128,25 @@ impl MarkdownRenderer {
                 Tag::Paragraph => {
                     let _ = self.print_output(OutputType::Paragraph { is_end: true });
                 }
-                Tag::Strong => self.apply_state(StateChange::SetStrongEmphasis(false)),
-                Tag::Emphasis => self.apply_state(StateChange::SetItalicEmphasis(false)),
+                Tag::Strong => self.set_strong_emphasis(false),
+                Tag::Emphasis => self.set_italic_emphasis(false),
                 Tag::Link { .. } => {
                     let _ = self.print_output(OutputType::Link);
                 }
-                Tag::List(_) => self.apply_state(StateChange::PopList),
+                Tag::List(_) => {
+                    self.pop_list();
+                    if self.state.list_stack.is_empty() {
+                        println!();
+                    }
+                }
                 Tag::Item => {
                     let _ = self.print_output(OutputType::ListItem { is_end: true });
                 }
                 Tag::CodeBlock(_) => self.print_output(OutputType::CodeBlock)?,
-                Tag::Table(_) => self.apply_state(StateChange::ClearTable),
+                Tag::Table(_) => {
+                    self.clear_table();
+                    println!();
+                }
                 Tag::TableHead => {
                     self.print_output(OutputType::Table {
                         variant: TableVariant::HeadEnd,

@@ -1,35 +1,10 @@
-use super::{MarkdownRenderer, state::StateChange};
+use super::MarkdownRenderer;
 use crate::theme::MarkdownTheme;
 
 // Re-export styling functions from theme module
 pub use crate::theme::{styled_text, styled_text_with_bg};
 
 impl MarkdownRenderer {
-    /// Apply state change
-    pub fn apply_state(&mut self, change: StateChange) {
-        match &change {
-            StateChange::PopList => {
-                self.apply_state_change(change);
-                if self.state.list_stack.is_empty() {
-                    println!();
-                }
-                return;
-            }
-            StateChange::ClearTable => {
-                self.apply_state_change(change);
-                println!();
-                return;
-            }
-            _ => {}
-        }
-        self.apply_state_change(change);
-    }
-
-    /// Internal helper to apply state change
-    pub(super) fn apply_state_change(&mut self, change: StateChange) {
-        change.apply_to(&mut self.state);
-    }
-
     /// Get text color based on current emphasis state
     pub(super) fn get_text_color(&self) -> (u8, u8, u8) {
         if self.state.emphasis.strong {
