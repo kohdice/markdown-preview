@@ -19,7 +19,7 @@ pub mod state;
 mod styling;
 
 // Re-export commonly used types
-pub use state::RenderContext;
+pub use state::{ElementType, RenderContext, RenderState, StateFrame};
 
 /// Main Markdown renderer struct
 ///
