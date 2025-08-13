@@ -11,7 +11,7 @@ use anyhow::Result;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
 use crate::html_entity::decode_html_entities;
-use crate::output::{OutputType, TableRenderer, TableVariant};
+use crate::output::{OutputType, TableVariant};
 use crate::parser::{CodeBlockState, ContentType, ListType, RenderContext, StateChange};
 use crate::theme::{MarkdownTheme, SolarizedOsaka, styled_text, styled_text_with_bg};
 
@@ -292,9 +292,9 @@ impl MarkdownRenderer {
                 } else {
                     let heading_marker = "#".repeat(level as usize);
                     let color = self.theme.heading_color(level);
-                    let styled_marker =
-                        styled_text(format!("{} ", heading_marker), color, true, false, false);
-                    print!("{}", styled_marker);
+                    let marker =
+                        self.create_styled_marker(&format!("{} ", heading_marker), color, true);
+                    print!("{}", marker);
                 }
             }
             OutputType::Paragraph { is_end } => {
@@ -319,7 +319,7 @@ impl MarkdownRenderer {
             OutputType::TaskMarker { checked } => {
                 let marker = if checked { "[x] " } else { "[ ] " };
                 let styled_marker =
-                    styled_text(marker, self.theme.list_marker_color(), false, false, false);
+                    self.create_styled_marker(marker, self.theme.list_marker_color(), false);
                 print!("{}", styled_marker);
             }
             OutputType::ListItem { is_end } => {
@@ -339,11 +339,9 @@ impl MarkdownRenderer {
                                 m
                             }
                         };
-                        let styled_marker = styled_text(
+                        let styled_marker = self.create_styled_marker(
                             &marker,
                             self.theme.list_marker_color(),
-                            false,
-                            false,
                             false,
                         );
                         print!("{}", styled_marker);
@@ -355,7 +353,7 @@ impl MarkdownRenderer {
                     println!();
                 } else {
                     let marker =
-                        styled_text("> ", self.theme.delimiter_color(), false, false, false);
+                        self.create_styled_marker("> ", self.theme.delimiter_color(), false);
                     print!("{}", marker);
                 }
             }
@@ -363,13 +361,7 @@ impl MarkdownRenderer {
                 if let Some(link) = self.state.link.take() {
                     let styled_link =
                         styled_text(&link.text, self.theme.link_color(), false, false, true);
-                    let url_text = styled_text(
-                        format!(" ({})", link.url),
-                        self.theme.delimiter_color(),
-                        false,
-                        false,
-                        false,
-                    );
+                    let url_text = self.create_styled_url(&link.url);
                     print!("{}{}", styled_link, url_text);
                 }
             }
@@ -381,14 +373,8 @@ impl MarkdownRenderer {
                         &image.alt_text
                     };
                     let styled_alt =
-                        styled_text(display_text, self.theme.cyan(), false, true, false);
-                    let url_text = styled_text(
-                        format!(" ({})", image.url),
-                        self.theme.delimiter_color(),
-                        false,
-                        false,
-                        false,
-                    );
+                        styled_text(display_text, self.theme.code_color(), false, true, false);
+                    let url_text = self.create_styled_url(&image.url);
                     print!("{}{}", styled_alt, url_text);
                 }
             }
@@ -489,6 +475,16 @@ impl MarkdownRenderer {
         .to_string()
     }
 
+    /// Helper method to create styled markers (headings, list items, etc.)
+    fn create_styled_marker(&self, marker: &str, color: (u8, u8, u8), bold: bool) -> String {
+        styled_text(marker, color, bold, false, false).to_string()
+    }
+
+    /// Helper method to create styled URL text
+    fn create_styled_url(&self, url: &str) -> String {
+        self.create_styled_marker(&format!(" ({})", url), self.theme.delimiter_color(), false)
+    }
+
     fn add_text_to_state(&mut self, text: &str) -> bool {
         if let Some(ref mut link) = self.state.link {
             link.text.push_str(text);
@@ -523,12 +519,12 @@ impl MarkdownRenderer {
 
     /// Create code fence without printing it
     fn create_code_fence(&self, language: Option<&str>) -> String {
-        let fence = styled_text("```", self.theme.delimiter_color(), false, false, false);
+        let fence = self.create_styled_marker("```", self.theme.delimiter_color(), false);
         if let Some(lang) = language {
-            let lang_text = styled_text(lang, self.theme.cyan(), false, false, false);
+            let lang_text = self.create_styled_marker(lang, self.theme.code_color(), false);
             format!("{}{}", fence, lang_text)
         } else {
-            fence.to_string()
+            fence
         }
     }
 
@@ -552,8 +548,8 @@ impl MarkdownRenderer {
     }
 }
 
-// Implement TableRenderer trait
-impl TableRenderer for MarkdownRenderer {
+// Table rendering methods
+impl MarkdownRenderer {
     fn render_table_row(&mut self, row: &[String], is_header: bool) -> Result<()> {
         // Calculate estimated size for table row (character count per cell + separators)
         let estimated_size: usize = row.iter().map(|s| s.len() + 4).sum::<usize>() + 1;

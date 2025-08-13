@@ -1,6 +1,3 @@
-use anyhow::Result;
-use pulldown_cmark::Alignment;
-
 /// Terminal output types
 pub enum OutputType {
     Heading { level: u8, is_end: bool },
@@ -20,10 +17,4 @@ pub enum TableVariant {
     HeadStart,
     HeadEnd,
     RowEnd,
-}
-
-/// Table rendering helper trait
-pub trait TableRenderer {
-    fn render_table_row(&mut self, row: &[String], is_header: bool) -> Result<()>;
-    fn render_table_separator(&mut self, alignments: &[Alignment]) -> Result<()>;
 }

@@ -10,7 +10,6 @@ pub trait MarkdownTheme {
     fn list_marker_color(&self) -> (u8, u8, u8);
     fn delimiter_color(&self) -> (u8, u8, u8);
     fn text_color(&self) -> (u8, u8, u8);
-    fn cyan(&self) -> (u8, u8, u8);
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -71,10 +70,6 @@ impl MarkdownTheme for SolarizedOsaka {
     fn text_color(&self) -> (u8, u8, u8) {
         Self::BASE0
     }
-
-    fn cyan(&self) -> (u8, u8, u8) {
-        Self::CYAN
-    }
 }
 
 pub fn styled_text<S: AsRef<str>>(
@@ -134,7 +129,7 @@ mod tests {
         assert_eq!(theme.list_marker_color(), SolarizedOsaka::BLUE);
         assert_eq!(theme.delimiter_color(), SolarizedOsaka::BASE01);
         assert_eq!(theme.text_color(), SolarizedOsaka::BASE0);
-        assert_eq!(theme.cyan(), SolarizedOsaka::CYAN);
+        assert_eq!(theme.code_color(), SolarizedOsaka::GREEN);
     }
 
     #[test]

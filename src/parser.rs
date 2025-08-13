@@ -133,11 +133,3 @@ pub struct TableState {
     pub current_row: Vec<String>,
     pub is_header: bool,
 }
-
-#[derive(Debug, Default, Clone)]
-pub struct ParserState {
-    pub buffer: String,
-    pub in_code_block: bool,
-    pub code_fence: Option<String>,
-    pub in_table: bool,
-}
