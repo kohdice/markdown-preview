@@ -19,7 +19,7 @@ pub mod state;
 mod styling;
 
 // Re-export commonly used types
-pub use state::{ActiveElement, RenderContext, RenderState};
+pub use state::{ActiveElement, RenderState};
 pub use styling::TextStyle;
 
 /// Main Markdown renderer struct
@@ -31,7 +31,7 @@ pub use styling::TextStyle;
 #[derive(Debug)]
 pub struct MarkdownRenderer {
     pub theme: SolarizedOsaka,
-    pub state: RenderContext,
+    pub state: RenderState,
     pub options: Options,
 }
 
@@ -52,7 +52,7 @@ impl MarkdownRenderer {
 
         Self {
             theme: SolarizedOsaka,
-            state: RenderContext::default(),
+            state: RenderState::default(),
             options,
         }
     }
@@ -67,7 +67,10 @@ impl MarkdownRenderer {
     }
 
     pub fn set_link(&mut self, url: String) {
-        self.set_link_new(url);
+        self.state.active_element = Some(ActiveElement::Link(state::LinkState {
+            text: String::new(),
+            url,
+        }));
     }
 
     pub fn clear_link(&mut self) {
@@ -76,113 +79,80 @@ impl MarkdownRenderer {
 
     pub fn has_link(&self) -> bool {
         matches!(
-            self.state.to_render_state().active_element,
+            self.state.active_element,
             Some(state::ActiveElement::Link(_))
         )
     }
 
     pub fn set_image(&mut self, url: String) {
-        self.set_image_new(url);
+        self.state.active_element = Some(ActiveElement::Image(state::ImageState {
+            alt_text: String::new(),
+            url,
+        }));
     }
 
     pub fn clear_image(&mut self) {
         self.clear_active_element();
     }
 
-    // New RenderState accessor methods (for gradual migration)
-    pub fn set_link_new(&mut self, url: String) {
-        let new_state = self.state.to_render_state();
-        self.state = RenderContext::from_render_state(&RenderState {
-            emphasis: new_state.emphasis,
-            active_element: Some(ActiveElement::Link(state::LinkState {
-                text: String::new(),
-                url,
-            })),
-            list_stack: new_state.list_stack,
-            current_line: new_state.current_line,
-        });
-    }
-
-    pub fn set_image_new(&mut self, url: String) {
-        let new_state = self.state.to_render_state();
-        self.state = RenderContext::from_render_state(&RenderState {
-            emphasis: new_state.emphasis,
-            active_element: Some(ActiveElement::Image(state::ImageState {
-                alt_text: String::new(),
-                url,
-            })),
-            list_stack: new_state.list_stack,
-            current_line: new_state.current_line,
-        });
-    }
-
-    pub fn set_code_block_new(&mut self, language: Option<String>) {
-        let new_state = self.state.to_render_state();
-        self.state = RenderContext::from_render_state(&RenderState {
-            emphasis: new_state.emphasis,
-            active_element: Some(ActiveElement::CodeBlock(state::CodeBlockState {
-                language,
-                content: String::new(),
-            })),
-            list_stack: new_state.list_stack,
-            current_line: new_state.current_line,
-        });
-    }
-
-    pub fn set_table_new(&mut self, alignments: Vec<pulldown_cmark::Alignment>) {
-        let new_state = self.state.to_render_state();
-        self.state = RenderContext::from_render_state(&RenderState {
-            emphasis: new_state.emphasis,
-            active_element: Some(ActiveElement::Table(state::TableState {
-                alignments,
-                current_row: Vec::new(),
-                is_header: true, // Tables start with header row
-            })),
-            list_stack: new_state.list_stack,
-            current_line: new_state.current_line,
-        });
-    }
-
     pub fn clear_active_element(&mut self) {
-        let new_state = self.state.to_render_state();
-        self.state = RenderContext::from_render_state(&RenderState {
-            emphasis: new_state.emphasis,
-            active_element: None,
-            list_stack: new_state.list_stack,
-            current_line: new_state.current_line,
-        });
+        self.state.active_element = None;
     }
 
     pub fn get_link(&self) -> Option<state::LinkState> {
-        self.state.link.clone()
+        match &self.state.active_element {
+            Some(ActiveElement::Link(link)) => Some(link.clone()),
+            _ => None,
+        }
     }
 
     pub fn get_image(&self) -> Option<state::ImageState> {
-        self.state.image.clone()
+        match &self.state.active_element {
+            Some(ActiveElement::Image(image)) => Some(image.clone()),
+            _ => None,
+        }
     }
 
     pub fn get_code_block(&self) -> Option<state::CodeBlockState> {
-        self.state.code_block.clone()
+        match &self.state.active_element {
+            Some(ActiveElement::CodeBlock(code_block)) => Some(code_block.clone()),
+            _ => None,
+        }
     }
 
     pub fn get_table(&self) -> Option<state::TableState> {
-        self.state.table.clone()
+        match &self.state.active_element {
+            Some(ActiveElement::Table(table)) => Some(table.clone()),
+            _ => None,
+        }
     }
 
     pub fn get_table_mut(&mut self) -> Option<&mut state::TableState> {
-        self.state.table.as_mut()
+        match &mut self.state.active_element {
+            Some(ActiveElement::Table(table)) => Some(table),
+            _ => None,
+        }
     }
 
     pub fn get_link_mut(&mut self) -> Option<&mut state::LinkState> {
-        self.state.link.as_mut()
+        match &mut self.state.active_element {
+            Some(ActiveElement::Link(link)) => Some(link),
+            _ => None,
+        }
     }
 
     pub fn get_image_mut(&mut self) -> Option<&mut state::ImageState> {
-        self.state.image.as_mut()
+        match &mut self.state.active_element {
+            Some(ActiveElement::Image(image)) => Some(image),
+            _ => None,
+        }
     }
 
     pub fn get_code_block_mut(&mut self) -> Option<&mut state::CodeBlockState> {
-        self.state.code_block.as_mut()
+        match &mut self.state.active_element {
+            Some(ActiveElement::CodeBlock(code_block)) => Some(code_block),
+            _ => None,
+        }
     }
 
     pub fn set_code_block(&mut self, kind: pulldown_cmark::CodeBlockKind<'static>) {
@@ -196,7 +166,10 @@ impl MarkdownRenderer {
                 }
             }
         };
-        self.set_code_block_new(language);
+        self.state.active_element = Some(ActiveElement::CodeBlock(state::CodeBlockState {
+            language,
+            content: String::new(),
+        }));
     }
 
     pub fn clear_code_block(&mut self) {
@@ -204,7 +177,11 @@ impl MarkdownRenderer {
     }
 
     pub fn set_table(&mut self, alignments: Vec<pulldown_cmark::Alignment>) {
-        self.set_table_new(alignments);
+        self.state.active_element = Some(ActiveElement::Table(state::TableState {
+            alignments,
+            current_row: Vec::new(),
+            is_header: true,
+        }));
     }
 
     pub fn clear_table(&mut self) {
