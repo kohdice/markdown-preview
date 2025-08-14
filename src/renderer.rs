@@ -18,6 +18,7 @@ mod handlers;
 mod io;
 pub mod state;
 mod styling;
+mod table_builder;
 
 // Public API exports for external module usage
 pub use config::RenderConfig;
@@ -26,6 +27,7 @@ pub use element_accessor::{
 };
 pub use state::{ActiveElement, RenderState};
 pub use styling::TextStyle;
+pub use table_builder::{Table, TableBuilder};
 
 // Re-export core rendering functionality
 use self::io::read_file;
@@ -201,6 +203,30 @@ impl MarkdownRenderer {
 
     pub fn clear_table(&mut self) {
         self.clear_active_element();
+    }
+
+    /// Build a table using the TableBuilder API
+    ///
+    /// # Example
+    /// ```no_run
+    /// use markdown_preview::renderer::MarkdownRenderer;
+    ///
+    /// let renderer = MarkdownRenderer::new();
+    /// let table = renderer.build_table()
+    ///     .header(vec!["Name", "Age"])
+    ///     .row(vec!["Alice", "30"])
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn build_table(&self) -> TableBuilder {
+        TableBuilder::new()
+            .separator(self.config.table_separator.clone())
+            .alignment_config(table_builder::TableAlignmentConfig {
+                left: self.config.table_alignment.left.clone(),
+                center: self.config.table_alignment.center.clone(),
+                right: self.config.table_alignment.right.clone(),
+                none: self.config.table_alignment.none.clone(),
+            })
     }
 
     pub fn push_list(&mut self, start: Option<u64>) {
@@ -471,6 +497,55 @@ fn main() {
     #[test]
     fn test_table_rendering() {
         assert_render_success(test_data::TABLE);
+    }
+
+    #[test]
+    fn test_table_builder_integration() {
+        let renderer = create_renderer();
+
+        // Test building a table with the integrated builder
+        let table = renderer
+            .build_table()
+            .header(vec!["Column 1", "Column 2", "Column 3"])
+            .alignments(vec![
+                pulldown_cmark::Alignment::Left,
+                pulldown_cmark::Alignment::Center,
+                pulldown_cmark::Alignment::Right,
+            ])
+            .row(vec!["Left", "Center", "Right"])
+            .row(vec!["Data 1", "Data 2", "Data 3"])
+            .build()
+            .unwrap();
+
+        // Verify table structure
+        assert_eq!(table.column_count(), 3);
+        assert_eq!(table.row_count(), 2);
+        assert!(table.headers().is_some());
+
+        // Verify rendering output
+        let lines = table.render();
+        assert!(!lines.is_empty());
+        assert!(lines[0].contains("Column 1"));
+        assert!(lines[1].contains(":---")); // Left alignment
+        assert!(lines[1].contains(":---:")); // Center alignment
+        assert!(lines[1].contains("---:")); // Right alignment
+    }
+
+    #[test]
+    fn test_table_builder_with_config() {
+        let mut renderer = create_renderer();
+        renderer.config.table_separator = "||".to_string();
+
+        let table = renderer
+            .build_table()
+            .header(vec!["A", "B"])
+            .row(vec!["1", "2"])
+            .build()
+            .unwrap();
+
+        let lines = table.render();
+        assert!(lines[0].starts_with("||"));
+        assert!(lines[0].contains("|| A ||"));
     }
 
     #[test]
