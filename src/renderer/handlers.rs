@@ -210,7 +210,7 @@ impl MarkdownRenderer {
                 println!();
             }
             ContentType::Rule => {
-                let line = "─".repeat(40);
+                let line = self.config.create_horizontal_rule();
                 let styled_line =
                     self.apply_text_style(&line, super::styling::TextStyle::Delimiter);
                 println!("\n{}\n", styled_line);

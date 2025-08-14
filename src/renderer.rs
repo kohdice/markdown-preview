@@ -11,6 +11,7 @@ use pulldown_cmark::{Options, Parser};
 use crate::theme::SolarizedOsaka;
 
 // Internal modules for separating rendering concerns
+mod config;
 mod element_accessor;
 mod formatting;
 mod handlers;
@@ -19,6 +20,7 @@ pub mod state;
 mod styling;
 
 // Public API exports for external module usage
+pub use config::RenderConfig;
 pub use element_accessor::{
     CodeBlockAccessor, ElementData, ImageAccessor, LinkAccessor, TableAccessor,
 };
@@ -39,6 +41,7 @@ pub struct MarkdownRenderer {
     pub theme: SolarizedOsaka,
     pub state: RenderState,
     pub options: Options,
+    pub config: RenderConfig,
 }
 
 impl Default for MarkdownRenderer {
@@ -60,6 +63,7 @@ impl MarkdownRenderer {
             theme: SolarizedOsaka,
             state: RenderState::default(),
             options,
+            config: RenderConfig::default(),
         }
     }
 

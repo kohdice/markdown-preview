@@ -33,7 +33,7 @@ impl MarkdownRenderer {
                 }
             }
             OutputType::HorizontalRule => {
-                let line = "─".repeat(40);
+                let line = self.config.create_horizontal_rule();
                 let styled_line = self.apply_text_style(&line, TextStyle::Delimiter);
                 println!("\n{}\n", styled_line);
             }
@@ -52,7 +52,7 @@ impl MarkdownRenderer {
                     println!();
                 } else {
                     let depth = self.state.list_stack.len();
-                    let indent = "  ".repeat(depth.saturating_sub(1));
+                    let indent = self.config.create_indent(depth.saturating_sub(1));
                     print!("{}", indent);
 
                     if let Some(list_type) = self.state.list_stack.last_mut() {
@@ -186,7 +186,7 @@ impl MarkdownRenderer {
         // improving performance for tables with many columns
         let estimated_size: usize = row.iter().map(|s| s.len() + 4).sum::<usize>() + 1;
         let mut output = String::with_capacity(estimated_size);
-        output.push('|');
+        output.push_str(&self.config.table_separator);
         for cell in row {
             output.push(' ');
             if is_header {
@@ -195,7 +195,8 @@ impl MarkdownRenderer {
             } else {
                 output.push_str(cell);
             }
-            output.push_str(" |");
+            output.push(' ');
+            output.push_str(&self.config.table_separator);
         }
         println!("{}", output);
         Ok(())
@@ -207,17 +208,18 @@ impl MarkdownRenderer {
         // Each column needs up to 7 chars for alignment markers plus delimiters.
         // Pre-allocation avoids growth during string building
         let mut output = String::with_capacity(alignments.len() * 8 + 1);
-        output.push('|');
+        output.push_str(&self.config.table_separator);
         for alignment in alignments {
             let separator = match alignment {
-                Alignment::Left => ":---",
-                Alignment::Center => ":---:",
-                Alignment::Right => "---:",
-                Alignment::None => "---",
+                Alignment::Left => &self.config.table_alignment.left,
+                Alignment::Center => &self.config.table_alignment.center,
+                Alignment::Right => &self.config.table_alignment.right,
+                Alignment::None => &self.config.table_alignment.none,
             };
             output.push(' ');
             output.push_str(separator);
-            output.push_str(" |");
+            output.push(' ');
+            output.push_str(&self.config.table_separator);
         }
         println!("{}", output);
         Ok(())
