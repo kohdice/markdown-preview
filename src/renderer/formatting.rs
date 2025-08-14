@@ -1,5 +1,6 @@
 use anyhow::Result;
 use pulldown_cmark::Alignment;
+use std::borrow::Cow;
 
 use super::{
     MarkdownRenderer,
@@ -57,9 +58,9 @@ impl MarkdownRenderer {
 
                     if let Some(list_type) = self.state.list_stack.last_mut() {
                         let marker = match list_type {
-                            ListType::Unordered => "• ".to_string(),
+                            ListType::Unordered => Cow::Borrowed("• "),
                             ListType::Ordered { current } => {
-                                let m = format!("{}.  ", current);
+                                let m = Cow::Owned(format!("{}.  ", current));
                                 *current += 1;
                                 m
                             }
@@ -164,7 +165,7 @@ impl MarkdownRenderer {
             let lang_text = self.create_styled_marker(lang, self.theme.code_color(), false);
             format!("{}{}", fence, lang_text)
         } else {
-            fence
+            fence.into_owned()
         }
     }
 

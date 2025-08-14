@@ -1,6 +1,7 @@
 use super::MarkdownRenderer;
 use crate::theme::MarkdownTheme;
 use colored::ColoredString;
+use std::borrow::Cow;
 
 /// Comprehensive text styling system for all Markdown element types.
 /// Encapsulates color, weight, and decoration for consistent terminal output.
@@ -58,7 +59,7 @@ impl MarkdownRenderer {
 
     /// Determines appropriate style based on current emphasis state.
     /// Priority: strong > italic > link > normal for style selection.
-    pub fn create_styled_text(&self, text: &str) -> String {
+    pub fn create_styled_text(&self, text: &str) -> Cow<'static, str> {
         let style = if self.state.emphasis.strong {
             TextStyle::Strong
         } else if self.state.emphasis.italic {
@@ -68,12 +69,17 @@ impl MarkdownRenderer {
         } else {
             TextStyle::Normal
         };
-        self.apply_text_style(text, style).to_string()
+        Cow::Owned(self.apply_text_style(text, style).to_string())
     }
 
     /// Creates styled text for structural markers like list bullets and quote markers.
     /// Automatically determines TextStyle based on color matching theme colors.
-    pub fn create_styled_marker(&self, marker: &str, color: (u8, u8, u8), bold: bool) -> String {
+    pub fn create_styled_marker(
+        &self,
+        marker: &str,
+        color: (u8, u8, u8),
+        bold: bool,
+    ) -> Cow<'static, str> {
         // Match color against theme colors to determine semantic style type.
         // Falls back to Custom style for non-standard color combinations
         let style = if color == self.theme.list_marker_color() {
@@ -84,13 +90,15 @@ impl MarkdownRenderer {
             TextStyle::Custom { color, bold }
         };
 
-        self.apply_text_style(marker, style).to_string()
+        Cow::Owned(self.apply_text_style(marker, style).to_string())
     }
 
     /// Formats URLs with delimiter style and parentheses for visual distinction
-    pub fn create_styled_url(&self, url: &str) -> String {
-        self.apply_text_style(&format!(" ({})", url), TextStyle::Delimiter)
-            .to_string()
+    pub fn create_styled_url(&self, url: &str) -> Cow<'static, str> {
+        Cow::Owned(
+            self.apply_text_style(&format!(" ({})", url), TextStyle::Delimiter)
+                .to_string(),
+        )
     }
 
     /// Routes text to the appropriate active element buffer.
