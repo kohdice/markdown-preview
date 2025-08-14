@@ -13,12 +13,16 @@ use pulldown_cmark::{Options, Parser};
 use crate::theme::SolarizedOsaka;
 
 // Internal modules for separating rendering concerns
+mod element_accessor;
 mod formatting;
 mod handlers;
 pub mod state;
 mod styling;
 
 // Public API exports for external module usage
+pub use element_accessor::{
+    CodeBlockAccessor, ElementData, ImageAccessor, LinkAccessor, TableAccessor,
+};
 pub use state::{ActiveElement, RenderState};
 pub use styling::TextStyle;
 
@@ -55,6 +59,32 @@ impl MarkdownRenderer {
             state: RenderState::default(),
             options,
         }
+    }
+
+    // Generic accessor methods using ElementData trait.
+    // These replace all repetitive getter/setter methods with a single implementation.
+    /// Get immutable reference to element data of type T
+    pub fn get<T: ElementData>(&self) -> Option<&T::Output> {
+        self.state.active_element.as_ref().and_then(T::extract)
+    }
+
+    /// Get mutable reference to element data of type T
+    pub fn get_mut<T: ElementData>(&mut self) -> Option<&mut T::Output> {
+        self.state.active_element.as_mut().and_then(T::extract_mut)
+    }
+
+    /// Get cloned element data of type T
+    pub fn get_cloned<T>(&self) -> Option<T::Output>
+    where
+        T: ElementData,
+        T::Output: Clone,
+    {
+        self.get::<T>().cloned()
+    }
+
+    /// Set active element with data of type T
+    pub fn set<T: ElementData>(&mut self, data: T::Output) {
+        self.state.active_element = Some(T::create(data));
     }
 
     // State management methods for tracking active Markdown elements during parsing.
@@ -101,60 +131,37 @@ impl MarkdownRenderer {
         self.state.active_element = None;
     }
 
+    // Legacy methods for backward compatibility - delegate to generic implementation
     pub fn get_link(&self) -> Option<state::LinkState> {
-        match &self.state.active_element {
-            Some(ActiveElement::Link(link)) => Some(link.clone()),
-            _ => None,
-        }
+        self.get_cloned::<LinkAccessor>()
     }
 
     pub fn get_image(&self) -> Option<state::ImageState> {
-        match &self.state.active_element {
-            Some(ActiveElement::Image(image)) => Some(image.clone()),
-            _ => None,
-        }
+        self.get_cloned::<ImageAccessor>()
     }
 
     pub fn get_code_block(&self) -> Option<state::CodeBlockState> {
-        match &self.state.active_element {
-            Some(ActiveElement::CodeBlock(code_block)) => Some(code_block.clone()),
-            _ => None,
-        }
+        self.get_cloned::<CodeBlockAccessor>()
     }
 
     pub fn get_table(&self) -> Option<state::TableState> {
-        match &self.state.active_element {
-            Some(ActiveElement::Table(table)) => Some(table.clone()),
-            _ => None,
-        }
+        self.get_cloned::<TableAccessor>()
     }
 
     pub fn get_table_mut(&mut self) -> Option<&mut state::TableState> {
-        match &mut self.state.active_element {
-            Some(ActiveElement::Table(table)) => Some(table),
-            _ => None,
-        }
+        self.get_mut::<TableAccessor>()
     }
 
     pub fn get_link_mut(&mut self) -> Option<&mut state::LinkState> {
-        match &mut self.state.active_element {
-            Some(ActiveElement::Link(link)) => Some(link),
-            _ => None,
-        }
+        self.get_mut::<LinkAccessor>()
     }
 
     pub fn get_image_mut(&mut self) -> Option<&mut state::ImageState> {
-        match &mut self.state.active_element {
-            Some(ActiveElement::Image(image)) => Some(image),
-            _ => None,
-        }
+        self.get_mut::<ImageAccessor>()
     }
 
     pub fn get_code_block_mut(&mut self) -> Option<&mut state::CodeBlockState> {
-        match &mut self.state.active_element {
-            Some(ActiveElement::CodeBlock(code_block)) => Some(code_block),
-            _ => None,
-        }
+        self.get_mut::<CodeBlockAccessor>()
     }
 
     pub fn set_code_block(&mut self, kind: pulldown_cmark::CodeBlockKind<'static>) {
