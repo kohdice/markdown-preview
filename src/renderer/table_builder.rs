@@ -203,7 +203,10 @@ impl Table {
 
     /// Renders a single row as a string
     pub fn render_row(&self, row: &[String], apply_styling: bool) -> String {
-        let mut output = String::new();
+        // Pre-allocate capacity based on estimated row size
+        let estimated_size =
+            row.iter().map(|s| s.len() + 4).sum::<usize>() + self.separator.len() * (row.len() + 1);
+        let mut output = String::with_capacity(estimated_size);
         output.push_str(&self.separator);
 
         for cell in row {
@@ -223,7 +226,10 @@ impl Table {
 
     /// Renders the alignment separator row
     pub fn render_separator(&self) -> String {
-        let mut output = String::new();
+        // Pre-allocate capacity based on alignment count
+        let estimated_size =
+            self.alignments.len() * 8 + self.separator.len() * (self.alignments.len() + 1);
+        let mut output = String::with_capacity(estimated_size);
         output.push_str(&self.separator);
 
         for alignment in &self.alignments {
@@ -244,7 +250,9 @@ impl Table {
 
     /// Renders the entire table
     pub fn render(&self) -> Vec<String> {
-        let mut lines = Vec::new();
+        // Pre-allocate capacity based on expected table size
+        let estimated_lines = if self.headers.is_some() { 2 } else { 0 } + self.rows.len();
+        let mut lines = Vec::with_capacity(estimated_lines);
 
         // Render header if present
         if let Some(ref headers) = self.headers {

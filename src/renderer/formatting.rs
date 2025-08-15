@@ -23,8 +23,9 @@ impl MarkdownRenderer {
                 } else {
                     let heading_marker = "#".repeat(level as usize);
                     let color = self.theme.heading_color(level);
-                    let marker =
-                        self.create_styled_marker(&format!("{} ", heading_marker), color, true);
+                    let mut marker_with_space = heading_marker;
+                    marker_with_space.push(' ');
+                    let marker = self.create_styled_marker(&marker_with_space, color, true);
                     print!("{}", marker);
                 }
             }
@@ -60,9 +61,10 @@ impl MarkdownRenderer {
                         let marker = match list_type {
                             ListType::Unordered => Cow::Borrowed("• "),
                             ListType::Ordered { current } => {
-                                let m = Cow::Owned(format!("{}.  ", current));
+                                let mut m = current.to_string();
+                                m.push_str(".  ");
                                 *current += 1;
-                                m
+                                Cow::Owned(m)
                             }
                         };
                         let styled_marker = self.create_styled_marker(
@@ -163,7 +165,9 @@ impl MarkdownRenderer {
         let fence = self.create_styled_marker("```", self.theme.delimiter_color(), false);
         if let Some(lang) = language {
             let lang_text = self.create_styled_marker(lang, self.theme.code_color(), false);
-            format!("{}{}", fence, lang_text)
+            let mut result = fence.into_owned();
+            result.push_str(&lang_text);
+            result
         } else {
             fence.into_owned()
         }

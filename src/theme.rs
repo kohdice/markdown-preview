@@ -135,14 +135,14 @@ mod tests {
         let result = styled_text(text, (255, 0, 0), true, false, false);
         assert!(result.to_string().contains("test"));
 
-        let string = String::from("test");
+        let string = "test".to_string();
         let result = styled_text(string, (0, 255, 0), false, true, false);
         assert!(result.to_string().contains("test"));
 
         let result = styled_text_with_bg("test", (255, 255, 255), (0, 0, 0));
         assert!(result.to_string().contains("test"));
 
-        let string = String::from("test");
+        let string = "test".to_string();
         let result = styled_text_with_bg(string, (255, 255, 255), (0, 0, 0));
         assert!(result.to_string().contains("test"));
     }
