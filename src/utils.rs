@@ -1,0 +1,71 @@
+//! Utility functions for cross-platform compatibility and text processing
+
+use std::borrow::Cow;
+
+/// Normalize line endings to Unix format (LF only) for consistent cross-platform processing.
+/// Handles Windows (CRLF), Classic Mac (CR), and Unix (LF) line endings.
+///
+/// # Examples
+/// ```
+/// use markdown_preview::utils::normalize_line_endings;
+///
+/// assert_eq!(normalize_line_endings("hello\r\nworld"), "hello\nworld");
+/// assert_eq!(normalize_line_endings("hello\rworld"), "hello\nworld");
+/// assert_eq!(normalize_line_endings("hello\nworld"), "hello\nworld");
+/// ```
+pub fn normalize_line_endings(text: &str) -> Cow<'_, str> {
+    // Early return if no Windows/Mac line endings are present
+    if !text.contains('\r') {
+        return Cow::Borrowed(text);
+    }
+
+    // Replace CRLF with LF, then replace any remaining CR with LF
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    Cow::Owned(normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_line_endings_windows() {
+        let input = "line1\r\nline2\r\nline3";
+        let expected = "line1\nline2\nline3";
+        assert_eq!(normalize_line_endings(input), expected);
+    }
+
+    #[test]
+    fn test_normalize_line_endings_mac_classic() {
+        let input = "line1\rline2\rline3";
+        let expected = "line1\nline2\nline3";
+        assert_eq!(normalize_line_endings(input), expected);
+    }
+
+    #[test]
+    fn test_normalize_line_endings_unix() {
+        let input = "line1\nline2\nline3";
+        // Should return borrowed reference for Unix line endings
+        assert!(matches!(normalize_line_endings(input), Cow::Borrowed(_)));
+        assert_eq!(normalize_line_endings(input), input);
+    }
+
+    #[test]
+    fn test_normalize_line_endings_mixed() {
+        let input = "line1\r\nline2\rline3\nline4";
+        let expected = "line1\nline2\nline3\nline4";
+        assert_eq!(normalize_line_endings(input), expected);
+    }
+
+    #[test]
+    fn test_normalize_line_endings_empty() {
+        assert_eq!(normalize_line_endings(""), "");
+    }
+
+    #[test]
+    fn test_normalize_line_endings_no_newlines() {
+        let input = "single line without newlines";
+        assert!(matches!(normalize_line_endings(input), Cow::Borrowed(_)));
+        assert_eq!(normalize_line_endings(input), input);
+    }
+}

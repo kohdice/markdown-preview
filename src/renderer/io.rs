@@ -8,13 +8,15 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::path::Path;
 
-/// Reads a file from the given path and returns its content
+use crate::utils::normalize_line_endings;
+
+/// Reads a file from the given path and returns its content with normalized line endings
 ///
 /// # Arguments
 /// * `path` - The path to the file to read
 ///
 /// # Returns
-/// * `Result<String>` - The file content as a string
+/// * `Result<String>` - The file content as a string with Unix-style line endings
 ///
 /// # Errors
 /// Returns an error if:
@@ -40,5 +42,6 @@ pub fn read_file(path: &Path) -> Result<String> {
     file.read_to_string(&mut content)
         .with_context(|| format!("Failed to read file: {}", path.display()))?;
 
-    Ok(content)
+    // Normalize line endings for cross-platform compatibility
+    Ok(normalize_line_endings(&content).into_owned())
 }

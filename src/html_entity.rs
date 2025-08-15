@@ -8,6 +8,7 @@ use std::borrow::Cow;
 use std::sync::LazyLock;
 
 use aho_corasick::AhoCorasick;
+use anyhow::{Context, Result};
 
 /// Structure for efficient HTML entity replacement
 struct EntityDecoder {
@@ -17,8 +18,8 @@ struct EntityDecoder {
     replacements: Vec<&'static str>,
 }
 
-/// Global entity decoder initialized once at first use to avoid repeated compilation
-static ENTITY_DECODER: LazyLock<EntityDecoder> = LazyLock::new(|| {
+/// Initialize the entity decoder with error handling
+fn init_entity_decoder() -> Result<EntityDecoder> {
     let patterns = vec![
         "&lt;", "&gt;", "&amp;", "&quot;", "&apos;", "&#39;", "&nbsp;", "&copy;", "&reg;",
         "&trade;", "&euro;", "&pound;", "&yen;", "&cent;", "&sect;", "&para;", "&bull;",
@@ -38,12 +39,18 @@ static ENTITY_DECODER: LazyLock<EntityDecoder> = LazyLock::new(|| {
     let matcher = AhoCorasick::builder()
         .match_kind(aho_corasick::MatchKind::LeftmostFirst)
         .build(patterns)
-        .expect("Failed to build AhoCorasick matcher");
+        .context("Failed to build AhoCorasick matcher for HTML entity decoding")?;
 
-    EntityDecoder {
+    Ok(EntityDecoder {
         matcher,
         replacements,
-    }
+    })
+}
+
+/// Global entity decoder initialized once at first use to avoid repeated compilation
+static ENTITY_DECODER: LazyLock<EntityDecoder> = LazyLock::new(|| {
+    init_entity_decoder()
+        .expect("Failed to initialize HTML entity decoder - this is a critical error")
 });
 
 /// Decode HTML entities using optimized AhoCorasick pattern matching
