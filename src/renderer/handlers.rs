@@ -4,7 +4,7 @@ use pulldown_cmark::{Event, Tag, TagEnd};
 use super::{MarkdownRenderer, state::ContentType};
 use crate::{
     html_entity::decode_html_entities,
-    output::{OutputType, TableVariant},
+    output::{ElementKind, ElementPhase, OutputType, TableVariant},
 };
 
 impl MarkdownRenderer {
@@ -80,17 +80,24 @@ impl MarkdownRenderer {
     /// Handle opening tags to set up state for element processing
     fn handle_tag_start(&mut self, tag: Tag) -> Result<()> {
         match tag {
-            Tag::Heading { level, .. } => self.handle_heading_start(level as u8)?,
-            Tag::Paragraph => self.handle_paragraph_start()?,
+            Tag::Heading { level, .. } => {
+                self.handle_element(ElementKind::Heading(level as u8), ElementPhase::Start)?
+            }
+            Tag::Paragraph => self.handle_element(ElementKind::Paragraph, ElementPhase::Start)?,
             Tag::Strong => self.set_strong_emphasis(true),
             Tag::Emphasis => self.set_italic_emphasis(true),
             Tag::Link { dest_url, .. } => self.set_link(dest_url.to_string()),
             Tag::List(start) => self.handle_list_start(start),
-            Tag::Item => self.handle_list_item_start()?,
+            Tag::Item => self.handle_element(ElementKind::ListItem, ElementPhase::Start)?,
             Tag::CodeBlock(kind) => self.handle_code_block_start(kind),
             Tag::Table(alignments) => self.set_table(alignments),
-            Tag::TableHead => self.handle_table_head_start()?,
-            Tag::BlockQuote(_) => self.handle_block_quote_start()?,
+            Tag::TableHead => self.handle_element(
+                ElementKind::Table(TableVariant::HeadStart),
+                ElementPhase::Start,
+            )?,
+            Tag::BlockQuote(_) => {
+                self.handle_element(ElementKind::BlockQuote, ElementPhase::Start)?
+            }
             Tag::Image { dest_url, .. } => self.set_image(dest_url.to_string()),
             _ => {}
         }
@@ -100,47 +107,41 @@ impl MarkdownRenderer {
     /// Handle closing tags to trigger rendering and cleanup
     fn handle_tag_end(&mut self, tag: Tag) -> Result<()> {
         match tag {
-            Tag::Heading { .. } => self.handle_heading_end()?,
-            Tag::Paragraph => self.handle_paragraph_end()?,
+            Tag::Heading { .. } => {
+                // Note: level is 0 for end tags in the original implementation
+                self.handle_element(ElementKind::Heading(0), ElementPhase::End)?
+            }
+            Tag::Paragraph => self.handle_element(ElementKind::Paragraph, ElementPhase::End)?,
             Tag::Strong => self.set_strong_emphasis(false),
             Tag::Emphasis => self.set_italic_emphasis(false),
-            Tag::Link { .. } => self.handle_link_end()?,
+            Tag::Link { .. } => self.print_output(OutputType::Link)?,
             Tag::List(_) => self.handle_list_end(),
-            Tag::Item => self.handle_list_item_end()?,
+            Tag::Item => self.handle_element(ElementKind::ListItem, ElementPhase::End)?,
             Tag::CodeBlock(_) => self.print_output(OutputType::CodeBlock)?,
             Tag::Table(_) => self.handle_table_end(),
-            Tag::TableHead => self.handle_table_head_end()?,
-            Tag::TableRow => self.handle_table_row_end()?,
-            Tag::BlockQuote(_) => self.handle_block_quote_end()?,
-            Tag::Image { .. } => self.handle_image_end()?,
+            Tag::TableHead => self.handle_element(
+                ElementKind::Table(TableVariant::HeadEnd),
+                ElementPhase::Start,
+            )?,
+            Tag::TableRow => self.handle_element(
+                ElementKind::Table(TableVariant::RowEnd),
+                ElementPhase::Start,
+            )?,
+            Tag::BlockQuote(_) => {
+                self.handle_element(ElementKind::BlockQuote, ElementPhase::End)?
+            }
+            Tag::Image { .. } => self.print_output(OutputType::Image)?,
             _ => {}
         }
         Ok(())
     }
 
-    // Helper methods for handling specific tag types
-    fn handle_heading_start(&mut self, level: u8) -> Result<()> {
-        self.print_output(OutputType::Heading {
-            level,
-            is_end: false,
-        })
+    // Unified element handler - replaces multiple duplicate methods
+    fn handle_element(&mut self, kind: ElementKind, phase: ElementPhase) -> Result<()> {
+        self.print_output(OutputType::Element { kind, phase })
     }
 
-    fn handle_heading_end(&mut self) -> Result<()> {
-        self.print_output(OutputType::Heading {
-            level: 0,
-            is_end: true,
-        })
-    }
-
-    fn handle_paragraph_start(&mut self) -> Result<()> {
-        self.print_output(OutputType::Paragraph { is_end: false })
-    }
-
-    fn handle_paragraph_end(&mut self) -> Result<()> {
-        self.print_output(OutputType::Paragraph { is_end: true })
-    }
-
+    // Special handlers for elements that require additional state management
     fn handle_list_start(&mut self, start: Option<u64>) {
         // Nested lists need visual separation from their parent list items
         // to maintain readability in terminal output
@@ -157,14 +158,6 @@ impl MarkdownRenderer {
         }
     }
 
-    fn handle_list_item_start(&mut self) -> Result<()> {
-        self.print_output(OutputType::ListItem { is_end: false })
-    }
-
-    fn handle_list_item_end(&mut self) -> Result<()> {
-        self.print_output(OutputType::ListItem { is_end: true })
-    }
-
     fn handle_code_block_start(&mut self, kind: pulldown_cmark::CodeBlockKind) {
         // Convert borrowed language string to owned for state storage.
         // Required because state outlives the parsing event lifetime
@@ -177,43 +170,9 @@ impl MarkdownRenderer {
         self.set_code_block(static_kind);
     }
 
-    fn handle_table_head_start(&mut self) -> Result<()> {
-        self.print_output(OutputType::Table {
-            variant: TableVariant::HeadStart,
-        })
-    }
-
-    fn handle_table_head_end(&mut self) -> Result<()> {
-        self.print_output(OutputType::Table {
-            variant: TableVariant::HeadEnd,
-        })
-    }
-
-    fn handle_table_row_end(&mut self) -> Result<()> {
-        self.print_output(OutputType::Table {
-            variant: TableVariant::RowEnd,
-        })
-    }
-
     fn handle_table_end(&mut self) {
         self.clear_table();
         println!();
-    }
-
-    fn handle_block_quote_start(&mut self) -> Result<()> {
-        self.print_output(OutputType::BlockQuote { is_end: false })
-    }
-
-    fn handle_block_quote_end(&mut self) -> Result<()> {
-        self.print_output(OutputType::BlockQuote { is_end: true })
-    }
-
-    fn handle_link_end(&mut self) -> Result<()> {
-        self.print_output(OutputType::Link)
-    }
-
-    fn handle_image_end(&mut self) -> Result<()> {
-        self.print_output(OutputType::Image)
     }
 
     /// Process content events including text, code, HTML, and breaks.

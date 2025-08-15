@@ -8,7 +8,7 @@ use super::{
     styling::TextStyle,
 };
 use crate::{
-    output::{OutputType, TableVariant},
+    output::{ElementKind, ElementPhase, OutputType, TableVariant},
     theme::MarkdownTheme,
 };
 
@@ -17,22 +17,8 @@ impl MarkdownRenderer {
     /// Maintains consistent formatting and styling across all element types.
     pub fn print_output(&mut self, output_type: OutputType) -> Result<()> {
         match output_type {
-            OutputType::Heading { level, is_end } => {
-                if is_end {
-                    println!("\n");
-                } else {
-                    let heading_marker = "#".repeat(level as usize);
-                    let color = self.theme.heading_color(level);
-                    let mut marker_with_space = heading_marker;
-                    marker_with_space.push(' ');
-                    let marker = self.create_styled_marker(&marker_with_space, color, true);
-                    print!("{}", marker);
-                }
-            }
-            OutputType::Paragraph { is_end } => {
-                if is_end {
-                    println!();
-                }
+            OutputType::Element { kind, phase } => {
+                self.handle_element_output(kind, phase)?;
             }
             OutputType::HorizontalRule => {
                 let line = self.config.create_horizontal_rule();
@@ -49,8 +35,59 @@ impl MarkdownRenderer {
                     self.create_styled_marker(marker, self.theme.list_marker_color(), false);
                 print!("{}", styled_marker);
             }
-            OutputType::ListItem { is_end } => {
-                if is_end {
+            OutputType::Link => {
+                if let Some(link) = self.get_link() {
+                    self.clear_link();
+                    let styled_link = self.apply_text_style(&link.text, TextStyle::Link);
+                    let url_text = self.create_styled_url(&link.url);
+                    print!("{}{}", styled_link, url_text);
+                }
+            }
+            OutputType::Image => {
+                if let Some(image) = self.get_image() {
+                    self.clear_image();
+                    let display_text = if image.alt_text.is_empty() {
+                        "[Image]"
+                    } else {
+                        &image.alt_text
+                    };
+                    let styled_alt = self.apply_text_style(display_text, TextStyle::Emphasis);
+                    let url_text = self.create_styled_url(&image.url);
+                    print!("{}{}", styled_alt, url_text);
+                }
+            }
+            OutputType::CodeBlock => {
+                if let Some(code_block) = self.get_code_block() {
+                    self.clear_code_block();
+                    self.render_code_block(&code_block)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Handles element output based on kind and phase
+    fn handle_element_output(&mut self, kind: ElementKind, phase: ElementPhase) -> Result<()> {
+        match kind {
+            ElementKind::Heading(level) => {
+                if phase == ElementPhase::End {
+                    println!("\n");
+                } else {
+                    let heading_marker = "#".repeat(level as usize);
+                    let color = self.theme.heading_color(level);
+                    let mut marker_with_space = heading_marker;
+                    marker_with_space.push(' ');
+                    let marker = self.create_styled_marker(&marker_with_space, color, true);
+                    print!("{}", marker);
+                }
+            }
+            ElementKind::Paragraph => {
+                if phase == ElementPhase::End {
+                    println!();
+                }
+            }
+            ElementKind::ListItem => {
+                if phase == ElementPhase::End {
                     println!();
                 } else {
                     let depth = self.state.list_stack.len();
@@ -76,8 +113,8 @@ impl MarkdownRenderer {
                     }
                 }
             }
-            OutputType::BlockQuote { is_end } => {
-                if is_end {
+            ElementKind::BlockQuote => {
+                if phase == ElementPhase::End {
                     println!();
                 } else {
                     let marker =
@@ -85,28 +122,7 @@ impl MarkdownRenderer {
                     print!("{}", marker);
                 }
             }
-            OutputType::Link => {
-                if let Some(link) = self.get_link() {
-                    self.clear_link();
-                    let styled_link = self.apply_text_style(&link.text, TextStyle::Link);
-                    let url_text = self.create_styled_url(&link.url);
-                    print!("{}{}", styled_link, url_text);
-                }
-            }
-            OutputType::Image => {
-                if let Some(image) = self.get_image() {
-                    self.clear_image();
-                    let display_text = if image.alt_text.is_empty() {
-                        "[Image]"
-                    } else {
-                        &image.alt_text
-                    };
-                    let styled_alt = self.apply_text_style(display_text, TextStyle::Emphasis);
-                    let url_text = self.create_styled_url(&image.url);
-                    print!("{}{}", styled_alt, url_text);
-                }
-            }
-            OutputType::Table { ref variant } => match variant {
+            ElementKind::Table(ref variant) => match variant {
                 TableVariant::HeadStart => {
                     if let Some(ref mut table) = self.get_table_mut() {
                         table.is_header = true;
@@ -136,12 +152,6 @@ impl MarkdownRenderer {
                     }
                 }
             },
-            OutputType::CodeBlock => {
-                if let Some(code_block) = self.get_code_block() {
-                    self.clear_code_block();
-                    self.render_code_block(&code_block)?;
-                }
-            }
         }
         Ok(())
     }
