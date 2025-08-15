@@ -208,7 +208,7 @@ impl MarkdownRenderer {
     /// Build a table using the TableBuilder API
     ///
     /// # Example
-    /// ```no_run
+    /// ```
     /// use markdown_preview::renderer::MarkdownRenderer;
     ///
     /// let renderer = MarkdownRenderer::new();
@@ -216,7 +216,7 @@ impl MarkdownRenderer {
     ///     .header(vec!["Name", "Age"])
     ///     .row(vec!["Alice", "30"])
     ///     .build()
-    ///     .unwrap();
+    ///     .expect("Failed to build table");
     /// ```
     pub fn build_table(&self) -> TableBuilder {
         TableBuilder::new()

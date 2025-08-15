@@ -10,7 +10,7 @@ use std::fmt;
 /// A builder for constructing tables with a fluent API
 ///
 /// # Example
-/// ```no_run
+/// ```
 /// use markdown_preview::renderer::TableBuilder;
 /// use pulldown_cmark::Alignment;
 ///
@@ -19,7 +19,8 @@ use std::fmt;
 ///     .alignments(vec![Alignment::Left, Alignment::Right, Alignment::Center])
 ///     .row(vec!["Alice", "30", "New York"])
 ///     .row(vec!["Bob", "25", "London"])
-///     .build();
+///     .build()
+///     .expect("Failed to build table");
 /// ```
 #[derive(Debug, Clone)]
 pub struct TableBuilder {
