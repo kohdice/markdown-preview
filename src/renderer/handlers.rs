@@ -108,7 +108,6 @@ impl MarkdownRenderer {
     fn handle_tag_end(&mut self, tag: Tag) -> Result<()> {
         match tag {
             Tag::Heading { .. } => {
-                // Note: level is 0 for end tags in the original implementation
                 self.handle_element(ElementKind::Heading(0), ElementPhase::End)?
             }
             Tag::Paragraph => self.handle_element(ElementKind::Paragraph, ElementPhase::End)?,

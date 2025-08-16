@@ -1,30 +1,21 @@
 /// Configuration for markdown rendering behavior and visual settings.
-/// Dynamically adjusts to terminal capabilities.
 #[derive(Debug, Clone)]
 pub struct RenderConfig {
-    /// Number of spaces for list item indentation
     pub indent_width: usize,
 
-    /// Table column separator character
     pub table_separator: String,
 
-    /// Table alignment indicators
     pub table_alignment: TableAlignmentConfig,
 
-    /// Enable color output
     pub enable_colors: bool,
 
-    /// Enable bold text styling
     pub enable_bold: bool,
 
-    /// Enable italic text styling  
     pub enable_italic: bool,
 
-    /// Enable underline text styling
     pub enable_underline: bool,
 }
 
-/// Configuration for table alignment indicators
 #[derive(Debug, Clone)]
 pub struct TableAlignmentConfig {
     pub left: String,
@@ -59,27 +50,22 @@ impl Default for TableAlignmentConfig {
 }
 
 impl RenderConfig {
-    /// Creates a new configuration with default values
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Gets the current terminal width, auto-detecting dynamically
     pub fn get_terminal_width() -> usize {
         terminal_size::terminal_size()
             .map(|(width, _)| width.0 as usize)
-            .unwrap_or(80) // Fallback to 80 columns if detection fails
+            .unwrap_or(80)
     }
 
-    /// Creates indentation string for the given depth level
     pub fn create_indent(&self, depth: usize) -> String {
         " ".repeat(self.indent_width * depth)
     }
 
-    /// Creates a horizontal rule string that adapts to terminal width
     pub fn create_horizontal_rule(&self) -> String {
         let width = Self::get_terminal_width();
-        // Use 80% of terminal width for horizontal rule, max 100 chars
         let rule_length = ((width as f32 * 0.8) as usize).min(100);
         "─".repeat(rule_length)
     }
@@ -110,16 +96,14 @@ mod tests {
     fn test_create_horizontal_rule() {
         let config = RenderConfig::default();
         let rule = config.create_horizontal_rule();
-        // Rule should be dynamic based on terminal width
-        assert!(rule.chars().count() > 0); // Should have some length
-        assert!(rule.chars().count() <= 100); // Max 100 chars
+        assert!(rule.chars().count() > 0);
+        assert!(rule.chars().count() <= 100);
         assert!(rule.chars().all(|c| c == '─'));
     }
 
     #[test]
     fn test_get_terminal_width() {
         let width = RenderConfig::get_terminal_width();
-        // Should return at least the fallback value
         assert!(width >= 80);
     }
 }

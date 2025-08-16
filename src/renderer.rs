@@ -517,18 +517,16 @@ fn main() {
             .build()
             .unwrap();
 
-        // Verify table structure
         assert_eq!(table.column_count(), 3);
         assert_eq!(table.row_count(), 2);
         assert!(table.headers().is_some());
 
-        // Verify rendering output
         let lines = table.render();
         assert!(!lines.is_empty());
         assert!(lines[0].contains("Column 1"));
-        assert!(lines[1].contains(":---")); // Left alignment
-        assert!(lines[1].contains(":---:")); // Center alignment
-        assert!(lines[1].contains("---:")); // Right alignment
+        assert!(lines[1].contains(":---"));
+        assert!(lines[1].contains(":---:"));
+        assert!(lines[1].contains("---:"));
     }
 
     #[test]

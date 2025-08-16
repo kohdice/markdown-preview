@@ -24,17 +24,14 @@ use crate::utils::normalize_line_endings;
 /// * The file cannot be read
 /// * The content is not valid UTF-8
 pub fn read_file(path: &Path) -> Result<String> {
-    // Check if file exists
     if !path.exists() {
         return Err(anyhow::anyhow!("File not found: {}", path.display()));
     }
 
-    // Get file metadata for size information
     let metadata = fs::metadata(path)
         .with_context(|| format!("Failed to get metadata for: {}", path.display()))?;
     let file_size = metadata.len();
 
-    // Open file and read content
     let mut file =
         File::open(path).with_context(|| format!("Failed to open file: {}", path.display()))?;
 
@@ -42,6 +39,5 @@ pub fn read_file(path: &Path) -> Result<String> {
     file.read_to_string(&mut content)
         .with_context(|| format!("Failed to read file: {}", path.display()))?;
 
-    // Normalize line endings for cross-platform compatibility
     Ok(normalize_line_endings(&content).into_owned())
 }

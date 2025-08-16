@@ -1,6 +1,5 @@
 /// Test helpers module for markdown-preview tests
 /// Contains common assertion macros and test utilities
-
 /// Macro for asserting successful rendering of markdown content
 #[macro_export]
 macro_rules! assert_renders_successfully {

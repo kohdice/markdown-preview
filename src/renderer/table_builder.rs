@@ -134,13 +134,12 @@ impl TableBuilder {
 
     /// Validates the table structure
     fn validate(&self) -> Result<()> {
-        // Check if all rows have the same number of columns
         let column_count = if let Some(ref headers) = self.headers {
             headers.len()
         } else if !self.rows.is_empty() {
             self.rows[0].len()
         } else {
-            return Ok(()); // Empty table is valid
+            return Ok(());
         };
 
         for (i, row) in self.rows.iter().enumerate() {
@@ -154,7 +153,6 @@ impl TableBuilder {
             }
         }
 
-        // Check alignment count matches column count
         if !self.alignments.is_empty() && self.alignments.len() != column_count {
             return Err(anyhow::anyhow!(
                 "Alignment count ({}) doesn't match column count ({})",
@@ -371,7 +369,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let rendered = table.render_row(&vec!["X".to_string(), "Y".to_string()], false);
+        let rendered = table.render_row(&["X".to_string(), "Y".to_string()], false);
         assert!(rendered.starts_with("||"));
         assert!(rendered.contains("|| X ||"));
     }
