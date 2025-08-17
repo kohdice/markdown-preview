@@ -318,11 +318,10 @@ mod tests {
         renderer.set_table(vec![]);
 
         // Add test data for HeadEnd and RowEnd cases
-        if matches!(variant, TableVariant::HeadEnd | TableVariant::RowEnd) {
-            if let Some(table) = renderer.get_table_mut() {
-                table.current_row.push("Cell1".to_string());
-                table.current_row.push("Cell2".to_string());
-            }
+        if matches!(variant, TableVariant::HeadEnd | TableVariant::RowEnd)
+            && let Some(table) = renderer.get_table_mut() {
+            table.current_row.push("Cell1".to_string());
+            table.current_row.push("Cell2".to_string());
         }
 
         let result = renderer.print_output(OutputType::Element {
