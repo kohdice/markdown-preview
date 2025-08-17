@@ -53,7 +53,6 @@ impl Default for MarkdownRenderer {
 }
 
 impl MarkdownRenderer {
-    /// Create a new MarkdownRenderer instance
     pub fn new() -> Self {
         let mut options = Options::empty();
         options.insert(Options::ENABLE_STRIKETHROUGH);
@@ -69,19 +68,38 @@ impl MarkdownRenderer {
         }
     }
 
-    // Generic accessor methods using ElementData trait.
-    // These replace all repetitive getter/setter methods with a single implementation.
-    /// Get immutable reference to element data of type T
+    pub fn render_file(&mut self, path: &Path) -> Result<()> {
+        let content = read_file(path)?;
+        self.render_content(&content)
+    }
+
+    pub fn render_content(&mut self, content: &str) -> Result<()> {
+        let parser = Parser::new_ext(content, self.options);
+
+        for event in parser {
+            self.process_event(event)?;
+        }
+
+        self.flush()?;
+        Ok(())
+    }
+
+    pub fn flush(&mut self) -> Result<()> {
+        if let Some(code_block) = self.get_code_block() {
+            self.clear_active_element();
+            self.render_code_block(&code_block)?;
+        }
+        Ok(())
+    }
+
     pub fn get<T: ElementData>(&self) -> Option<&T::Output> {
         self.state.active_element.as_ref().and_then(T::extract)
     }
 
-    /// Get mutable reference to element data of type T
     pub fn get_mut<T: ElementData>(&mut self) -> Option<&mut T::Output> {
         self.state.active_element.as_mut().and_then(T::extract_mut)
     }
 
-    /// Get cloned element data of type T
     pub fn get_cloned<T>(&self) -> Option<T::Output>
     where
         T: ElementData,
@@ -90,14 +108,10 @@ impl MarkdownRenderer {
         self.get::<T>().cloned()
     }
 
-    /// Set active element with data of type T
     pub fn set<T: ElementData>(&mut self, data: T::Output) {
         self.state.active_element = Some(T::create(data));
     }
 
-    // State management methods for tracking active Markdown elements during parsing.
-    // These methods provide a clean API for state transitions without exposing
-    // the internal state structure directly.
     pub fn set_strong_emphasis(&mut self, value: bool) {
         self.state.emphasis.strong = value;
     }
@@ -124,6 +138,14 @@ impl MarkdownRenderer {
         )
     }
 
+    pub fn get_link(&self) -> Option<state::LinkState> {
+        self.get_cloned::<LinkAccessor>()
+    }
+
+    pub fn get_link_mut(&mut self) -> Option<&mut state::LinkState> {
+        self.get_mut::<LinkAccessor>()
+    }
+
     pub fn set_image(&mut self, url: String) {
         self.state.active_element = Some(ActiveElement::Image(state::ImageState {
             alt_text: String::new(),
@@ -135,41 +157,12 @@ impl MarkdownRenderer {
         self.clear_active_element();
     }
 
-    pub fn clear_active_element(&mut self) {
-        self.state.active_element = None;
-    }
-
-    // Legacy methods for backward compatibility - delegate to generic implementation
-    pub fn get_link(&self) -> Option<state::LinkState> {
-        self.get_cloned::<LinkAccessor>()
-    }
-
     pub fn get_image(&self) -> Option<state::ImageState> {
         self.get_cloned::<ImageAccessor>()
     }
 
-    pub fn get_code_block(&self) -> Option<state::CodeBlockState> {
-        self.get_cloned::<CodeBlockAccessor>()
-    }
-
-    pub fn get_table(&self) -> Option<state::TableState> {
-        self.get_cloned::<TableAccessor>()
-    }
-
-    pub fn get_table_mut(&mut self) -> Option<&mut state::TableState> {
-        self.get_mut::<TableAccessor>()
-    }
-
-    pub fn get_link_mut(&mut self) -> Option<&mut state::LinkState> {
-        self.get_mut::<LinkAccessor>()
-    }
-
     pub fn get_image_mut(&mut self) -> Option<&mut state::ImageState> {
         self.get_mut::<ImageAccessor>()
-    }
-
-    pub fn get_code_block_mut(&mut self) -> Option<&mut state::CodeBlockState> {
-        self.get_mut::<CodeBlockAccessor>()
     }
 
     pub fn set_code_block(&mut self, kind: pulldown_cmark::CodeBlockKind<'static>) {
@@ -193,6 +186,14 @@ impl MarkdownRenderer {
         self.clear_active_element();
     }
 
+    pub fn get_code_block(&self) -> Option<state::CodeBlockState> {
+        self.get_cloned::<CodeBlockAccessor>()
+    }
+
+    pub fn get_code_block_mut(&mut self) -> Option<&mut state::CodeBlockState> {
+        self.get_mut::<CodeBlockAccessor>()
+    }
+
     pub fn set_table(&mut self, alignments: Vec<pulldown_cmark::Alignment>) {
         self.state.active_element = Some(ActiveElement::Table(state::TableState {
             alignments,
@@ -203,6 +204,14 @@ impl MarkdownRenderer {
 
     pub fn clear_table(&mut self) {
         self.clear_active_element();
+    }
+
+    pub fn get_table(&self) -> Option<state::TableState> {
+        self.get_cloned::<TableAccessor>()
+    }
+
+    pub fn get_table_mut(&mut self) -> Option<&mut state::TableState> {
+        self.get_mut::<TableAccessor>()
     }
 
     /// Build a table using the TableBuilder API
@@ -244,43 +253,8 @@ impl MarkdownRenderer {
         self.state.list_stack.pop();
     }
 
-    /// Load and render Markdown content from a file
-    ///
-    /// # Performance Optimizations
-    /// - Pre-allocate memory based on file size
-    /// - Efficient reading delegated to io module
-    ///
-    /// # Error Handling
-    /// - Returns detailed error message if file doesn't exist
-    pub fn render_file(&mut self, path: &Path) -> Result<()> {
-        let content = read_file(path)?;
-        self.render_content(&content)
-    }
-
-    /// Render Markdown content directly
-    ///
-    /// # Processing Flow
-    /// 1. Parse Markdown with pulldown_cmark
-    /// 2. Process each event
-    /// 3. Convert to terminal format
-    pub fn render_content(&mut self, content: &str) -> Result<()> {
-        let parser = Parser::new_ext(content, self.options);
-
-        for event in parser {
-            self.process_event(event)?;
-        }
-
-        self.flush()?;
-        Ok(())
-    }
-
-    /// Flush any remaining buffers
-    pub fn flush(&mut self) -> Result<()> {
-        if let Some(code_block) = self.get_code_block() {
-            self.clear_active_element();
-            self.render_code_block(&code_block)?;
-        }
-        Ok(())
+    pub fn clear_active_element(&mut self) {
+        self.state.active_element = None;
     }
 }
 

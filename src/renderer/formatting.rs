@@ -13,8 +13,6 @@ use crate::{
 };
 
 impl MarkdownRenderer {
-    /// Central output dispatcher that handles all Markdown element rendering.
-    /// Maintains consistent formatting and styling across all element types.
     pub fn print_output(&mut self, output_type: OutputType) -> Result<()> {
         match output_type {
             OutputType::Element { kind, phase } => {
@@ -66,7 +64,6 @@ impl MarkdownRenderer {
         Ok(())
     }
 
-    /// Handles element output based on kind and phase
     fn handle_element_output(&mut self, kind: ElementKind, phase: ElementPhase) -> Result<()> {
         match kind {
             ElementKind::Heading(level) => self.render_heading(level, phase),
@@ -77,7 +74,6 @@ impl MarkdownRenderer {
         }
     }
 
-    /// Renders heading elements with appropriate styling and spacing
     fn render_heading(&mut self, level: u8, phase: ElementPhase) -> Result<()> {
         if phase == ElementPhase::End {
             println!("\n");
@@ -92,7 +88,6 @@ impl MarkdownRenderer {
         Ok(())
     }
 
-    /// Renders paragraph elements with proper line breaks
     fn render_paragraph(&self, phase: ElementPhase) -> Result<()> {
         if phase == ElementPhase::End {
             println!();
@@ -100,7 +95,6 @@ impl MarkdownRenderer {
         Ok(())
     }
 
-    /// Renders list items with proper indentation and markers
     fn render_list_item(&mut self, phase: ElementPhase) -> Result<()> {
         if phase == ElementPhase::End {
             println!();
@@ -127,7 +121,6 @@ impl MarkdownRenderer {
         Ok(())
     }
 
-    /// Renders blockquote elements with quote markers
     fn render_blockquote(&self, phase: ElementPhase) -> Result<()> {
         if phase == ElementPhase::End {
             println!();
@@ -138,7 +131,6 @@ impl MarkdownRenderer {
         Ok(())
     }
 
-    /// Renders table elements based on variant type
     fn render_table_element(&mut self, variant: &TableVariant) -> Result<()> {
         match variant {
             TableVariant::HeadStart => self.render_table_head_start(),
@@ -148,14 +140,12 @@ impl MarkdownRenderer {
         Ok(())
     }
 
-    /// Handles the start of a table header
     fn render_table_head_start(&mut self) {
         if let Some(ref mut table) = self.get_table_mut() {
             table.is_header = true;
         }
     }
 
-    /// Handles the end of a table header, rendering the header row and separator
     fn render_table_head_end(&mut self) -> Result<()> {
         if let Some(table) = self.get_table() {
             let current_row = table.current_row.clone();
@@ -171,7 +161,6 @@ impl MarkdownRenderer {
         Ok(())
     }
 
-    /// Handles the end of a table row
     fn render_table_row_end(&mut self) -> Result<()> {
         if let Some(table) = self.get_table() {
             let current_row = table.current_row.clone();
@@ -184,8 +173,6 @@ impl MarkdownRenderer {
         Ok(())
     }
 
-    /// Renders complete code block with opening fence, content, and closing fence.
-    /// Language identifier is included in opening fence if specified.
     pub(super) fn render_code_block(&self, code_block: &CodeBlockState) -> Result<()> {
         self.render_code_fence(code_block.language.as_deref());
         self.render_code_content(&code_block.content);
@@ -197,8 +184,6 @@ impl MarkdownRenderer {
         println!("{}", self.create_code_fence(language));
     }
 
-    /// Creates styled code fence marker with optional language identifier.
-    /// Used for both opening (with language) and closing (without) fences.
     pub(super) fn create_code_fence(&self, language: Option<&str>) -> String {
         let fence = self.create_styled_marker("```", self.theme.delimiter_color(), false);
         if let Some(lang) = language {
@@ -222,8 +207,6 @@ impl MarkdownRenderer {
             .to_string()
     }
 
-    /// Formats and renders a table row with proper column separators.
-    /// Header rows receive special styling for visual distinction.
     pub fn render_table_row(&mut self, row: &[String], is_header: bool) -> Result<()> {
         // Pre-allocation reduces memory reallocations during string building,
         // improving performance for tables with many columns
@@ -245,8 +228,6 @@ impl MarkdownRenderer {
         Ok(())
     }
 
-    /// Creates alignment-aware separator row between header and body.
-    /// Alignment indicators (:) show column text alignment visually.
     pub fn render_table_separator(&mut self, alignments: &[Alignment]) -> Result<()> {
         // Each column needs up to 7 chars for alignment markers plus delimiters.
         // Pre-allocation avoids growth during string building
