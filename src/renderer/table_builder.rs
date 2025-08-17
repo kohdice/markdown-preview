@@ -200,22 +200,23 @@ impl Table {
         &self.alignments
     }
 
-    /// Renders a single row as a string
-    pub fn render_row(&self, row: &[String], apply_styling: bool) -> String {
-        // Pre-allocate capacity based on estimated row size
+    /// Helper function to format table row with common logic
+    fn format_table_row<I, F>(&self, items: I, formatter: F, estimated_cell_size: usize) -> String
+    where
+        I: IntoIterator,
+        I::IntoIter: ExactSizeIterator,
+        F: Fn(&mut String, I::Item),
+    {
+        let items_iter = items.into_iter();
+        let item_count = items_iter.len();
         let estimated_size =
-            row.iter().map(|s| s.len() + 4).sum::<usize>() + self.separator.len() * (row.len() + 1);
+            item_count * estimated_cell_size + self.separator.len() * (item_count + 1);
         let mut output = String::with_capacity(estimated_size);
-        output.push_str(&self.separator);
 
-        for cell in row {
+        output.push_str(&self.separator);
+        for item in items_iter {
             output.push(' ');
-            if apply_styling {
-                // In a real implementation, this would apply color/bold styling
-                output.push_str(cell);
-            } else {
-                output.push_str(cell);
-            }
+            formatter(&mut output, item);
             output.push(' ');
             output.push_str(&self.separator);
         }
@@ -223,28 +224,36 @@ impl Table {
         output
     }
 
+    /// Renders a single row as a string
+    pub fn render_row(&self, row: &[String]) -> String {
+        let avg_cell_size = if row.is_empty() {
+            4
+        } else {
+            row.iter().map(|s| s.len()).sum::<usize>() / row.len() + 4
+        };
+
+        self.format_table_row(
+            row.iter(),
+            |output, cell| output.push_str(cell),
+            avg_cell_size,
+        )
+    }
+
     /// Renders the alignment separator row
     pub fn render_separator(&self) -> String {
-        // Pre-allocate capacity based on alignment count
-        let estimated_size =
-            self.alignments.len() * 8 + self.separator.len() * (self.alignments.len() + 1);
-        let mut output = String::with_capacity(estimated_size);
-        output.push_str(&self.separator);
-
-        for alignment in &self.alignments {
-            let sep = match alignment {
-                Alignment::Left => &self.alignment_config.left,
-                Alignment::Center => &self.alignment_config.center,
-                Alignment::Right => &self.alignment_config.right,
-                Alignment::None => &self.alignment_config.none,
-            };
-            output.push(' ');
-            output.push_str(sep);
-            output.push(' ');
-            output.push_str(&self.separator);
-        }
-
-        output
+        self.format_table_row(
+            &self.alignments,
+            |output, alignment| {
+                let sep = match alignment {
+                    Alignment::Left => &self.alignment_config.left,
+                    Alignment::Center => &self.alignment_config.center,
+                    Alignment::Right => &self.alignment_config.right,
+                    Alignment::None => &self.alignment_config.none,
+                };
+                output.push_str(sep);
+            },
+            8,
+        )
     }
 
     /// Renders the entire table
@@ -255,13 +264,13 @@ impl Table {
 
         // Render header if present
         if let Some(ref headers) = self.headers {
-            lines.push(self.render_row(headers, true));
+            lines.push(self.render_row(headers));
             lines.push(self.render_separator());
         }
 
         // Render data rows
         for row in &self.rows {
-            lines.push(self.render_row(row, false));
+            lines.push(self.render_row(row));
         }
 
         lines
@@ -369,7 +378,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let rendered = table.render_row(&["X".to_string(), "Y".to_string()], false);
+        let rendered = table.render_row(&["X".to_string(), "Y".to_string()]);
         assert!(rendered.starts_with("||"));
         assert!(rendered.contains("|| X ||"));
     }
