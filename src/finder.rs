@@ -110,7 +110,6 @@ mod tests {
         // Hidden files are excluded by default
         assert_eq!(files.len(), 3);
 
-        // Compare only filename portions
         let file_names: Vec<String> = files
             .iter()
             .map(|p| p.to_string_lossy().to_string())
@@ -118,7 +117,18 @@ mod tests {
 
         assert!(file_names.iter().any(|f| f.ends_with("README.md")));
         assert!(file_names.iter().any(|f| f.ends_with("test.md")));
-        assert!(file_names.iter().any(|f| f.ends_with("subdir/sub.md")));
+
+        // Platform-specific path separator check
+        #[cfg(windows)]
+        {
+            assert!(file_names.iter().any(|f| f.ends_with("subdir\\sub.md")));
+        }
+
+        #[cfg(not(windows))]
+        {
+            assert!(file_names.iter().any(|f| f.ends_with("subdir/sub.md")));
+        }
+
         assert!(!file_names.iter().any(|f| f.ends_with(".hidden.md")));
     }
 
@@ -141,6 +151,63 @@ mod tests {
             .collect();
 
         assert!(file_names.iter().any(|f| f.ends_with(".hidden.md")));
+
+        // Platform-specific path separator check
+        #[cfg(windows)]
+        {
+            assert!(file_names.iter().any(|f| f.ends_with("subdir\\sub.md")));
+        }
+
+        #[cfg(not(windows))]
+        {
+            assert!(file_names.iter().any(|f| f.ends_with("subdir/sub.md")));
+        }
+    }
+
+    #[test]
+    fn test_path_separator_normalization() {
+        let temp_dir = create_test_dir();
+
+        let config = FinderConfig::default();
+        let files = find_markdown_files_in_dir(temp_dir.path().to_str().unwrap(), config).unwrap();
+
+        // Test that actual paths contain platform-specific separators
+        let raw_paths: Vec<String> = files
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+
+        // On each platform, paths should contain the native separator
+        #[cfg(windows)]
+        {
+            // Windows paths should contain backslashes
+            assert!(
+                raw_paths.iter().any(|f| f.contains("subdir\\sub.md")),
+                "Windows paths should contain backslashes"
+            );
+        }
+
+        #[cfg(not(windows))]
+        {
+            // Unix paths should contain forward slashes
+            assert!(
+                raw_paths.iter().any(|f| f.contains("subdir/sub.md")),
+                "Unix paths should contain forward slashes"
+            );
+        }
+
+        // After normalization, all paths should work with forward slashes
+        let normalized_paths: Vec<String> = files
+            .iter()
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .collect();
+
+        assert!(
+            normalized_paths
+                .iter()
+                .any(|f| f.ends_with("subdir/sub.md")),
+            "Normalized paths should work with forward slashes"
+        );
     }
 
     #[test]
