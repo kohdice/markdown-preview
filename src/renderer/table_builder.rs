@@ -27,26 +27,26 @@ pub struct TableBuilder {
     headers: Option<Vec<String>>,
     rows: Vec<Vec<String>>,
     alignments: Vec<Alignment>,
-    separator: String,
+    separator: &'static str,
     alignment_config: TableAlignmentConfig,
 }
 
 /// Configuration for table alignment indicators
 #[derive(Debug, Clone)]
 pub struct TableAlignmentConfig {
-    pub left: String,
-    pub center: String,
-    pub right: String,
-    pub none: String,
+    pub left: &'static str,
+    pub center: &'static str,
+    pub right: &'static str,
+    pub none: &'static str,
 }
 
 impl Default for TableAlignmentConfig {
     fn default() -> Self {
         Self {
-            left: ":---".to_string(),
-            center: ":---:".to_string(),
-            right: "---:".to_string(),
-            none: "---".to_string(),
+            left: ":---",
+            center: ":---:",
+            right: "---:",
+            none: "---",
         }
     }
 }
@@ -57,7 +57,7 @@ pub struct Table {
     headers: Option<Vec<String>>,
     rows: Vec<Vec<String>>,
     alignments: Vec<Alignment>,
-    separator: String,
+    separator: &'static str,
     alignment_config: TableAlignmentConfig,
 }
 
@@ -68,7 +68,7 @@ impl TableBuilder {
             headers: None,
             rows: Vec::new(),
             alignments: Vec::new(),
-            separator: "|".to_string(),
+            separator: "|",
             alignment_config: TableAlignmentConfig::default(),
         }
     }
@@ -121,8 +121,8 @@ impl TableBuilder {
     }
 
     /// Sets a custom separator character
-    pub fn separator<S: Into<String>>(mut self, separator: S) -> Self {
-        self.separator = separator.into();
+    pub fn separator(mut self, separator: &'static str) -> Self {
+        self.separator = separator;
         self
     }
 
@@ -213,12 +213,12 @@ impl Table {
             item_count * estimated_cell_size + self.separator.len() * (item_count + 1);
         let mut output = String::with_capacity(estimated_size);
 
-        output.push_str(&self.separator);
+        output.push_str(self.separator);
         for item in items_iter {
             output.push(' ');
             formatter(&mut output, item);
             output.push(' ');
-            output.push_str(&self.separator);
+            output.push_str(self.separator);
         }
 
         output
