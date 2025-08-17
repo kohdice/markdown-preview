@@ -41,6 +41,12 @@ fn test_mp_without_args_lists_markdown_files() {
 
     assert!(stdout.contains("README.md"));
     assert!(stdout.contains("doc.md"));
+
+    // Platform-specific path separator check
+    #[cfg(windows)]
+    assert!(stdout.contains("docs\\api.md"));
+
+    #[cfg(not(windows))]
     assert!(stdout.contains("docs/api.md"));
 
     assert!(!stdout.contains("test.txt"));
