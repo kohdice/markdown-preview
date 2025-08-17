@@ -1,6 +1,6 @@
 use anyhow::Result;
 use ignore::WalkBuilder;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Default)]
 pub struct FinderConfig {
@@ -18,6 +18,7 @@ pub fn find_markdown_files(config: FinderConfig) -> Result<Vec<PathBuf>> {
 /// Search for markdown files in the specified directory (also used for testing)
 pub fn find_markdown_files_in_dir(dir: &str, config: FinderConfig) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
+    let base_path = Path::new(dir);
 
     let mut builder = WalkBuilder::new(dir);
 
@@ -48,13 +49,8 @@ pub fn find_markdown_files_in_dir(dir: &str, config: FinderConfig) -> Result<Vec
 
         // Collect only .md files
         if path.is_file() && path.extension().is_some_and(|ext| ext == "md") {
-            // Relative path from base directory
-            let relative_path = if let Ok(rel) = path.strip_prefix(dir) {
-                rel.to_path_buf()
-            } else {
-                // Use as-is if strip_prefix fails
-                path.to_path_buf()
-            };
+            // Create relative path with better cross-platform support
+            let relative_path = make_relative_path(path, base_path);
             files.push(relative_path);
         }
     }
@@ -62,6 +58,28 @@ pub fn find_markdown_files_in_dir(dir: &str, config: FinderConfig) -> Result<Vec
     // Sort alphabetically
     files.sort();
     Ok(files)
+}
+
+/// Create a relative path with robust cross-platform support
+fn make_relative_path(path: &Path, base: &Path) -> PathBuf {
+    // Try to canonicalize both paths for consistent comparison
+    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let canonical_base = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
+
+    // Try strip_prefix with canonicalized paths
+    if let Ok(rel) = canonical_path.strip_prefix(&canonical_base) {
+        return rel.to_path_buf();
+    }
+
+    // Try strip_prefix with original paths as fallback
+    if let Ok(rel) = path.strip_prefix(base) {
+        return rel.to_path_buf();
+    }
+
+    // Final fallback: use file name if available, otherwise full path
+    path.file_name()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| path.to_path_buf())
 }
 
 /// Display file list

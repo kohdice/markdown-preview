@@ -69,89 +69,117 @@ impl MarkdownRenderer {
     /// Handles element output based on kind and phase
     fn handle_element_output(&mut self, kind: ElementKind, phase: ElementPhase) -> Result<()> {
         match kind {
-            ElementKind::Heading(level) => {
-                if phase == ElementPhase::End {
-                    println!("\n");
-                } else {
-                    let heading_marker = "#".repeat(level as usize);
-                    let color = self.theme.heading_color(level);
-                    let mut marker_with_space = heading_marker;
-                    marker_with_space.push(' ');
-                    let marker = self.create_styled_marker(&marker_with_space, color, true);
-                    print!("{}", marker);
-                }
-            }
-            ElementKind::Paragraph => {
-                if phase == ElementPhase::End {
-                    println!();
-                }
-            }
-            ElementKind::ListItem => {
-                if phase == ElementPhase::End {
-                    println!();
-                } else {
-                    let depth = self.state.list_stack.len();
-                    let indent = self.config.create_indent(depth.saturating_sub(1));
-                    print!("{}", indent);
+            ElementKind::Heading(level) => self.render_heading(level, phase),
+            ElementKind::Paragraph => self.render_paragraph(phase),
+            ElementKind::ListItem => self.render_list_item(phase),
+            ElementKind::BlockQuote => self.render_blockquote(phase),
+            ElementKind::Table(ref variant) => self.render_table_element(variant),
+        }
+    }
 
-                    if let Some(list_type) = self.state.list_stack.last_mut() {
-                        let marker = match list_type {
-                            ListType::Unordered => Cow::Borrowed("• "),
-                            ListType::Ordered { current } => {
-                                let mut m = current.to_string();
-                                m.push_str(".  ");
-                                *current += 1;
-                                Cow::Owned(m)
-                            }
-                        };
-                        let styled_marker = self.create_styled_marker(
-                            &marker,
-                            self.theme.list_marker_color(),
-                            false,
-                        );
-                        print!("{}", styled_marker);
-                    }
-                }
-            }
-            ElementKind::BlockQuote => {
-                if phase == ElementPhase::End {
-                    println!();
-                } else {
-                    let marker =
-                        self.create_styled_marker("> ", self.theme.delimiter_color(), false);
-                    print!("{}", marker);
-                }
-            }
-            ElementKind::Table(ref variant) => match variant {
-                TableVariant::HeadStart => {
-                    if let Some(ref mut table) = self.get_table_mut() {
-                        table.is_header = true;
-                    }
-                }
-                TableVariant::HeadEnd => {
-                    if let Some(table) = self.get_table() {
-                        let current_row = table.current_row.clone();
-                        let alignments = table.alignments.clone();
-                        self.render_table_row(&current_row, true)?;
-                        self.render_table_separator(&alignments)?;
-                    }
+    /// Renders heading elements with appropriate styling and spacing
+    fn render_heading(&mut self, level: u8, phase: ElementPhase) -> Result<()> {
+        if phase == ElementPhase::End {
+            println!("\n");
+        } else {
+            let heading_marker = "#".repeat(level as usize);
+            let color = self.theme.heading_color(level);
+            let mut marker_with_space = heading_marker;
+            marker_with_space.push(' ');
+            let marker = self.create_styled_marker(&marker_with_space, color, true);
+            print!("{}", marker);
+        }
+        Ok(())
+    }
 
-                    if let Some(ref mut table) = self.get_table_mut() {
-                        table.current_row.clear();
-                        table.is_header = false;
-                    }
-                }
-                TableVariant::RowEnd => {
-                    if let Some(table) = self.get_table() {
-                        let current_row = table.current_row.clone();
-                        self.render_table_row(&current_row, false)?;
-                    }
+    /// Renders paragraph elements with proper line breaks
+    fn render_paragraph(&self, phase: ElementPhase) -> Result<()> {
+        if phase == ElementPhase::End {
+            println!();
+        }
+        Ok(())
+    }
 
-                    if let Some(ref mut table) = self.get_table_mut() {
-                        table.current_row.clear();
+    /// Renders list items with proper indentation and markers
+    fn render_list_item(&mut self, phase: ElementPhase) -> Result<()> {
+        if phase == ElementPhase::End {
+            println!();
+        } else {
+            let depth = self.state.list_stack.len();
+            let indent = self.config.create_indent(depth.saturating_sub(1));
+            print!("{}", indent);
+
+            if let Some(list_type) = self.state.list_stack.last_mut() {
+                let marker = match list_type {
+                    ListType::Unordered => Cow::Borrowed("• "),
+                    ListType::Ordered { current } => {
+                        let mut m = current.to_string();
+                        m.push_str(".  ");
+                        *current += 1;
+                        Cow::Owned(m)
                     }
-                }
-            },
+                };
+                let styled_marker =
+                    self.create_styled_marker(&marker, self.theme.list_marker_color(), false);
+                print!("{}", styled_marker);
+            }
+        }
+        Ok(())
+    }
+
+    /// Renders blockquote elements with quote markers
+    fn render_blockquote(&self, phase: ElementPhase) -> Result<()> {
+        if phase == ElementPhase::End {
+            println!();
+        } else {
+            let marker = self.create_styled_marker("> ", self.theme.delimiter_color(), false);
+            print!("{}", marker);
+        }
+        Ok(())
+    }
+
+    /// Renders table elements based on variant type
+    fn render_table_element(&mut self, variant: &TableVariant) -> Result<()> {
+        match variant {
+            TableVariant::HeadStart => self.render_table_head_start(),
+            TableVariant::HeadEnd => self.render_table_head_end()?,
+            TableVariant::RowEnd => self.render_table_row_end()?,
+        }
+        Ok(())
+    }
+
+    /// Handles the start of a table header
+    fn render_table_head_start(&mut self) {
+        if let Some(ref mut table) = self.get_table_mut() {
+            table.is_header = true;
+        }
+    }
+
+    /// Handles the end of a table header, rendering the header row and separator
+    fn render_table_head_end(&mut self) -> Result<()> {
+        if let Some(table) = self.get_table() {
+            let current_row = table.current_row.clone();
+            let alignments = table.alignments.clone();
+            self.render_table_row(&current_row, true)?;
+            self.render_table_separator(&alignments)?;
+        }
+
+        if let Some(ref mut table) = self.get_table_mut() {
+            table.current_row.clear();
+            table.is_header = false;
+        }
+        Ok(())
+    }
+
+    /// Handles the end of a table row
+    fn render_table_row_end(&mut self) -> Result<()> {
+        if let Some(table) = self.get_table() {
+            let current_row = table.current_row.clone();
+            self.render_table_row(&current_row, false)?;
+        }
+
+        if let Some(ref mut table) = self.get_table_mut() {
+            table.current_row.clear();
         }
         Ok(())
     }
@@ -238,5 +266,196 @@ impl MarkdownRenderer {
         }
         println!("{}", output);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        output::{ElementKind, ElementPhase, OutputType, TableVariant},
+        renderer::MarkdownRenderer,
+    };
+    use rstest::rstest;
+
+    fn create_test_renderer() -> MarkdownRenderer {
+        MarkdownRenderer::new()
+    }
+
+    #[rstest]
+    #[case(OutputType::Element { kind: ElementKind::Heading(1), phase: ElementPhase::Start })]
+    #[case(OutputType::Element { kind: ElementKind::Heading(1), phase: ElementPhase::End })]
+    #[case(OutputType::Element { kind: ElementKind::Heading(3), phase: ElementPhase::Start })]
+    #[case(OutputType::Element { kind: ElementKind::Paragraph, phase: ElementPhase::End })]
+    #[case(OutputType::Element { kind: ElementKind::BlockQuote, phase: ElementPhase::Start })]
+    #[case(OutputType::Element { kind: ElementKind::BlockQuote, phase: ElementPhase::End })]
+    fn test_print_output_element_types(#[case] output_type: OutputType) {
+        let mut renderer = create_test_renderer();
+        let result = renderer.print_output(output_type);
+        assert!(result.is_ok());
+    }
+
+    #[rstest]
+    #[case(OutputType::Element { kind: ElementKind::ListItem, phase: ElementPhase::Start }, None)]
+    #[case(OutputType::Element { kind: ElementKind::ListItem, phase: ElementPhase::End }, None)]
+    #[case(OutputType::Element { kind: ElementKind::ListItem, phase: ElementPhase::Start }, Some(1))]
+    fn test_print_output_list_items(
+        #[case] output_type: OutputType,
+        #[case] list_start: Option<u64>,
+    ) {
+        let mut renderer = create_test_renderer();
+        renderer.push_list(list_start);
+        let result = renderer.print_output(output_type);
+        assert!(result.is_ok());
+        renderer.pop_list();
+    }
+
+    #[rstest]
+    #[case(TableVariant::HeadStart)]
+    #[case(TableVariant::HeadEnd)]
+    #[case(TableVariant::RowEnd)]
+    fn test_print_output_table_elements(#[case] variant: TableVariant) {
+        let mut renderer = create_test_renderer();
+        renderer.set_table(vec![]);
+
+        // Add test data for HeadEnd and RowEnd cases
+        if matches!(variant, TableVariant::HeadEnd | TableVariant::RowEnd)
+            && let Some(table) = renderer.get_table_mut()
+        {
+            table.current_row.push("Cell1".to_string());
+            table.current_row.push("Cell2".to_string());
+        }
+
+        let result = renderer.print_output(OutputType::Element {
+            kind: ElementKind::Table(variant),
+            phase: ElementPhase::Start,
+        });
+        assert!(result.is_ok());
+    }
+
+    #[rstest]
+    #[case(OutputType::HorizontalRule)]
+    #[case(OutputType::InlineCode { code: "test code".to_string() })]
+    #[case(OutputType::TaskMarker { checked: true })]
+    #[case(OutputType::TaskMarker { checked: false })]
+    fn test_print_output_inline_types(#[case] output_type: OutputType) {
+        let mut renderer = create_test_renderer();
+        let result = renderer.print_output(output_type);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_print_output_link() {
+        let mut renderer = create_test_renderer();
+        renderer.set_link("https://example.com".to_string());
+        if let Some(link) = renderer.get_link_mut() {
+            link.text = "Example Link".to_string();
+        }
+        let result = renderer.print_output(OutputType::Link);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_print_output_image() {
+        let mut renderer = create_test_renderer();
+        renderer.set_image("https://example.com/image.jpg".to_string());
+        if let Some(image) = renderer.get_image_mut() {
+            image.alt_text = "Example Image".to_string();
+        }
+        let result = renderer.print_output(OutputType::Image);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_print_output_code_block() {
+        let mut renderer = create_test_renderer();
+        renderer.set_code_block(pulldown_cmark::CodeBlockKind::Fenced("rust".into()));
+        if let Some(code) = renderer.get_code_block_mut() {
+            code.content = "fn main() {}".to_string();
+        }
+        let result = renderer.print_output(OutputType::CodeBlock);
+        assert!(result.is_ok());
+    }
+
+    #[rstest]
+    #[case("# Heading 1\n## Heading 2", "headings")]
+    #[case("- Item 1\n- Item 2\n1. Ordered item", "lists")]
+    #[case("> This is a quote", "blockquote")]
+    #[case("| Header |\n|--------|\n| Cell |", "table")]
+    #[case("```rust\nfn main() {}\n```", "code_block")]
+    #[case("**bold** *italic* `code`", "inline_elements")]
+    #[case("[Link](https://example.com)", "link")]
+    #[case("---", "horizontal_rule")]
+    fn test_render_content_markdown_elements(#[case] markdown: &str, #[case] _description: &str) {
+        let mut renderer = create_test_renderer();
+        let result = renderer.render_content(markdown);
+        assert!(result.is_ok(), "Failed to render {}", _description);
+    }
+
+    #[test]
+    fn test_complex_markdown_rendering() {
+        let mut renderer = create_test_renderer();
+
+        let complex_markdown = r#"
+# Main Title
+
+This is a paragraph with **bold** and *italic* text.
+
+## Lists
+
+- Unordered item 1
+- Unordered item 2
+  - Nested item
+
+1. Ordered item 1
+2. Ordered item 2
+
+## Code
+
+```rust
+fn hello() {
+    println!("Hello, world!");
+}
+```
+
+## Table
+
+| Column 1 | Column 2 |
+|----------|----------|
+| Data 1   | Data 2   |
+
+> A blockquote with multiple
+> lines of text
+
+---
+
+[Link](https://example.com)
+"#;
+
+        let result = renderer.render_content(complex_markdown);
+        assert!(result.is_ok());
+    }
+
+    #[rstest]
+    #[case(1)]
+    #[case(2)]
+    #[case(3)]
+    #[case(4)]
+    #[case(5)]
+    #[case(6)]
+    fn test_heading_levels(#[case] level: u8) {
+        let mut renderer = create_test_renderer();
+        let markdown = format!("{} Heading Level {}", "#".repeat(level as usize), level);
+        let result = renderer.render_content(&markdown);
+        assert!(result.is_ok(), "Failed to render heading level {}", level);
+    }
+
+    #[rstest]
+    #[case("- [ ] Unchecked task")]
+    #[case("- [x] Checked task")]
+    #[case("- [X] Also checked task")]
+    fn test_task_lists(#[case] markdown: &str) {
+        let mut renderer = create_test_renderer();
+        let result = renderer.render_content(markdown);
+        assert!(result.is_ok(), "Failed to render task list: {}", markdown);
     }
 }
