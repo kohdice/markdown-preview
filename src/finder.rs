@@ -17,7 +17,6 @@ pub fn find_markdown_files(config: FinderConfig) -> Result<Vec<PathBuf>> {
 
 /// Search for markdown files in the specified directory (also used for testing)
 pub fn find_markdown_files_in_dir(dir: &str, config: FinderConfig) -> Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
     let base_path = Path::new(dir);
 
     let mut builder = WalkBuilder::new(dir);
@@ -43,17 +42,20 @@ pub fn find_markdown_files_in_dir(dir: &str, config: FinderConfig) -> Result<Vec
 
     let walker = builder.build();
 
-    for result in walker {
-        let entry = result?;
-        let path = entry.path();
-
-        // Collect only .md files
-        if path.is_file() && path.extension().is_some_and(|ext| ext == "md") {
-            // Create relative path with better cross-platform support
-            let relative_path = make_relative_path(path, base_path);
-            files.push(relative_path);
-        }
-    }
+    // Use iterator chain with filter_map for efficiency
+    let mut files: Vec<PathBuf> = walker
+        .filter_map(|result| result.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            // Collect only .md files
+            if path.is_file() && path.extension().is_some_and(|ext| ext == "md") {
+                // Create relative path with better cross-platform support
+                Some(make_relative_path(path, base_path))
+            } else {
+                None
+            }
+        })
+        .collect();
 
     // Sort alphabetically
     files.sort();
