@@ -319,7 +319,8 @@ mod tests {
 
         // Add test data for HeadEnd and RowEnd cases
         if matches!(variant, TableVariant::HeadEnd | TableVariant::RowEnd)
-            && let Some(table) = renderer.get_table_mut() {
+            && let Some(table) = renderer.get_table_mut()
+        {
             table.current_row.push("Cell1".to_string());
             table.current_row.push("Cell2".to_string());
         }
