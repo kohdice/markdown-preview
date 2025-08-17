@@ -1,4 +1,5 @@
 mod cli;
+mod finder;
 
 use cli::run;
 

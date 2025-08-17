@@ -14,12 +14,9 @@ use std::borrow::Cow;
 /// assert_eq!(normalize_line_endings("hello\nworld"), "hello\nworld");
 /// ```
 pub fn normalize_line_endings(text: &str) -> Cow<'_, str> {
-    // Early return if no Windows/Mac line endings are present
     if !text.contains('\r') {
         return Cow::Borrowed(text);
     }
-
-    // Replace CRLF with LF, then replace any remaining CR with LF
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
     Cow::Owned(normalized)
 }
@@ -45,7 +42,6 @@ mod tests {
     #[test]
     fn test_normalize_line_endings_unix() {
         let input = "line1\nline2\nline3";
-        // Should return borrowed reference for Unix line endings
         assert!(matches!(normalize_line_endings(input), Cow::Borrowed(_)));
         assert_eq!(normalize_line_endings(input), input);
     }
