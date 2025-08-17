@@ -2,6 +2,7 @@ use super::MarkdownRenderer;
 use crate::theme::MarkdownTheme;
 use colored::ColoredString;
 use std::borrow::Cow;
+use std::io::Write;
 
 /// Comprehensive text styling system for all Markdown element types.
 /// Encapsulates color, weight, and decoration for consistent terminal output.
@@ -23,7 +24,7 @@ pub enum TextStyle {
     },
 }
 
-impl MarkdownRenderer {
+impl<W: Write> MarkdownRenderer<W> {
     /// Converts TextStyle enum to colored terminal output.
     /// Centralizes all styling logic for consistency across the renderer.
     pub fn apply_text_style(&self, text: &str, style: TextStyle) -> ColoredString {
@@ -53,8 +54,9 @@ impl MarkdownRenderer {
         }
     }
 
-    pub fn render_styled_text(&self, text: &str) {
-        print!("{}", self.create_styled_text(text));
+    pub fn render_styled_text(&mut self, text: &str) {
+        let styled = self.create_styled_text(text);
+        self.output.write(&styled).ok();
     }
 
     /// Determines appropriate style based on current emphasis state.

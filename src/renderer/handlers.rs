@@ -1,5 +1,6 @@
 use anyhow::Result;
 use pulldown_cmark::{Event, Tag, TagEnd};
+use std::io::Write;
 
 use super::{MarkdownRenderer, state::ContentType};
 use crate::{
@@ -7,7 +8,7 @@ use crate::{
     output::{ElementKind, ElementPhase, OutputType, TableVariant},
 };
 
-impl MarkdownRenderer {
+impl<W: Write> MarkdownRenderer<W> {
     fn tag_end_to_tag(tag_end: TagEnd) -> Option<Tag<'static>> {
         match tag_end {
             TagEnd::Heading(level) => Some(Tag::Heading {
@@ -109,7 +110,9 @@ impl MarkdownRenderer {
             Tag::List(_) => self.handle_list_end(),
             Tag::Item => self.handle_element(ElementKind::ListItem, ElementPhase::End)?,
             Tag::CodeBlock(_) => self.print_output(OutputType::CodeBlock)?,
-            Tag::Table(_) => self.handle_table_end(),
+            Tag::Table(_) => {
+                self.handle_table_end();
+            }
             Tag::TableHead => self.handle_element(
                 ElementKind::Table(TableVariant::HeadEnd),
                 ElementPhase::Start,
@@ -137,7 +140,7 @@ impl MarkdownRenderer {
         // Nested lists need visual separation from their parent list items
         // to maintain readability in terminal output
         if !self.state.list_stack.is_empty() {
-            println!();
+            self.output.newline().ok();
         }
         self.push_list(start);
     }
@@ -145,7 +148,7 @@ impl MarkdownRenderer {
     fn handle_list_end(&mut self) {
         self.pop_list();
         if self.state.list_stack.is_empty() {
-            println!();
+            self.output.newline().ok();
         }
     }
 
@@ -163,7 +166,7 @@ impl MarkdownRenderer {
 
     fn handle_table_end(&mut self) {
         self.clear_table();
-        println!();
+        self.output.newline().ok();
     }
 
     pub(super) fn handle_content(&mut self, content: ContentType) -> Result<()> {
@@ -190,16 +193,18 @@ impl MarkdownRenderer {
                 }
             }
             ContentType::SoftBreak => {
-                print!(" ");
+                self.output.write(" ")?;
             }
             ContentType::HardBreak => {
-                println!();
+                self.output.newline()?;
             }
             ContentType::Rule => {
                 let line = self.config.create_horizontal_rule();
                 let styled_line =
                     self.apply_text_style(&line, super::styling::TextStyle::Delimiter);
-                println!("\n{}\n", styled_line);
+                self.output.writeln("")?;
+                self.output.writeln(&styled_line)?;
+                self.output.writeln("")?;
             }
             ContentType::TaskMarker(checked) => {
                 self.print_output(OutputType::TaskMarker { checked })?;

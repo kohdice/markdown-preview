@@ -3,6 +3,7 @@
 //! This module parses Markdown files and content,
 //! converting them to terminal-displayable format.
 
+use std::io::{Stdout, Write};
 use std::path::Path;
 
 use anyhow::Result;
@@ -11,6 +12,7 @@ use pulldown_cmark::{Options, Parser};
 use crate::theme::SolarizedOsaka;
 
 // Internal modules for separating rendering concerns
+pub mod buffered_output;
 mod config;
 mod element_accessor;
 mod formatting;
@@ -30,6 +32,7 @@ pub use styling::TextStyle;
 pub use table_builder::{Table, TableBuilder};
 
 // Re-export core rendering functionality
+pub use self::buffered_output::BufferedOutput;
 use self::io::read_file;
 
 /// Main Markdown renderer struct
@@ -38,22 +41,29 @@ use self::io::read_file;
 /// - Loading and parsing Markdown files
 /// - Markdown parsing using pulldown_cmark
 /// - Converting events to terminal-displayable format
-#[derive(Debug)]
-pub struct MarkdownRenderer {
+/// - Efficient buffered output to terminal
+pub struct MarkdownRenderer<W: Write = Stdout> {
     pub theme: SolarizedOsaka,
     pub state: RenderState,
     pub options: Options,
     pub config: RenderConfig,
+    pub output: BufferedOutput<W>,
 }
 
-impl Default for MarkdownRenderer {
+impl Default for MarkdownRenderer<Stdout> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl MarkdownRenderer {
+impl MarkdownRenderer<Stdout> {
     pub fn new() -> Self {
+        Self::with_output(BufferedOutput::stdout())
+    }
+}
+
+impl<W: Write> MarkdownRenderer<W> {
+    pub fn with_output(output: BufferedOutput<W>) -> Self {
         let mut options = Options::empty();
         options.insert(Options::ENABLE_STRIKETHROUGH);
         options.insert(Options::ENABLE_TABLES);
@@ -65,6 +75,7 @@ impl MarkdownRenderer {
             state: RenderState::default(),
             options,
             config: RenderConfig::default(),
+            output,
         }
     }
 
@@ -81,6 +92,8 @@ impl MarkdownRenderer {
         }
 
         self.flush()?;
+        // Flush buffered output to ensure all content is written
+        self.output.flush()?;
         Ok(())
     }
 
@@ -229,12 +242,12 @@ impl MarkdownRenderer {
     /// ```
     pub fn build_table(&self) -> TableBuilder {
         TableBuilder::new()
-            .separator(self.config.table_separator.clone())
+            .separator(self.config.table_separator)
             .alignment_config(table_builder::TableAlignmentConfig {
-                left: self.config.table_alignment.left.clone(),
-                center: self.config.table_alignment.center.clone(),
-                right: self.config.table_alignment.right.clone(),
-                none: self.config.table_alignment.none.clone(),
+                left: self.config.table_alignment.left,
+                center: self.config.table_alignment.center,
+                right: self.config.table_alignment.right,
+                none: self.config.table_alignment.none,
             })
     }
 
@@ -263,6 +276,31 @@ mod tests {
     use super::*;
     use pulldown_cmark::Options;
     use rstest::rstest;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    // Test-specific MockWriter implementation
+    struct MockWriter {
+        buffer: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl MockWriter {
+        fn new_with_buffer(buffer: Arc<Mutex<Vec<u8>>>) -> Self {
+            MockWriter { buffer }
+        }
+    }
+
+    impl Write for MockWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let mut buffer = self.buffer.lock().unwrap();
+            buffer.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
     // ====================
     // Test Data Constants
@@ -328,8 +366,11 @@ fn main() {
     // ====================
 
     /// Helper function to create a renderer with default settings
-    fn create_renderer() -> MarkdownRenderer {
-        MarkdownRenderer::new()
+    fn create_renderer() -> MarkdownRenderer<MockWriter> {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let mock_writer = MockWriter::new_with_buffer(buffer);
+        let output = BufferedOutput::new(mock_writer);
+        MarkdownRenderer::with_output(output)
     }
 
     /// Helper function to assert rendering succeeds
@@ -340,7 +381,11 @@ fn main() {
     }
 
     /// Helper function to set emphasis state
-    fn set_emphasis_state(renderer: &mut MarkdownRenderer, strong: bool, italic: bool) {
+    fn set_emphasis_state<W: Write>(
+        renderer: &mut MarkdownRenderer<W>,
+        strong: bool,
+        italic: bool,
+    ) {
         renderer.state.emphasis.strong = strong;
         renderer.state.emphasis.italic = italic;
     }
@@ -506,7 +551,7 @@ fn main() {
     #[test]
     fn test_table_builder_with_config() {
         let mut renderer = create_renderer();
-        renderer.config.table_separator = "||".to_string();
+        renderer.config.table_separator = "||";
 
         let table = renderer
             .build_table()
