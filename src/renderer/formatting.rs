@@ -205,8 +205,14 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     pub(super) fn render_code_content(&mut self, content: &str) -> Result<()> {
-        for line in content.lines() {
-            let styled_line = self.create_styled_code_line(line);
+        // Collect styled lines first to avoid multiple borrows
+        let styled_lines: Vec<String> = content
+            .lines()
+            .map(|line| self.create_styled_code_line(line))
+            .collect();
+
+        // Then write them all
+        for styled_line in styled_lines {
             self.output.writeln(&styled_line)?;
         }
         Ok(())

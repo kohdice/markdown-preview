@@ -6,13 +6,14 @@
 use std::io::{Stdout, Write};
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use pulldown_cmark::{Options, Parser};
 
 use crate::theme::SolarizedOsaka;
 
 // Internal modules for separating rendering concerns
 pub mod buffered_output;
+pub mod builder;
 mod config;
 mod element_accessor;
 mod formatting;
@@ -23,6 +24,7 @@ mod styling;
 mod table_builder;
 
 // Public API exports for external module usage
+pub use builder::RendererBuilder;
 pub use config::RenderConfig;
 pub use element_accessor::{
     CodeBlockAccessor, ElementData, ImageAccessor, LinkAccessor, TableAccessor,
@@ -80,7 +82,8 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     pub fn render_file(&mut self, path: &Path) -> Result<()> {
-        let content = read_file(path)?;
+        let content = read_file(path)
+            .with_context(|| format!("Failed to read markdown file: {}", path.display()))?;
         self.render_content(&content)
     }
 
@@ -92,7 +95,6 @@ impl<W: Write> MarkdownRenderer<W> {
         }
 
         self.flush()?;
-        // Flush buffered output to ensure all content is written
         self.output.flush()?;
         Ok(())
     }
