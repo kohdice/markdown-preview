@@ -11,7 +11,6 @@ fn test_all_commonmark_features() {
     let test_groups = create_commonmark_test_cases();
 
     for (group_name, cases) in test_groups {
-        println!("Testing group: {}", group_name);
         let test_cases: Vec<TestCase> = cases
             .into_iter()
             .enumerate()

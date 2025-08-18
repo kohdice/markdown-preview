@@ -1,5 +1,6 @@
 use anyhow::Result;
 use pulldown_cmark::{Event, Tag, TagEnd};
+use std::io::Write;
 
 use super::{MarkdownRenderer, state::ContentType};
 use crate::{
@@ -7,55 +8,51 @@ use crate::{
     output::{ElementKind, ElementPhase, OutputType, TableVariant},
 };
 
-impl MarkdownRenderer {
-    /// Process pulldown_cmark events and route them to appropriate handlers.
-    /// Converts Tag events to handle_tag and content events to handle_content.
+impl<W: Write> MarkdownRenderer<W> {
+    fn tag_end_to_tag(tag_end: TagEnd) -> Option<Tag<'static>> {
+        match tag_end {
+            TagEnd::Heading(level) => Some(Tag::Heading {
+                level,
+                id: None,
+                classes: vec![],
+                attrs: vec![],
+            }),
+            TagEnd::Paragraph => Some(Tag::Paragraph),
+            TagEnd::Strong => Some(Tag::Strong),
+            TagEnd::Emphasis => Some(Tag::Emphasis),
+            TagEnd::Link => Some(Tag::Link {
+                link_type: pulldown_cmark::LinkType::Inline,
+                dest_url: "".into(),
+                title: "".into(),
+                id: "".into(),
+            }),
+            TagEnd::List(_) => Some(Tag::List(None)),
+            TagEnd::Item => Some(Tag::Item),
+            TagEnd::CodeBlock => Some(Tag::CodeBlock(pulldown_cmark::CodeBlockKind::Indented)),
+            TagEnd::Table => Some(Tag::Table(vec![])),
+            TagEnd::TableHead => Some(Tag::TableHead),
+            TagEnd::TableRow => Some(Tag::TableRow),
+            TagEnd::BlockQuote(_) => Some(Tag::BlockQuote(None)),
+            TagEnd::Image => Some(Tag::Image {
+                link_type: pulldown_cmark::LinkType::Inline,
+                dest_url: "".into(),
+                title: "".into(),
+                id: "".into(),
+            }),
+            _ => None,
+        }
+    }
+
     pub fn process_event(&mut self, event: Event) -> Result<()> {
         match event {
             Event::Start(tag) => self.handle_tag(tag, true),
-            Event::End(tag) => match tag {
-                TagEnd::Heading(level) => self.handle_tag(
-                    Tag::Heading {
-                        level,
-                        id: None,
-                        classes: vec![],
-                        attrs: vec![],
-                    },
-                    false,
-                ),
-                TagEnd::Paragraph => self.handle_tag(Tag::Paragraph, false),
-                TagEnd::Strong => self.handle_tag(Tag::Strong, false),
-                TagEnd::Emphasis => self.handle_tag(Tag::Emphasis, false),
-                TagEnd::Link => self.handle_tag(
-                    Tag::Link {
-                        link_type: pulldown_cmark::LinkType::Inline,
-                        dest_url: "".into(),
-                        title: "".into(),
-                        id: "".into(),
-                    },
-                    false,
-                ),
-                TagEnd::List(_) => self.handle_tag(Tag::List(None), false),
-                TagEnd::Item => self.handle_tag(Tag::Item, false),
-                TagEnd::CodeBlock => self.handle_tag(
-                    Tag::CodeBlock(pulldown_cmark::CodeBlockKind::Indented),
-                    false,
-                ),
-                TagEnd::Table => self.handle_tag(Tag::Table(vec![]), false),
-                TagEnd::TableHead => self.handle_tag(Tag::TableHead, false),
-                TagEnd::TableRow => self.handle_tag(Tag::TableRow, false),
-                TagEnd::BlockQuote(_) => self.handle_tag(Tag::BlockQuote(None), false),
-                TagEnd::Image => self.handle_tag(
-                    Tag::Image {
-                        link_type: pulldown_cmark::LinkType::Inline,
-                        dest_url: "".into(),
-                        title: "".into(),
-                        id: "".into(),
-                    },
-                    false,
-                ),
-                _ => Ok(()),
-            },
+            Event::End(tag_end) => {
+                if let Some(tag) = Self::tag_end_to_tag(tag_end) {
+                    self.handle_tag(tag, false)
+                } else {
+                    Ok(())
+                }
+            }
             Event::Text(text) => self.handle_content(ContentType::Text(&text)),
             Event::Code(code) => self.handle_content(ContentType::Code(&code)),
             Event::Html(html) => self.handle_content(ContentType::Html(&html)),
@@ -67,8 +64,6 @@ impl MarkdownRenderer {
         }
     }
 
-    /// Process opening and closing tags to manage state transitions and output.
-    /// Opening tags set up state, closing tags trigger rendering and cleanup.
     pub(super) fn handle_tag(&mut self, tag: Tag, is_start: bool) -> Result<()> {
         if is_start {
             self.handle_tag_start(tag)
@@ -77,7 +72,6 @@ impl MarkdownRenderer {
         }
     }
 
-    /// Handle opening tags to set up state for element processing
     fn handle_tag_start(&mut self, tag: Tag) -> Result<()> {
         match tag {
             Tag::Heading { level, .. } => {
@@ -104,7 +98,6 @@ impl MarkdownRenderer {
         Ok(())
     }
 
-    /// Handle closing tags to trigger rendering and cleanup
     fn handle_tag_end(&mut self, tag: Tag) -> Result<()> {
         match tag {
             Tag::Heading { .. } => {
@@ -117,7 +110,9 @@ impl MarkdownRenderer {
             Tag::List(_) => self.handle_list_end(),
             Tag::Item => self.handle_element(ElementKind::ListItem, ElementPhase::End)?,
             Tag::CodeBlock(_) => self.print_output(OutputType::CodeBlock)?,
-            Tag::Table(_) => self.handle_table_end(),
+            Tag::Table(_) => {
+                self.handle_table_end();
+            }
             Tag::TableHead => self.handle_element(
                 ElementKind::Table(TableVariant::HeadEnd),
                 ElementPhase::Start,
@@ -145,7 +140,7 @@ impl MarkdownRenderer {
         // Nested lists need visual separation from their parent list items
         // to maintain readability in terminal output
         if !self.state.list_stack.is_empty() {
-            println!();
+            self.output.newline().ok();
         }
         self.push_list(start);
     }
@@ -153,7 +148,7 @@ impl MarkdownRenderer {
     fn handle_list_end(&mut self) {
         self.pop_list();
         if self.state.list_stack.is_empty() {
-            println!();
+            self.output.newline().ok();
         }
     }
 
@@ -171,11 +166,9 @@ impl MarkdownRenderer {
 
     fn handle_table_end(&mut self) {
         self.clear_table();
-        println!();
+        self.output.newline().ok();
     }
 
-    /// Process content events including text, code, HTML, and breaks.
-    /// Routes content to active elements or renders directly based on state.
     pub(super) fn handle_content(&mut self, content: ContentType) -> Result<()> {
         match content {
             ContentType::Text(text) => {
@@ -200,16 +193,18 @@ impl MarkdownRenderer {
                 }
             }
             ContentType::SoftBreak => {
-                print!(" ");
+                self.output.write(" ")?;
             }
             ContentType::HardBreak => {
-                println!();
+                self.output.newline()?;
             }
             ContentType::Rule => {
                 let line = self.config.create_horizontal_rule();
                 let styled_line =
                     self.apply_text_style(&line, super::styling::TextStyle::Delimiter);
-                println!("\n{}\n", styled_line);
+                self.output.writeln("")?;
+                self.output.writeln(&styled_line)?;
+                self.output.writeln("")?;
             }
             ContentType::TaskMarker(checked) => {
                 self.print_output(OutputType::TaskMarker { checked })?;

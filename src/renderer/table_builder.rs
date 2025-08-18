@@ -27,26 +27,26 @@ pub struct TableBuilder {
     headers: Option<Vec<String>>,
     rows: Vec<Vec<String>>,
     alignments: Vec<Alignment>,
-    separator: String,
+    separator: &'static str,
     alignment_config: TableAlignmentConfig,
 }
 
 /// Configuration for table alignment indicators
 #[derive(Debug, Clone)]
 pub struct TableAlignmentConfig {
-    pub left: String,
-    pub center: String,
-    pub right: String,
-    pub none: String,
+    pub left: &'static str,
+    pub center: &'static str,
+    pub right: &'static str,
+    pub none: &'static str,
 }
 
 impl Default for TableAlignmentConfig {
     fn default() -> Self {
         Self {
-            left: ":---".to_string(),
-            center: ":---:".to_string(),
-            right: "---:".to_string(),
-            none: "---".to_string(),
+            left: ":---",
+            center: ":---:",
+            right: "---:",
+            none: "---",
         }
     }
 }
@@ -57,7 +57,7 @@ pub struct Table {
     headers: Option<Vec<String>>,
     rows: Vec<Vec<String>>,
     alignments: Vec<Alignment>,
-    separator: String,
+    separator: &'static str,
     alignment_config: TableAlignmentConfig,
 }
 
@@ -68,7 +68,7 @@ impl TableBuilder {
             headers: None,
             rows: Vec::new(),
             alignments: Vec::new(),
-            separator: "|".to_string(),
+            separator: "|",
             alignment_config: TableAlignmentConfig::default(),
         }
     }
@@ -121,8 +121,8 @@ impl TableBuilder {
     }
 
     /// Sets a custom separator character
-    pub fn separator<S: Into<String>>(mut self, separator: S) -> Self {
-        self.separator = separator.into();
+    pub fn separator(mut self, separator: &'static str) -> Self {
+        self.separator = separator;
         self
     }
 
@@ -200,51 +200,60 @@ impl Table {
         &self.alignments
     }
 
-    /// Renders a single row as a string
-    pub fn render_row(&self, row: &[String], apply_styling: bool) -> String {
-        // Pre-allocate capacity based on estimated row size
+    /// Helper function to format table row with common logic
+    fn format_table_row<I, F>(&self, items: I, formatter: F, estimated_cell_size: usize) -> String
+    where
+        I: IntoIterator,
+        I::IntoIter: ExactSizeIterator,
+        F: Fn(&mut String, I::Item),
+    {
+        let items_iter = items.into_iter();
+        let item_count = items_iter.len();
         let estimated_size =
-            row.iter().map(|s| s.len() + 4).sum::<usize>() + self.separator.len() * (row.len() + 1);
+            item_count * estimated_cell_size + self.separator.len() * (item_count + 1);
         let mut output = String::with_capacity(estimated_size);
-        output.push_str(&self.separator);
 
-        for cell in row {
+        output.push_str(self.separator);
+        for item in items_iter {
             output.push(' ');
-            if apply_styling {
-                // In a real implementation, this would apply color/bold styling
-                output.push_str(cell);
-            } else {
-                output.push_str(cell);
-            }
+            formatter(&mut output, item);
             output.push(' ');
-            output.push_str(&self.separator);
+            output.push_str(self.separator);
         }
 
         output
     }
 
+    /// Renders a single row as a string
+    pub fn render_row(&self, row: &[String]) -> String {
+        let avg_cell_size = if row.is_empty() {
+            4
+        } else {
+            row.iter().map(|s| s.len()).sum::<usize>() / row.len() + 4
+        };
+
+        self.format_table_row(
+            row.iter(),
+            |output, cell| output.push_str(cell),
+            avg_cell_size,
+        )
+    }
+
     /// Renders the alignment separator row
     pub fn render_separator(&self) -> String {
-        // Pre-allocate capacity based on alignment count
-        let estimated_size =
-            self.alignments.len() * 8 + self.separator.len() * (self.alignments.len() + 1);
-        let mut output = String::with_capacity(estimated_size);
-        output.push_str(&self.separator);
-
-        for alignment in &self.alignments {
-            let sep = match alignment {
-                Alignment::Left => &self.alignment_config.left,
-                Alignment::Center => &self.alignment_config.center,
-                Alignment::Right => &self.alignment_config.right,
-                Alignment::None => &self.alignment_config.none,
-            };
-            output.push(' ');
-            output.push_str(sep);
-            output.push(' ');
-            output.push_str(&self.separator);
-        }
-
-        output
+        self.format_table_row(
+            &self.alignments,
+            |output, alignment| {
+                let sep = match alignment {
+                    Alignment::Left => &self.alignment_config.left,
+                    Alignment::Center => &self.alignment_config.center,
+                    Alignment::Right => &self.alignment_config.right,
+                    Alignment::None => &self.alignment_config.none,
+                };
+                output.push_str(sep);
+            },
+            8,
+        )
     }
 
     /// Renders the entire table
@@ -255,13 +264,13 @@ impl Table {
 
         // Render header if present
         if let Some(ref headers) = self.headers {
-            lines.push(self.render_row(headers, true));
+            lines.push(self.render_row(headers));
             lines.push(self.render_separator());
         }
 
         // Render data rows
         for row in &self.rows {
-            lines.push(self.render_row(row, false));
+            lines.push(self.render_row(row));
         }
 
         lines
@@ -369,7 +378,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let rendered = table.render_row(&["X".to_string(), "Y".to_string()], false);
+        let rendered = table.render_row(&["X".to_string(), "Y".to_string()]);
         assert!(rendered.starts_with("||"));
         assert!(rendered.contains("|| X ||"));
     }

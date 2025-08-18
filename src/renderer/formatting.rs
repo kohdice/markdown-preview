@@ -1,6 +1,7 @@
 use anyhow::Result;
 use pulldown_cmark::Alignment;
 use std::borrow::Cow;
+use std::io::Write;
 
 use super::{
     MarkdownRenderer,
@@ -12,9 +13,7 @@ use crate::{
     theme::MarkdownTheme,
 };
 
-impl MarkdownRenderer {
-    /// Central output dispatcher that handles all Markdown element rendering.
-    /// Maintains consistent formatting and styling across all element types.
+impl<W: Write> MarkdownRenderer<W> {
     pub fn print_output(&mut self, output_type: OutputType) -> Result<()> {
         match output_type {
             OutputType::Element { kind, phase } => {
@@ -23,24 +22,27 @@ impl MarkdownRenderer {
             OutputType::HorizontalRule => {
                 let line = self.config.create_horizontal_rule();
                 let styled_line = self.apply_text_style(&line, TextStyle::Delimiter);
-                println!("\n{}\n", styled_line);
+                self.output.writeln("")?;
+                self.output.writeln(&styled_line)?;
+                self.output.writeln("")?;
             }
             OutputType::InlineCode { ref code } => {
                 let styled_code = self.apply_text_style(code, TextStyle::CodeBlock);
-                print!("{}", styled_code);
+                self.output.write(&styled_code)?;
             }
             OutputType::TaskMarker { checked } => {
                 let marker = if checked { "[x] " } else { "[ ] " };
                 let styled_marker =
                     self.create_styled_marker(marker, self.theme.list_marker_color(), false);
-                print!("{}", styled_marker);
+                self.output.write(&styled_marker)?;
             }
             OutputType::Link => {
                 if let Some(link) = self.get_link() {
                     self.clear_link();
                     let styled_link = self.apply_text_style(&link.text, TextStyle::Link);
                     let url_text = self.create_styled_url(&link.url);
-                    print!("{}{}", styled_link, url_text);
+                    self.output.write(&styled_link)?;
+                    self.output.write(&url_text)?;
                 }
             }
             OutputType::Image => {
@@ -53,7 +55,8 @@ impl MarkdownRenderer {
                     };
                     let styled_alt = self.apply_text_style(display_text, TextStyle::Emphasis);
                     let url_text = self.create_styled_url(&image.url);
-                    print!("{}{}", styled_alt, url_text);
+                    self.output.write(&styled_alt)?;
+                    self.output.write(&url_text)?;
                 }
             }
             OutputType::CodeBlock => {
@@ -66,7 +69,6 @@ impl MarkdownRenderer {
         Ok(())
     }
 
-    /// Handles element output based on kind and phase
     fn handle_element_output(&mut self, kind: ElementKind, phase: ElementPhase) -> Result<()> {
         match kind {
             ElementKind::Heading(level) => self.render_heading(level, phase),
@@ -77,37 +79,35 @@ impl MarkdownRenderer {
         }
     }
 
-    /// Renders heading elements with appropriate styling and spacing
     fn render_heading(&mut self, level: u8, phase: ElementPhase) -> Result<()> {
         if phase == ElementPhase::End {
-            println!("\n");
+            self.output.writeln("")?;
+            self.output.writeln("")?
         } else {
             let heading_marker = "#".repeat(level as usize);
             let color = self.theme.heading_color(level);
             let mut marker_with_space = heading_marker;
             marker_with_space.push(' ');
             let marker = self.create_styled_marker(&marker_with_space, color, true);
-            print!("{}", marker);
+            self.output.write(&marker)?;
         }
         Ok(())
     }
 
-    /// Renders paragraph elements with proper line breaks
-    fn render_paragraph(&self, phase: ElementPhase) -> Result<()> {
+    fn render_paragraph(&mut self, phase: ElementPhase) -> Result<()> {
         if phase == ElementPhase::End {
-            println!();
+            self.output.newline()?;
         }
         Ok(())
     }
 
-    /// Renders list items with proper indentation and markers
     fn render_list_item(&mut self, phase: ElementPhase) -> Result<()> {
         if phase == ElementPhase::End {
-            println!();
+            self.output.newline()?;
         } else {
             let depth = self.state.list_stack.len();
             let indent = self.config.create_indent(depth.saturating_sub(1));
-            print!("{}", indent);
+            self.output.write(&indent)?;
 
             if let Some(list_type) = self.state.list_stack.last_mut() {
                 let marker = match list_type {
@@ -121,24 +121,22 @@ impl MarkdownRenderer {
                 };
                 let styled_marker =
                     self.create_styled_marker(&marker, self.theme.list_marker_color(), false);
-                print!("{}", styled_marker);
+                self.output.write(&styled_marker)?;
             }
         }
         Ok(())
     }
 
-    /// Renders blockquote elements with quote markers
-    fn render_blockquote(&self, phase: ElementPhase) -> Result<()> {
+    fn render_blockquote(&mut self, phase: ElementPhase) -> Result<()> {
         if phase == ElementPhase::End {
-            println!();
+            self.output.newline()?;
         } else {
             let marker = self.create_styled_marker("> ", self.theme.delimiter_color(), false);
-            print!("{}", marker);
+            self.output.write(&marker)?;
         }
         Ok(())
     }
 
-    /// Renders table elements based on variant type
     fn render_table_element(&mut self, variant: &TableVariant) -> Result<()> {
         match variant {
             TableVariant::HeadStart => self.render_table_head_start(),
@@ -148,14 +146,12 @@ impl MarkdownRenderer {
         Ok(())
     }
 
-    /// Handles the start of a table header
     fn render_table_head_start(&mut self) {
         if let Some(ref mut table) = self.get_table_mut() {
             table.is_header = true;
         }
     }
 
-    /// Handles the end of a table header, rendering the header row and separator
     fn render_table_head_end(&mut self) -> Result<()> {
         if let Some(table) = self.get_table() {
             let current_row = table.current_row.clone();
@@ -171,7 +167,6 @@ impl MarkdownRenderer {
         Ok(())
     }
 
-    /// Handles the end of a table row
     fn render_table_row_end(&mut self) -> Result<()> {
         if let Some(table) = self.get_table() {
             let current_row = table.current_row.clone();
@@ -184,21 +179,19 @@ impl MarkdownRenderer {
         Ok(())
     }
 
-    /// Renders complete code block with opening fence, content, and closing fence.
-    /// Language identifier is included in opening fence if specified.
-    pub(super) fn render_code_block(&self, code_block: &CodeBlockState) -> Result<()> {
-        self.render_code_fence(code_block.language.as_deref());
-        self.render_code_content(&code_block.content);
-        self.render_code_fence(None);
+    pub(super) fn render_code_block(&mut self, code_block: &CodeBlockState) -> Result<()> {
+        self.render_code_fence(code_block.language.as_deref())?;
+        self.render_code_content(&code_block.content)?;
+        self.render_code_fence(None)?;
         Ok(())
     }
 
-    pub(super) fn render_code_fence(&self, language: Option<&str>) {
-        println!("{}", self.create_code_fence(language));
+    pub(super) fn render_code_fence(&mut self, language: Option<&str>) -> Result<()> {
+        let fence = self.create_code_fence(language);
+        self.output.writeln(&fence)?;
+        Ok(())
     }
 
-    /// Creates styled code fence marker with optional language identifier.
-    /// Used for both opening (with language) and closing (without) fences.
     pub(super) fn create_code_fence(&self, language: Option<&str>) -> String {
         let fence = self.create_styled_marker("```", self.theme.delimiter_color(), false);
         if let Some(lang) = language {
@@ -211,10 +204,18 @@ impl MarkdownRenderer {
         }
     }
 
-    pub(super) fn render_code_content(&self, content: &str) {
-        for line in content.lines() {
-            println!("{}", self.create_styled_code_line(line));
+    pub(super) fn render_code_content(&mut self, content: &str) -> Result<()> {
+        // Collect styled lines first to avoid multiple borrows
+        let styled_lines: Vec<String> = content
+            .lines()
+            .map(|line| self.create_styled_code_line(line))
+            .collect();
+
+        // Then write them all
+        for styled_line in styled_lines {
+            self.output.writeln(&styled_line)?;
         }
+        Ok(())
     }
 
     pub(super) fn create_styled_code_line(&self, line: &str) -> String {
@@ -222,14 +223,12 @@ impl MarkdownRenderer {
             .to_string()
     }
 
-    /// Formats and renders a table row with proper column separators.
-    /// Header rows receive special styling for visual distinction.
     pub fn render_table_row(&mut self, row: &[String], is_header: bool) -> Result<()> {
         // Pre-allocation reduces memory reallocations during string building,
         // improving performance for tables with many columns
         let estimated_size: usize = row.iter().map(|s| s.len() + 4).sum::<usize>() + 1;
         let mut output = String::with_capacity(estimated_size);
-        output.push_str(&self.config.table_separator);
+        output.push_str(self.config.table_separator);
         for cell in row {
             output.push(' ');
             if is_header {
@@ -239,19 +238,17 @@ impl MarkdownRenderer {
                 output.push_str(cell);
             }
             output.push(' ');
-            output.push_str(&self.config.table_separator);
+            output.push_str(self.config.table_separator);
         }
-        println!("{}", output);
+        self.output.writeln(&output)?;
         Ok(())
     }
 
-    /// Creates alignment-aware separator row between header and body.
-    /// Alignment indicators (:) show column text alignment visually.
     pub fn render_table_separator(&mut self, alignments: &[Alignment]) -> Result<()> {
         // Each column needs up to 7 chars for alignment markers plus delimiters.
         // Pre-allocation avoids growth during string building
         let mut output = String::with_capacity(alignments.len() * 8 + 1);
-        output.push_str(&self.config.table_separator);
+        output.push_str(self.config.table_separator);
         for alignment in alignments {
             let separator = match alignment {
                 Alignment::Left => &self.config.table_alignment.left,
@@ -262,9 +259,9 @@ impl MarkdownRenderer {
             output.push(' ');
             output.push_str(separator);
             output.push(' ');
-            output.push_str(&self.config.table_separator);
+            output.push_str(self.config.table_separator);
         }
-        println!("{}", output);
+        self.output.writeln(&output)?;
         Ok(())
     }
 }
@@ -273,12 +270,40 @@ impl MarkdownRenderer {
 mod tests {
     use crate::{
         output::{ElementKind, ElementPhase, OutputType, TableVariant},
-        renderer::MarkdownRenderer,
+        renderer::{BufferedOutput, MarkdownRenderer},
     };
     use rstest::rstest;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
 
-    fn create_test_renderer() -> MarkdownRenderer {
-        MarkdownRenderer::new()
+    // Test-specific MockWriter implementation
+    struct MockWriter {
+        buffer: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl MockWriter {
+        fn new_with_buffer(buffer: Arc<Mutex<Vec<u8>>>) -> Self {
+            MockWriter { buffer }
+        }
+    }
+
+    impl Write for MockWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let mut buffer = self.buffer.lock().unwrap();
+            buffer.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn create_test_renderer() -> MarkdownRenderer<MockWriter> {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let mock_writer = MockWriter::new_with_buffer(buffer);
+        let output = BufferedOutput::new(mock_writer);
+        MarkdownRenderer::with_output(output)
     }
 
     #[rstest]

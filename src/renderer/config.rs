@@ -1,9 +1,11 @@
+use std::borrow::Cow;
+
 /// Configuration for markdown rendering behavior and visual settings.
 #[derive(Debug, Clone)]
 pub struct RenderConfig {
     pub indent_width: usize,
 
-    pub table_separator: String,
+    pub table_separator: &'static str,
 
     pub table_alignment: TableAlignmentConfig,
 
@@ -18,17 +20,17 @@ pub struct RenderConfig {
 
 #[derive(Debug, Clone)]
 pub struct TableAlignmentConfig {
-    pub left: String,
-    pub center: String,
-    pub right: String,
-    pub none: String,
+    pub left: &'static str,
+    pub center: &'static str,
+    pub right: &'static str,
+    pub none: &'static str,
 }
 
 impl Default for RenderConfig {
     fn default() -> Self {
         Self {
             indent_width: 2,
-            table_separator: "|".to_string(),
+            table_separator: "|",
             table_alignment: TableAlignmentConfig::default(),
             enable_colors: true,
             enable_bold: true,
@@ -41,10 +43,10 @@ impl Default for RenderConfig {
 impl Default for TableAlignmentConfig {
     fn default() -> Self {
         Self {
-            left: ":---".to_string(),
-            center: ":---:".to_string(),
-            right: "---:".to_string(),
-            none: "---".to_string(),
+            left: ":---",
+            center: ":---:",
+            right: "---:",
+            none: "---",
         }
     }
 }
@@ -60,14 +62,18 @@ impl RenderConfig {
             .unwrap_or(80)
     }
 
-    pub fn create_indent(&self, depth: usize) -> String {
-        " ".repeat(self.indent_width * depth)
+    pub fn create_indent(&self, depth: usize) -> Cow<'static, str> {
+        if depth == 0 {
+            Cow::Borrowed("")
+        } else {
+            Cow::Owned(" ".repeat(self.indent_width * depth))
+        }
     }
 
-    pub fn create_horizontal_rule(&self) -> String {
+    pub fn create_horizontal_rule(&self) -> Cow<'static, str> {
         let width = Self::get_terminal_width();
         let rule_length = ((width as f32 * 0.8) as usize).min(100);
-        "─".repeat(rule_length)
+        Cow::Owned("─".repeat(rule_length))
     }
 }
 

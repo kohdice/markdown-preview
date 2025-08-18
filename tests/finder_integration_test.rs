@@ -29,9 +29,8 @@ fn test_mp_without_args_lists_markdown_files() {
         .output()
         .expect("Failed to execute mp command");
 
-    // Debug output
     if !output.status.success() {
-        eprintln!(
+        panic!(
             "Command failed with stderr: {}",
             String::from_utf8_lossy(&output.stderr)
         );
@@ -143,13 +142,6 @@ fn test_mp_with_gitignore() {
         .expect("Failed to execute mp command");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // Debug output
-    eprintln!("Output with .gitignore: '{}'", stdout);
-    eprintln!(
-        "Files in dir: {:?}",
-        fs::read_dir(temp_dir.path()).unwrap().collect::<Vec<_>>()
-    );
 
     assert!(stdout.contains("visible.md"));
     assert!(!stdout.contains("ignored.md"));

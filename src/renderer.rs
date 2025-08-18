@@ -3,14 +3,17 @@
 //! This module parses Markdown files and content,
 //! converting them to terminal-displayable format.
 
+use std::io::{Stdout, Write};
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use pulldown_cmark::{Options, Parser};
 
 use crate::theme::SolarizedOsaka;
 
 // Internal modules for separating rendering concerns
+pub mod buffered_output;
+pub mod builder;
 mod config;
 mod element_accessor;
 mod formatting;
@@ -21,6 +24,7 @@ mod styling;
 mod table_builder;
 
 // Public API exports for external module usage
+pub use builder::RendererBuilder;
 pub use config::RenderConfig;
 pub use element_accessor::{
     CodeBlockAccessor, ElementData, ImageAccessor, LinkAccessor, TableAccessor,
@@ -30,6 +34,7 @@ pub use styling::TextStyle;
 pub use table_builder::{Table, TableBuilder};
 
 // Re-export core rendering functionality
+pub use self::buffered_output::BufferedOutput;
 use self::io::read_file;
 
 /// Main Markdown renderer struct
@@ -38,23 +43,29 @@ use self::io::read_file;
 /// - Loading and parsing Markdown files
 /// - Markdown parsing using pulldown_cmark
 /// - Converting events to terminal-displayable format
-#[derive(Debug)]
-pub struct MarkdownRenderer {
+/// - Efficient buffered output to terminal
+pub struct MarkdownRenderer<W: Write = Stdout> {
     pub theme: SolarizedOsaka,
     pub state: RenderState,
     pub options: Options,
     pub config: RenderConfig,
+    pub output: BufferedOutput<W>,
 }
 
-impl Default for MarkdownRenderer {
+impl Default for MarkdownRenderer<Stdout> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl MarkdownRenderer {
-    /// Create a new MarkdownRenderer instance
+impl MarkdownRenderer<Stdout> {
     pub fn new() -> Self {
+        Self::with_output(BufferedOutput::stdout())
+    }
+}
+
+impl<W: Write> MarkdownRenderer<W> {
+    pub fn with_output(output: BufferedOutput<W>) -> Self {
         let mut options = Options::empty();
         options.insert(Options::ENABLE_STRIKETHROUGH);
         options.insert(Options::ENABLE_TABLES);
@@ -66,22 +77,44 @@ impl MarkdownRenderer {
             state: RenderState::default(),
             options,
             config: RenderConfig::default(),
+            output,
         }
     }
 
-    // Generic accessor methods using ElementData trait.
-    // These replace all repetitive getter/setter methods with a single implementation.
-    /// Get immutable reference to element data of type T
+    pub fn render_file(&mut self, path: &Path) -> Result<()> {
+        let content = read_file(path)
+            .with_context(|| format!("Failed to read markdown file: {}", path.display()))?;
+        self.render_content(&content)
+    }
+
+    pub fn render_content(&mut self, content: &str) -> Result<()> {
+        let parser = Parser::new_ext(content, self.options);
+
+        for event in parser {
+            self.process_event(event)?;
+        }
+
+        self.flush()?;
+        self.output.flush()?;
+        Ok(())
+    }
+
+    pub fn flush(&mut self) -> Result<()> {
+        if let Some(code_block) = self.get_code_block() {
+            self.clear_active_element();
+            self.render_code_block(&code_block)?;
+        }
+        Ok(())
+    }
+
     pub fn get<T: ElementData>(&self) -> Option<&T::Output> {
         self.state.active_element.as_ref().and_then(T::extract)
     }
 
-    /// Get mutable reference to element data of type T
     pub fn get_mut<T: ElementData>(&mut self) -> Option<&mut T::Output> {
         self.state.active_element.as_mut().and_then(T::extract_mut)
     }
 
-    /// Get cloned element data of type T
     pub fn get_cloned<T>(&self) -> Option<T::Output>
     where
         T: ElementData,
@@ -90,14 +123,10 @@ impl MarkdownRenderer {
         self.get::<T>().cloned()
     }
 
-    /// Set active element with data of type T
     pub fn set<T: ElementData>(&mut self, data: T::Output) {
         self.state.active_element = Some(T::create(data));
     }
 
-    // State management methods for tracking active Markdown elements during parsing.
-    // These methods provide a clean API for state transitions without exposing
-    // the internal state structure directly.
     pub fn set_strong_emphasis(&mut self, value: bool) {
         self.state.emphasis.strong = value;
     }
@@ -124,6 +153,14 @@ impl MarkdownRenderer {
         )
     }
 
+    pub fn get_link(&self) -> Option<state::LinkState> {
+        self.get_cloned::<LinkAccessor>()
+    }
+
+    pub fn get_link_mut(&mut self) -> Option<&mut state::LinkState> {
+        self.get_mut::<LinkAccessor>()
+    }
+
     pub fn set_image(&mut self, url: String) {
         self.state.active_element = Some(ActiveElement::Image(state::ImageState {
             alt_text: String::new(),
@@ -135,41 +172,12 @@ impl MarkdownRenderer {
         self.clear_active_element();
     }
 
-    pub fn clear_active_element(&mut self) {
-        self.state.active_element = None;
-    }
-
-    // Legacy methods for backward compatibility - delegate to generic implementation
-    pub fn get_link(&self) -> Option<state::LinkState> {
-        self.get_cloned::<LinkAccessor>()
-    }
-
     pub fn get_image(&self) -> Option<state::ImageState> {
         self.get_cloned::<ImageAccessor>()
     }
 
-    pub fn get_code_block(&self) -> Option<state::CodeBlockState> {
-        self.get_cloned::<CodeBlockAccessor>()
-    }
-
-    pub fn get_table(&self) -> Option<state::TableState> {
-        self.get_cloned::<TableAccessor>()
-    }
-
-    pub fn get_table_mut(&mut self) -> Option<&mut state::TableState> {
-        self.get_mut::<TableAccessor>()
-    }
-
-    pub fn get_link_mut(&mut self) -> Option<&mut state::LinkState> {
-        self.get_mut::<LinkAccessor>()
-    }
-
     pub fn get_image_mut(&mut self) -> Option<&mut state::ImageState> {
         self.get_mut::<ImageAccessor>()
-    }
-
-    pub fn get_code_block_mut(&mut self) -> Option<&mut state::CodeBlockState> {
-        self.get_mut::<CodeBlockAccessor>()
     }
 
     pub fn set_code_block(&mut self, kind: pulldown_cmark::CodeBlockKind<'static>) {
@@ -193,6 +201,14 @@ impl MarkdownRenderer {
         self.clear_active_element();
     }
 
+    pub fn get_code_block(&self) -> Option<state::CodeBlockState> {
+        self.get_cloned::<CodeBlockAccessor>()
+    }
+
+    pub fn get_code_block_mut(&mut self) -> Option<&mut state::CodeBlockState> {
+        self.get_mut::<CodeBlockAccessor>()
+    }
+
     pub fn set_table(&mut self, alignments: Vec<pulldown_cmark::Alignment>) {
         self.state.active_element = Some(ActiveElement::Table(state::TableState {
             alignments,
@@ -203,6 +219,14 @@ impl MarkdownRenderer {
 
     pub fn clear_table(&mut self) {
         self.clear_active_element();
+    }
+
+    pub fn get_table(&self) -> Option<state::TableState> {
+        self.get_cloned::<TableAccessor>()
+    }
+
+    pub fn get_table_mut(&mut self) -> Option<&mut state::TableState> {
+        self.get_mut::<TableAccessor>()
     }
 
     /// Build a table using the TableBuilder API
@@ -220,12 +244,12 @@ impl MarkdownRenderer {
     /// ```
     pub fn build_table(&self) -> TableBuilder {
         TableBuilder::new()
-            .separator(self.config.table_separator.clone())
+            .separator(self.config.table_separator)
             .alignment_config(table_builder::TableAlignmentConfig {
-                left: self.config.table_alignment.left.clone(),
-                center: self.config.table_alignment.center.clone(),
-                right: self.config.table_alignment.right.clone(),
-                none: self.config.table_alignment.none.clone(),
+                left: self.config.table_alignment.left,
+                center: self.config.table_alignment.center,
+                right: self.config.table_alignment.right,
+                none: self.config.table_alignment.none,
             })
     }
 
@@ -244,43 +268,8 @@ impl MarkdownRenderer {
         self.state.list_stack.pop();
     }
 
-    /// Load and render Markdown content from a file
-    ///
-    /// # Performance Optimizations
-    /// - Pre-allocate memory based on file size
-    /// - Efficient reading delegated to io module
-    ///
-    /// # Error Handling
-    /// - Returns detailed error message if file doesn't exist
-    pub fn render_file(&mut self, path: &Path) -> Result<()> {
-        let content = read_file(path)?;
-        self.render_content(&content)
-    }
-
-    /// Render Markdown content directly
-    ///
-    /// # Processing Flow
-    /// 1. Parse Markdown with pulldown_cmark
-    /// 2. Process each event
-    /// 3. Convert to terminal format
-    pub fn render_content(&mut self, content: &str) -> Result<()> {
-        let parser = Parser::new_ext(content, self.options);
-
-        for event in parser {
-            self.process_event(event)?;
-        }
-
-        self.flush()?;
-        Ok(())
-    }
-
-    /// Flush any remaining buffers
-    pub fn flush(&mut self) -> Result<()> {
-        if let Some(code_block) = self.get_code_block() {
-            self.clear_active_element();
-            self.render_code_block(&code_block)?;
-        }
-        Ok(())
+    pub fn clear_active_element(&mut self) {
+        self.state.active_element = None;
     }
 }
 
@@ -289,6 +278,31 @@ mod tests {
     use super::*;
     use pulldown_cmark::Options;
     use rstest::rstest;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    // Test-specific MockWriter implementation
+    struct MockWriter {
+        buffer: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl MockWriter {
+        fn new_with_buffer(buffer: Arc<Mutex<Vec<u8>>>) -> Self {
+            MockWriter { buffer }
+        }
+    }
+
+    impl Write for MockWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let mut buffer = self.buffer.lock().unwrap();
+            buffer.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
     // ====================
     // Test Data Constants
@@ -354,8 +368,11 @@ fn main() {
     // ====================
 
     /// Helper function to create a renderer with default settings
-    fn create_renderer() -> MarkdownRenderer {
-        MarkdownRenderer::new()
+    fn create_renderer() -> MarkdownRenderer<MockWriter> {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let mock_writer = MockWriter::new_with_buffer(buffer);
+        let output = BufferedOutput::new(mock_writer);
+        MarkdownRenderer::with_output(output)
     }
 
     /// Helper function to assert rendering succeeds
@@ -366,7 +383,11 @@ fn main() {
     }
 
     /// Helper function to set emphasis state
-    fn set_emphasis_state(renderer: &mut MarkdownRenderer, strong: bool, italic: bool) {
+    fn set_emphasis_state<W: Write>(
+        renderer: &mut MarkdownRenderer<W>,
+        strong: bool,
+        italic: bool,
+    ) {
         renderer.state.emphasis.strong = strong;
         renderer.state.emphasis.italic = italic;
     }
@@ -532,7 +553,7 @@ fn main() {
     #[test]
     fn test_table_builder_with_config() {
         let mut renderer = create_renderer();
-        renderer.config.table_separator = "||".to_string();
+        renderer.config.table_separator = "||";
 
         let table = renderer
             .build_table()

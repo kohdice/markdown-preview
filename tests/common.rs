@@ -1,10 +1,64 @@
 #![allow(dead_code)]
 
-use markdown_preview::MarkdownRenderer;
+use markdown_preview::{MarkdownRenderer, renderer::BufferedOutput};
+use std::io::Write;
+use std::sync::{Arc, Mutex};
 
-/// Create a test renderer
+/// Mock writer for testing that captures output to a buffer
+pub struct MockWriter {
+    buffer: Arc<Mutex<Vec<u8>>>,
+}
+
+impl MockWriter {
+    pub fn new() -> (Self, Arc<Mutex<Vec<u8>>>) {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        (
+            MockWriter {
+                buffer: Arc::clone(&buffer),
+            },
+            buffer,
+        )
+    }
+
+    pub fn new_with_buffer(buffer: Arc<Mutex<Vec<u8>>>) -> Self {
+        MockWriter { buffer }
+    }
+}
+
+impl Write for MockWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut buffer = self.buffer.lock().unwrap();
+        buffer.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Create a test renderer that outputs to a buffer instead of stdout
+#[cfg(not(test))]
 pub fn create_test_renderer() -> MarkdownRenderer {
     MarkdownRenderer::new()
+}
+
+/// Create a test renderer that outputs to a buffer instead of stdout
+#[cfg(test)]
+pub fn create_test_renderer() -> MarkdownRenderer<MockWriter> {
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let mock_writer = MockWriter::new_with_buffer(buffer);
+    let output = BufferedOutput::new(mock_writer);
+    MarkdownRenderer::with_output(output)
+}
+
+/// Create a test renderer with access to the output buffer
+#[cfg(test)]
+pub fn create_test_renderer_with_buffer() -> (MarkdownRenderer<MockWriter>, Arc<Mutex<Vec<u8>>>) {
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let mock_writer = MockWriter::new_with_buffer(Arc::clone(&buffer));
+    let output = BufferedOutput::new(mock_writer);
+    (MarkdownRenderer::with_output(output), buffer)
 }
 
 /// Test case struct for data-driven testing
@@ -166,14 +220,6 @@ where
         "Performance test '{}' failed: {:?}",
         name,
         result.err()
-    );
-
-    println!(
-        "Performance: {} - {} chars in {:?} ({:.2} chars/ms)",
-        name,
-        content.len(),
-        duration,
-        content.len() as f64 / duration.as_millis() as f64
     );
 
     duration
