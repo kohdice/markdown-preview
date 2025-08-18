@@ -51,7 +51,7 @@ fn test_extend_vs_multiple_push() {
 
 #[test]
 fn test_filter_map_efficiency() {
-    let input = vec!["1", "2", "invalid", "4", "5", "not_a_number"];
+    let input = ["1", "2", "invalid", "4", "5", "not_a_number"];
 
     // Using filter_map (single pass)
     let result1: Vec<i32> = input.iter().filter_map(|s| s.parse().ok()).collect();
@@ -69,8 +69,8 @@ fn test_filter_map_efficiency() {
 
 #[test]
 fn test_chain_iterators() {
-    let vec1 = vec![1, 2, 3];
-    let vec2 = vec![4, 5, 6];
+    let vec1 = [1, 2, 3];
+    let vec2 = [4, 5, 6];
 
     // Using chain to combine iterators efficiently
     let result: Vec<i32> = vec1.iter().chain(vec2.iter()).copied().collect();
@@ -82,8 +82,8 @@ fn test_chain_iterators() {
 fn test_fold_vs_for_loop() {
     let numbers = vec![1, 2, 3, 4, 5];
 
-    // Using fold (functional approach)
-    let sum1 = numbers.iter().fold(0, |acc, &x| acc + x);
+    // Using sum (functional approach)
+    let sum1: i32 = numbers.iter().sum();
 
     // Using for loop (imperative approach)
     let mut sum2 = 0;
