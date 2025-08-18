@@ -1,6 +1,9 @@
 use anyhow::Result;
 use std::io::{self, BufWriter, Write};
 
+/// Default buffer size for BufferedOutput (8KB)
+const DEFAULT_BUFFER_SIZE: usize = 8192;
+
 /// Buffered output writer for efficient terminal output
 ///
 /// This struct wraps any writer (typically stdout) with a BufWriter
@@ -12,9 +15,7 @@ pub struct BufferedOutput<W: Write> {
 impl<W: Write> BufferedOutput<W> {
     /// Creates a new BufferedOutput with default buffer size (8KB)
     pub fn new(writer: W) -> Self {
-        Self {
-            writer: BufWriter::new(writer),
-        }
+        Self::with_capacity(DEFAULT_BUFFER_SIZE, writer)
     }
 
     /// Creates a new BufferedOutput with specified buffer capacity
@@ -57,7 +58,7 @@ impl<W: Write> BufferedOutput<W> {
     pub fn into_inner(self) -> Result<W> {
         self.writer
             .into_inner()
-            .map_err(|e| anyhow::anyhow!("Failed to flush and unwrap writer: {}", e))
+            .map_err(|e| anyhow::anyhow!("Failed to flush BufferedOutput: {}", e))
     }
 }
 
