@@ -1,3 +1,7 @@
-fn main() {
-    println!("Hello from mp!");
+mod cli;
+
+use cli::run;
+
+fn main() -> anyhow::Result<()> {
+    run()
 }
