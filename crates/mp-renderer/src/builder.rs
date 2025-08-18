@@ -1,7 +1,4 @@
 //! Builder pattern implementation for MarkdownRenderer
-//!
-//! This module provides a builder pattern for constructing MarkdownRenderer instances
-//! with custom configurations, demonstrating Rust's builder pattern implementation.
 
 use std::io::{Stdout, Write};
 
@@ -27,8 +24,7 @@ pub struct RendererBuilder<W: Write = Stdout> {
     theme: Option<SolarizedOsaka>,
     options: Option<Options>,
     config: Option<RenderConfig>,
-    #[allow(dead_code)]
-    output: Option<BufferedOutput<W>>,
+    writer: Option<W>,
     buffer_size: Option<usize>,
     enable_strikethrough: bool,
     enable_tables: bool,
@@ -48,12 +44,46 @@ impl RendererBuilder<Stdout> {
             theme: None,
             options: None,
             config: None,
-            output: None,
+            writer: None,
             buffer_size: None,
             enable_strikethrough: true,
             enable_tables: true,
             enable_footnotes: true,
             enable_tasklists: true,
+        }
+    }
+
+    /// Build with default stdout output
+    pub fn build(self) -> MarkdownRenderer<Stdout> {
+        let options = self.options.unwrap_or_else(|| {
+            let mut opts = Options::empty();
+            if self.enable_strikethrough {
+                opts.insert(Options::ENABLE_STRIKETHROUGH);
+            }
+            if self.enable_tables {
+                opts.insert(Options::ENABLE_TABLES);
+            }
+            if self.enable_footnotes {
+                opts.insert(Options::ENABLE_FOOTNOTES);
+            }
+            if self.enable_tasklists {
+                opts.insert(Options::ENABLE_TASKLISTS);
+            }
+            opts
+        });
+
+        let output = if let Some(size) = self.buffer_size {
+            BufferedOutput::stdout_with_capacity(size)
+        } else {
+            BufferedOutput::stdout()
+        };
+
+        MarkdownRenderer {
+            theme: self.theme.unwrap_or_default(),
+            state: RenderState::default(),
+            options,
+            config: self.config.unwrap_or_default(),
+            output,
         }
     }
 }
@@ -64,7 +94,7 @@ impl<W: Write> RendererBuilder<W> {
             theme: None,
             options: None,
             config: None,
-            output: Some(BufferedOutput::new(writer)),
+            writer: Some(writer),
             buffer_size: None,
             enable_strikethrough: true,
             enable_tables: true,
@@ -113,11 +143,9 @@ impl<W: Write> RendererBuilder<W> {
         self.options = Some(options);
         self
     }
-}
 
-// Special implementation for Stdout to handle default case
-impl RendererBuilder<Stdout> {
-    pub fn build(self) -> MarkdownRenderer<Stdout> {
+    /// Build with custom writer
+    pub fn build_with_writer(self) -> MarkdownRenderer<W> {
         let options = self.options.unwrap_or_else(|| {
             let mut opts = Options::empty();
             if self.enable_strikethrough {
@@ -135,10 +163,13 @@ impl RendererBuilder<Stdout> {
             opts
         });
 
+        let writer = self
+            .writer
+            .expect("Writer must be provided via with_writer()");
         let output = if let Some(size) = self.buffer_size {
-            BufferedOutput::stdout_with_capacity(size)
+            BufferedOutput::with_capacity(size, writer)
         } else {
-            BufferedOutput::stdout()
+            BufferedOutput::new(writer)
         };
 
         MarkdownRenderer {
@@ -193,5 +224,16 @@ mod tests {
         let renderer = RendererBuilder::new().config(config.clone()).build();
         // Verify the renderer has the custom config
         assert_eq!(renderer.config.table_separator, config.table_separator);
+    }
+
+    #[test]
+    fn test_builder_with_custom_writer() {
+        let writer = Vec::new();
+        let renderer = RendererBuilder::with_writer(writer)
+            .enable_tables(false)
+            .build_with_writer();
+
+        assert!(!renderer.options.contains(Options::ENABLE_TABLES));
+        assert!(renderer.options.contains(Options::ENABLE_STRIKETHROUGH));
     }
 }
