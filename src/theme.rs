@@ -12,7 +12,7 @@ pub trait MarkdownTheme {
     fn text_color(&self) -> (u8, u8, u8);
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct SolarizedOsaka;
 
 impl SolarizedOsaka {
