@@ -1,7 +1,9 @@
+use std::fs;
+
+use tempfile::TempDir;
+
 use mp_core::finder::{FinderConfig, find_markdown_files_in_dir};
 use mp_core::html_entity::decode_html_entities;
-use std::fs;
-use tempfile::TempDir;
 
 #[test]
 fn test_workspace_integration() {

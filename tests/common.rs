@@ -1,8 +1,9 @@
 #![allow(dead_code)]
 
-use mp_renderer::{MarkdownRenderer, BufferedOutput};
 use std::io::Write;
 use std::sync::{Arc, Mutex};
+
+use mp_renderer::{BufferedOutput, MarkdownRenderer};
 
 /// Mock writer for testing that captures output to a buffer
 pub struct MockWriter {
