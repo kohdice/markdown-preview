@@ -6,8 +6,7 @@ use colored::ColoredString;
 use super::MarkdownRenderer;
 use crate::theme::MarkdownTheme;
 
-/// Comprehensive text styling system for all Markdown element types.
-/// Encapsulates color, weight, and decoration for consistent terminal output.
+/// Text styling for Markdown elements
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TextStyle {
     Normal,
@@ -19,16 +18,11 @@ pub enum TextStyle {
     ListMarker,
     Delimiter,
     CodeBlock,
-    /// Allows arbitrary color and bold combination for special cases
-    Custom {
-        color: (u8, u8, u8),
-        bold: bool,
-    },
+    Custom { color: (u8, u8, u8), bold: bool },
 }
 
 impl<W: Write> MarkdownRenderer<W> {
-    /// Converts TextStyle enum to colored terminal output.
-    /// Centralizes all styling logic for consistency across the renderer.
+    /// Apply text styling based on TextStyle enum
     pub fn apply_text_style(&self, text: &str, style: TextStyle) -> ColoredString {
         use crate::theme::{styled_text, styled_text_with_bg};
 
@@ -61,8 +55,7 @@ impl<W: Write> MarkdownRenderer<W> {
         self.output.write(&styled).ok();
     }
 
-    /// Determines appropriate style based on current emphasis state.
-    /// Priority: strong > italic > link > normal for style selection.
+    /// Create styled text based on current emphasis state
     pub fn create_styled_text(&self, text: &str) -> Cow<'static, str> {
         let style = if self.state.emphasis.strong {
             TextStyle::Strong
@@ -76,16 +69,13 @@ impl<W: Write> MarkdownRenderer<W> {
         Cow::Owned(self.apply_text_style(text, style).to_string())
     }
 
-    /// Creates styled text for structural markers like list bullets and quote markers.
-    /// Automatically determines TextStyle based on color matching theme colors.
+    /// Create styled marker text
     pub fn create_styled_marker(
         &self,
         marker: &str,
         color: (u8, u8, u8),
         bold: bool,
     ) -> Cow<'static, str> {
-        // Match color against theme colors to determine semantic style type.
-        // Falls back to Custom style for non-standard color combinations
         let style = if color == self.theme.list_marker_color() {
             TextStyle::ListMarker
         } else if color == self.theme.delimiter_color() {
@@ -97,7 +87,7 @@ impl<W: Write> MarkdownRenderer<W> {
         Cow::Owned(self.apply_text_style(marker, style).to_string())
     }
 
-    /// Formats URLs with delimiter style and parentheses for visual distinction
+    /// Format URLs with delimiters
     pub fn create_styled_url(&self, url: &str) -> Cow<'static, str> {
         Cow::Owned(
             self.apply_text_style(&format!(" ({})", url), TextStyle::Delimiter)
@@ -105,9 +95,7 @@ impl<W: Write> MarkdownRenderer<W> {
         )
     }
 
-    /// Routes text to the appropriate active element buffer.
-    /// Returns true if text was consumed, false if no active element exists.
-    /// Handles link text, image alt text, code content, and table cells.
+    /// Route text to active element buffer
     pub fn add_text_to_state(&mut self, text: &str) -> bool {
         if let Some(ref mut link) = self.get_link_mut() {
             link.text.push_str(text);

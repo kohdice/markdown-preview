@@ -1,7 +1,4 @@
 //! Table builder module for constructing tables with fluent API
-//!
-//! Provides a builder pattern implementation for creating and rendering tables
-//! with support for headers, alignments, and customizable formatting.
 
 use std::fmt;
 

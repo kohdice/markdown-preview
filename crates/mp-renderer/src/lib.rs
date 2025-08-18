@@ -1,7 +1,4 @@
-//! Module for rendering Markdown files
-//!
-//! This module parses Markdown files and content,
-//! converting them to terminal-displayable format.
+//! Markdown to terminal renderer
 
 use std::io::{Stdout, Write};
 use std::path::Path;
@@ -11,14 +8,12 @@ use pulldown_cmark::{Options, Parser};
 
 use theme::SolarizedOsaka;
 
-// Public modules
 pub mod buffered_output;
 pub mod builder;
 pub mod output;
 pub mod state;
 pub mod theme;
 
-// Internal modules
 mod config;
 mod element_accessor;
 mod formatting;
@@ -27,7 +22,6 @@ mod io;
 mod styling;
 mod table_builder;
 
-// Public API exports for external module usage
 pub use builder::RendererBuilder;
 pub use config::RenderConfig;
 pub use element_accessor::{
@@ -37,17 +31,10 @@ pub use state::{ActiveElement, RenderState};
 pub use styling::TextStyle;
 pub use table_builder::{Table, TableBuilder};
 
-// Re-export core rendering functionality
 pub use self::buffered_output::BufferedOutput;
 use self::io::read_file;
 
-/// Main Markdown renderer struct
-///
-/// # Primary Responsibilities
-/// - Loading and parsing Markdown files
-/// - Markdown parsing using pulldown_cmark
-/// - Converting events to terminal-displayable format
-/// - Efficient buffered output to terminal
+/// Main Markdown renderer
 pub struct MarkdownRenderer<W: Write = Stdout> {
     pub theme: SolarizedOsaka,
     pub state: RenderState,
@@ -234,18 +221,6 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     /// Build a table using the TableBuilder API
-    ///
-    /// # Example
-    /// ```
-    /// use mp_renderer::MarkdownRenderer;
-    ///
-    /// let renderer = MarkdownRenderer::new();
-    /// let table = renderer.build_table()
-    ///     .header(vec!["Name", "Age"])
-    ///     .row(vec!["Alice", "30"])
-    ///     .build()
-    ///     .expect("Failed to build table");
-    /// ```
     pub fn build_table(&self) -> TableBuilder {
         TableBuilder::new()
             .separator(self.config.table_separator)

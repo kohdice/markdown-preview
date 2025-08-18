@@ -225,8 +225,6 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     pub fn render_table_row(&mut self, row: &[String], is_header: bool) -> Result<()> {
-        // Pre-allocation reduces memory reallocations during string building,
-        // improving performance for tables with many columns
         let estimated_size: usize = row.iter().map(|s| s.len() + 4).sum::<usize>() + 1;
         let mut output = String::with_capacity(estimated_size);
         output.push_str(self.config.table_separator);
@@ -246,8 +244,6 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     pub fn render_table_separator(&mut self, alignments: &[Alignment]) -> Result<()> {
-        // Each column needs up to 7 chars for alignment markers plus delimiters.
-        // Pre-allocation avoids growth during string building
         let mut output = String::with_capacity(alignments.len() * 8 + 1);
         output.push_str(self.config.table_separator);
         for alignment in alignments {

@@ -1,7 +1,6 @@
 use pulldown_cmark::Alignment;
 
-/// Represents different types of content that can appear in Markdown.
-/// Used to differentiate handling between plain text, code, HTML, and structural elements.
+/// Different types of Markdown content
 pub enum ContentType<'a> {
     Text(&'a str),
     Code(&'a str),
@@ -12,40 +11,35 @@ pub enum ContentType<'a> {
     TaskMarker(bool),
 }
 
-/// Tracks text emphasis states for proper rendering.
-/// Both strong and italic can be active simultaneously.
+/// Text emphasis states
 #[derive(Debug, Default, Clone)]
 pub struct EmphasisState {
     pub strong: bool,
     pub italic: bool,
 }
 
-/// Stores link element data during parsing.
-/// Text is accumulated as parsing progresses, URL is set at link start.
+/// Link element data
 #[derive(Debug, Clone, Default)]
 pub struct LinkState {
     pub text: String,
     pub url: String,
 }
 
-/// Stores image element data during parsing.
-/// Alt text is accumulated as parsing progresses, URL is set at image start.
+/// Image element data
 #[derive(Debug, Clone, Default)]
 pub struct ImageState {
     pub alt_text: String,
     pub url: String,
 }
 
-/// Accumulates code block content and tracks language for syntax highlighting.
-/// Content is built incrementally as text events are received.
+/// Code block content and language
 #[derive(Debug, Clone)]
 pub struct CodeBlockState {
     pub language: Option<String>,
     pub content: String,
 }
 
-/// Manages table parsing state including column alignments and current row data.
-/// Rows are built cell by cell, then rendered when row ends.
+/// Table parsing state
 #[derive(Debug, Clone)]
 pub struct TableState {
     pub alignments: Vec<Alignment>,
@@ -53,16 +47,14 @@ pub struct TableState {
     pub is_header: bool,
 }
 
-/// Distinguishes between ordered and unordered lists.
-/// Ordered lists track current item number for proper numbering.
+/// List type enumeration
 #[derive(Debug, Clone)]
 pub enum ListType {
     Ordered { current: usize },
     Unordered,
 }
 
-/// Represents the currently active complex element being parsed.
-/// Only one complex element can be active at a time to maintain parsing context.
+/// Currently active complex element
 #[derive(Debug, Clone)]
 pub enum ActiveElement {
     Link(LinkState),
@@ -71,8 +63,7 @@ pub enum ActiveElement {
     Table(TableState),
 }
 
-/// Central state management for the rendering process.
-/// Tracks emphasis, active elements, list nesting, and current line buffer.
+/// Central rendering state
 #[derive(Debug, Default, Clone)]
 pub struct RenderState {
     /// Current text emphasis (bold/italic) that applies to all text rendering

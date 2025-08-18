@@ -130,15 +130,11 @@ impl<W: Write> MarkdownRenderer<W> {
         Ok(())
     }
 
-    // Unified element handler - replaces multiple duplicate methods
     fn handle_element(&mut self, kind: ElementKind, phase: ElementPhase) -> Result<()> {
         self.print_output(OutputType::Element { kind, phase })
     }
 
-    // Special handlers for elements that require additional state management
     fn handle_list_start(&mut self, start: Option<u64>) {
-        // Nested lists need visual separation from their parent list items
-        // to maintain readability in terminal output
         if !self.state.list_stack.is_empty() {
             self.output.newline().ok();
         }
@@ -153,8 +149,6 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     fn handle_code_block_start(&mut self, kind: pulldown_cmark::CodeBlockKind) {
-        // Convert borrowed language string to owned for state storage.
-        // Required because state outlives the parsing event lifetime
         let static_kind = match kind {
             pulldown_cmark::CodeBlockKind::Indented => pulldown_cmark::CodeBlockKind::Indented,
             pulldown_cmark::CodeBlockKind::Fenced(lang) => {
