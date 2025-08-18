@@ -402,6 +402,7 @@ dependencies = [
  "clap",
  "mp-core",
  "mp-renderer",
+ "tempfile",
 ]
 
 [[package]]
