@@ -21,5 +21,5 @@ anyhow = "1.0.99"
 
 # Test dependencies
 regex = "1.11.1"
-rstest = "0.23.0"
-tempfile = "3.14.0"
+rstest = "0.26.1"
+tempfile = "3.20.0"
