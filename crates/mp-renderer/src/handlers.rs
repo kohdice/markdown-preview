@@ -1,10 +1,12 @@
+use std::io::Write;
+
 use anyhow::Result;
 use pulldown_cmark::{Event, Tag, TagEnd};
-use std::io::Write;
+
+use mp_core::html_entity::decode_html_entities;
 
 use super::{MarkdownRenderer, state::ContentType};
 use crate::output::{ElementKind, ElementPhase, OutputType, TableVariant};
-use mp_core::html_entity::decode_html_entities;
 
 impl<W: Write> MarkdownRenderer<W> {
     fn tag_end_to_tag(tag_end: TagEnd) -> Option<Tag<'static>> {

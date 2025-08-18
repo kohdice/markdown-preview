@@ -10,8 +10,8 @@ repository.workspace = true
 [dependencies]
 mp-core = { workspace = true }
 anyhow = { workspace = true }
-pulldown-cmark = "0.13.0"
 colored = "3.0.0"
+pulldown-cmark = "0.13.0"
 terminal_size = "0.4.3"
 
 [dev-dependencies]

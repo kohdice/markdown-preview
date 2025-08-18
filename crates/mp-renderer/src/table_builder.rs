@@ -3,9 +3,10 @@
 //! Provides a builder pattern implementation for creating and rendering tables
 //! with support for headers, alignments, and customizable formatting.
 
+use std::fmt;
+
 use anyhow::Result;
 use pulldown_cmark::Alignment;
-use std::fmt;
 
 /// A builder for constructing tables with a fluent API
 ///

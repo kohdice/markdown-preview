@@ -1,8 +1,10 @@
-use super::MarkdownRenderer;
-use crate::theme::MarkdownTheme;
-use colored::ColoredString;
 use std::borrow::Cow;
 use std::io::Write;
+
+use colored::ColoredString;
+
+use super::MarkdownRenderer;
+use crate::theme::MarkdownTheme;
 
 /// Comprehensive text styling system for all Markdown element types.
 /// Encapsulates color, weight, and decoration for consistent terminal output.

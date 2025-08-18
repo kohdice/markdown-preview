@@ -1,7 +1,8 @@
-use anyhow::{Context, Result};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::Path;
+
+use anyhow::{Context, Result};
 
 use mp_core::utils::normalize_line_endings;
 

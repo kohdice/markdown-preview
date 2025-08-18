@@ -9,23 +9,21 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use pulldown_cmark::{Options, Parser};
 
-pub mod output;
-pub mod theme;
-
-// Re-import from mp-core is done in modules that need them
-
-// Use local theme module
 use theme::SolarizedOsaka;
 
-// Internal modules for separating rendering concerns
+// Public modules
 pub mod buffered_output;
 pub mod builder;
+pub mod output;
+pub mod state;
+pub mod theme;
+
+// Internal modules
 mod config;
 mod element_accessor;
 mod formatting;
 mod handlers;
 mod io;
-pub mod state;
 mod styling;
 mod table_builder;
 

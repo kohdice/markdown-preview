@@ -1,7 +1,8 @@
-use anyhow::Result;
-use pulldown_cmark::Alignment;
 use std::borrow::Cow;
 use std::io::Write;
+
+use anyhow::Result;
+use pulldown_cmark::Alignment;
 
 use super::{
     MarkdownRenderer,
