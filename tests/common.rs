@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use markdown_preview::{MarkdownRenderer, renderer::BufferedOutput};
+use mp_renderer::{MarkdownRenderer, BufferedOutput};
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
