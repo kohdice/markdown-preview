@@ -91,6 +91,10 @@ fn test_fold_vs_for_loop() {
         sum2 += x;
     }
 
+    // Using sum() method (most idiomatic)
+    let sum3: i32 = numbers.iter().sum();
+
     assert_eq!(sum1, sum2);
+    assert_eq!(sum1, sum3);
     assert_eq!(sum1, 15);
 }

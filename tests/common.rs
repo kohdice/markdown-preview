@@ -222,13 +222,5 @@ where
         result.err()
     );
 
-    println!(
-        "Performance: {} - {} chars in {:?} ({:.2} chars/ms)",
-        name,
-        content.len(),
-        duration,
-        content.len() as f64 / duration.as_millis() as f64
-    );
-
     duration
 }
