@@ -1,17 +1,15 @@
 //! Table builder module for constructing tables with fluent API
-//!
-//! Provides a builder pattern implementation for creating and rendering tables
-//! with support for headers, alignments, and customizable formatting.
+
+use std::fmt;
 
 use anyhow::Result;
 use pulldown_cmark::Alignment;
-use std::fmt;
 
 /// A builder for constructing tables with a fluent API
 ///
 /// # Example
 /// ```
-/// use markdown_preview::renderer::TableBuilder;
+/// use mp_stdout::TableBuilder;
 /// use pulldown_cmark::Alignment;
 ///
 /// let table = TableBuilder::new()

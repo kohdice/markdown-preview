@@ -1,29 +1,14 @@
-//! Utility functions for cross-platform compatibility and text processing
+//! Cross-platform text processing utilities
 
 use std::borrow::Cow;
 
-/// Platform-specific line ending
 #[cfg(target_os = "windows")]
 pub const LINE_ENDING: &str = "\r\n";
 
-/// Platform-specific line ending
 #[cfg(not(target_os = "windows"))]
 pub const LINE_ENDING: &str = "\n";
 
-/// Normalize line endings for consistent cross-platform processing.
-/// Handles Windows (CRLF), Classic Mac (CR), and Unix (LF) line endings.
-///
-/// By default, normalizes to Unix format (LF only).
-/// Use `normalize_line_endings_with_platform` to preserve platform-specific endings.
-///
-/// # Examples
-/// ```
-/// use markdown_preview::utils::normalize_line_endings;
-///
-/// assert_eq!(normalize_line_endings("hello\r\nworld"), "hello\nworld");
-/// assert_eq!(normalize_line_endings("hello\rworld"), "hello\nworld");
-/// assert_eq!(normalize_line_endings("hello\nworld"), "hello\nworld");
-/// ```
+/// Normalize line endings to Unix format (LF only).
 pub fn normalize_line_endings(text: &str) -> Cow<'_, str> {
     if !text.contains('\r') {
         return Cow::Borrowed(text);
@@ -32,25 +17,9 @@ pub fn normalize_line_endings(text: &str) -> Cow<'_, str> {
     Cow::Owned(normalized)
 }
 
-/// Normalize line endings with option to preserve platform-specific format.
-///
-/// # Arguments
-/// * `text` - The text to normalize
-/// * `preserve_platform` - If true, converts to platform-specific line endings
-///
-/// # Examples
-/// ```
-/// use markdown_preview::utils::normalize_line_endings_with_platform;
-///
-/// // On Windows with preserve_platform=true, converts to CRLF
-/// // On Unix with preserve_platform=true, keeps LF
-/// let result = normalize_line_endings_with_platform("hello\r\nworld", true);
-/// ```
+/// Normalize line endings with optional platform-specific format.
 pub fn normalize_line_endings_with_platform(text: &str, preserve_platform: bool) -> String {
-    // First normalize to LF
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-
-    // Then convert to platform-specific if requested
     if preserve_platform && cfg!(windows) {
         normalized.replace('\n', "\r\n")
     } else {

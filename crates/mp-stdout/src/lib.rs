@@ -1,29 +1,24 @@
-//! Module for rendering Markdown files
-//!
-//! This module parses Markdown files and content,
-//! converting them to terminal-displayable format.
-
 use std::io::{Stdout, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use pulldown_cmark::{Options, Parser};
 
-use crate::theme::SolarizedOsaka;
+use mp_core::theme::SolarizedOsaka;
 
-// Internal modules for separating rendering concerns
 pub mod buffered_output;
 pub mod builder;
+pub mod output;
+pub mod state;
+
 mod config;
 mod element_accessor;
 mod formatting;
 mod handlers;
 mod io;
-pub mod state;
 mod styling;
 mod table_builder;
 
-// Public API exports for external module usage
 pub use builder::RendererBuilder;
 pub use config::RenderConfig;
 pub use element_accessor::{
@@ -33,17 +28,9 @@ pub use state::{ActiveElement, RenderState};
 pub use styling::TextStyle;
 pub use table_builder::{Table, TableBuilder};
 
-// Re-export core rendering functionality
 pub use self::buffered_output::BufferedOutput;
 use self::io::read_file;
 
-/// Main Markdown renderer struct
-///
-/// # Primary Responsibilities
-/// - Loading and parsing Markdown files
-/// - Markdown parsing using pulldown_cmark
-/// - Converting events to terminal-displayable format
-/// - Efficient buffered output to terminal
 pub struct MarkdownRenderer<W: Write = Stdout> {
     pub theme: SolarizedOsaka,
     pub state: RenderState,
@@ -230,18 +217,6 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     /// Build a table using the TableBuilder API
-    ///
-    /// # Example
-    /// ```
-    /// use markdown_preview::renderer::MarkdownRenderer;
-    ///
-    /// let renderer = MarkdownRenderer::new();
-    /// let table = renderer.build_table()
-    ///     .header(vec!["Name", "Age"])
-    ///     .row(vec!["Alice", "30"])
-    ///     .build()
-    ///     .expect("Failed to build table");
-    /// ```
     pub fn build_table(&self) -> TableBuilder {
         TableBuilder::new()
             .separator(self.config.table_separator)
@@ -281,7 +256,6 @@ mod tests {
     use std::io::Write;
     use std::sync::{Arc, Mutex};
 
-    // Test-specific MockWriter implementation
     struct MockWriter {
         buffer: Arc<Mutex<Vec<u8>>>,
     }
@@ -304,11 +278,6 @@ mod tests {
         }
     }
 
-    // ====================
-    // Test Data Constants
-    // ====================
-
-    /// Common test data for various markdown elements
     mod test_data {
         pub const HEADING_1: &str = "# Heading 1";
         pub const HEADING_2: &str = "## Heading 2";
@@ -363,11 +332,6 @@ fn main() {
 "#;
     }
 
-    // ====================
-    // Helper Functions
-    // ====================
-
-    /// Helper function to create a renderer with default settings
     fn create_renderer() -> MarkdownRenderer<MockWriter> {
         let buffer = Arc::new(Mutex::new(Vec::new()));
         let mock_writer = MockWriter::new_with_buffer(buffer);
@@ -375,14 +339,12 @@ fn main() {
         MarkdownRenderer::with_output(output)
     }
 
-    /// Helper function to assert rendering succeeds
     fn assert_render_success(content: &str) {
         let mut renderer = create_renderer();
         let result = renderer.render_content(content);
         assert!(result.is_ok(), "Failed to render: {}", content);
     }
 
-    /// Helper function to set emphasis state
     fn set_emphasis_state<W: Write>(
         renderer: &mut MarkdownRenderer<W>,
         strong: bool,
@@ -391,10 +353,6 @@ fn main() {
         renderer.state.emphasis.strong = strong;
         renderer.state.emphasis.italic = italic;
     }
-
-    // ====================
-    // Unit Tests
-    // ====================
 
     #[test]
     fn test_renderer_creation() {
@@ -481,10 +439,6 @@ fn main() {
         assert!(fence_with_lang.contains("```"));
         assert!(fence_with_lang.contains("rust"));
     }
-
-    // ====================
-    // Parametrized Tests
-    // ====================
 
     #[rstest]
     #[case(test_data::HEADING_1)]

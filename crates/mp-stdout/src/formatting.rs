@@ -1,17 +1,16 @@
-use anyhow::Result;
-use pulldown_cmark::Alignment;
 use std::borrow::Cow;
 use std::io::Write;
+
+use anyhow::Result;
+use pulldown_cmark::Alignment;
 
 use super::{
     MarkdownRenderer,
     state::{CodeBlockState, ListType},
     styling::TextStyle,
 };
-use crate::{
-    output::{ElementKind, ElementPhase, OutputType, TableVariant},
-    theme::MarkdownTheme,
-};
+use crate::output::{ElementKind, ElementPhase, OutputType, TableVariant};
+use mp_core::theme::MarkdownTheme;
 
 impl<W: Write> MarkdownRenderer<W> {
     pub fn print_output(&mut self, output_type: OutputType) -> Result<()> {
@@ -224,8 +223,6 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     pub fn render_table_row(&mut self, row: &[String], is_header: bool) -> Result<()> {
-        // Pre-allocation reduces memory reallocations during string building,
-        // improving performance for tables with many columns
         let estimated_size: usize = row.iter().map(|s| s.len() + 4).sum::<usize>() + 1;
         let mut output = String::with_capacity(estimated_size);
         output.push_str(self.config.table_separator);
@@ -245,8 +242,6 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     pub fn render_table_separator(&mut self, alignments: &[Alignment]) -> Result<()> {
-        // Each column needs up to 7 chars for alignment markers plus delimiters.
-        // Pre-allocation avoids growth during string building
         let mut output = String::with_capacity(alignments.len() * 8 + 1);
         output.push_str(self.config.table_separator);
         for alignment in alignments {
@@ -269,14 +264,13 @@ impl<W: Write> MarkdownRenderer<W> {
 #[cfg(test)]
 mod tests {
     use crate::{
+        BufferedOutput, MarkdownRenderer,
         output::{ElementKind, ElementPhase, OutputType, TableVariant},
-        renderer::{BufferedOutput, MarkdownRenderer},
     };
     use rstest::rstest;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
 
-    // Test-specific MockWriter implementation
     struct MockWriter {
         buffer: Arc<Mutex<Vec<u8>>>,
     }

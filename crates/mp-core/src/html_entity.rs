@@ -1,8 +1,4 @@
-//! Module for decoding HTML entities
-//!
-//! This module converts HTML entities (&amp;, &lt;, &gt;, etc.) to their
-//! corresponding characters. It uses the AhoCorasick algorithm for
-//! efficient string replacement.
+//! HTML entity decoding with AhoCorasick algorithm
 
 use std::borrow::Cow;
 use std::sync::LazyLock;
@@ -10,15 +6,13 @@ use std::sync::LazyLock;
 use aho_corasick::AhoCorasick;
 use anyhow::{Context, Result};
 
-/// Structure for efficient HTML entity replacement
-struct EntityDecoder {
-    /// Pre-compiled pattern matcher using AhoCorasick for O(n) complexity
+/// Efficient HTML entity decoder
+pub struct EntityDecoder {
     matcher: AhoCorasick,
-    /// Character replacements corresponding to each HTML entity pattern
     replacements: Vec<&'static str>,
 }
 
-/// Initialize the entity decoder with error handling
+/// Initialize entity decoder
 fn init_entity_decoder() -> Result<EntityDecoder> {
     let patterns = vec![
         "&lt;", "&gt;", "&amp;", "&quot;", "&apos;", "&#39;", "&nbsp;", "&copy;", "&reg;",
@@ -34,8 +28,6 @@ fn init_entity_decoder() -> Result<EntityDecoder> {
         "∞", "∑", "∏", "√", "←", "→", "↑", "↓", "↔",
     ];
 
-    // Using AhoCorasick instead of multiple string::replace calls reduces
-    // complexity from O(n*m) to O(n) where n=text length, m=pattern count
     let matcher = AhoCorasick::builder()
         .match_kind(aho_corasick::MatchKind::LeftmostFirst)
         .build(patterns)
@@ -47,20 +39,14 @@ fn init_entity_decoder() -> Result<EntityDecoder> {
     })
 }
 
-/// Global entity decoder initialized once at first use to avoid repeated compilation
+/// Global entity decoder
 static ENTITY_DECODER: LazyLock<EntityDecoder> = LazyLock::new(|| {
     init_entity_decoder()
         .expect("Failed to initialize HTML entity decoder - this is a critical error")
 });
 
-/// Decode HTML entities using optimized AhoCorasick pattern matching
-///
-/// This function uses the AhoCorasick algorithm for O(n) time complexity
-/// instead of the previous O(n*m) approach with multiple replace calls.
-/// Returns Cow<str> to avoid unnecessary allocations when no entities are present.
+/// Decode HTML entities using AhoCorasick pattern matching
 pub fn decode_html_entities(text: &str) -> Cow<'_, str> {
-    // Early return when no '&' character exists avoids unnecessary processing
-    // for the common case of plain text without HTML entities
     if !text.contains('&') {
         return Cow::Borrowed(text);
     }
@@ -76,15 +62,11 @@ pub fn decode_html_entities(text: &str) -> Cow<'_, str> {
 
     result.push_str(&text[last_end..]);
 
-    // Numeric entities require dynamic parsing and cannot be pre-compiled
-    // into the AhoCorasick matcher, so they're handled in a second pass
     Cow::Owned(decode_numeric_entities(&result))
 }
 
-/// Decode numeric entities with optimized string building
+/// Decode numeric HTML entities
 fn decode_numeric_entities(text: &str) -> String {
-    // Skip processing if no numeric entity prefix exists, improving performance
-    // for text that only contains named entities or plain text
     if !text.contains("&#") {
         return text.to_string();
     }

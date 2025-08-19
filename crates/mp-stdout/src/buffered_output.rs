@@ -1,7 +1,7 @@
-use anyhow::Result;
 use std::io::{self, BufWriter, Write};
 
-/// Default buffer size for BufferedOutput (8KB)
+use anyhow::Result;
+
 const DEFAULT_BUFFER_SIZE: usize = 8192;
 
 /// Buffered output writer for efficient terminal output

@@ -1,9 +1,10 @@
-use anyhow::{Context, Result};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::Path;
 
-use crate::utils::normalize_line_endings;
+use anyhow::{Context, Result};
+
+use mp_core::utils::normalize_line_endings;
 
 pub fn read_file(path: &Path) -> Result<String> {
     if !path.exists() {

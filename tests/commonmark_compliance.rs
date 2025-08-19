@@ -1,6 +1,6 @@
 mod common;
 
-use common::{TestCase, run_data_driven_tests};
+use common::{run_data_driven_tests, TestCase};
 
 /// Data-driven test macro for better organization
 macro_rules! data_driven_test {

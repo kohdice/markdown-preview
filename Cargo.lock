@@ -337,26 +337,45 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13dc2df351e3202783a1fe0d44375f7295ffb4049267b0f3018346dc122a1d94"
 
 [[package]]
-name = "markdown-preview"
-version = "0.1.0"
-dependencies = [
- "aho-corasick",
- "anyhow",
- "clap",
- "colored",
- "ignore",
- "pulldown-cmark",
- "regex",
- "rstest",
- "tempfile",
- "terminal_size",
-]
-
-[[package]]
 name = "memchr"
 version = "2.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a282da65faaf38286cf3be983213fcf1d2e2a58700e808f83f4ea9a4804bc0"
+
+[[package]]
+name = "mp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "mp-core",
+ "mp-stdout",
+ "tempfile",
+]
+
+[[package]]
+name = "mp-core"
+version = "0.1.0"
+dependencies = [
+ "aho-corasick",
+ "anyhow",
+ "colored",
+ "ignore",
+ "rstest",
+ "tempfile",
+]
+
+[[package]]
+name = "mp-stdout"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "colored",
+ "mp-core",
+ "pulldown-cmark",
+ "rstest",
+ "terminal_size",
+]
 
 [[package]]
 name = "once_cell"

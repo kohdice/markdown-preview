@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use crate::finder::{FinderConfig, display_files, find_markdown_files};
-use markdown_preview::MarkdownRenderer;
+use mp_core::finder::{FinderConfig, display_files, find_markdown_files};
+use mp_stdout::MarkdownRenderer;
 
 #[derive(Debug, Parser)]
 #[command(name = "mp", version, about = "Markdown previewer in terminal")]

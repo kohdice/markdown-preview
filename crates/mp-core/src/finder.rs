@@ -22,9 +22,9 @@ pub fn find_markdown_files_in_dir(dir: &str, config: FinderConfig) -> Result<Vec
     let mut builder = WalkBuilder::new(dir);
 
     builder
-        .hidden(!config.hidden) // Exclude hidden files by default
-        .parents(!config.no_ignore_parent) // Consider .gitignore in parent directories
-        .add_custom_ignore_filename(".mpignore"); // mp-specific ignore file
+        .hidden(!config.hidden)
+        .parents(!config.no_ignore_parent)
+        .add_custom_ignore_filename(".mpignore");
 
     if config.no_ignore {
         builder
@@ -42,14 +42,11 @@ pub fn find_markdown_files_in_dir(dir: &str, config: FinderConfig) -> Result<Vec
 
     let walker = builder.build();
 
-    // Use iterator chain with filter_map for efficiency
     let mut files: Vec<PathBuf> = walker
         .filter_map(|result| result.ok())
         .filter_map(|entry| {
             let path = entry.path();
-            // Collect only .md files
             if path.is_file() && path.extension().is_some_and(|ext| ext == "md") {
-                // Create relative path with better cross-platform support
                 Some(make_relative_path(path, base_path))
             } else {
                 None
@@ -57,28 +54,23 @@ pub fn find_markdown_files_in_dir(dir: &str, config: FinderConfig) -> Result<Vec
         })
         .collect();
 
-    // Sort alphabetically
     files.sort();
     Ok(files)
 }
 
 /// Create a relative path with robust cross-platform support
 fn make_relative_path(path: &Path, base: &Path) -> PathBuf {
-    // Try to canonicalize both paths for consistent comparison
     let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let canonical_base = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
 
-    // Try strip_prefix with canonicalized paths
     if let Ok(rel) = canonical_path.strip_prefix(&canonical_base) {
         return rel.to_path_buf();
     }
 
-    // Try strip_prefix with original paths as fallback
     if let Ok(rel) = path.strip_prefix(base) {
         return rel.to_path_buf();
     }
 
-    // Final fallback: use file name if available, otherwise full path
     path.file_name()
         .map(PathBuf::from)
         .unwrap_or_else(|| path.to_path_buf())
@@ -87,7 +79,6 @@ fn make_relative_path(path: &Path, base: &Path) -> PathBuf {
 /// Display file list
 pub fn display_files(files: &[PathBuf]) {
     if files.is_empty() {
-        // Like fd, output nothing if no files are found
         return;
     }
 
@@ -109,10 +100,8 @@ mod tests {
         fs::write(dir.path().join("test.md"), "Test content").unwrap();
         fs::write(dir.path().join("test.txt"), "Not markdown").unwrap();
 
-        // Hidden file
         fs::write(dir.path().join(".hidden.md"), "Hidden markdown").unwrap();
 
-        // Subdirectory
         let sub_dir = dir.path().join("subdir");
         fs::create_dir(&sub_dir).unwrap();
         fs::write(sub_dir.join("sub.md"), "Sub markdown").unwrap();
@@ -127,7 +116,6 @@ mod tests {
         let config = FinderConfig::default();
         let files = find_markdown_files_in_dir(temp_dir.path().to_str().unwrap(), config).unwrap();
 
-        // Hidden files are excluded by default
         assert_eq!(files.len(), 3);
 
         let file_names: Vec<String> = files
@@ -138,7 +126,6 @@ mod tests {
         assert!(file_names.iter().any(|f| f.ends_with("README.md")));
         assert!(file_names.iter().any(|f| f.ends_with("test.md")));
 
-        // Platform-specific path separator check
         #[cfg(windows)]
         {
             assert!(file_names.iter().any(|f| f.ends_with("subdir\\sub.md")));
@@ -162,7 +149,6 @@ mod tests {
         };
         let files = find_markdown_files_in_dir(temp_dir.path().to_str().unwrap(), config).unwrap();
 
-        // Hidden files are included
         assert_eq!(files.len(), 4);
 
         let file_names: Vec<String> = files
@@ -172,7 +158,6 @@ mod tests {
 
         assert!(file_names.iter().any(|f| f.ends_with(".hidden.md")));
 
-        // Platform-specific path separator check
         #[cfg(windows)]
         {
             assert!(file_names.iter().any(|f| f.ends_with("subdir\\sub.md")));
@@ -191,16 +176,13 @@ mod tests {
         let config = FinderConfig::default();
         let files = find_markdown_files_in_dir(temp_dir.path().to_str().unwrap(), config).unwrap();
 
-        // Test that actual paths contain platform-specific separators
         let raw_paths: Vec<String> = files
             .iter()
             .map(|p| p.to_string_lossy().to_string())
             .collect();
 
-        // On each platform, paths should contain the native separator
         #[cfg(windows)]
         {
-            // Windows paths should contain backslashes
             assert!(
                 raw_paths.iter().any(|f| f.contains("subdir\\sub.md")),
                 "Windows paths should contain backslashes"
@@ -209,14 +191,11 @@ mod tests {
 
         #[cfg(not(windows))]
         {
-            // Unix paths should contain forward slashes
             assert!(
                 raw_paths.iter().any(|f| f.contains("subdir/sub.md")),
                 "Unix paths should contain forward slashes"
             );
         }
-
-        // After normalization, all paths should work with forward slashes
         let normalized_paths: Vec<String> = files
             .iter()
             .map(|p| p.to_string_lossy().replace('\\', "/"))
