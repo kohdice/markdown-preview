@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use mp_core::finder::{FinderConfig, display_files, find_markdown_files};
 use mp_stdout::MarkdownRenderer;
 
 #[derive(Debug, Parser)]
@@ -49,15 +48,7 @@ pub fn run() -> Result<()> {
                 .with_context(|| format!("Failed to render markdown file: {}", path.display()))?;
         }
         None => {
-            let config = FinderConfig {
-                hidden: args.hidden,
-                no_ignore: args.no_ignore,
-                no_ignore_parent: args.no_ignore_parent,
-                no_global_ignore_file: args.no_global_ignore_file,
-            };
-
-            let files = find_markdown_files(config)?;
-            display_files(&files);
+            mp_tui::run_tui().map_err(|e| anyhow::anyhow!("Failed to run TUI mode: {}", e))?;
         }
     }
 
