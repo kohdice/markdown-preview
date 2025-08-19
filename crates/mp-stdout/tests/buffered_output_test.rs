@@ -1,7 +1,6 @@
 use std::io::{BufWriter, Write};
 use std::sync::{Arc, Mutex};
 
-/// テスト用のモックライター
 #[derive(Debug)]
 struct MockWriter {
     buffer: Arc<Mutex<Vec<u8>>>,
@@ -41,12 +40,10 @@ fn test_buffered_writer_basic() {
     let (mock_writer, _) = MockWriter::new();
     let mut buffered = BufWriter::new(mock_writer);
 
-    // 複数の小さな書き込み
     writeln!(buffered, "Line 1").unwrap();
     writeln!(buffered, "Line 2").unwrap();
     writeln!(buffered, "Line 3").unwrap();
 
-    // フラッシュして出力を確認
     buffered.flush().unwrap();
 
     let mock_writer = buffered.into_inner().unwrap();
@@ -59,18 +56,15 @@ fn test_buffered_writer_performance() {
     let (mock_writer, buffer_ref) = MockWriter::new();
     let mut buffered = BufWriter::with_capacity(8192, mock_writer);
 
-    // 大量の小さな書き込み（バッファリングされる）
     for i in 0..100 {
         writeln!(buffered, "Line {}", i).unwrap();
     }
 
-    // フラッシュ前：バッファは空（まだ書き込まれていない）
     {
         let buffer = buffer_ref.lock().unwrap();
         assert!(buffer.is_empty() || buffer.len() < 8192);
     }
 
-    // フラッシュ後：全てのデータが書き込まれる
     buffered.flush().unwrap();
     let mock_writer = buffered.into_inner().unwrap();
     let output = mock_writer.get_output();
@@ -84,9 +78,8 @@ fn test_buffered_writer_performance() {
 #[test]
 fn test_buffered_writer_auto_flush() {
     let (mock_writer, _) = MockWriter::new();
-    let mut buffered = BufWriter::with_capacity(64, mock_writer); // 小さなバッファ
+    let mut buffered = BufWriter::with_capacity(64, mock_writer);
 
-    // バッファサイズを超える書き込み（自動フラッシュ）
     let long_string = "a".repeat(100);
     writeln!(buffered, "{}", long_string).unwrap();
 
