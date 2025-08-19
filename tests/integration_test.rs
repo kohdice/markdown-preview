@@ -3,7 +3,7 @@ mod test_helpers;
 
 use rstest::rstest;
 
-use common::{TestCase, generate_large_markdown_content, run_data_driven_tests};
+use common::{generate_large_markdown_content, run_data_driven_tests, TestCase};
 
 #[rstest]
 #[case::heading1("# Heading 1")]

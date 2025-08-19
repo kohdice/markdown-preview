@@ -1,8 +1,8 @@
 mod common;
 
 use common::{
-    TestCase, create_commonmark_test_cases, create_html_entity_test_cases, create_test_renderer,
-    generate_large_markdown_content, measure_render_performance, run_data_driven_tests,
+    create_commonmark_test_cases, create_html_entity_test_cases, create_test_renderer,
+    generate_large_markdown_content, measure_render_performance, run_data_driven_tests, TestCase,
 };
 
 /// Comprehensive data-driven tests for all CommonMark features
