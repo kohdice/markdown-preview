@@ -15,10 +15,12 @@ repository = "https://github.com/kohdice/markdown-preview"
 # Internal crates
 mp-core = { version = "0.1.0", path = "crates/mp-core" }
 mp-stdout = { version = "0.1.0", path = "crates/mp-stdout" }
+mp-tui = { version = "0.1.0", path = "crates/mp-tui" }
 
 # Common external dependencies
 anyhow = "1.0.99"
 colored = "3.0.0"
+pulldown-cmark = "0.12"
 
 # Test dependencies
 rstest = "0.26.1"
