@@ -1,5 +1,3 @@
-//! Markdown to terminal renderer
-
 use std::io::{Stdout, Write};
 use std::path::Path;
 
@@ -33,7 +31,6 @@ pub use table_builder::{Table, TableBuilder};
 pub use self::buffered_output::BufferedOutput;
 use self::io::read_file;
 
-/// Main Markdown renderer
 pub struct MarkdownRenderer<W: Write = Stdout> {
     pub theme: SolarizedOsaka,
     pub state: RenderState,
@@ -259,7 +256,6 @@ mod tests {
     use std::io::Write;
     use std::sync::{Arc, Mutex};
 
-    // Test-specific MockWriter implementation
     struct MockWriter {
         buffer: Arc<Mutex<Vec<u8>>>,
     }
@@ -282,11 +278,6 @@ mod tests {
         }
     }
 
-    // ====================
-    // Test Data Constants
-    // ====================
-
-    /// Common test data for various markdown elements
     mod test_data {
         pub const HEADING_1: &str = "# Heading 1";
         pub const HEADING_2: &str = "## Heading 2";
@@ -341,11 +332,6 @@ fn main() {
 "#;
     }
 
-    // ====================
-    // Helper Functions
-    // ====================
-
-    /// Helper function to create a renderer with default settings
     fn create_renderer() -> MarkdownRenderer<MockWriter> {
         let buffer = Arc::new(Mutex::new(Vec::new()));
         let mock_writer = MockWriter::new_with_buffer(buffer);
@@ -353,14 +339,12 @@ fn main() {
         MarkdownRenderer::with_output(output)
     }
 
-    /// Helper function to assert rendering succeeds
     fn assert_render_success(content: &str) {
         let mut renderer = create_renderer();
         let result = renderer.render_content(content);
         assert!(result.is_ok(), "Failed to render: {}", content);
     }
 
-    /// Helper function to set emphasis state
     fn set_emphasis_state<W: Write>(
         renderer: &mut MarkdownRenderer<W>,
         strong: bool,
@@ -369,10 +353,6 @@ fn main() {
         renderer.state.emphasis.strong = strong;
         renderer.state.emphasis.italic = italic;
     }
-
-    // ====================
-    // Unit Tests
-    // ====================
 
     #[test]
     fn test_renderer_creation() {
@@ -459,10 +439,6 @@ fn main() {
         assert!(fence_with_lang.contains("```"));
         assert!(fence_with_lang.contains("rust"));
     }
-
-    // ====================
-    // Parametrized Tests
-    // ====================
 
     #[rstest]
     #[case(test_data::HEADING_1)]

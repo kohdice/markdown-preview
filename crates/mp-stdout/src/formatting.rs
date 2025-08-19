@@ -271,7 +271,6 @@ mod tests {
     use std::io::Write;
     use std::sync::{Arc, Mutex};
 
-    // Test-specific MockWriter implementation
     struct MockWriter {
         buffer: Arc<Mutex<Vec<u8>>>,
     }
