@@ -349,7 +349,7 @@ dependencies = [
  "anyhow",
  "clap",
  "mp-core",
- "mp-renderer",
+ "mp-stdout",
  "tempfile",
 ]
 
@@ -359,13 +359,14 @@ version = "0.1.0"
 dependencies = [
  "aho-corasick",
  "anyhow",
+ "colored",
  "ignore",
  "rstest",
  "tempfile",
 ]
 
 [[package]]
-name = "mp-renderer"
+name = "mp-stdout"
 version = "0.1.0"
 dependencies = [
  "anyhow",
