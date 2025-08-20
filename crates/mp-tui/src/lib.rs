@@ -5,6 +5,7 @@ use color_eyre::eyre;
 mod app;
 mod events;
 mod renderer;
+mod theme_adapter;
 mod ui;
 mod widgets {
     pub mod file_tree;

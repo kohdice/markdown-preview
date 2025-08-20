@@ -2,12 +2,13 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, Widget, Wrap},
 };
 use regex::Regex;
 
+use crate::theme_adapter::{RatatuiAdapter, RatatuiStyleAdapter};
 use mp_core::theme::{MarkdownTheme, SolarizedOsaka};
 
 #[derive(Debug, Clone)]
@@ -48,22 +49,6 @@ impl MarkdownWidget {
         };
         widget.parse_markdown();
         widget
-    }
-
-    fn crossterm_to_ratatui_color(color: crossterm::style::Color) -> Color {
-        match color {
-            crossterm::style::Color::Rgb { r, g, b } => Color::Rgb(r, g, b),
-            crossterm::style::Color::Black => Color::Black,
-            crossterm::style::Color::Red => Color::Red,
-            crossterm::style::Color::Green => Color::Green,
-            crossterm::style::Color::Yellow => Color::Yellow,
-            crossterm::style::Color::Blue => Color::Blue,
-            crossterm::style::Color::Magenta => Color::Magenta,
-            crossterm::style::Color::Cyan => Color::Cyan,
-            crossterm::style::Color::White => Color::White,
-            crossterm::style::Color::Grey => Color::Gray,
-            _ => Color::Reset,
-        }
     }
 
     pub fn scroll_offset(mut self, offset: u16) -> Self {
@@ -155,22 +140,16 @@ impl MarkdownWidget {
                             pulldown_cmark::HeadingLevel::H5 => 5,
                             pulldown_cmark::HeadingLevel::H6 => 6,
                         };
-                        let color = Self::crossterm_to_ratatui_color(
-                            self.theme.heading_color(heading_level),
-                        );
-                        current_style = if heading_level <= 2 {
-                            Style::default().fg(color).add_modifier(Modifier::BOLD)
-                        } else {
-                            Style::default().fg(color)
-                        };
+                        let heading_style = self.theme.heading_style(heading_level);
+                        current_style = heading_style.to_ratatui_style();
                     }
                     Tag::Emphasis => {
-                        let color = Self::crossterm_to_ratatui_color(self.theme.emphasis_color());
-                        current_style = Style::default().fg(color).add_modifier(Modifier::ITALIC);
+                        let emphasis_style = self.theme.emphasis_style();
+                        current_style = emphasis_style.to_ratatui_style();
                     }
                     Tag::Strong => {
-                        let color = Self::crossterm_to_ratatui_color(self.theme.strong_color());
-                        current_style = Style::default().fg(color).add_modifier(Modifier::BOLD);
+                        let strong_style = self.theme.strong_style();
+                        current_style = strong_style.to_ratatui_style();
                     }
                     Tag::List(start) => {
                         if in_list_item && !current_line.is_empty() {
@@ -205,13 +184,15 @@ impl MarkdownWidget {
                         current_line.push(Span::raw(format!("{}{}", indent, marker)));
                     }
                     Tag::Link { .. } => {
-                        let color = Self::crossterm_to_ratatui_color(self.theme.link_color());
+                        let link_style = self.theme.link_style();
+                        let color = link_style.color.to_ratatui_color();
                         current_style = Style::default()
                             .fg(color)
                             .add_modifier(Modifier::UNDERLINED);
                     }
                     Tag::BlockQuote(_) => {
-                        let color = Self::crossterm_to_ratatui_color(self.theme.delimiter_color());
+                        let delimiter_style = self.theme.delimiter_style();
+                        let color = delimiter_style.color.to_ratatui_color();
                         current_line.push(Span::styled("> ", Style::default().fg(color)));
                         current_style = Style::default().fg(color);
                     }
@@ -318,9 +299,9 @@ impl MarkdownWidget {
                     if in_table {
                         current_cell.push_str(&format!("`{}`", code));
                     } else {
-                        let fg_color = Self::crossterm_to_ratatui_color(self.theme.code_color());
-                        let bg_color =
-                            Self::crossterm_to_ratatui_color(self.theme.code_background());
+                        let code_style = self.theme.code_style();
+                        let fg_color = code_style.color.to_ratatui_color();
+                        let bg_color = self.theme.code_background().to_ratatui_color();
                         current_line.push(Span::styled(
                             format!("`{}`", code),
                             Style::default().fg(fg_color).bg(bg_color),
@@ -372,7 +353,8 @@ impl MarkdownWidget {
             vec![]
         };
 
-        let text_color = Self::crossterm_to_ratatui_color(self.theme.text_color());
+        let text_style = self.theme.text_style();
+        let text_color = text_style.color.to_ratatui_color();
         Table::new(rows, constraints)
             .header(header)
             .block(Block::default().borders(Borders::ALL))
@@ -382,7 +364,8 @@ impl MarkdownWidget {
     fn render_code_block(&self, data: &CodeBlockData) -> Paragraph<'_> {
         let mut lines = Vec::new();
 
-        let fence_color = Self::crossterm_to_ratatui_color(self.theme.delimiter_color());
+        let delimiter_style = self.theme.delimiter_style();
+        let fence_color = delimiter_style.color.to_ratatui_color();
         let fence_style = Style::default().fg(fence_color);
         let opening = if let Some(ref lang) = data.language {
             format!("```{}", lang)
@@ -391,7 +374,8 @@ impl MarkdownWidget {
         };
         lines.push(Line::from(Span::styled(opening, fence_style)));
 
-        let code_color = Self::crossterm_to_ratatui_color(self.theme.code_color());
+        let theme_code_style = self.theme.code_style();
+        let code_color = theme_code_style.color.to_ratatui_color();
         let code_style = Style::default().fg(code_color);
         for line in data.content.lines() {
             lines.push(Line::from(Span::styled(line.to_string(), code_style)));
