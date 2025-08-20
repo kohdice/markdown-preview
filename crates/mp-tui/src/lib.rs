@@ -8,7 +8,6 @@ mod theme_adapter;
 mod ui;
 mod widgets {
     pub mod file_tree;
-    pub mod preview;
 }
 
 pub use app::{App, Focus};
