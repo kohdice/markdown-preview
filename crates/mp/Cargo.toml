@@ -12,7 +12,8 @@ mp-core = { workspace = true }
 mp-stdout = { workspace = true }
 mp-tui = { workspace = true }
 anyhow = { workspace = true }
-clap = { version = "4.5.45", features = ["derive"] }
+
+clap = { version = "4.5", features = ["derive"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
