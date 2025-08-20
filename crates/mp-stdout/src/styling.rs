@@ -1,10 +1,11 @@
 use std::borrow::Cow;
 use std::io::Write;
 
-use colored::ColoredString;
+use crossterm::style::{Color, StyledContent};
+
+use mp_core::theme::MarkdownTheme;
 
 use super::MarkdownRenderer;
-use mp_core::theme::MarkdownTheme;
 
 /// Text styling for Markdown elements
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -18,12 +19,12 @@ pub enum TextStyle {
     ListMarker,
     Delimiter,
     CodeBlock,
-    Custom { color: (u8, u8, u8), bold: bool },
+    Custom { color: Color, bold: bool },
 }
 
 impl<W: Write> MarkdownRenderer<W> {
     /// Apply text styling based on TextStyle enum
-    pub fn apply_text_style(&self, text: &str, style: TextStyle) -> ColoredString {
+    pub fn apply_text_style(&self, text: &str, style: TextStyle) -> StyledContent<String> {
         use mp_core::theme::{styled_text, styled_text_with_bg};
 
         match style {
@@ -66,33 +67,26 @@ impl<W: Write> MarkdownRenderer<W> {
         } else {
             TextStyle::Normal
         };
-        Cow::Owned(self.apply_text_style(text, style).to_string())
+        Cow::Owned(format!("{}", self.apply_text_style(text, style)))
     }
 
     /// Create styled marker text
     pub fn create_styled_marker(
         &self,
         marker: &str,
-        color: (u8, u8, u8),
+        color: Color,
         bold: bool,
     ) -> Cow<'static, str> {
-        let style = if color == self.theme.list_marker_color() {
-            TextStyle::ListMarker
-        } else if color == self.theme.delimiter_color() {
-            TextStyle::Delimiter
-        } else {
-            TextStyle::Custom { color, bold }
-        };
-
-        Cow::Owned(self.apply_text_style(marker, style).to_string())
+        let style = TextStyle::Custom { color, bold };
+        Cow::Owned(format!("{}", self.apply_text_style(marker, style)))
     }
 
     /// Format URLs with delimiters
     pub fn create_styled_url(&self, url: &str) -> Cow<'static, str> {
-        Cow::Owned(
+        Cow::Owned(format!(
+            "{}",
             self.apply_text_style(&format!(" ({})", url), TextStyle::Delimiter)
-                .to_string(),
-        )
+        ))
     }
 
     /// Route text to active element buffer

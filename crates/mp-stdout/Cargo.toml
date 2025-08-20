@@ -9,10 +9,12 @@ repository.workspace = true
 
 [dependencies]
 mp-core = { workspace = true }
+
 anyhow = { workspace = true }
-colored = { workspace = true }
-pulldown-cmark = "0.13.0"
-terminal_size = "0.4.3"
+crossterm = { workspace = true }
+
+pulldown-cmark = "0.13"
+terminal_size = "0.4"
 
 [dev-dependencies]
 rstest = { workspace = true }

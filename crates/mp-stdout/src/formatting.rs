@@ -4,13 +4,14 @@ use std::io::Write;
 use anyhow::Result;
 use pulldown_cmark::Alignment;
 
+use mp_core::theme::MarkdownTheme;
+
 use super::{
     MarkdownRenderer,
     state::{CodeBlockState, ListType},
     styling::TextStyle,
 };
 use crate::output::{ElementKind, ElementPhase, OutputType, TableVariant};
-use mp_core::theme::MarkdownTheme;
 
 impl<W: Write> MarkdownRenderer<W> {
     pub fn print_output(&mut self, output_type: OutputType) -> Result<()> {
@@ -20,13 +21,13 @@ impl<W: Write> MarkdownRenderer<W> {
             }
             OutputType::HorizontalRule => {
                 let line = self.config.create_horizontal_rule();
-                let styled_line = self.apply_text_style(&line, TextStyle::Delimiter);
+                let styled_line = format!("{}", self.apply_text_style(&line, TextStyle::Delimiter));
                 self.output.writeln("")?;
                 self.output.writeln(&styled_line)?;
                 self.output.writeln("")?;
             }
             OutputType::InlineCode { ref code } => {
-                let styled_code = self.apply_text_style(code, TextStyle::CodeBlock);
+                let styled_code = format!("{}", self.apply_text_style(code, TextStyle::CodeBlock));
                 self.output.write(&styled_code)?;
             }
             OutputType::TaskMarker { checked } => {
@@ -38,7 +39,8 @@ impl<W: Write> MarkdownRenderer<W> {
             OutputType::Link => {
                 if let Some(link) = self.get_link() {
                     self.clear_link();
-                    let styled_link = self.apply_text_style(&link.text, TextStyle::Link);
+                    let styled_link =
+                        format!("{}", self.apply_text_style(&link.text, TextStyle::Link));
                     let url_text = self.create_styled_url(&link.url);
                     self.output.write(&styled_link)?;
                     self.output.write(&url_text)?;
@@ -52,7 +54,10 @@ impl<W: Write> MarkdownRenderer<W> {
                     } else {
                         &image.alt_text
                     };
-                    let styled_alt = self.apply_text_style(display_text, TextStyle::Emphasis);
+                    let styled_alt = format!(
+                        "{}",
+                        self.apply_text_style(display_text, TextStyle::Emphasis)
+                    );
                     let url_text = self.create_styled_url(&image.url);
                     self.output.write(&styled_alt)?;
                     self.output.write(&url_text)?;

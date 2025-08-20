@@ -194,8 +194,10 @@ impl<W: Write> MarkdownRenderer<W> {
             }
             ContentType::Rule => {
                 let line = self.config.create_horizontal_rule();
-                let styled_line =
-                    self.apply_text_style(&line, super::styling::TextStyle::Delimiter);
+                let styled_line = format!(
+                    "{}",
+                    self.apply_text_style(&line, super::styling::TextStyle::Delimiter)
+                );
                 self.output.writeln("")?;
                 self.output.writeln(&styled_line)?;
                 self.output.writeln("")?;

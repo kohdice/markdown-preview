@@ -4,8 +4,9 @@ use std::io::{Stdout, Write};
 
 use pulldown_cmark::Options;
 
-use crate::{BufferedOutput, MarkdownRenderer, RenderConfig, RenderState};
 use mp_core::theme::SolarizedOsaka;
+
+use crate::{BufferedOutput, MarkdownRenderer, RenderConfig, RenderState};
 
 /// Builder for creating configured MarkdownRenderer instances
 ///
@@ -214,8 +215,6 @@ mod tests {
     #[test]
     fn test_builder_with_buffer_size() {
         let renderer = RendererBuilder::new().buffer_size(32 * 1024).build();
-        // The buffer size is internal to BufferedOutput, so we can't directly test it
-        // But we can verify the renderer is created successfully
         assert!(renderer.options.contains(Options::ENABLE_TABLES));
     }
 
@@ -223,7 +222,6 @@ mod tests {
     fn test_builder_with_custom_config() {
         let config = RenderConfig::default();
         let renderer = RendererBuilder::new().config(config.clone()).build();
-        // Verify the renderer has the custom config
         assert_eq!(renderer.config.table_separator, config.table_separator);
     }
 
