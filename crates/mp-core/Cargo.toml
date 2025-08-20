@@ -9,7 +9,6 @@ repository.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-crossterm = { workspace = true }
 
 aho-corasick = "1.1"
 ignore = "0.4"
