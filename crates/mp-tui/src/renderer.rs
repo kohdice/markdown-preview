@@ -8,6 +8,8 @@ use ratatui::{
 };
 use regex::Regex;
 
+use mp_core::theme::{MarkdownTheme, SolarizedOsaka};
+
 #[derive(Debug, Clone)]
 enum MarkdownElement {
     Paragraph(Text<'static>),
@@ -32,6 +34,7 @@ pub struct MarkdownWidget {
     scroll_offset: u16,
     border_style: Style,
     elements: Vec<MarkdownElement>,
+    theme: SolarizedOsaka,
 }
 
 impl MarkdownWidget {
@@ -41,9 +44,26 @@ impl MarkdownWidget {
             scroll_offset: 0,
             border_style: Style::default(),
             elements: Vec::new(),
+            theme: SolarizedOsaka,
         };
         widget.parse_markdown();
         widget
+    }
+
+    fn crossterm_to_ratatui_color(color: crossterm::style::Color) -> Color {
+        match color {
+            crossterm::style::Color::Rgb { r, g, b } => Color::Rgb(r, g, b),
+            crossterm::style::Color::Black => Color::Black,
+            crossterm::style::Color::Red => Color::Red,
+            crossterm::style::Color::Green => Color::Green,
+            crossterm::style::Color::Yellow => Color::Yellow,
+            crossterm::style::Color::Blue => Color::Blue,
+            crossterm::style::Color::Magenta => Color::Magenta,
+            crossterm::style::Color::Cyan => Color::Cyan,
+            crossterm::style::Color::White => Color::White,
+            crossterm::style::Color::Grey => Color::Gray,
+            _ => Color::Reset,
+        }
     }
 
     pub fn scroll_offset(mut self, offset: u16) -> Self {
@@ -127,32 +147,30 @@ impl MarkdownWidget {
                         };
                     }
                     Tag::Heading { level, .. } => {
-                        current_style = match level {
-                            pulldown_cmark::HeadingLevel::H1 => Style::default()
-                                .fg(Color::Rgb(211, 54, 130))
-                                .add_modifier(Modifier::BOLD),
-                            pulldown_cmark::HeadingLevel::H2 => Style::default()
-                                .fg(Color::Rgb(108, 113, 196))
-                                .add_modifier(Modifier::BOLD),
-                            pulldown_cmark::HeadingLevel::H3 => {
-                                Style::default().fg(Color::Rgb(38, 139, 210))
-                            }
-                            pulldown_cmark::HeadingLevel::H4 => {
-                                Style::default().fg(Color::Rgb(42, 161, 152))
-                            }
-                            pulldown_cmark::HeadingLevel::H5 => {
-                                Style::default().fg(Color::Rgb(133, 153, 0))
-                            }
-                            pulldown_cmark::HeadingLevel::H6 => {
-                                Style::default().fg(Color::Rgb(181, 137, 0))
-                            }
+                        let heading_level = match level {
+                            pulldown_cmark::HeadingLevel::H1 => 1,
+                            pulldown_cmark::HeadingLevel::H2 => 2,
+                            pulldown_cmark::HeadingLevel::H3 => 3,
+                            pulldown_cmark::HeadingLevel::H4 => 4,
+                            pulldown_cmark::HeadingLevel::H5 => 5,
+                            pulldown_cmark::HeadingLevel::H6 => 6,
+                        };
+                        let color = Self::crossterm_to_ratatui_color(
+                            self.theme.heading_color(heading_level),
+                        );
+                        current_style = if heading_level <= 2 {
+                            Style::default().fg(color).add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(color)
                         };
                     }
                     Tag::Emphasis => {
-                        current_style = current_style.add_modifier(Modifier::ITALIC);
+                        let color = Self::crossterm_to_ratatui_color(self.theme.emphasis_color());
+                        current_style = Style::default().fg(color).add_modifier(Modifier::ITALIC);
                     }
                     Tag::Strong => {
-                        current_style = current_style.add_modifier(Modifier::BOLD);
+                        let color = Self::crossterm_to_ratatui_color(self.theme.strong_color());
+                        current_style = Style::default().fg(color).add_modifier(Modifier::BOLD);
                     }
                     Tag::List(start) => {
                         if in_list_item && !current_line.is_empty() {
@@ -187,16 +205,15 @@ impl MarkdownWidget {
                         current_line.push(Span::raw(format!("{}{}", indent, marker)));
                     }
                     Tag::Link { .. } => {
+                        let color = Self::crossterm_to_ratatui_color(self.theme.link_color());
                         current_style = Style::default()
-                            .fg(Color::Rgb(38, 139, 210))
+                            .fg(color)
                             .add_modifier(Modifier::UNDERLINED);
                     }
                     Tag::BlockQuote(_) => {
-                        current_line.push(Span::styled(
-                            "> ",
-                            Style::default().fg(Color::Rgb(101, 123, 131)),
-                        ));
-                        current_style = Style::default().fg(Color::Rgb(101, 123, 131));
+                        let color = Self::crossterm_to_ratatui_color(self.theme.delimiter_color());
+                        current_line.push(Span::styled("> ", Style::default().fg(color)));
+                        current_style = Style::default().fg(color);
                     }
                     _ => {}
                 },
@@ -301,11 +318,12 @@ impl MarkdownWidget {
                     if in_table {
                         current_cell.push_str(&format!("`{}`", code));
                     } else {
+                        let fg_color = Self::crossterm_to_ratatui_color(self.theme.code_color());
+                        let bg_color =
+                            Self::crossterm_to_ratatui_color(self.theme.code_background());
                         current_line.push(Span::styled(
                             format!("`{}`", code),
-                            Style::default()
-                                .fg(Color::Rgb(42, 161, 152))
-                                .bg(Color::Rgb(7, 54, 66)),
+                            Style::default().fg(fg_color).bg(bg_color),
                         ));
                     }
                 }
@@ -354,16 +372,18 @@ impl MarkdownWidget {
             vec![]
         };
 
+        let text_color = Self::crossterm_to_ratatui_color(self.theme.text_color());
         Table::new(rows, constraints)
             .header(header)
             .block(Block::default().borders(Borders::ALL))
-            .style(Style::default().fg(Color::Rgb(131, 148, 150)))
+            .style(Style::default().fg(text_color))
     }
 
     fn render_code_block(&self, data: &CodeBlockData) -> Paragraph<'_> {
         let mut lines = Vec::new();
 
-        let fence_style = Style::default().fg(Color::Rgb(101, 123, 131));
+        let fence_color = Self::crossterm_to_ratatui_color(self.theme.delimiter_color());
+        let fence_style = Style::default().fg(fence_color);
         let opening = if let Some(ref lang) = data.language {
             format!("```{}", lang)
         } else {
@@ -371,7 +391,8 @@ impl MarkdownWidget {
         };
         lines.push(Line::from(Span::styled(opening, fence_style)));
 
-        let code_style = Style::default().fg(Color::Rgb(42, 161, 152));
+        let code_color = Self::crossterm_to_ratatui_color(self.theme.code_color());
+        let code_style = Style::default().fg(code_color);
         for line in data.content.lines() {
             lines.push(Line::from(Span::styled(line.to_string(), code_style)));
         }
