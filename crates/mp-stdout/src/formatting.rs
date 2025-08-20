@@ -4,6 +4,7 @@ use std::io::Write;
 use anyhow::Result;
 use pulldown_cmark::Alignment;
 
+use crate::theme_adapter::CrosstermAdapter;
 use mp_core::theme::MarkdownTheme;
 
 use super::{
@@ -32,8 +33,12 @@ impl<W: Write> MarkdownRenderer<W> {
             }
             OutputType::TaskMarker { checked } => {
                 let marker = if checked { "[x] " } else { "[ ] " };
-                let styled_marker =
-                    self.create_styled_marker(marker, self.theme.list_marker_color(), false);
+                let list_marker_style = self.theme.list_marker_style();
+                let styled_marker = self.create_styled_marker(
+                    marker,
+                    list_marker_style.color.to_crossterm_color(),
+                    false,
+                );
                 self.output.write(&styled_marker)?;
             }
             OutputType::Link => {
@@ -89,10 +94,14 @@ impl<W: Write> MarkdownRenderer<W> {
             self.output.writeln("")?
         } else {
             let heading_marker = "#".repeat(level as usize);
-            let color = self.theme.heading_color(level);
+            let heading_style = self.theme.heading_style(level);
             let mut marker_with_space = heading_marker;
             marker_with_space.push(' ');
-            let marker = self.create_styled_marker(&marker_with_space, color, true);
+            let marker = self.create_styled_marker(
+                &marker_with_space,
+                heading_style.color.to_crossterm_color(),
+                heading_style.bold,
+            );
             self.output.write(&marker)?;
         }
         Ok(())
@@ -123,8 +132,12 @@ impl<W: Write> MarkdownRenderer<W> {
                         Cow::Owned(m)
                     }
                 };
-                let styled_marker =
-                    self.create_styled_marker(&marker, self.theme.list_marker_color(), false);
+                let list_marker_style = self.theme.list_marker_style();
+                let styled_marker = self.create_styled_marker(
+                    &marker,
+                    list_marker_style.color.to_crossterm_color(),
+                    false,
+                );
                 self.output.write(&styled_marker)?;
             }
         }
@@ -135,7 +148,9 @@ impl<W: Write> MarkdownRenderer<W> {
         if phase == ElementPhase::End {
             self.output.newline()?;
         } else {
-            let marker = self.create_styled_marker("> ", self.theme.delimiter_color(), false);
+            let delimiter_style = self.theme.delimiter_style();
+            let marker =
+                self.create_styled_marker("> ", delimiter_style.color.to_crossterm_color(), false);
             self.output.write(&marker)?;
         }
         Ok(())
@@ -197,9 +212,13 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     pub(super) fn create_code_fence(&self, language: Option<&str>) -> String {
-        let fence = self.create_styled_marker("```", self.theme.delimiter_color(), false);
+        let delimiter_style = self.theme.delimiter_style();
+        let fence =
+            self.create_styled_marker("```", delimiter_style.color.to_crossterm_color(), false);
         if let Some(lang) = language {
-            let lang_text = self.create_styled_marker(lang, self.theme.code_color(), false);
+            let code_style = self.theme.code_style();
+            let lang_text =
+                self.create_styled_marker(lang, code_style.color.to_crossterm_color(), false);
             let mut result = fence.into_owned();
             result.push_str(&lang_text);
             result

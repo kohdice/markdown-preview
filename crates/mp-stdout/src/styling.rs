@@ -3,9 +3,10 @@ use std::io::Write;
 
 use crossterm::style::{Color, StyledContent};
 
-use mp_core::theme::MarkdownTheme;
+use mp_core::theme::{MarkdownTheme, ThemeColor};
 
 use super::MarkdownRenderer;
+use crate::theme_adapter::CrosstermStyleAdapter;
 
 /// Text styling for Markdown elements
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -25,29 +26,41 @@ pub enum TextStyle {
 impl<W: Write> MarkdownRenderer<W> {
     /// Apply text styling based on TextStyle enum
     pub fn apply_text_style(&self, text: &str, style: TextStyle) -> StyledContent<String> {
-        use mp_core::theme::{styled_text, styled_text_with_bg};
+        use crate::theme_adapter::{styled_text, styled_text_with_bg};
 
         match style {
-            TextStyle::Normal => styled_text(text, self.theme.text_color(), false, false, false),
-            TextStyle::Strong => styled_text(text, self.theme.strong_color(), true, false, false),
-            TextStyle::Emphasis => {
-                styled_text(text, self.theme.emphasis_color(), false, true, false)
-            }
-            TextStyle::Code => styled_text(text, self.theme.code_color(), false, false, false),
-            TextStyle::Link => styled_text(text, self.theme.link_color(), false, false, true),
-            TextStyle::Heading(level) => {
-                styled_text(text, self.theme.heading_color(level), true, false, false)
-            }
-            TextStyle::ListMarker => {
-                styled_text(text, self.theme.list_marker_color(), false, false, false)
-            }
-            TextStyle::Delimiter => {
-                styled_text(text, self.theme.delimiter_color(), false, false, false)
-            }
+            TextStyle::Normal => styled_text(text, &self.theme.text_style()),
+            TextStyle::Strong => styled_text(text, &self.theme.strong_style()),
+            TextStyle::Emphasis => styled_text(text, &self.theme.emphasis_style()),
+            TextStyle::Code => styled_text(text, &self.theme.code_style()),
+            TextStyle::Link => styled_text(text, &self.theme.link_style()),
+            TextStyle::Heading(level) => styled_text(text, &self.theme.heading_style(level)),
+            TextStyle::ListMarker => styled_text(text, &self.theme.list_marker_style()),
+            TextStyle::Delimiter => styled_text(text, &self.theme.delimiter_style()),
             TextStyle::CodeBlock => {
-                styled_text_with_bg(text, self.theme.code_color(), self.theme.code_background())
+                let style = self.theme.code_style();
+                let bg = self.theme.code_background();
+                styled_text_with_bg(text, &style, &bg)
             }
-            TextStyle::Custom { color, bold } => styled_text(text, color, bold, false, false),
+            TextStyle::Custom { color, bold } => {
+                // Handle custom color by converting from crossterm Color to ThemeColor
+                // For now, we'll create a temporary style
+                let theme_color = match color {
+                    Color::Rgb { r, g, b } => ThemeColor { r, g, b },
+                    _ => ThemeColor {
+                        r: 255,
+                        g: 255,
+                        b: 255,
+                    }, // Default to white for non-RGB colors
+                };
+                let theme_style = mp_core::theme::ThemeStyle {
+                    color: theme_color,
+                    bold,
+                    italic: false,
+                    underline: false,
+                };
+                theme_style.apply_crossterm_style(text)
+            }
         }
     }
 

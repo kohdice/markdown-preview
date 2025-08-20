@@ -18,6 +18,7 @@ mod handlers;
 mod io;
 mod styling;
 mod table_builder;
+mod theme_adapter;
 
 pub use builder::RendererBuilder;
 pub use config::RenderConfig;
