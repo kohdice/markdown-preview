@@ -80,7 +80,7 @@ impl<W: Write> MarkdownRenderer<W> {
             Tag::Paragraph => self.handle_element(ElementKind::Paragraph, ElementPhase::Start)?,
             Tag::Strong => self.set_strong_emphasis(true),
             Tag::Emphasis => self.set_italic_emphasis(true),
-            Tag::Link { dest_url, .. } => self.set_link(dest_url.to_string()),
+            Tag::Link { dest_url, .. } => self.set_link(dest_url.as_ref().to_owned()),
             Tag::List(start) => self.handle_list_start(start),
             Tag::Item => self.handle_element(ElementKind::ListItem, ElementPhase::Start)?,
             Tag::CodeBlock(kind) => self.handle_code_block_start(kind),
@@ -92,7 +92,7 @@ impl<W: Write> MarkdownRenderer<W> {
             Tag::BlockQuote(_) => {
                 self.handle_element(ElementKind::BlockQuote, ElementPhase::Start)?
             }
-            Tag::Image { dest_url, .. } => self.set_image(dest_url.to_string()),
+            Tag::Image { dest_url, .. } => self.set_image(dest_url.as_ref().to_owned()),
             _ => {}
         }
         Ok(())
