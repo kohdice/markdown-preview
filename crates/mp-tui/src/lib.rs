@@ -3,7 +3,6 @@ use std::panic;
 use color_eyre::eyre;
 
 mod app;
-mod events;
 mod renderer;
 mod theme_adapter;
 mod ui;
