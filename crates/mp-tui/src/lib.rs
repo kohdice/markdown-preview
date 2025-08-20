@@ -1,3 +1,7 @@
+use std::panic;
+
+use color_eyre::eyre;
+
 mod app;
 mod events;
 mod renderer;
@@ -8,8 +12,7 @@ mod widgets {
 }
 
 pub use app::{App, Focus};
-use color_eyre::eyre;
-use std::panic;
+pub use renderer::MarkdownWidget;
 
 pub fn run_tui() -> eyre::Result<()> {
     color_eyre::install()?;

@@ -1,9 +1,10 @@
+use std::path::PathBuf;
+use std::time::Duration;
+
 use color_eyre::eyre::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent};
 use ratatui::DefaultTerminal;
 use ratatui::widgets::ListState;
-use std::path::PathBuf;
-use std::time::Duration;
 
 pub struct App {
     pub file_list: Vec<PathBuf>,
