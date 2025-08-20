@@ -62,6 +62,14 @@ pub fn create_test_renderer_with_buffer() -> (MarkdownRenderer<MockWriter>, Arc<
     (MarkdownRenderer::with_output(output), buffer)
 }
 
+/// Common trait for test scenarios
+pub trait TestScenario {
+    fn name(&self) -> &str;
+    fn input(&self) -> &str;
+    fn description(&self) -> Option<&str>;
+    fn execute(&self) -> anyhow::Result<()>;
+}
+
 /// Test case struct for data-driven testing
 #[derive(Debug, Clone)]
 pub struct TestCase {
@@ -85,21 +93,37 @@ impl TestCase {
     }
 }
 
-/// Test Markdown rendering in data-driven format
-pub fn run_data_driven_tests(test_cases: Vec<TestCase>) {
-    for case in test_cases {
+impl TestScenario for TestCase {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn input(&self) -> &str {
+        &self.input
+    }
+
+    fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    fn execute(&self) -> anyhow::Result<()> {
         let mut renderer = create_test_renderer();
-        let result = renderer.render_content(&case.input);
+        renderer.render_content(self.input())
+    }
+}
+
+/// Test Markdown rendering in data-driven format
+pub fn run_data_driven_tests<T: TestScenario>(test_cases: Vec<T>) {
+    for case in test_cases {
+        let result = case.execute();
 
         assert!(
             result.is_ok(),
             "Test '{}' failed: {:?}. Input: '{}'. Description: {}",
-            case.name,
+            case.name(),
             result.err(),
-            case.input.trim(),
-            case.description
-                .as_ref()
-                .unwrap_or(&"No description".to_string())
+            case.input().trim(),
+            case.description().unwrap_or("No description")
         );
     }
 }
@@ -201,25 +225,43 @@ pub fn generate_large_markdown_content(lines: usize) -> String {
     content
 }
 
-/// Helper for performance testing
-pub fn measure_render_performance<F>(
-    name: &str,
-    content: &str,
-    mut test_fn: F,
-) -> std::time::Duration
-where
-    F: FnMut(&str) -> anyhow::Result<()>,
-{
+/// Performance test scenario
+pub struct PerformanceTestCase {
+    pub name: String,
+    pub input: String,
+}
+
+impl TestScenario for PerformanceTestCase {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn input(&self) -> &str {
+        &self.input
+    }
+
+    fn description(&self) -> Option<&str> {
+        Some("Performance test")
+    }
+
+    fn execute(&self) -> anyhow::Result<()> {
+        let mut renderer = create_test_renderer();
+        renderer.render_content(self.input())
+    }
+}
+
+/// Helper for performance testing using the common trait
+pub fn measure_render_performance<T: TestScenario>(test_case: &T) -> std::time::Duration {
     use std::time::Instant;
 
     let start = Instant::now();
-    let result = test_fn(content);
+    let result = test_case.execute();
     let duration = start.elapsed();
 
     assert!(
         result.is_ok(),
         "Performance test '{}' failed: {:?}",
-        name,
+        test_case.name(),
         result.err()
     );
 
