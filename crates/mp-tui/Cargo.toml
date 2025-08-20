@@ -12,9 +12,14 @@ mp-core = { workspace = true }
 
 anyhow = { workspace = true }
 pulldown-cmark = { workspace = true }
-
-color-eyre = "0.6"
 crossterm = "0.29"
 ratatui = "0.29"
 unicode-width = "0.2"
 regex = "1.11"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "renderer_benchmark"
+harness = false

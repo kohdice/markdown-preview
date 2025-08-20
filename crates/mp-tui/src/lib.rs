@@ -1,9 +1,10 @@
 use std::panic;
 
-use color_eyre::eyre;
+use anyhow::Result;
 
 mod app;
-mod renderer;
+pub mod renderer;
+pub mod renderer_optimized;
 mod theme_adapter;
 mod ui;
 mod widgets {
@@ -13,8 +14,7 @@ mod widgets {
 pub use app::{App, Focus};
 pub use renderer::MarkdownWidget;
 
-pub fn run_tui() -> eyre::Result<()> {
-    color_eyre::install()?;
+pub fn run_tui() -> Result<()> {
     install_panic_handler();
 
     let terminal = ratatui::init();
