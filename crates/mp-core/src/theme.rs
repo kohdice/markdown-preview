@@ -1,58 +1,75 @@
-use crossterm::style::{Attribute, Color, StyledContent, Stylize};
-
-pub trait MarkdownTheme {
-    fn heading_color(&self, level: u8) -> Color;
-    fn strong_color(&self) -> Color;
-    fn emphasis_color(&self) -> Color;
-    fn link_color(&self) -> Color;
-    fn code_color(&self) -> Color;
-    fn code_background(&self) -> Color;
-    fn list_marker_color(&self) -> Color;
-    fn delimiter_color(&self) -> Color;
-    fn text_color(&self) -> Color;
+/// Theme color definition - library-independent RGB representation
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThemeColor {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
 }
 
+/// Theme style definition - library-independent style representation
+#[derive(Debug, Clone, Copy)]
+pub struct ThemeStyle {
+    pub color: ThemeColor,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+}
+
+/// Markdown theme trait for defining theme colors and styles
+pub trait MarkdownTheme {
+    fn heading_style(&self, level: u8) -> ThemeStyle;
+    fn strong_style(&self) -> ThemeStyle;
+    fn emphasis_style(&self) -> ThemeStyle;
+    fn link_style(&self) -> ThemeStyle;
+    fn code_style(&self) -> ThemeStyle;
+    fn code_background(&self) -> ThemeColor;
+    fn list_marker_style(&self) -> ThemeStyle;
+    fn delimiter_style(&self) -> ThemeStyle;
+    fn text_style(&self) -> ThemeStyle;
+}
+
+/// Solarized Osaka theme implementation
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SolarizedOsaka;
 
 impl SolarizedOsaka {
-    const BASE02: Color = Color::Rgb { r: 7, g: 54, b: 66 };
-    const BASE01: Color = Color::Rgb {
+    const BASE02: ThemeColor = ThemeColor { r: 7, g: 54, b: 66 };
+    const BASE01: ThemeColor = ThemeColor {
         r: 88,
         g: 110,
         b: 117,
     };
-    const BASE0: Color = Color::Rgb {
+    const BASE0: ThemeColor = ThemeColor {
         r: 131,
         g: 148,
         b: 150,
     };
-    const YELLOW: Color = Color::Rgb {
+    const YELLOW: ThemeColor = ThemeColor {
         r: 181,
         g: 137,
         b: 0,
     };
-    const ORANGE: Color = Color::Rgb {
+    const ORANGE: ThemeColor = ThemeColor {
         r: 203,
         g: 75,
         b: 22,
     };
-    const MAGENTA: Color = Color::Rgb {
+    const MAGENTA: ThemeColor = ThemeColor {
         r: 211,
         g: 54,
         b: 130,
     };
-    const BLUE: Color = Color::Rgb {
+    const BLUE: ThemeColor = ThemeColor {
         r: 38,
         g: 139,
         b: 210,
     };
-    const CYAN: Color = Color::Rgb {
+    const CYAN: ThemeColor = ThemeColor {
         r: 42,
         g: 161,
         b: 152,
     };
-    const GREEN: Color = Color::Rgb {
+    const GREEN: ThemeColor = ThemeColor {
         r: 133,
         g: 153,
         b: 0,
@@ -60,72 +77,89 @@ impl SolarizedOsaka {
 }
 
 impl MarkdownTheme for SolarizedOsaka {
-    fn heading_color(&self, level: u8) -> Color {
-        match level {
+    fn heading_style(&self, level: u8) -> ThemeStyle {
+        let color = match level {
             1 => Self::BLUE,
             2 => Self::GREEN,
             3 => Self::CYAN,
             4 => Self::YELLOW,
             5 => Self::ORANGE,
             _ => Self::MAGENTA,
+        };
+        ThemeStyle {
+            color,
+            bold: level <= 2,
+            italic: false,
+            underline: false,
         }
     }
 
-    fn strong_color(&self) -> Color {
-        Self::ORANGE
+    fn strong_style(&self) -> ThemeStyle {
+        ThemeStyle {
+            color: Self::ORANGE,
+            bold: true,
+            italic: false,
+            underline: false,
+        }
     }
 
-    fn emphasis_color(&self) -> Color {
-        Self::GREEN
+    fn emphasis_style(&self) -> ThemeStyle {
+        ThemeStyle {
+            color: Self::GREEN,
+            bold: false,
+            italic: true,
+            underline: false,
+        }
     }
 
-    fn link_color(&self) -> Color {
-        Self::CYAN
+    fn link_style(&self) -> ThemeStyle {
+        ThemeStyle {
+            color: Self::CYAN,
+            bold: false,
+            italic: false,
+            underline: true,
+        }
     }
 
-    fn code_color(&self) -> Color {
-        Self::GREEN
+    fn code_style(&self) -> ThemeStyle {
+        ThemeStyle {
+            color: Self::GREEN,
+            bold: false,
+            italic: false,
+            underline: false,
+        }
     }
 
-    fn code_background(&self) -> Color {
+    fn code_background(&self) -> ThemeColor {
         Self::BASE02
     }
 
-    fn list_marker_color(&self) -> Color {
-        Self::BLUE
+    fn list_marker_style(&self) -> ThemeStyle {
+        ThemeStyle {
+            color: Self::BLUE,
+            bold: false,
+            italic: false,
+            underline: false,
+        }
     }
 
-    fn delimiter_color(&self) -> Color {
-        Self::BASE01
+    fn delimiter_style(&self) -> ThemeStyle {
+        ThemeStyle {
+            color: Self::BASE01,
+            bold: false,
+            italic: false,
+            underline: false,
+        }
     }
 
-    fn text_color(&self) -> Color {
-        Self::BASE0
+    fn text_style(&self) -> ThemeStyle {
+        ThemeStyle {
+            color: Self::BASE0,
+            bold: false,
+            italic: false,
+            underline: false,
+        }
     }
-}
-
-pub fn styled_text<S: AsRef<str>>(
-    text: S,
-    color: Color,
-    bold: bool,
-    italic: bool,
-    underline: bool,
-) -> StyledContent<String> {
-    let mut styled = text.as_ref().to_string().with(color);
-    if bold {
-        styled = styled.attribute(Attribute::Bold);
-    }
-    if italic {
-        styled = styled.attribute(Attribute::Italic);
-    }
-    if underline {
-        styled = styled.attribute(Attribute::Underlined);
-    }
-    styled
-}
-
-pub fn styled_text_with_bg<S: AsRef<str>>(text: S, fg: Color, bg: Color) -> StyledContent<String> {
-    text.as_ref().to_string().with(fg).on(bg)
 }
 
 #[cfg(test)]
@@ -133,69 +167,94 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_solarized_osaka_theme_colors() {
-        let theme = SolarizedOsaka;
+    fn test_theme_color_equality() {
+        let color1 = ThemeColor { r: 255, g: 0, b: 0 };
+        let color2 = ThemeColor { r: 255, g: 0, b: 0 };
+        let color3 = ThemeColor { r: 0, g: 255, b: 0 };
 
-        // Color comparison helper
-        fn color_eq(c1: Color, c2: Color) -> bool {
-            match (c1, c2) {
-                (
-                    Color::Rgb {
-                        r: r1,
-                        g: g1,
-                        b: b1,
-                    },
-                    Color::Rgb {
-                        r: r2,
-                        g: g2,
-                        b: b2,
-                    },
-                ) => r1 == r2 && g1 == g2 && b1 == b2,
-                _ => false,
-            }
-        }
-
-        assert!(color_eq(theme.heading_color(1), SolarizedOsaka::BLUE));
-        assert!(color_eq(theme.heading_color(2), SolarizedOsaka::GREEN));
-        assert!(color_eq(theme.heading_color(3), SolarizedOsaka::CYAN));
-        assert!(color_eq(theme.heading_color(4), SolarizedOsaka::YELLOW));
-        assert!(color_eq(theme.heading_color(5), SolarizedOsaka::ORANGE));
-        assert!(color_eq(theme.heading_color(6), SolarizedOsaka::MAGENTA));
-
-        assert!(color_eq(theme.strong_color(), SolarizedOsaka::ORANGE));
-        assert!(color_eq(theme.emphasis_color(), SolarizedOsaka::GREEN));
-        assert!(color_eq(theme.link_color(), SolarizedOsaka::CYAN));
-        assert!(color_eq(theme.code_color(), SolarizedOsaka::GREEN));
-        assert!(color_eq(theme.code_background(), SolarizedOsaka::BASE02));
-
-        assert!(color_eq(theme.list_marker_color(), SolarizedOsaka::BLUE));
-        assert!(color_eq(theme.delimiter_color(), SolarizedOsaka::BASE01));
-        assert!(color_eq(theme.text_color(), SolarizedOsaka::BASE0));
+        assert_eq!(color1, color2);
+        assert_ne!(color1, color3);
     }
 
     #[test]
-    fn test_styled_text_functions() {
-        let text = "test";
-        let color = Color::Rgb { r: 255, g: 0, b: 0 };
-        let result = styled_text(text, color, true, false, false);
-        assert!(format!("{}", result).contains("test"));
+    fn test_solarized_osaka_theme_styles() {
+        let theme = SolarizedOsaka;
 
-        let string = "test".to_string();
-        let color = Color::Rgb { r: 0, g: 255, b: 0 };
-        let result = styled_text(string, color, false, true, false);
-        assert!(format!("{}", result).contains("test"));
+        // Test heading styles
+        let h1_style = theme.heading_style(1);
+        assert_eq!(h1_style.color, SolarizedOsaka::BLUE);
+        assert!(h1_style.bold);
+        assert!(!h1_style.italic);
+        assert!(!h1_style.underline);
 
-        let fg = Color::Rgb {
-            r: 255,
-            g: 255,
-            b: 255,
+        let h2_style = theme.heading_style(2);
+        assert_eq!(h2_style.color, SolarizedOsaka::GREEN);
+        assert!(h2_style.bold);
+
+        let h3_style = theme.heading_style(3);
+        assert_eq!(h3_style.color, SolarizedOsaka::CYAN);
+        assert!(!h3_style.bold);
+
+        let h4_style = theme.heading_style(4);
+        assert_eq!(h4_style.color, SolarizedOsaka::YELLOW);
+        assert!(!h4_style.bold);
+
+        let h5_style = theme.heading_style(5);
+        assert_eq!(h5_style.color, SolarizedOsaka::ORANGE);
+        assert!(!h5_style.bold);
+
+        let h6_style = theme.heading_style(6);
+        assert_eq!(h6_style.color, SolarizedOsaka::MAGENTA);
+        assert!(!h6_style.bold);
+
+        // Test text styles
+        let strong_style = theme.strong_style();
+        assert_eq!(strong_style.color, SolarizedOsaka::ORANGE);
+        assert!(strong_style.bold);
+        assert!(!strong_style.italic);
+
+        let emphasis_style = theme.emphasis_style();
+        assert_eq!(emphasis_style.color, SolarizedOsaka::GREEN);
+        assert!(!emphasis_style.bold);
+        assert!(emphasis_style.italic);
+
+        let link_style = theme.link_style();
+        assert_eq!(link_style.color, SolarizedOsaka::CYAN);
+        assert!(link_style.underline);
+
+        let code_style = theme.code_style();
+        assert_eq!(code_style.color, SolarizedOsaka::GREEN);
+        assert!(!code_style.bold);
+        assert!(!code_style.italic);
+        assert!(!code_style.underline);
+
+        // Test colors
+        assert_eq!(theme.code_background(), SolarizedOsaka::BASE02);
+
+        let list_marker_style = theme.list_marker_style();
+        assert_eq!(list_marker_style.color, SolarizedOsaka::BLUE);
+
+        let delimiter_style = theme.delimiter_style();
+        assert_eq!(delimiter_style.color, SolarizedOsaka::BASE01);
+
+        let text_style = theme.text_style();
+        assert_eq!(text_style.color, SolarizedOsaka::BASE0);
+    }
+
+    #[test]
+    fn test_theme_style_properties() {
+        let style = ThemeStyle {
+            color: ThemeColor { r: 255, g: 0, b: 0 },
+            bold: true,
+            italic: false,
+            underline: true,
         };
-        let bg = Color::Rgb { r: 0, g: 0, b: 0 };
-        let result = styled_text_with_bg("test", fg, bg);
-        assert!(format!("{}", result).contains("test"));
 
-        let string = "test".to_string();
-        let result = styled_text_with_bg(string, fg, bg);
-        assert!(format!("{}", result).contains("test"));
+        assert_eq!(style.color.r, 255);
+        assert_eq!(style.color.g, 0);
+        assert_eq!(style.color.b, 0);
+        assert!(style.bold);
+        assert!(!style.italic);
+        assert!(style.underline);
     }
 }
