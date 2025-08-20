@@ -6,6 +6,8 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent};
 use ratatui::DefaultTerminal;
 use ratatui::widgets::ListState;
 
+use crate::renderer::{MarkdownWidget, MarkdownWidgetState};
+
 pub struct App {
     pub file_list: Vec<PathBuf>,
     pub list_state: ListState,
@@ -13,6 +15,9 @@ pub struct App {
     pub preview_scroll: (u16, u16),
     pub focus: Focus,
     pub should_quit: bool,
+    pub markdown_widget: Option<MarkdownWidget>,
+    pub markdown_state: MarkdownWidgetState,
+    pub cached_file_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -39,6 +44,9 @@ impl App {
             preview_scroll: (0, 0),
             focus: Focus::FileTree,
             should_quit: false,
+            markdown_widget: None,
+            markdown_state: MarkdownWidgetState::default(),
+            cached_file_path: None,
         };
 
         app.load_preview()?;
@@ -46,14 +54,19 @@ impl App {
     }
 
     pub fn run(mut self, mut terminal: DefaultTerminal) -> Result<()> {
-        loop {
-            terminal.draw(|frame| crate::ui::draw(frame, &self))?;
+        // Initial draw
+        terminal.draw(|frame| crate::ui::draw(frame, &mut self))?;
 
-            if event::poll(Duration::from_millis(16))?
+        loop {
+            // Only redraw when there's an event
+            if event::poll(Duration::from_millis(100))?
                 && let Event::Key(key) = event::read()?
-                && self.handle_key(key)?
             {
-                break;
+                if self.handle_key(key)? {
+                    break;
+                }
+                // Redraw only after handling a key event
+                terminal.draw(|frame| crate::ui::draw(frame, &mut self))?;
             }
         }
         Ok(())
@@ -75,15 +88,19 @@ impl App {
 
             (Focus::Preview, KeyCode::Char('j')) => {
                 self.preview_scroll.0 = self.preview_scroll.0.saturating_add(1);
+                self.markdown_state.scroll_offset = self.preview_scroll.0;
             }
             (Focus::Preview, KeyCode::Char('k')) => {
                 self.preview_scroll.0 = self.preview_scroll.0.saturating_sub(1);
+                self.markdown_state.scroll_offset = self.preview_scroll.0;
             }
             (Focus::Preview, KeyCode::PageDown) => {
                 self.preview_scroll.0 = self.preview_scroll.0.saturating_add(10);
+                self.markdown_state.scroll_offset = self.preview_scroll.0;
             }
             (Focus::Preview, KeyCode::PageUp) => {
                 self.preview_scroll.0 = self.preview_scroll.0.saturating_sub(10);
+                self.markdown_state.scroll_offset = self.preview_scroll.0;
             }
 
             (_, KeyCode::Tab) => {
@@ -113,6 +130,14 @@ impl App {
             selected + 1
         };
         self.list_state.select(Some(next));
+
+        // Clear cache if file changed
+        if let Some(path) = self.file_list.get(next)
+            && Some(path) != self.cached_file_path.as_ref()
+        {
+            self.markdown_widget = None;
+            self.cached_file_path = None;
+        }
     }
 
     fn previous_file(&mut self) {
@@ -127,6 +152,14 @@ impl App {
             selected - 1
         };
         self.list_state.select(Some(previous));
+
+        // Clear cache if file changed
+        if let Some(path) = self.file_list.get(previous)
+            && Some(path) != self.cached_file_path.as_ref()
+        {
+            self.markdown_widget = None;
+            self.cached_file_path = None;
+        }
     }
 
     fn load_preview(&mut self) -> Result<()> {
@@ -134,7 +167,16 @@ impl App {
             && let Some(path) = self.file_list.get(selected)
         {
             self.preview_content = std::fs::read_to_string(path)?;
+
+            // Parse and cache the markdown content
+            let widget = MarkdownWidget::new(self.preview_content.clone());
+
+            // Save widget and file path to cache
+            self.markdown_widget = Some(widget);
+            self.cached_file_path = Some(path.clone());
+
             self.preview_scroll = (0, 0);
+            self.markdown_state.scroll_offset = 0;
         }
         Ok(())
     }
