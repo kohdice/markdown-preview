@@ -12,7 +12,6 @@ fn test_mp_without_args_lists_markdown_files() {
     fs::write(temp_dir.path().join("doc.md"), "Documentation").unwrap();
     fs::write(temp_dir.path().join("test.txt"), "Not markdown").unwrap();
 
-    // Subdirectory and files
     let sub_dir = temp_dir.path().join("docs");
     fs::create_dir(&sub_dir).unwrap();
     fs::write(sub_dir.join("api.md"), "API docs").unwrap();
@@ -42,7 +41,6 @@ fn test_mp_without_args_lists_markdown_files() {
     assert!(stdout.contains("README.md"));
     assert!(stdout.contains("doc.md"));
 
-    // Platform-specific path separator check
     #[cfg(windows)]
     assert!(stdout.contains("docs\\api.md"));
 
@@ -101,7 +99,6 @@ fn test_mp_with_hidden_flag() {
     assert!(stdout.contains("visible.md"));
     assert!(!stdout.contains(".hidden.md"));
 
-    // With --hidden flag (show hidden files)
     let output = Command::new(&mp_path)
         .arg("--hidden")
         .current_dir(temp_dir.path())
@@ -117,7 +114,6 @@ fn test_mp_with_hidden_flag() {
 fn test_mp_with_gitignore() {
     let temp_dir = TempDir::new().unwrap();
 
-    // Initialize as git repository (required for .gitignore to work)
     Command::new("git")
         .args(["init"])
         .current_dir(temp_dir.path())
@@ -147,7 +143,6 @@ fn test_mp_with_gitignore() {
     assert!(stdout.contains("visible.md"));
     assert!(!stdout.contains("ignored.md"));
 
-    // With --no-ignore flag (ignore .gitignore)
     let output = Command::new(&mp_path)
         .arg("--no-ignore")
         .current_dir(temp_dir.path())

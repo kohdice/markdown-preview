@@ -3,7 +3,7 @@
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
-use mp_renderer::{BufferedOutput, MarkdownRenderer};
+use mp_stdout::{BufferedOutput, MarkdownRenderer};
 
 /// Mock writer for testing that captures output to a buffer
 pub struct MockWriter {

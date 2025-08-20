@@ -4,7 +4,7 @@
 #[macro_export]
 macro_rules! assert_renders_successfully {
     ($content:expr) => {{
-        use mp_renderer::MarkdownRenderer;
+        use mp_stdout::MarkdownRenderer;
         let mut renderer = MarkdownRenderer::new();
         let result = renderer.render_content($content);
         assert!(
@@ -15,7 +15,7 @@ macro_rules! assert_renders_successfully {
         result.unwrap()
     }};
     ($content:expr, $description:expr) => {{
-        use mp_renderer::MarkdownRenderer;
+        use mp_stdout::MarkdownRenderer;
         let mut renderer = MarkdownRenderer::new();
         let result = renderer.render_content($content);
         assert!(
