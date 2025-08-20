@@ -1,6 +1,7 @@
+use std::path::{Path, PathBuf};
+
 use anyhow::Result;
 use ignore::WalkBuilder;
-use std::path::{Path, PathBuf};
 
 #[derive(Debug, Default)]
 pub struct FinderConfig {
