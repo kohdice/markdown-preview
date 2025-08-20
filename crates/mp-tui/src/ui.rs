@@ -17,9 +17,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_preview(frame, app, chunks[1]);
 }
 
-fn draw_file_tree(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_file_tree(frame: &mut Frame, app: &mut App, area: Rect) {
     let file_list = file_tree::create_file_list(app);
-    frame.render_stateful_widget(file_list, area, &mut app.list_state.clone());
+    frame.render_stateful_widget(file_list, area, &mut app.list_state);
 }
 
 fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {

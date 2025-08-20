@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use color_eyre::eyre::Result;
+use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent};
 use ratatui::DefaultTerminal;
 use ratatui::widgets::ListState;
@@ -30,7 +30,7 @@ impl App {
     pub fn new() -> Result<Self> {
         let config = mp_core::finder::FinderConfig::default();
         let file_list = mp_core::finder::find_markdown_files(config)
-            .map_err(|e| color_eyre::eyre::eyre!("Failed to find markdown files: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to find markdown files: {}", e))?;
         let mut list_state = ListState::default();
 
         if !file_list.is_empty() {
@@ -169,11 +169,12 @@ impl App {
             self.preview_content = std::fs::read_to_string(path)?;
 
             // Parse and cache the markdown content
+            // Use reference to avoid cloning the entire content
             let widget = MarkdownWidget::new(self.preview_content.clone());
 
             // Save widget and file path to cache
             self.markdown_widget = Some(widget);
-            self.cached_file_path = Some(path.clone());
+            self.cached_file_path = Some(path.to_path_buf());
 
             self.preview_scroll = (0, 0);
             self.markdown_state.scroll_offset = 0;

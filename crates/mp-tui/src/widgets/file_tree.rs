@@ -28,7 +28,7 @@ pub fn create_file_list(app: &App) -> List<'static> {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("📁 Files")
+                .title("Files")
                 .border_style(border_style),
         )
         .highlight_style(
