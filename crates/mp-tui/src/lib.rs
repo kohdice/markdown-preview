@@ -4,7 +4,6 @@ use anyhow::Result;
 
 mod app;
 pub mod renderer;
-pub mod renderer_optimized;
 mod theme_adapter;
 mod ui;
 mod widgets {
