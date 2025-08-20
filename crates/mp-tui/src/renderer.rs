@@ -1,70 +1,39 @@
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Rect},
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, Widget, Wrap},
+    widgets::{Block, Borders, Paragraph, StatefulWidget, Widget, Wrap},
 };
 use regex::Regex;
 
 use crate::theme_adapter::{RatatuiAdapter, RatatuiStyleAdapter};
 use mp_core::theme::{MarkdownTheme, SolarizedOsaka};
 
-#[derive(Debug, Clone)]
-enum MarkdownElement {
-    Paragraph(Text<'static>),
-    Table(TableData),
-    CodeBlock(CodeBlockData),
-}
-
-#[derive(Debug, Clone)]
-struct TableData {
-    headers: Vec<String>,
-    rows: Vec<Vec<String>>,
-}
-
-#[derive(Debug, Clone)]
-struct CodeBlockData {
-    language: Option<String>,
-    content: String,
-}
-
 pub struct MarkdownWidget {
-    content: String,
-    scroll_offset: u16,
-    border_style: Style,
-    elements: Vec<MarkdownElement>,
+    text: Text<'static>,
     theme: SolarizedOsaka,
+}
+
+#[derive(Default, Clone)]
+pub struct MarkdownWidgetState {
+    pub scroll_offset: u16,
+    pub border_style: Style,
 }
 
 impl MarkdownWidget {
     pub fn new(content: String) -> Self {
         let mut widget = Self {
-            content: content.clone(),
-            scroll_offset: 0,
-            border_style: Style::default(),
-            elements: Vec::new(),
+            text: Text::default(),
             theme: SolarizedOsaka,
         };
-        widget.parse_markdown();
+        widget.parse_markdown(&content);
         widget
     }
 
-    pub fn scroll_offset(mut self, offset: u16) -> Self {
-        self.scroll_offset = offset;
-        self
-    }
-
-    pub fn border_style(mut self, style: Style) -> Self {
-        self.border_style = style;
-        self
-    }
-
-    fn parse_markdown(&mut self) {
-        self.elements.clear();
-
-        let mut current_paragraph_lines: Vec<Line> = Vec::new();
+    fn parse_markdown(&mut self, content: &str) {
+        let mut lines: Vec<Line<'static>> = Vec::new();
         let mut current_line = Vec::new();
         let mut current_style = Style::default();
         let mut list_stack: Vec<(Option<u64>, u64)> = Vec::new();
@@ -84,19 +53,16 @@ impl MarkdownWidget {
         let mut options = Options::empty();
         options.insert(Options::ENABLE_TABLES);
         options.insert(Options::ENABLE_STRIKETHROUGH);
-        let parser = Parser::new_ext(&self.content, options);
+        let parser = Parser::new_ext(content, options);
 
         for event in parser {
             match event {
                 Event::Start(tag) => match tag {
-                    Tag::Table(_alignments) => {
-                        if !current_paragraph_lines.is_empty() {
-                            self.elements.push(MarkdownElement::Paragraph(Text::from(
-                                current_paragraph_lines.clone(),
-                            )));
-                            current_paragraph_lines.clear();
+                    Tag::Table(_) => {
+                        if !current_line.is_empty() {
+                            lines.push(Line::from(current_line.clone()));
+                            current_line.clear();
                         }
-
                         in_table = true;
                         table_headers.clear();
                         table_rows.clear();
@@ -111,13 +77,10 @@ impl MarkdownWidget {
                         current_cell.clear();
                     }
                     Tag::CodeBlock(kind) => {
-                        if !current_paragraph_lines.is_empty() {
-                            self.elements.push(MarkdownElement::Paragraph(Text::from(
-                                current_paragraph_lines.clone(),
-                            )));
-                            current_paragraph_lines.clear();
+                        if !current_line.is_empty() {
+                            lines.push(Line::from(current_line.clone()));
+                            current_line.clear();
                         }
-
                         in_code_block = true;
                         code_block_content.clear();
                         code_block_language = match kind {
@@ -153,7 +116,7 @@ impl MarkdownWidget {
                     }
                     Tag::List(start) => {
                         if in_list_item && !current_line.is_empty() {
-                            current_paragraph_lines.push(Line::from(current_line.clone()));
+                            lines.push(Line::from(current_line.clone()));
                             current_line.clear();
                         }
                         let counter = start.unwrap_or(0);
@@ -162,12 +125,11 @@ impl MarkdownWidget {
                     Tag::Item => {
                         in_list_item = true;
                         if !current_line.is_empty() {
-                            current_paragraph_lines.push(Line::from(current_line.clone()));
+                            lines.push(Line::from(current_line.clone()));
                             current_line.clear();
                         }
 
                         let indent = "  ".repeat(list_stack.len().saturating_sub(1));
-
                         let marker = if let Some((list_type, counter)) = list_stack.last_mut() {
                             match list_type {
                                 Some(_) => {
@@ -190,21 +152,13 @@ impl MarkdownWidget {
                             .fg(color)
                             .add_modifier(Modifier::UNDERLINED);
                     }
-                    Tag::BlockQuote(_) => {
-                        let delimiter_style = self.theme.delimiter_style();
-                        let color = delimiter_style.color.to_ratatui_color();
-                        current_line.push(Span::styled("> ", Style::default().fg(color)));
-                        current_style = Style::default().fg(color);
-                    }
                     _ => {}
                 },
                 Event::End(tag) => match tag {
                     TagEnd::Table => {
                         in_table = false;
-                        self.elements.push(MarkdownElement::Table(TableData {
-                            headers: table_headers.clone(),
-                            rows: table_rows.clone(),
-                        }));
+                        // Render table as simple lines
+                        self.render_table_as_lines(&mut lines, &table_headers, &table_rows);
                         table_headers.clear();
                         table_rows.clear();
                     }
@@ -225,20 +179,20 @@ impl MarkdownWidget {
                     }
                     TagEnd::CodeBlock => {
                         in_code_block = false;
-                        self.elements
-                            .push(MarkdownElement::CodeBlock(CodeBlockData {
-                                language: code_block_language.clone(),
-                                content: code_block_content.clone(),
-                            }));
+                        self.render_code_block_as_lines(
+                            &mut lines,
+                            &code_block_language,
+                            &code_block_content,
+                        );
                         code_block_content.clear();
                         code_block_language = None;
                     }
                     TagEnd::Heading(_) => {
                         if !current_line.is_empty() {
-                            current_paragraph_lines.push(Line::from(current_line.clone()));
+                            lines.push(Line::from(current_line.clone()));
                             current_line.clear();
                         }
-                        current_paragraph_lines.push(Line::from(""));
+                        lines.push(Line::from(""));
                         current_style = Style::default();
                     }
                     TagEnd::Emphasis | TagEnd::Strong => {
@@ -247,34 +201,27 @@ impl MarkdownWidget {
                     TagEnd::List(_) => {
                         list_stack.pop();
                         if list_stack.is_empty() && !current_line.is_empty() {
-                            current_paragraph_lines.push(Line::from(current_line.clone()));
+                            lines.push(Line::from(current_line.clone()));
                             current_line.clear();
                         }
                     }
                     TagEnd::Item => {
                         in_list_item = false;
                         if !current_line.is_empty() {
-                            current_paragraph_lines.push(Line::from(current_line.clone()));
+                            lines.push(Line::from(current_line.clone()));
                             current_line.clear();
                         }
                     }
                     TagEnd::Link => {
                         current_style = Style::default();
                     }
-                    TagEnd::BlockQuote(_) => {
-                        if !current_line.is_empty() {
-                            current_paragraph_lines.push(Line::from(current_line.clone()));
-                            current_line.clear();
-                        }
-                        current_style = Style::default();
-                    }
                     TagEnd::Paragraph => {
                         if !current_line.is_empty() && !in_table {
-                            current_paragraph_lines.push(Line::from(current_line.clone()));
+                            lines.push(Line::from(current_line.clone()));
                             current_line.clear();
                         }
                         if !in_code_block && !in_table {
-                            current_paragraph_lines.push(Line::from(""));
+                            lines.push(Line::from(""));
                         }
                     }
                     _ => {}
@@ -287,7 +234,7 @@ impl MarkdownWidget {
                     } else {
                         for line in text.to_string().lines() {
                             if !current_line.is_empty() && line.is_empty() {
-                                current_paragraph_lines.push(Line::from(current_line.clone()));
+                                lines.push(Line::from(current_line.clone()));
                                 current_line.clear();
                             } else {
                                 current_line.push(Span::styled(line.to_string(), current_style));
@@ -315,7 +262,7 @@ impl MarkdownWidget {
                 }
                 Event::HardBreak => {
                     if !current_line.is_empty() && !in_table && !in_code_block {
-                        current_paragraph_lines.push(Line::from(current_line.clone()));
+                        lines.push(Line::from(current_line.clone()));
                         current_line.clear();
                     }
                 }
@@ -324,148 +271,81 @@ impl MarkdownWidget {
         }
 
         if !current_line.is_empty() {
-            current_paragraph_lines.push(Line::from(current_line));
+            lines.push(Line::from(current_line));
         }
 
-        if !current_paragraph_lines.is_empty() {
-            self.elements.push(MarkdownElement::Paragraph(Text::from(
-                current_paragraph_lines,
-            )));
+        self.text = Text::from(lines);
+    }
+
+    fn render_table_as_lines(
+        &self,
+        lines: &mut Vec<Line<'static>>,
+        headers: &[String],
+        rows: &[Vec<String>],
+    ) {
+        // Simple table rendering
+        let header_line = headers.join(" | ");
+        lines.push(Line::from(vec![Span::styled(
+            header_line,
+            Style::default().add_modifier(Modifier::BOLD),
+        )]));
+
+        lines.push(Line::from("-".repeat(40)));
+
+        for row in rows {
+            let row_line = row.join(" | ");
+            lines.push(Line::from(row_line));
         }
+
+        lines.push(Line::from(""));
     }
 
-    fn create_ratatui_table<'a>(&self, data: &'a TableData) -> Table<'a> {
-        let header =
-            Row::new(data.headers.iter().map(|h| {
-                Cell::from(h.as_str()).style(Style::default().add_modifier(Modifier::BOLD))
-            }));
-
-        let rows: Vec<Row> = data
-            .rows
-            .iter()
-            .map(|row| Row::new(row.iter().map(|cell| Cell::from(cell.as_str()))))
-            .collect();
-
-        let num_cols = data.headers.len();
-        let constraints = if num_cols > 0 {
-            vec![Constraint::Percentage((100 / num_cols) as u16); num_cols]
-        } else {
-            vec![]
-        };
-
-        let text_style = self.theme.text_style();
-        let text_color = text_style.color.to_ratatui_color();
-        Table::new(rows, constraints)
-            .header(header)
-            .block(Block::default().borders(Borders::ALL))
-            .style(Style::default().fg(text_color))
-    }
-
-    fn render_code_block(&self, data: &CodeBlockData) -> Paragraph<'_> {
-        let mut lines = Vec::new();
-
+    fn render_code_block_as_lines(
+        &self,
+        lines: &mut Vec<Line<'static>>,
+        language: &Option<String>,
+        content: &str,
+    ) {
         let delimiter_style = self.theme.delimiter_style();
         let fence_color = delimiter_style.color.to_ratatui_color();
         let fence_style = Style::default().fg(fence_color);
-        let opening = if let Some(ref lang) = data.language {
+
+        let opening = if let Some(lang) = language {
             format!("```{}", lang)
         } else {
             "```".to_string()
         };
+
         lines.push(Line::from(Span::styled(opening, fence_style)));
 
         let theme_code_style = self.theme.code_style();
         let code_color = theme_code_style.color.to_ratatui_color();
         let code_style = Style::default().fg(code_color);
-        for line in data.content.lines() {
+
+        for line in content.lines() {
             lines.push(Line::from(Span::styled(line.to_string(), code_style)));
         }
 
         lines.push(Line::from(Span::styled("```", fence_style)));
-
-        Paragraph::new(Text::from(lines))
+        lines.push(Line::from(""));
     }
 }
 
-impl Widget for MarkdownWidget {
-    fn render(self, area: Rect, buf: &mut Buffer) {
+impl StatefulWidget for &MarkdownWidget {
+    type State = MarkdownWidgetState;
+
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         let block = Block::default()
             .borders(Borders::ALL)
             .title("Preview")
-            .border_style(self.border_style);
+            .border_style(state.border_style);
 
-        let inner_area = block.inner(area);
-        block.render(area, buf);
+        let paragraph = Paragraph::new(self.text.clone())
+            .block(block)
+            .wrap(Wrap { trim: false })
+            .scroll((state.scroll_offset, 0));
 
-        let mut current_y = inner_area.y;
-        let mut accumulated_height = 0u16;
-
-        for element in &self.elements {
-            if accumulated_height < self.scroll_offset {
-                let element_height = match element {
-                    MarkdownElement::Paragraph(text) => text.lines.len() as u16,
-                    MarkdownElement::Table(data) => {
-                        (data.headers.len() + data.rows.len() + 2) as u16
-                    }
-                    MarkdownElement::CodeBlock(data) => (data.content.lines().count() + 2) as u16,
-                };
-                accumulated_height += element_height;
-
-                if accumulated_height <= self.scroll_offset {
-                    continue;
-                }
-            }
-
-            if current_y >= inner_area.y + inner_area.height {
-                break;
-            }
-
-            match element {
-                MarkdownElement::Paragraph(text) => {
-                    let paragraph = Paragraph::new(text.clone()).wrap(Wrap { trim: false });
-
-                    let paragraph_area = Rect {
-                        x: inner_area.x,
-                        y: current_y,
-                        width: inner_area.width,
-                        height: (inner_area.y + inner_area.height).saturating_sub(current_y),
-                    };
-
-                    paragraph.render(paragraph_area, buf);
-                    current_y += text.lines.len() as u16;
-                }
-                MarkdownElement::Table(data) => {
-                    let table = self.create_ratatui_table(data);
-                    let table_height = (data.rows.len() + 3) as u16; // +3 for header, separator, and borders
-
-                    let table_area = Rect {
-                        x: inner_area.x,
-                        y: current_y,
-                        width: inner_area.width,
-                        height: table_height
-                            .min((inner_area.y + inner_area.height).saturating_sub(current_y)),
-                    };
-
-                    table.render(table_area, buf);
-                    current_y += table_height;
-                }
-                MarkdownElement::CodeBlock(data) => {
-                    let code_block = self.render_code_block(data);
-                    let code_height = (data.content.lines().count() + 2) as u16;
-
-                    let code_area = Rect {
-                        x: inner_area.x,
-                        y: current_y,
-                        width: inner_area.width,
-                        height: code_height
-                            .min((inner_area.y + inner_area.height).saturating_sub(current_y)),
-                    };
-
-                    code_block.render(code_area, buf);
-                    current_y += code_height;
-                }
-            }
-        }
+        paragraph.render(area, buf);
     }
 }
 
