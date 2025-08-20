@@ -74,6 +74,56 @@ impl SolarizedOsaka {
         g: 153,
         b: 0,
     };
+
+    // Predefined styles to reduce code duplication
+    const STRONG: ThemeStyle = ThemeStyle {
+        color: Self::ORANGE,
+        bold: true,
+        italic: false,
+        underline: false,
+    };
+
+    const EMPHASIS: ThemeStyle = ThemeStyle {
+        color: Self::GREEN,
+        bold: false,
+        italic: true,
+        underline: false,
+    };
+
+    const LINK: ThemeStyle = ThemeStyle {
+        color: Self::CYAN,
+        bold: false,
+        italic: false,
+        underline: true,
+    };
+
+    const CODE: ThemeStyle = ThemeStyle {
+        color: Self::GREEN,
+        bold: false,
+        italic: false,
+        underline: false,
+    };
+
+    const LIST_MARKER: ThemeStyle = ThemeStyle {
+        color: Self::BLUE,
+        bold: false,
+        italic: false,
+        underline: false,
+    };
+
+    const DELIMITER: ThemeStyle = ThemeStyle {
+        color: Self::BASE01,
+        bold: false,
+        italic: false,
+        underline: false,
+    };
+
+    const TEXT: ThemeStyle = ThemeStyle {
+        color: Self::BASE0,
+        bold: false,
+        italic: false,
+        underline: false,
+    };
 }
 
 impl MarkdownTheme for SolarizedOsaka {
@@ -95,39 +145,19 @@ impl MarkdownTheme for SolarizedOsaka {
     }
 
     fn strong_style(&self) -> ThemeStyle {
-        ThemeStyle {
-            color: Self::ORANGE,
-            bold: true,
-            italic: false,
-            underline: false,
-        }
+        Self::STRONG
     }
 
     fn emphasis_style(&self) -> ThemeStyle {
-        ThemeStyle {
-            color: Self::GREEN,
-            bold: false,
-            italic: true,
-            underline: false,
-        }
+        Self::EMPHASIS
     }
 
     fn link_style(&self) -> ThemeStyle {
-        ThemeStyle {
-            color: Self::CYAN,
-            bold: false,
-            italic: false,
-            underline: true,
-        }
+        Self::LINK
     }
 
     fn code_style(&self) -> ThemeStyle {
-        ThemeStyle {
-            color: Self::GREEN,
-            bold: false,
-            italic: false,
-            underline: false,
-        }
+        Self::CODE
     }
 
     fn code_background(&self) -> ThemeColor {
@@ -135,30 +165,15 @@ impl MarkdownTheme for SolarizedOsaka {
     }
 
     fn list_marker_style(&self) -> ThemeStyle {
-        ThemeStyle {
-            color: Self::BLUE,
-            bold: false,
-            italic: false,
-            underline: false,
-        }
+        Self::LIST_MARKER
     }
 
     fn delimiter_style(&self) -> ThemeStyle {
-        ThemeStyle {
-            color: Self::BASE01,
-            bold: false,
-            italic: false,
-            underline: false,
-        }
+        Self::DELIMITER
     }
 
     fn text_style(&self) -> ThemeStyle {
-        ThemeStyle {
-            color: Self::BASE0,
-            bold: false,
-            italic: false,
-            underline: false,
-        }
+        Self::TEXT
     }
 }
 
