@@ -6,7 +6,6 @@ use crossterm::style::{Color, StyledContent};
 use mp_core::theme::{MarkdownTheme, ThemeColor};
 
 use super::MarkdownRenderer;
-use crate::theme_adapter::CrosstermStyleAdapter;
 
 /// Text styling for Markdown elements
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -44,7 +43,6 @@ impl<W: Write> MarkdownRenderer<W> {
             }
             TextStyle::Custom { color, bold } => {
                 // Handle custom color by converting from crossterm Color to ThemeColor
-                // For now, we'll create a temporary style
                 let theme_color = match color {
                     Color::Rgb { r, g, b } => ThemeColor { r, g, b },
                     _ => ThemeColor {
@@ -59,7 +57,7 @@ impl<W: Write> MarkdownRenderer<W> {
                     italic: false,
                     underline: false,
                 };
-                theme_style.apply_crossterm_style(text)
+                styled_text(text, &theme_style)
             }
         }
     }

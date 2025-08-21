@@ -201,7 +201,7 @@ impl<W: Write> MarkdownRenderer<W> {
         let column_count = alignments.len();
         self.state.active_element = Some(ActiveElement::Table(state::TableState {
             alignments,
-            current_row: Vec::with_capacity(column_count), // Pre-allocate based on column count
+            current_row: Vec::with_capacity(column_count),
             is_header: true,
         }));
     }
@@ -335,7 +335,6 @@ fn main() {
     }
 
     fn create_renderer() -> MarkdownRenderer<MockWriter> {
-        // Typical test output is around 1KB
         let buffer = Arc::new(Mutex::new(Vec::with_capacity(1024)));
         let mock_writer = MockWriter::new_with_buffer(buffer);
         let output = BufferedOutput::new(mock_writer);
@@ -481,7 +480,6 @@ fn main() {
     fn test_table_builder_integration() {
         let renderer = create_renderer();
 
-        // Test building a table with the integrated builder
         let table = renderer
             .build_table()
             .header(vec!["Column 1", "Column 2", "Column 3"])

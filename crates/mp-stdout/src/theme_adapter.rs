@@ -1,48 +1,54 @@
 use crossterm::style::{Attribute, Color, StyledContent, Stylize};
-use mp_core::theme::{ThemeColor, ThemeStyle};
 
-/// Adapter trait for converting ThemeColor to Crossterm Color
-pub trait CrosstermAdapter {
-    fn to_crossterm_color(&self) -> Color;
-}
+use mp_core::theme::{ThemeAdapter, ThemeColor, ThemeStyle};
 
-/// Adapter trait for applying ThemeStyle to text using Crossterm
-pub trait CrosstermStyleAdapter {
-    fn apply_crossterm_style<S: AsRef<str>>(&self, text: S) -> StyledContent<String>;
-}
+/// Crossterm-specific theme adapter
+pub struct CrosstermThemeAdapter;
 
-impl CrosstermAdapter for ThemeColor {
-    fn to_crossterm_color(&self) -> Color {
+impl ThemeAdapter for CrosstermThemeAdapter {
+    type Color = Color;
+    type Style = StyledContent<String>;
+
+    fn to_color(&self, color: &ThemeColor) -> Self::Color {
         Color::Rgb {
-            r: self.r,
-            g: self.g,
-            b: self.b,
+            r: color.r,
+            g: color.g,
+            b: color.b,
         }
     }
-}
 
-impl CrosstermStyleAdapter for ThemeStyle {
-    fn apply_crossterm_style<S: AsRef<str>>(&self, text: S) -> StyledContent<String> {
-        let mut styled = text
-            .as_ref()
-            .to_string()
-            .with(self.color.to_crossterm_color());
-        if self.bold {
+    fn to_style(&self, style: &ThemeStyle) -> Self::Style {
+        // This returns a base styled content that can be applied to text
+        let mut styled = String::new().with(self.to_color(&style.color));
+        if style.bold {
             styled = styled.attribute(Attribute::Bold);
         }
-        if self.italic {
+        if style.italic {
             styled = styled.attribute(Attribute::Italic);
         }
-        if self.underline {
+        if style.underline {
             styled = styled.attribute(Attribute::Underlined);
         }
         styled
     }
 }
 
+/// Legacy adapter trait for converting ThemeColor to Crossterm Color
+/// Kept for backward compatibility
+pub trait CrosstermAdapter {
+    fn to_crossterm_color(&self) -> Color;
+}
+
+impl CrosstermAdapter for ThemeColor {
+    fn to_crossterm_color(&self) -> Color {
+        let adapter = CrosstermThemeAdapter;
+        adapter.to_color(self)
+    }
+}
+
 /// Helper function to apply style to text
 pub fn styled_text<S: AsRef<str>>(text: S, style: &ThemeStyle) -> StyledContent<String> {
-    style.apply_crossterm_style(text)
+    styled_text_v2(text, style)
 }
 
 /// Helper function to apply style with background color
@@ -51,11 +57,31 @@ pub fn styled_text_with_bg<S: AsRef<str>>(
     style: &ThemeStyle,
     bg: &ThemeColor,
 ) -> StyledContent<String> {
+    let adapter = CrosstermThemeAdapter;
     let mut styled = text
         .as_ref()
         .to_string()
-        .with(style.color.to_crossterm_color())
-        .on(bg.to_crossterm_color());
+        .with(adapter.to_color(&style.color))
+        .on(adapter.to_color(bg));
+    if style.bold {
+        styled = styled.attribute(Attribute::Bold);
+    }
+    if style.italic {
+        styled = styled.attribute(Attribute::Italic);
+    }
+    if style.underline {
+        styled = styled.attribute(Attribute::Underlined);
+    }
+    styled
+}
+
+/// Helper function using the new adapter
+pub fn styled_text_v2<S: AsRef<str>>(text: S, style: &ThemeStyle) -> StyledContent<String> {
+    let adapter = CrosstermThemeAdapter;
+    let mut styled = text
+        .as_ref()
+        .to_string()
+        .with(adapter.to_color(&style.color));
     if style.bold {
         styled = styled.attribute(Attribute::Bold);
     }
@@ -98,7 +124,7 @@ mod tests {
             italic: false,
             underline: true,
         };
-        let styled = style.apply_crossterm_style("test");
+        let styled = styled_text("test", &style);
         let formatted = format!("{}", styled);
         assert!(formatted.contains("test"));
     }

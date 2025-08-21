@@ -4,7 +4,6 @@ use std::io::Write;
 use anyhow::Result;
 use pulldown_cmark::Alignment;
 
-use crate::theme_adapter::CrosstermAdapter;
 use mp_core::theme::MarkdownTheme;
 
 use super::{
@@ -13,6 +12,7 @@ use super::{
     styling::TextStyle,
 };
 use crate::output::{ElementKind, ElementPhase, OutputType, TableVariant};
+use crate::theme_adapter::CrosstermAdapter;
 
 impl<W: Write> MarkdownRenderer<W> {
     pub fn print_output(&mut self, output_type: OutputType) -> Result<()> {
