@@ -17,16 +17,6 @@ pub fn normalize_line_endings(text: &str) -> Cow<'_, str> {
     Cow::Owned(normalized)
 }
 
-/// Normalize line endings with optional platform-specific format.
-pub fn normalize_line_endings_with_platform(text: &str, preserve_platform: bool) -> String {
-    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-    if preserve_platform && cfg!(windows) {
-        normalized.replace('\n', "\r\n")
-    } else {
-        normalized
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -69,29 +59,6 @@ mod tests {
         let input = "single line without newlines";
         assert!(matches!(normalize_line_endings(input), Cow::Borrowed(_)));
         assert_eq!(normalize_line_endings(input), input);
-    }
-
-    #[test]
-    fn test_normalize_with_platform_preserve_false() {
-        let input = "line1\r\nline2\rline3";
-        let expected = "line1\nline2\nline3";
-        assert_eq!(normalize_line_endings_with_platform(input, false), expected);
-    }
-
-    #[test]
-    fn test_normalize_with_platform_preserve_true() {
-        let input = "line1\r\nline2\rline3";
-        let result = normalize_line_endings_with_platform(input, true);
-
-        #[cfg(windows)]
-        {
-            assert_eq!(result, "line1\r\nline2\r\nline3");
-        }
-
-        #[cfg(not(windows))]
-        {
-            assert_eq!(result, "line1\nline2\nline3");
-        }
     }
 
     #[test]

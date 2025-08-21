@@ -77,17 +77,6 @@ fn make_relative_path(path: &Path, base: &Path) -> PathBuf {
         .unwrap_or_else(|| path.to_path_buf())
 }
 
-/// Display file list
-pub fn display_files(files: &[PathBuf]) {
-    if files.is_empty() {
-        return;
-    }
-
-    for file in files {
-        println!("{}", file.display());
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
