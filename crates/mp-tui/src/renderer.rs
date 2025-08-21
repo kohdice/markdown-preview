@@ -29,7 +29,7 @@ impl MarkdownWidget {
     pub fn new(content: Arc<String>) -> Self {
         let mut widget = Self {
             content,
-            lines: Vec::new(),
+            lines: Vec::with_capacity(100), // Pre-allocate for typical markdown file
             theme: SolarizedOsaka,
         };
         widget.parse_markdown();
@@ -43,16 +43,16 @@ impl MarkdownWidget {
     pub fn parse_markdown(&mut self) {
         self.lines.clear();
 
-        let mut current_line = Vec::new();
+        let mut current_line = Vec::with_capacity(10); // Pre-allocate for typical line spans
         let mut current_style = Style::default();
-        let mut list_stack: Vec<(Option<u64>, u64)> = Vec::new();
+        let mut list_stack: Vec<(Option<u64>, u64)> = Vec::with_capacity(5); // Pre-allocate for nested lists
         let mut in_list_item = false;
 
         let mut in_table = false;
         let mut is_header_row = false;
-        let mut table_headers: Vec<String> = Vec::new();
-        let mut table_rows: Vec<Vec<String>> = Vec::new();
-        let mut current_row: Vec<String> = Vec::new();
+        let mut table_headers: Vec<String> = Vec::with_capacity(10); // Pre-allocate for table columns
+        let mut table_rows: Vec<Vec<String>> = Vec::with_capacity(20); // Pre-allocate for table rows
+        let mut current_row: Vec<String> = Vec::with_capacity(10); // Pre-allocate for row cells
         let mut current_cell = String::new();
 
         let mut in_code_block = false;
@@ -285,7 +285,7 @@ impl MarkdownWidget {
     }
 
     fn create_table_lines(headers: &[String], rows: &[Vec<String>]) -> Vec<Line<'static>> {
-        let mut lines = Vec::new();
+        let mut lines = Vec::with_capacity(rows.len() + 3); // headers + separator + rows
         // Simplified table rendering as lines
         let header_line = headers.join(" | ");
         lines.push(Line::from(vec![Span::styled(

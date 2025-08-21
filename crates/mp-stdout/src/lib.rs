@@ -198,9 +198,10 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     pub fn set_table(&mut self, alignments: Vec<pulldown_cmark::Alignment>) {
+        let column_count = alignments.len();
         self.state.active_element = Some(ActiveElement::Table(state::TableState {
             alignments,
-            current_row: Vec::new(),
+            current_row: Vec::with_capacity(column_count), // Pre-allocate based on column count
             is_header: true,
         }));
     }
