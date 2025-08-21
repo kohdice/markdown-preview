@@ -1,6 +1,5 @@
 use pulldown_cmark::Alignment;
 
-/// Different types of Markdown content
 pub enum ContentType<'a> {
     Text(&'a str),
     Code(&'a str),
@@ -11,35 +10,30 @@ pub enum ContentType<'a> {
     TaskMarker(bool),
 }
 
-/// Text emphasis states
 #[derive(Debug, Default, Clone)]
 pub struct EmphasisState {
     pub strong: bool,
     pub italic: bool,
 }
 
-/// Link element data
 #[derive(Debug, Clone, Default)]
 pub struct LinkState {
     pub text: String,
     pub url: String,
 }
 
-/// Image element data
 #[derive(Debug, Clone, Default)]
 pub struct ImageState {
     pub alt_text: String,
     pub url: String,
 }
 
-/// Code block content and language
 #[derive(Debug, Clone)]
 pub struct CodeBlockState {
     pub language: Option<String>,
     pub content: String,
 }
 
-/// Table parsing state
 #[derive(Debug, Clone)]
 pub struct TableState {
     pub alignments: Vec<Alignment>,
@@ -47,14 +41,12 @@ pub struct TableState {
     pub is_header: bool,
 }
 
-/// List type enumeration
 #[derive(Debug, Clone)]
 pub enum ListType {
     Ordered { current: usize },
     Unordered,
 }
 
-/// Currently active complex element
 #[derive(Debug, Clone)]
 pub enum ActiveElement {
     Link(LinkState),
@@ -63,7 +55,6 @@ pub enum ActiveElement {
     Table(TableState),
 }
 
-/// Central rendering state
 #[derive(Debug, Default, Clone)]
 pub struct RenderState {
     /// Current text emphasis (bold/italic) that applies to all text rendering

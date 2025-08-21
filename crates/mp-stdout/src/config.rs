@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 
-/// Configuration for markdown rendering behavior and visual settings.
 #[derive(Debug, Clone)]
 pub struct RenderConfig {
     pub indent_width: usize,

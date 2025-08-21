@@ -1,4 +1,3 @@
-/// Theme color definition - library-independent RGB representation
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ThemeColor {
     pub r: u8,
@@ -6,7 +5,6 @@ pub struct ThemeColor {
     pub b: u8,
 }
 
-/// Theme style definition - library-independent style representation
 #[derive(Debug, Clone, Copy)]
 pub struct ThemeStyle {
     pub color: ThemeColor,
@@ -75,7 +73,6 @@ impl SolarizedOsaka {
         b: 0,
     };
 
-    // Predefined styles to reduce code duplication
     const STRONG: ThemeStyle = ThemeStyle {
         color: Self::ORANGE,
         bold: true,
