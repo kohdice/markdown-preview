@@ -2,12 +2,6 @@
 
 use std::borrow::Cow;
 
-#[cfg(target_os = "windows")]
-pub const LINE_ENDING: &str = "\r\n";
-
-#[cfg(not(target_os = "windows"))]
-pub const LINE_ENDING: &str = "\n";
-
 /// Normalize line endings to Unix format (LF only).
 pub fn normalize_line_endings(text: &str) -> Cow<'_, str> {
     if !text.contains('\r') {
@@ -59,18 +53,5 @@ mod tests {
         let input = "single line without newlines";
         assert!(matches!(normalize_line_endings(input), Cow::Borrowed(_)));
         assert_eq!(normalize_line_endings(input), input);
-    }
-
-    #[test]
-    fn test_line_ending_constant() {
-        #[cfg(windows)]
-        {
-            assert_eq!(LINE_ENDING, "\r\n");
-        }
-
-        #[cfg(not(windows))]
-        {
-            assert_eq!(LINE_ENDING, "\n");
-        }
     }
 }
