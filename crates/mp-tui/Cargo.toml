@@ -11,15 +11,9 @@ repository.workspace = true
 mp-core = { workspace = true }
 
 anyhow = { workspace = true }
+crossterm = { workspace = true }
 pulldown-cmark = { workspace = true }
-crossterm = "0.29"
+
 ratatui = "0.29"
-unicode-width = "0.2"
 regex = "1.11"
-
-[dev-dependencies]
-criterion = "0.5"
-
-[[bench]]
-name = "renderer_benchmark"
-harness = false
+unicode-width = "0.2"
