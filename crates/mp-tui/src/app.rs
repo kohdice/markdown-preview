@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -11,7 +12,7 @@ use crate::renderer::{MarkdownWidget, MarkdownWidgetState};
 pub struct App {
     pub file_list: Vec<PathBuf>,
     pub list_state: ListState,
-    pub preview_content: String,
+    pub preview_content: Arc<String>,
     pub preview_scroll: (u16, u16),
     pub focus: Focus,
     pub should_quit: bool,
@@ -40,7 +41,7 @@ impl App {
         let mut app = Self {
             file_list,
             list_state,
-            preview_content: String::new(),
+            preview_content: Arc::new(String::new()),
             preview_scroll: (0, 0),
             focus: Focus::FileTree,
             should_quit: false,
@@ -166,11 +167,11 @@ impl App {
         if let Some(selected) = self.list_state.selected()
             && let Some(path) = self.file_list.get(selected)
         {
-            self.preview_content = std::fs::read_to_string(path)?;
+            self.preview_content = Arc::new(std::fs::read_to_string(path)?);
 
             // Parse and cache the markdown content
-            // Use reference to avoid cloning the entire content
-            let widget = MarkdownWidget::new(self.preview_content.clone());
+            // Share the Arc reference instead of cloning
+            let widget = MarkdownWidget::new(Arc::clone(&self.preview_content));
 
             // Save widget and file path to cache
             self.markdown_widget = Some(widget);

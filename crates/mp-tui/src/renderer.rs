@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use ratatui::{
     buffer::Buffer,
@@ -12,7 +14,7 @@ use crate::theme_adapter::{RatatuiAdapter, RatatuiStyleAdapter};
 use mp_core::theme::{MarkdownTheme, SolarizedOsaka};
 
 pub struct MarkdownWidget {
-    content: String,
+    content: Arc<String>,
     lines: Vec<Line<'static>>, // Flattened lines for efficient scrolling
     theme: SolarizedOsaka,
 }
@@ -24,7 +26,7 @@ pub struct MarkdownWidgetState {
 }
 
 impl MarkdownWidget {
-    pub fn new(content: String) -> Self {
+    pub fn new(content: Arc<String>) -> Self {
         let mut widget = Self {
             content,
             lines: Vec::new(),
@@ -307,7 +309,9 @@ impl MarkdownWidget {
         language: &Option<String>,
         content: &str,
     ) -> Vec<Line<'static>> {
-        let mut lines = Vec::new();
+        // Pre-allocate: fence lines + content lines
+        let content_lines = content.lines().count();
+        let mut lines = Vec::with_capacity(content_lines + 2);
         let delimiter_style = self.theme.delimiter_style();
         let fence_color = delimiter_style.color.to_ratatui_color();
         let fence_style = Style::default().fg(fence_color);
