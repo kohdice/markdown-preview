@@ -17,63 +17,74 @@ use crate::output::{ElementKind, ElementPhase, OutputType, TableVariant};
 impl<W: Write> MarkdownRenderer<W> {
     pub fn print_output(&mut self, output_type: OutputType) -> Result<()> {
         match output_type {
-            OutputType::Element { kind, phase } => {
-                self.handle_element_output(kind, phase)?;
-            }
-            OutputType::HorizontalRule => {
-                let line = self.config.create_horizontal_rule();
-                let styled_line = format!("{}", self.apply_text_style(&line, TextStyle::Delimiter));
-                self.output.writeln("")?;
-                self.output.writeln(&styled_line)?;
-                self.output.writeln("")?;
-            }
-            OutputType::InlineCode { ref code } => {
-                let styled_code = format!("{}", self.apply_text_style(code, TextStyle::CodeBlock));
-                self.output.write(&styled_code)?;
-            }
-            OutputType::TaskMarker { checked } => {
-                let marker = if checked { "[x] " } else { "[ ] " };
-                let list_marker_style = self.theme.list_marker_style();
-                let styled_marker = self.create_styled_marker(
-                    marker,
-                    list_marker_style.color.to_crossterm_color(),
-                    false,
-                );
-                self.output.write(&styled_marker)?;
-            }
-            OutputType::Link => {
-                if let Some(link) = self.get_link() {
-                    self.clear_link();
-                    let styled_link =
-                        format!("{}", self.apply_text_style(&link.text, TextStyle::Link));
-                    let url_text = self.create_styled_url(&link.url);
-                    self.output.write(&styled_link)?;
-                    self.output.write(&url_text)?;
-                }
-            }
-            OutputType::Image => {
-                if let Some(image) = self.get_image() {
-                    self.clear_image();
-                    let display_text = if image.alt_text.is_empty() {
-                        "[Image]"
-                    } else {
-                        &image.alt_text
-                    };
-                    let styled_alt = format!(
-                        "{}",
-                        self.apply_text_style(display_text, TextStyle::Emphasis)
-                    );
-                    let url_text = self.create_styled_url(&image.url);
-                    self.output.write(&styled_alt)?;
-                    self.output.write(&url_text)?;
-                }
-            }
-            OutputType::CodeBlock => {
-                if let Some(code_block) = self.get_code_block() {
-                    self.clear_code_block();
-                    self.render_code_block(&code_block)?;
-                }
-            }
+            OutputType::Element { kind, phase } => self.handle_element_output(kind, phase),
+            OutputType::HorizontalRule => self.render_horizontal_rule(),
+            OutputType::InlineCode { ref code } => self.render_inline_code(code),
+            OutputType::TaskMarker { checked } => self.render_task_marker(checked),
+            OutputType::Link => self.render_link(),
+            OutputType::Image => self.render_image(),
+            OutputType::CodeBlock => self.render_code_block_output(),
+        }
+    }
+
+    fn render_horizontal_rule(&mut self) -> Result<()> {
+        let line = self.config.create_horizontal_rule();
+        let styled_line = format!("{}", self.apply_text_style(&line, TextStyle::Delimiter));
+        self.output.writeln("")?;
+        self.output.writeln(&styled_line)?;
+        self.output.writeln("")?;
+        Ok(())
+    }
+
+    fn render_inline_code(&mut self, code: &str) -> Result<()> {
+        let styled_code = format!("{}", self.apply_text_style(code, TextStyle::CodeBlock));
+        self.output.write(&styled_code)?;
+        Ok(())
+    }
+
+    fn render_task_marker(&mut self, checked: bool) -> Result<()> {
+        let marker = if checked { "[x] " } else { "[ ] " };
+        let list_marker_style = self.theme.list_marker_style();
+        let styled_marker =
+            self.create_styled_marker(marker, list_marker_style.color.to_crossterm_color(), false);
+        self.output.write(&styled_marker)?;
+        Ok(())
+    }
+
+    fn render_link(&mut self) -> Result<()> {
+        if let Some(link) = self.get_link() {
+            self.clear_link();
+            let styled_link = format!("{}", self.apply_text_style(&link.text, TextStyle::Link));
+            let url_text = self.create_styled_url(&link.url);
+            self.output.write(&styled_link)?;
+            self.output.write(&url_text)?;
+        }
+        Ok(())
+    }
+
+    fn render_image(&mut self) -> Result<()> {
+        if let Some(image) = self.get_image() {
+            self.clear_image();
+            let display_text = if image.alt_text.is_empty() {
+                "[Image]"
+            } else {
+                &image.alt_text
+            };
+            let styled_alt = format!(
+                "{}",
+                self.apply_text_style(display_text, TextStyle::Emphasis)
+            );
+            let url_text = self.create_styled_url(&image.url);
+            self.output.write(&styled_alt)?;
+            self.output.write(&url_text)?;
+        }
+        Ok(())
+    }
+
+    fn render_code_block_output(&mut self) -> Result<()> {
+        if let Some(code_block) = self.get_code_block() {
+            self.clear_code_block();
+            self.render_code_block(&code_block)?;
         }
         Ok(())
     }
@@ -173,10 +184,8 @@ impl<W: Write> MarkdownRenderer<W> {
 
     fn render_table_head_end(&mut self) -> Result<()> {
         if let Some(table) = self.get_table() {
-            let current_row = table.current_row.clone();
-            let alignments = table.alignments.clone();
-            self.render_table_row(&current_row, true)?;
-            self.render_table_separator(&alignments)?;
+            self.render_table_row(&table.current_row, true)?;
+            self.render_table_separator(&table.alignments)?;
         }
 
         if let Some(ref mut table) = self.get_table_mut() {
@@ -188,8 +197,7 @@ impl<W: Write> MarkdownRenderer<W> {
 
     fn render_table_row_end(&mut self) -> Result<()> {
         if let Some(table) = self.get_table() {
-            let current_row = table.current_row.clone();
-            self.render_table_row(&current_row, false)?;
+            self.render_table_row(&table.current_row, false)?;
         }
 
         if let Some(ref mut table) = self.get_table_mut() {

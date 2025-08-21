@@ -64,8 +64,8 @@ impl TableBuilder {
     pub fn new() -> Self {
         Self {
             headers: None,
-            rows: Vec::new(),
-            alignments: Vec::new(),
+            rows: Vec::with_capacity(10), // Pre-allocate for typical table size
+            alignments: Vec::with_capacity(5), // Tables typically have 2-5 columns
             separator: "|",
             alignment_config: TableAlignmentConfig::default(),
         }
@@ -304,52 +304,77 @@ impl fmt::Display for Table {
 mod tests {
     use super::*;
 
+    // Helper function to create a basic table with default configuration
+    fn create_test_table() -> TableBuilder {
+        TableBuilder::new()
+    }
+
+    // Helper function to create a table with header and rows
+    fn create_table_with_data(header: Vec<&str>, rows: Vec<Vec<&str>>) -> Result<Table> {
+        let mut builder = TableBuilder::new().header(header);
+        for row in rows {
+            builder = builder.row(row);
+        }
+        builder.build()
+    }
+
+    // Helper function to assert table dimensions
+    fn assert_table_dimensions(table: &Table, expected_columns: usize, expected_rows: usize) {
+        assert_eq!(table.column_count(), expected_columns);
+        assert_eq!(table.row_count(), expected_rows);
+    }
+
+    // Helper function to verify alignments
+    fn assert_alignments(table: &Table, expected: Vec<Alignment>) {
+        let alignments = table.alignments();
+        assert_eq!(alignments.len(), expected.len());
+        for (actual, expected) in alignments.iter().zip(expected.iter()) {
+            assert_eq!(actual, expected);
+        }
+    }
+
     #[test]
     fn test_basic_table_builder() {
-        let table = TableBuilder::new()
-            .header(vec!["Name", "Age"])
-            .row(vec!["Alice", "30"])
-            .row(vec!["Bob", "25"])
-            .build()
-            .unwrap();
+        let table = create_table_with_data(
+            vec!["Name", "Age"],
+            vec![vec!["Alice", "30"], vec!["Bob", "25"]],
+        )
+        .unwrap();
 
-        assert_eq!(table.column_count(), 2);
-        assert_eq!(table.row_count(), 2);
+        assert_table_dimensions(&table, 2, 2);
         assert!(table.headers().is_some());
     }
 
     #[test]
     fn test_table_without_header() {
-        let table = TableBuilder::new()
+        let table = create_test_table()
             .row(vec!["A", "B", "C"])
             .row(vec!["D", "E", "F"])
             .build()
             .unwrap();
 
-        assert_eq!(table.column_count(), 3);
-        assert_eq!(table.row_count(), 2);
+        assert_table_dimensions(&table, 3, 2);
         assert!(table.headers().is_none());
     }
 
     #[test]
     fn test_table_with_alignments() {
-        let table = TableBuilder::new()
+        let table = create_test_table()
             .header(vec!["Left", "Center", "Right"])
             .alignments(vec![Alignment::Left, Alignment::Center, Alignment::Right])
             .row(vec!["A", "B", "C"])
             .build()
             .unwrap();
 
-        let alignments = table.alignments();
-        assert_eq!(alignments.len(), 3);
-        assert_eq!(alignments[0], Alignment::Left);
-        assert_eq!(alignments[1], Alignment::Center);
-        assert_eq!(alignments[2], Alignment::Right);
+        assert_alignments(
+            &table,
+            vec![Alignment::Left, Alignment::Center, Alignment::Right],
+        );
     }
 
     #[test]
     fn test_table_validation_column_mismatch() {
-        let result = TableBuilder::new()
+        let result = create_test_table()
             .header(vec!["A", "B"])
             .row(vec!["1", "2", "3"]) // Too many columns
             .build();
@@ -359,7 +384,7 @@ mod tests {
 
     #[test]
     fn test_table_validation_alignment_mismatch() {
-        let result = TableBuilder::new()
+        let result = create_test_table()
             .header(vec!["A", "B", "C"])
             .alignments(vec![Alignment::Left, Alignment::Right]) // Too few alignments
             .build();
@@ -369,7 +394,7 @@ mod tests {
 
     #[test]
     fn test_custom_separator() {
-        let table = TableBuilder::new()
+        let table = create_test_table()
             .separator("||")
             .header(vec!["A", "B"])
             .row(vec!["1", "2"])
@@ -383,14 +408,13 @@ mod tests {
 
     #[test]
     fn test_empty_table() {
-        let table = TableBuilder::new().build().unwrap();
-        assert_eq!(table.column_count(), 0);
-        assert_eq!(table.row_count(), 0);
+        let table = create_test_table().build().unwrap();
+        assert_table_dimensions(&table, 0, 0);
     }
 
     #[test]
     fn test_table_rendering() {
-        let table = TableBuilder::new()
+        let table = create_test_table()
             .header(vec!["Name", "Value"])
             .alignments(vec![Alignment::Left, Alignment::Right])
             .row(vec!["foo", "123"])
@@ -408,7 +432,7 @@ mod tests {
 
     #[test]
     fn test_builder_method_chaining() {
-        let _table = TableBuilder::new()
+        let _table = create_test_table()
             .separator("!")
             .header(vec!["A"])
             .alignments(vec![Alignment::Center])
@@ -421,11 +445,7 @@ mod tests {
 
     #[test]
     fn test_auto_alignment_generation() {
-        let table = TableBuilder::new()
-            .header(vec!["A", "B", "C"])
-            .row(vec!["1", "2", "3"])
-            .build()
-            .unwrap();
+        let table = create_table_with_data(vec!["A", "B", "C"], vec![vec!["1", "2", "3"]]).unwrap();
 
         let alignments = table.alignments();
         assert_eq!(alignments.len(), 3);

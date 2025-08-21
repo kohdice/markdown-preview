@@ -165,47 +165,66 @@ impl<W: Write> MarkdownRenderer<W> {
 
     pub(super) fn handle_content(&mut self, content: ContentType) -> Result<()> {
         match content {
-            ContentType::Text(text) => {
-                let decoded_text = decode_html_entities(text);
-                if !self.add_text_to_state(&decoded_text) {
-                    self.render_styled_text(&decoded_text);
-                }
-            }
-            ContentType::Code(code) => {
-                if let Some(ref mut cb) = self.get_code_block_mut() {
-                    cb.content.push_str(code);
-                } else {
-                    self.print_output(OutputType::InlineCode {
-                        code: code.to_string(),
-                    })?;
-                }
-            }
-            ContentType::Html(html) => {
-                let decoded = decode_html_entities(html);
-                if !self.add_text_to_state(&decoded) {
-                    self.render_styled_text(&decoded);
-                }
-            }
-            ContentType::SoftBreak => {
-                self.output.write(" ")?;
-            }
-            ContentType::HardBreak => {
-                self.output.newline()?;
-            }
-            ContentType::Rule => {
-                let line = self.config.create_horizontal_rule();
-                let styled_line = format!(
-                    "{}",
-                    self.apply_text_style(&line, super::styling::TextStyle::Delimiter)
-                );
-                self.output.writeln("")?;
-                self.output.writeln(&styled_line)?;
-                self.output.writeln("")?;
-            }
-            ContentType::TaskMarker(checked) => {
-                self.print_output(OutputType::TaskMarker { checked })?;
-            }
+            ContentType::Text(text) => self.handle_text_content(text),
+            ContentType::Code(code) => self.handle_code_content(code),
+            ContentType::Html(html) => self.handle_html_content(html),
+            ContentType::SoftBreak => self.handle_soft_break(),
+            ContentType::HardBreak => self.handle_hard_break(),
+            ContentType::Rule => self.handle_rule(),
+            ContentType::TaskMarker(checked) => self.handle_task_marker(checked),
+        }
+    }
+
+    fn handle_text_content(&mut self, text: &str) -> Result<()> {
+        let decoded_text = decode_html_entities(text);
+        if !self.add_text_to_state(&decoded_text) {
+            self.render_styled_text(&decoded_text);
         }
         Ok(())
+    }
+
+    fn handle_code_content(&mut self, code: &str) -> Result<()> {
+        if let Some(ref mut cb) = self.get_code_block_mut() {
+            cb.content.push_str(code);
+        } else {
+            self.print_output(OutputType::InlineCode {
+                code: code.to_string(),
+            })?;
+        }
+        Ok(())
+    }
+
+    fn handle_html_content(&mut self, html: &str) -> Result<()> {
+        let decoded = decode_html_entities(html);
+        if !self.add_text_to_state(&decoded) {
+            self.render_styled_text(&decoded);
+        }
+        Ok(())
+    }
+
+    fn handle_soft_break(&mut self) -> Result<()> {
+        self.output.write(" ")?;
+        Ok(())
+    }
+
+    fn handle_hard_break(&mut self) -> Result<()> {
+        self.output.newline()?;
+        Ok(())
+    }
+
+    fn handle_rule(&mut self) -> Result<()> {
+        let line = self.config.create_horizontal_rule();
+        let styled_line = format!(
+            "{}",
+            self.apply_text_style(&line, super::styling::TextStyle::Delimiter)
+        );
+        self.output.writeln("")?;
+        self.output.writeln(&styled_line)?;
+        self.output.writeln("")?;
+        Ok(())
+    }
+
+    fn handle_task_marker(&mut self, checked: bool) -> Result<()> {
+        self.print_output(OutputType::TaskMarker { checked })
     }
 }
