@@ -12,7 +12,8 @@ pub struct MockWriter {
 
 impl MockWriter {
     pub fn new() -> (Self, Arc<Mutex<Vec<u8>>>) {
-        let buffer = Arc::new(Mutex::new(Vec::new()));
+        // Typical test output is around 1KB
+        let buffer = Arc::new(Mutex::new(Vec::with_capacity(1024)));
         (
             MockWriter {
                 buffer: Arc::clone(&buffer),
@@ -47,7 +48,8 @@ pub fn create_test_renderer() -> MarkdownRenderer {
 /// Create a test renderer that outputs to a buffer instead of stdout
 #[cfg(test)]
 pub fn create_test_renderer() -> MarkdownRenderer<MockWriter> {
-    let buffer = Arc::new(Mutex::new(Vec::new()));
+    // Typical test output is around 1KB
+    let buffer = Arc::new(Mutex::new(Vec::with_capacity(1024)));
     let mock_writer = MockWriter::new_with_buffer(buffer);
     let output = BufferedOutput::new(mock_writer);
     MarkdownRenderer::with_output(output)
@@ -56,7 +58,8 @@ pub fn create_test_renderer() -> MarkdownRenderer<MockWriter> {
 /// Create a test renderer with access to the output buffer
 #[cfg(test)]
 pub fn create_test_renderer_with_buffer() -> (MarkdownRenderer<MockWriter>, Arc<Mutex<Vec<u8>>>) {
-    let buffer = Arc::new(Mutex::new(Vec::new()));
+    // Typical test output is around 1KB
+    let buffer = Arc::new(Mutex::new(Vec::with_capacity(1024)));
     let mock_writer = MockWriter::new_with_buffer(Arc::clone(&buffer));
     let output = BufferedOutput::new(mock_writer);
     (MarkdownRenderer::with_output(output), buffer)

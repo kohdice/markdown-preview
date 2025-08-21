@@ -309,7 +309,6 @@ impl MarkdownWidget {
         language: &Option<String>,
         content: &str,
     ) -> Vec<Line<'static>> {
-        // Pre-allocate: fence lines + content lines
         let content_lines = content.lines().count();
         let mut lines = Vec::with_capacity(content_lines + 2);
         let delimiter_style = self.theme.delimiter_style();
