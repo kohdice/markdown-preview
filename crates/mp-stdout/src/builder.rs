@@ -227,7 +227,8 @@ mod tests {
 
     #[test]
     fn test_builder_with_custom_writer() {
-        let writer = Vec::new();
+        // Allocate reasonable capacity for test output
+        let writer = Vec::with_capacity(256);
         let renderer = RendererBuilder::with_writer(writer)
             .enable_tables(false)
             .build_with_writer();

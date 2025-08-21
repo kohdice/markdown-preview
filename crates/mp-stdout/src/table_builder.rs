@@ -256,7 +256,6 @@ impl Table {
 
     /// Renders the entire table
     pub fn render(&self) -> Vec<String> {
-        // Pre-allocate capacity based on expected table size
         let estimated_lines = if self.headers.is_some() { 2 } else { 0 } + self.rows.len();
         let mut lines = Vec::with_capacity(estimated_lines);
 

@@ -8,7 +8,8 @@ struct MockWriter {
 
 impl MockWriter {
     fn new() -> (Self, Arc<Mutex<Vec<u8>>>) {
-        let buffer = Arc::new(Mutex::new(Vec::new()));
+        // Typical test output is around 1KB
+        let buffer = Arc::new(Mutex::new(Vec::with_capacity(1024)));
         (
             MockWriter {
                 buffer: Arc::clone(&buffer),

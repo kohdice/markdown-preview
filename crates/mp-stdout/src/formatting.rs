@@ -326,7 +326,8 @@ mod tests {
     }
 
     fn create_test_renderer() -> MarkdownRenderer<MockWriter> {
-        let buffer = Arc::new(Mutex::new(Vec::new()));
+        // Typical test output is around 1KB
+        let buffer = Arc::new(Mutex::new(Vec::with_capacity(1024)));
         let mock_writer = MockWriter::new_with_buffer(buffer);
         let output = BufferedOutput::new(mock_writer);
         MarkdownRenderer::with_output(output)
