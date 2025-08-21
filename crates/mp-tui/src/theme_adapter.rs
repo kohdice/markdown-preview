@@ -1,42 +1,63 @@
-use mp_core::theme::{ThemeColor, ThemeStyle};
 use ratatui::style::{Color, Modifier, Style};
 
-/// Adapter trait for converting ThemeColor to Ratatui Color
+use mp_core::theme::{ThemeAdapter, ThemeColor, ThemeStyle};
+
+/// Ratatui-specific theme adapter
+pub struct RatatuiThemeAdapter;
+
+impl ThemeAdapter for RatatuiThemeAdapter {
+    type Color = Color;
+    type Style = Style;
+
+    fn to_color(&self, color: &ThemeColor) -> Self::Color {
+        Color::Rgb(color.r, color.g, color.b)
+    }
+
+    fn to_style(&self, style: &ThemeStyle) -> Self::Style {
+        let mut ratatui_style = Style::default().fg(self.to_color(&style.color));
+        let mut modifiers = Modifier::empty();
+
+        if style.bold {
+            modifiers |= Modifier::BOLD;
+        }
+        if style.italic {
+            modifiers |= Modifier::ITALIC;
+        }
+        if style.underline {
+            modifiers |= Modifier::UNDERLINED;
+        }
+
+        if !modifiers.is_empty() {
+            ratatui_style = ratatui_style.add_modifier(modifiers);
+        }
+
+        ratatui_style
+    }
+}
+
+/// Legacy adapter trait for converting ThemeColor to Ratatui Color
+/// Kept for backward compatibility
 pub trait RatatuiAdapter {
     fn to_ratatui_color(&self) -> Color;
 }
 
-/// Adapter trait for converting ThemeStyle to Ratatui Style
+/// Legacy adapter trait for converting ThemeStyle to Ratatui Style
+/// Kept for backward compatibility
 pub trait RatatuiStyleAdapter {
     fn to_ratatui_style(&self) -> Style;
 }
 
 impl RatatuiAdapter for ThemeColor {
     fn to_ratatui_color(&self) -> Color {
-        Color::Rgb(self.r, self.g, self.b)
+        let adapter = RatatuiThemeAdapter;
+        adapter.to_color(self)
     }
 }
 
 impl RatatuiStyleAdapter for ThemeStyle {
     fn to_ratatui_style(&self) -> Style {
-        let mut style = Style::default().fg(self.color.to_ratatui_color());
-        let mut modifiers = Modifier::empty();
-
-        if self.bold {
-            modifiers |= Modifier::BOLD;
-        }
-        if self.italic {
-            modifiers |= Modifier::ITALIC;
-        }
-        if self.underline {
-            modifiers |= Modifier::UNDERLINED;
-        }
-
-        if !modifiers.is_empty() {
-            style = style.add_modifier(modifiers);
-        }
-
-        style
+        let adapter = RatatuiThemeAdapter;
+        adapter.to_style(self)
     }
 }
 

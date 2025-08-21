@@ -3,14 +3,14 @@ use std::panic;
 use anyhow::Result;
 
 mod app;
+mod file_tree;
+mod preview;
 pub mod renderer;
+mod status_bar;
 mod theme_adapter;
-mod ui;
-mod widgets {
-    pub mod file_tree;
-}
+pub mod widgets;
 
-pub use app::{App, Focus};
+pub use app::{App, AppFocus};
 pub use renderer::MarkdownWidget;
 
 pub fn run_tui() -> Result<()> {

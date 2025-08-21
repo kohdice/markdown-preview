@@ -10,12 +10,13 @@ use ratatui::{
 };
 use regex::Regex;
 
-use crate::theme_adapter::{RatatuiAdapter, RatatuiStyleAdapter};
 use mp_core::theme::{MarkdownTheme, SolarizedOsaka};
+
+use crate::theme_adapter::{RatatuiAdapter, RatatuiStyleAdapter};
 
 pub struct MarkdownWidget {
     content: Arc<String>,
-    lines: Vec<Line<'static>>, // Flattened lines for efficient scrolling
+    lines: Vec<Line<'static>>,
     theme: SolarizedOsaka,
 }
 
@@ -29,7 +30,7 @@ impl MarkdownWidget {
     pub fn new(content: Arc<String>) -> Self {
         let mut widget = Self {
             content,
-            lines: Vec::with_capacity(100), // Pre-allocate for typical markdown file
+            lines: Vec::with_capacity(100),
             theme: SolarizedOsaka,
         };
         widget.parse_markdown();
@@ -43,16 +44,16 @@ impl MarkdownWidget {
     pub fn parse_markdown(&mut self) {
         self.lines.clear();
 
-        let mut current_line = Vec::with_capacity(10); // Pre-allocate for typical line spans
+        let mut current_line = Vec::with_capacity(10);
         let mut current_style = Style::default();
-        let mut list_stack: Vec<(Option<u64>, u64)> = Vec::with_capacity(5); // Pre-allocate for nested lists
+        let mut list_stack: Vec<(Option<u64>, u64)> = Vec::with_capacity(5);
         let mut in_list_item = false;
 
         let mut in_table = false;
         let mut is_header_row = false;
-        let mut table_headers: Vec<String> = Vec::with_capacity(10); // Pre-allocate for table columns
-        let mut table_rows: Vec<Vec<String>> = Vec::with_capacity(20); // Pre-allocate for table rows
-        let mut current_row: Vec<String> = Vec::with_capacity(10); // Pre-allocate for row cells
+        let mut table_headers: Vec<String> = Vec::with_capacity(10);
+        let mut table_rows: Vec<Vec<String>> = Vec::with_capacity(20);
+        let mut current_row: Vec<String> = Vec::with_capacity(10);
         let mut current_cell = String::new();
 
         let mut in_code_block = false;
@@ -167,7 +168,6 @@ impl MarkdownWidget {
                 Event::End(tag) => match tag {
                     TagEnd::Table => {
                         in_table = false;
-                        // Render table as simple lines
                         let rendered_lines = Self::create_table_lines(&table_headers, &table_rows);
                         self.lines.extend(rendered_lines);
                         table_headers.clear();
@@ -285,8 +285,7 @@ impl MarkdownWidget {
     }
 
     fn create_table_lines(headers: &[String], rows: &[Vec<String>]) -> Vec<Line<'static>> {
-        let mut lines = Vec::with_capacity(rows.len() + 3); // headers + separator + rows
-        // Simplified table rendering as lines
+        let mut lines = Vec::with_capacity(rows.len() + 3);
         let header_line = headers.join(" | ");
         lines.push(Line::from(vec![Span::styled(
             header_line,
@@ -349,7 +348,6 @@ impl StatefulWidget for &MarkdownWidget {
         let inner_area = block.inner(area);
         block.render(area, buf);
 
-        // Virtual scrolling: only render visible lines
         let visible_lines = inner_area.height as usize;
         let skip_lines = state.scroll_offset as usize;
 
