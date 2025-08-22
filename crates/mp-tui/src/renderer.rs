@@ -13,6 +13,7 @@ use regex::Regex;
 use mp_core::theme::{MarkdownTheme, SolarizedOsaka};
 
 use crate::theme_adapter::{RatatuiAdapter, RatatuiStyleAdapter};
+use crate::utils::truncate_unicode_string;
 
 pub struct MarkdownWidget {
     content: Arc<String>,
@@ -356,12 +357,14 @@ impl StatefulWidget for &MarkdownWidget {
 
             for span in &line.spans {
                 let content = span.content.as_ref();
-                let max_width = (area.width as usize).saturating_sub((x - area.x) as usize);
-                let display_len = content.chars().take(max_width).count();
+                let remaining_width = (area.width as usize).saturating_sub((x - area.x) as usize);
 
-                if display_len > 0 {
-                    buf.set_stringn(x, y, content, display_len, span.style);
-                    x += display_len as u16;
+                // Use the helper function to properly handle Unicode width
+                let (truncated, actual_width) = truncate_unicode_string(content, remaining_width);
+
+                if !truncated.is_empty() {
+                    buf.set_stringn(x, y, &truncated, remaining_width, span.style);
+                    x += actual_width as u16;
                 }
 
                 if x >= area.x + area.width {
