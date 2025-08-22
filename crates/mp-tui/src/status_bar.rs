@@ -13,6 +13,7 @@ pub struct StatusBar {
     pub message: Option<String>,
     pub error: Option<String>,
     pub mode: StatusMode,
+    pub search_query: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -29,6 +30,7 @@ impl StatusBar {
             message: None,
             error: None,
             mode: StatusMode::Normal,
+            search_query: None,
         }
     }
 
@@ -54,6 +56,14 @@ impl StatusBar {
 
     pub fn set_mode(&mut self, mode: StatusMode) {
         self.mode = mode;
+    }
+
+    pub fn set_search_query(&mut self, query: &str) {
+        self.search_query = Some(query.to_string());
+    }
+
+    pub fn clear_search_query(&mut self) {
+        self.search_query = None;
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
@@ -86,7 +96,7 @@ impl StatusBar {
         spans.push(mode_span);
         spans.push(Span::raw(" "));
 
-        // File path or message
+        // File path or message or search query
         if let Some(error) = &self.error {
             spans.push(Span::styled(
                 error,
@@ -101,6 +111,22 @@ impl StatusBar {
                     .fg(Color::Rgb(181, 137, 0))
                     .add_modifier(Modifier::ITALIC),
             ));
+        } else if self.mode == StatusMode::Search {
+            if let Some(query) = &self.search_query {
+                spans.push(Span::styled(
+                    query,
+                    Style::default()
+                        .fg(Color::Rgb(181, 137, 0))
+                        .add_modifier(Modifier::BOLD),
+                ));
+            } else {
+                spans.push(Span::styled(
+                    "",
+                    Style::default()
+                        .fg(Color::Rgb(181, 137, 0))
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
         } else if let Some(path) = &self.file_path {
             spans.push(Span::styled(
                 path,

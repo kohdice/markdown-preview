@@ -76,17 +76,23 @@ impl App {
                 KeyCode::Esc => {
                     self.file_tree.cancel_search();
                     self.status_bar.set_mode(StatusMode::Normal);
+                    self.status_bar.clear_search_query();
                 }
                 KeyCode::Enter => {
                     self.file_tree.search_mode = false;
                     self.status_bar.set_mode(StatusMode::Normal);
+                    self.status_bar.clear_search_query();
                     self.load_selected_file()?;
                 }
                 KeyCode::Backspace => {
                     self.file_tree.remove_search_char();
+                    self.status_bar
+                        .set_search_query(&self.file_tree.search_query);
                 }
                 KeyCode::Char(c) => {
                     self.file_tree.add_search_char(c);
+                    self.status_bar
+                        .set_search_query(&self.file_tree.search_query);
                 }
                 _ => {}
             }
@@ -108,6 +114,7 @@ impl App {
             (_, KeyCode::Char('/'), _) => {
                 self.file_tree.start_search();
                 self.status_bar.set_mode(StatusMode::Search);
+                self.status_bar.clear_search_query();
             }
             (_, KeyCode::Tab, _) => {
                 self.focus = match self.focus {

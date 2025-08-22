@@ -302,11 +302,7 @@ impl FileTreeWidget {
             Style::default().fg(delimiter_color.to_ratatui_color())
         };
 
-        let title = if self.search_mode {
-            format!("Files [Search: {}]", self.search_query)
-        } else {
-            "Files".to_string()
-        };
+        let title = "Files".to_string();
 
         let list = List::new(items).block(
             Block::default()
