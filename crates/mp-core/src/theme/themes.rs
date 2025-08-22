@@ -11,6 +11,7 @@ pub trait MarkdownTheme {
     fn list_marker_style(&self) -> ThemeStyle;
     fn delimiter_style(&self) -> ThemeStyle;
     fn text_style(&self) -> ThemeStyle;
+    fn focus_border_style(&self) -> ThemeStyle;
 }
 
 /// Solarized Osaka theme implementation
@@ -108,6 +109,13 @@ impl SolarizedOsaka {
         italic: false,
         underline: false,
     };
+
+    const FOCUS_BORDER: ThemeStyle = ThemeStyle {
+        color: Self::BLUE,
+        bold: false,
+        italic: false,
+        underline: false,
+    };
 }
 
 impl MarkdownTheme for SolarizedOsaka {
@@ -158,6 +166,10 @@ impl MarkdownTheme for SolarizedOsaka {
 
     fn text_style(&self) -> ThemeStyle {
         Self::TEXT
+    }
+
+    fn focus_border_style(&self) -> ThemeStyle {
+        Self::FOCUS_BORDER
     }
 }
 
