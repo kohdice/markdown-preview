@@ -7,13 +7,17 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
+use mp_core::theme::{MarkdownTheme, SolarizedOsaka};
+
 use crate::renderer::{MarkdownWidget, MarkdownWidgetState};
+use crate::theme_adapter::RatatuiAdapter;
 
 pub struct PreviewWidget {
     pub content: Arc<String>,
     pub scroll_offset: u16,
     pub markdown_widget: Option<MarkdownWidget>,
     pub markdown_state: MarkdownWidgetState,
+    theme: SolarizedOsaka,
 }
 
 impl Default for PreviewWidget {
@@ -23,6 +27,7 @@ impl Default for PreviewWidget {
             scroll_offset: 0,
             markdown_widget: None,
             markdown_state: MarkdownWidgetState::default(),
+            theme: SolarizedOsaka,
         }
     }
 }
@@ -71,9 +76,11 @@ impl PreviewWidget {
 
     pub fn render(&mut self, frame: &mut Frame, area: Rect, is_focused: bool) {
         let border_style = if is_focused {
-            Style::default().fg(Color::Rgb(38, 139, 210))
+            let focus_color = self.theme.focus_border_style().color;
+            Style::default().fg(focus_color.to_ratatui_color())
         } else {
-            Style::default().fg(Color::Rgb(101, 123, 131))
+            let delimiter_color = self.theme.delimiter_style().color;
+            Style::default().fg(delimiter_color.to_ratatui_color())
         };
 
         // If we have a markdown widget, use it

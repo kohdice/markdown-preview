@@ -1,14 +1,18 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use crate::tree_builder::{DefaultTreeBuilder, TreeBuilder};
-use mp_core::{FileTreeNode, FinderConfig};
 use ratatui::{
     Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, List, ListItem},
 };
+
+use mp_core::theme::{MarkdownTheme, SolarizedOsaka};
+use mp_core::{FileTreeNode, FinderConfig};
+
+use crate::theme_adapter::RatatuiAdapter;
+use crate::tree_builder::{DefaultTreeBuilder, TreeBuilder};
 
 #[derive(Clone, Debug)]
 pub struct DisplayNode {
@@ -29,6 +33,7 @@ pub struct FileTreeWidget {
     pub scroll_offset: usize,
     finder_config: FinderConfig,
     tree_builder: Box<dyn TreeBuilder>,
+    theme: SolarizedOsaka,
 }
 
 impl FileTreeWidget {
@@ -57,6 +62,7 @@ impl FileTreeWidget {
             scroll_offset: 0,
             finder_config,
             tree_builder,
+            theme: SolarizedOsaka,
         };
 
         // Initialize display nodes with root expanded
@@ -289,9 +295,11 @@ impl FileTreeWidget {
             .collect();
 
         let border_style = if is_focused {
-            Style::default().fg(Color::Rgb(38, 139, 210))
+            let focus_color = self.theme.focus_border_style().color;
+            Style::default().fg(focus_color.to_ratatui_color())
         } else {
-            Style::default().fg(Color::Rgb(101, 123, 131))
+            let delimiter_color = self.theme.delimiter_style().color;
+            Style::default().fg(delimiter_color.to_ratatui_color())
         };
 
         let title = if self.search_mode {
