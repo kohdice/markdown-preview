@@ -9,51 +9,10 @@ use super::{MarkdownRenderer, state::ContentType};
 use crate::output::{ElementKind, ElementPhase, OutputType, TableVariant};
 
 impl<W: Write> MarkdownRenderer<W> {
-    fn tag_end_to_tag(tag_end: TagEnd) -> Option<Tag<'static>> {
-        match tag_end {
-            TagEnd::Heading(level) => Some(Tag::Heading {
-                level,
-                id: None,
-                classes: vec![],
-                attrs: vec![],
-            }),
-            TagEnd::Paragraph => Some(Tag::Paragraph),
-            TagEnd::Strong => Some(Tag::Strong),
-            TagEnd::Emphasis => Some(Tag::Emphasis),
-            TagEnd::Link => Some(Tag::Link {
-                link_type: pulldown_cmark::LinkType::Inline,
-                dest_url: "".into(),
-                title: "".into(),
-                id: "".into(),
-            }),
-            TagEnd::List(_) => Some(Tag::List(None)),
-            TagEnd::Item => Some(Tag::Item),
-            TagEnd::CodeBlock => Some(Tag::CodeBlock(pulldown_cmark::CodeBlockKind::Indented)),
-            TagEnd::Table => Some(Tag::Table(vec![])),
-            TagEnd::TableHead => Some(Tag::TableHead),
-            TagEnd::TableRow => Some(Tag::TableRow),
-            TagEnd::BlockQuote(_) => Some(Tag::BlockQuote(None)),
-            TagEnd::Image => Some(Tag::Image {
-                link_type: pulldown_cmark::LinkType::Inline,
-                dest_url: "".into(),
-                title: "".into(),
-                id: "".into(),
-            }),
-            TagEnd::FootnoteDefinition => Some(Tag::FootnoteDefinition("".into())),
-            _ => None,
-        }
-    }
-
     pub fn process_event(&mut self, event: Event) -> Result<()> {
         match event {
             Event::Start(tag) => self.handle_tag(tag, true),
-            Event::End(tag_end) => {
-                if let Some(tag) = Self::tag_end_to_tag(tag_end) {
-                    self.handle_tag(tag, false)
-                } else {
-                    Ok(())
-                }
-            }
+            Event::End(tag_end) => self.handle_tag_end_direct(tag_end),
             Event::Text(text) => self.handle_content(ContentType::Text(&text)),
             Event::Code(code) => self.handle_content(ContentType::Code(&code)),
             Event::Html(html) => self.handle_content(ContentType::Html(&html)),
@@ -135,6 +94,39 @@ impl<W: Write> MarkdownRenderer<W> {
             }
             Tag::Image { .. } => self.print_output(OutputType::Image)?,
             Tag::FootnoteDefinition(_) => {
+                self.output.newline().ok();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_tag_end_direct(&mut self, tag_end: TagEnd) -> Result<()> {
+        match tag_end {
+            TagEnd::Heading(_) => {
+                self.handle_element(ElementKind::Heading(0), ElementPhase::End)?
+            }
+            TagEnd::Paragraph => self.handle_element(ElementKind::Paragraph, ElementPhase::End)?,
+            TagEnd::Strong => self.set_strong_emphasis(false),
+            TagEnd::Emphasis => self.set_italic_emphasis(false),
+            TagEnd::Link => self.print_output(OutputType::Link)?,
+            TagEnd::List(_) => self.handle_list_end(),
+            TagEnd::Item => self.handle_element(ElementKind::ListItem, ElementPhase::End)?,
+            TagEnd::CodeBlock => self.print_output(OutputType::CodeBlock)?,
+            TagEnd::Table => self.handle_table_end(),
+            TagEnd::TableHead => self.handle_element(
+                ElementKind::Table(TableVariant::HeadEnd),
+                ElementPhase::Start,
+            )?,
+            TagEnd::TableRow => self.handle_element(
+                ElementKind::Table(TableVariant::RowEnd),
+                ElementPhase::Start,
+            )?,
+            TagEnd::BlockQuote(_) => {
+                self.handle_element(ElementKind::BlockQuote, ElementPhase::End)?
+            }
+            TagEnd::Image => self.print_output(OutputType::Image)?,
+            TagEnd::FootnoteDefinition => {
                 self.output.newline().ok();
             }
             _ => {}
