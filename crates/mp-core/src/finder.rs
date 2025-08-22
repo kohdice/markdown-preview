@@ -52,11 +52,19 @@ pub fn build_markdown_tree(config: FinderConfig) -> Result<FileTreeNode> {
 
 pub fn build_markdown_tree_in_dir(dir: &str, config: FinderConfig) -> Result<FileTreeNode> {
     let base_path = Path::new(dir);
-    let root_name = base_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(".")
-        .to_string();
+
+    let root_name = if dir == "." {
+        std::env::current_dir()
+            .ok()
+            .and_then(|d| d.file_name().and_then(|n| n.to_str()).map(String::from))
+            .unwrap_or_else(|| ".".to_string())
+    } else {
+        base_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(dir)
+            .to_string()
+    };
 
     let mut root = FileTreeNode {
         path: base_path.to_path_buf(),

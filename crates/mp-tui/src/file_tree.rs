@@ -44,10 +44,14 @@ impl FileTreeWidget {
     pub fn with_builder(tree_builder: Box<dyn TreeBuilder>, finder_config: FinderConfig) -> Self {
         // Build the tree using the provided builder
         let tree_data = tree_builder.build_tree(finder_config).unwrap_or_else(|_| {
-            // Fallback to empty tree on error
+            let name = std::env::current_dir()
+                .ok()
+                .and_then(|d| d.file_name().and_then(|n| n.to_str()).map(String::from))
+                .unwrap_or_else(|| "Current Directory".to_string());
+
             FileTreeNode {
                 path: PathBuf::from("."),
-                name: "Current Directory".to_string(),
+                name,
                 is_dir: true,
                 children: Vec::new(),
             }
@@ -105,11 +109,7 @@ impl FileTreeWidget {
 
         let display_node = DisplayNode {
             path: node.path.clone(),
-            name: if is_root && node.name == "." {
-                "Current Directory".to_string()
-            } else {
-                node.name.clone()
-            },
+            name: node.name.clone(),
             is_dir: node.is_dir,
             is_expanded: was_expanded,
             depth,
