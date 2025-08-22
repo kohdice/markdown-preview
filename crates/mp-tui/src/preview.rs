@@ -60,9 +60,16 @@ impl PreviewWidget {
     }
 
     pub fn scroll_to_bottom(&mut self) {
-        // This would need the actual content height
-        // For now, just scroll down a large amount
-        self.scroll_offset = u16::MAX;
+        // Calculate the maximum scroll offset based on content height
+        if let Some(widget) = &self.markdown_widget {
+            let line_count = widget.line_count();
+            // Set scroll to show the last lines (accounting for visible area)
+            // We'll use a conservative estimate of visible lines
+            self.scroll_offset = line_count.saturating_sub(1) as u16;
+        } else {
+            // Fallback for plain text - scroll to a large value
+            self.scroll_offset = u16::MAX;
+        }
         self.markdown_state.scroll_offset = self.scroll_offset;
     }
 
