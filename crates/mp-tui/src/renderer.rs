@@ -6,7 +6,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, StatefulWidget, Widget},
+    widgets::StatefulWidget,
 };
 use regex::Regex;
 
@@ -340,15 +340,8 @@ impl StatefulWidget for &MarkdownWidget {
     type State = MarkdownWidgetState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title("Preview")
-            .border_style(state.border_style);
-
-        let inner_area = block.inner(area);
-        block.render(area, buf);
-
-        let visible_lines = inner_area.height as usize;
+        // Don't render borders here - let PreviewWidget handle the borders
+        let visible_lines = area.height as usize;
         let skip_lines = state.scroll_offset as usize;
 
         for (i, line) in self
@@ -358,13 +351,12 @@ impl StatefulWidget for &MarkdownWidget {
             .take(visible_lines)
             .enumerate()
         {
-            let y = inner_area.y + i as u16;
-            let mut x = inner_area.x;
+            let y = area.y + i as u16;
+            let mut x = area.x;
 
             for span in &line.spans {
                 let content = span.content.as_ref();
-                let max_width =
-                    (inner_area.width as usize).saturating_sub((x - inner_area.x) as usize);
+                let max_width = (area.width as usize).saturating_sub((x - area.x) as usize);
                 let display_len = content.chars().take(max_width).count();
 
                 if display_len > 0 {
@@ -372,7 +364,7 @@ impl StatefulWidget for &MarkdownWidget {
                     x += display_len as u16;
                 }
 
-                if x >= inner_area.x + inner_area.width {
+                if x >= area.x + area.width {
                     break;
                 }
             }
