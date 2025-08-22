@@ -3,8 +3,9 @@ use std::time::Duration;
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
-use mp_core::FinderConfig;
 use ratatui::DefaultTerminal;
+
+use mp_core::FinderConfig;
 
 use crate::widgets::{FileTreeWidget, PreviewWidget, StatusBar, StatusMode};
 
