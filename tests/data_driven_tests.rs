@@ -111,11 +111,13 @@ fn test_performance_with_large_content() {
 
     for size in sizes {
         let content = generate_large_markdown_content(size);
-        let duration =
-            measure_render_performance(&format!("large_content_{}_lines", size), &content, |c| {
-                let mut renderer = create_test_renderer();
-                renderer.render_content(c)
-            });
+        let test_case = TestCase::new(
+            format!("large_content_{}_lines", size),
+            content,
+        )
+        .with_description(format!("Performance test with {} lines", size));
+        
+        let duration = measure_render_performance(&test_case);
 
         // Performance target: 100 lines should complete within 1 second
         if size == 100 {

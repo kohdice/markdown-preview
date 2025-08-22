@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
@@ -45,7 +43,6 @@ pub fn create_test_renderer() -> MarkdownRenderer {
     MarkdownRenderer::new()
 }
 
-/// Create a test renderer that outputs to a buffer instead of stdout
 #[cfg(test)]
 pub fn create_test_renderer() -> MarkdownRenderer<MockWriter> {
     // Typical test output is around 1KB
