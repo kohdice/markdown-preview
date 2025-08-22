@@ -38,6 +38,10 @@ impl MarkdownWidget {
         widget
     }
 
+    pub fn line_count(&self) -> usize {
+        self.lines.len()
+    }
+
     pub fn get_lines(&self) -> &Vec<Line<'static>> {
         &self.lines
     }
@@ -164,6 +168,18 @@ impl MarkdownWidget {
                             .fg(color)
                             .add_modifier(Modifier::UNDERLINED);
                     }
+                    Tag::FootnoteDefinition(label) => {
+                        if !current_line.is_empty() {
+                            self.lines
+                                .push(Line::from(std::mem::take(&mut current_line)));
+                        }
+                        let footnote_style = self.theme.emphasis_style();
+                        let color = footnote_style.color.to_ratatui_color();
+                        current_line.push(Span::styled(
+                            format!("[{}]: ", label.as_ref()),
+                            Style::default().fg(color),
+                        ));
+                    }
                     _ => {}
                 },
                 Event::End(tag) => match tag {
@@ -234,6 +250,13 @@ impl MarkdownWidget {
                             self.lines.push(Line::from(""));
                         }
                     }
+                    TagEnd::FootnoteDefinition => {
+                        if !current_line.is_empty() {
+                            self.lines
+                                .push(Line::from(std::mem::take(&mut current_line)));
+                        }
+                        self.lines.push(Line::from(""));
+                    }
                     _ => {}
                 },
                 Event::Text(text) => {
@@ -275,6 +298,14 @@ impl MarkdownWidget {
                         self.lines
                             .push(Line::from(std::mem::take(&mut current_line)));
                     }
+                }
+                Event::FootnoteReference(label) => {
+                    let footnote_style = self.theme.emphasis_style();
+                    let color = footnote_style.color.to_ratatui_color();
+                    current_line.push(Span::styled(
+                        format!("[^{}]", label.as_ref()),
+                        Style::default().fg(color).add_modifier(Modifier::ITALIC),
+                    ));
                 }
                 _ => {}
             }

@@ -57,8 +57,8 @@ impl<W: Write> MarkdownRenderer<W> {
         let mut options = Options::empty();
         options.insert(Options::ENABLE_STRIKETHROUGH);
         options.insert(Options::ENABLE_TABLES);
-        options.insert(Options::ENABLE_FOOTNOTES);
         options.insert(Options::ENABLE_TASKLISTS);
+        options.insert(Options::ENABLE_FOOTNOTES);
 
         Self {
             theme: SolarizedOsaka,
@@ -361,8 +361,8 @@ fn main() {
         let renderer = create_renderer();
         assert!(renderer.options.contains(Options::ENABLE_TABLES));
         assert!(renderer.options.contains(Options::ENABLE_STRIKETHROUGH));
-        assert!(renderer.options.contains(Options::ENABLE_FOOTNOTES));
         assert!(renderer.options.contains(Options::ENABLE_TASKLISTS));
+        assert!(renderer.options.contains(Options::ENABLE_FOOTNOTES));
     }
 
     #[test]

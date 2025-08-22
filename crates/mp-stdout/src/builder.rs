@@ -30,8 +30,8 @@ pub struct RendererBuilder<W: Write = Stdout> {
     buffer_size: Option<usize>,
     enable_strikethrough: bool,
     enable_tables: bool,
-    enable_footnotes: bool,
     enable_tasklists: bool,
+    enable_footnotes: bool,
 }
 
 impl Default for RendererBuilder<Stdout> {
@@ -50,8 +50,8 @@ impl RendererBuilder<Stdout> {
             buffer_size: None,
             enable_strikethrough: true,
             enable_tables: true,
-            enable_footnotes: true,
             enable_tasklists: true,
+            enable_footnotes: true,
         }
     }
 
@@ -65,11 +65,11 @@ impl RendererBuilder<Stdout> {
             if self.enable_tables {
                 opts.insert(Options::ENABLE_TABLES);
             }
-            if self.enable_footnotes {
-                opts.insert(Options::ENABLE_FOOTNOTES);
-            }
             if self.enable_tasklists {
                 opts.insert(Options::ENABLE_TASKLISTS);
+            }
+            if self.enable_footnotes {
+                opts.insert(Options::ENABLE_FOOTNOTES);
             }
             opts
         });
@@ -100,8 +100,8 @@ impl<W: Write> RendererBuilder<W> {
             buffer_size: None,
             enable_strikethrough: true,
             enable_tables: true,
-            enable_footnotes: true,
             enable_tasklists: true,
+            enable_footnotes: true,
         }
     }
 
@@ -130,14 +130,13 @@ impl<W: Write> RendererBuilder<W> {
         self
     }
 
-    /// Enable or disable footnote parsing
-    pub fn enable_footnotes(mut self, enable: bool) -> Self {
-        self.enable_footnotes = enable;
+    pub fn enable_tasklists(mut self, enable: bool) -> Self {
+        self.enable_tasklists = enable;
         self
     }
 
-    pub fn enable_tasklists(mut self, enable: bool) -> Self {
-        self.enable_tasklists = enable;
+    pub fn enable_footnotes(mut self, enable: bool) -> Self {
+        self.enable_footnotes = enable;
         self
     }
 
@@ -156,11 +155,11 @@ impl<W: Write> RendererBuilder<W> {
             if self.enable_tables {
                 opts.insert(Options::ENABLE_TABLES);
             }
-            if self.enable_footnotes {
-                opts.insert(Options::ENABLE_FOOTNOTES);
-            }
             if self.enable_tasklists {
                 opts.insert(Options::ENABLE_TASKLISTS);
+            }
+            if self.enable_footnotes {
+                opts.insert(Options::ENABLE_FOOTNOTES);
             }
             opts
         });
@@ -193,8 +192,8 @@ mod tests {
         let renderer = RendererBuilder::new().build();
         assert!(renderer.options.contains(Options::ENABLE_STRIKETHROUGH));
         assert!(renderer.options.contains(Options::ENABLE_TABLES));
-        assert!(renderer.options.contains(Options::ENABLE_FOOTNOTES));
         assert!(renderer.options.contains(Options::ENABLE_TASKLISTS));
+        assert!(renderer.options.contains(Options::ENABLE_FOOTNOTES));
     }
 
     #[test]
@@ -202,14 +201,14 @@ mod tests {
         let renderer = RendererBuilder::new()
             .enable_strikethrough(false)
             .enable_tables(true)
-            .enable_footnotes(false)
             .enable_tasklists(true)
+            .enable_footnotes(false)
             .build();
 
         assert!(!renderer.options.contains(Options::ENABLE_STRIKETHROUGH));
         assert!(renderer.options.contains(Options::ENABLE_TABLES));
-        assert!(!renderer.options.contains(Options::ENABLE_FOOTNOTES));
         assert!(renderer.options.contains(Options::ENABLE_TASKLISTS));
+        assert!(!renderer.options.contains(Options::ENABLE_FOOTNOTES));
     }
 
     #[test]

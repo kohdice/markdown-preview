@@ -39,6 +39,7 @@ impl<W: Write> MarkdownRenderer<W> {
                 title: "".into(),
                 id: "".into(),
             }),
+            TagEnd::FootnoteDefinition => Some(Tag::FootnoteDefinition("".into())),
             _ => None,
         }
     }
@@ -60,6 +61,10 @@ impl<W: Write> MarkdownRenderer<W> {
             Event::HardBreak => self.handle_content(ContentType::HardBreak),
             Event::Rule => self.handle_content(ContentType::Rule),
             Event::TaskListMarker(checked) => self.handle_content(ContentType::TaskMarker(checked)),
+            Event::FootnoteReference(label) => {
+                let footnote_text = format!("[^{}]", label.as_ref());
+                self.handle_content(ContentType::Text(&footnote_text))
+            }
             _ => Ok(()),
         }
     }
@@ -93,6 +98,10 @@ impl<W: Write> MarkdownRenderer<W> {
                 self.handle_element(ElementKind::BlockQuote, ElementPhase::Start)?
             }
             Tag::Image { dest_url, .. } => self.set_image(dest_url.as_ref().to_owned()),
+            Tag::FootnoteDefinition(label) => {
+                self.output.newline().ok();
+                self.output.write(&format!("[{}]: ", label.as_ref())).ok();
+            }
             _ => {}
         }
         Ok(())
@@ -125,6 +134,9 @@ impl<W: Write> MarkdownRenderer<W> {
                 self.handle_element(ElementKind::BlockQuote, ElementPhase::End)?
             }
             Tag::Image { .. } => self.print_output(OutputType::Image)?,
+            Tag::FootnoteDefinition(_) => {
+                self.output.newline().ok();
+            }
             _ => {}
         }
         Ok(())
