@@ -4,46 +4,37 @@ use anyhow::Result;
 
 const DEFAULT_BUFFER_SIZE: usize = 8192;
 
-/// Buffered output writer for efficient terminal output
-///
-/// This struct wraps any writer (typically stdout) with a BufWriter
-/// to improve performance by reducing the number of system calls.
+/// Buffered output wrapper using BufWriter for efficient I/O
 pub struct BufferedOutput<W: Write> {
     writer: BufWriter<W>,
 }
 
 impl<W: Write> BufferedOutput<W> {
-    /// Creates a new BufferedOutput with default buffer size (8KB)
     pub fn new(writer: W) -> Self {
         Self::with_capacity(DEFAULT_BUFFER_SIZE, writer)
     }
 
-    /// Creates a new BufferedOutput with specified buffer capacity
     pub fn with_capacity(capacity: usize, writer: W) -> Self {
         Self {
             writer: BufWriter::with_capacity(capacity, writer),
         }
     }
 
-    /// Writes a line to the buffered output
     pub fn writeln(&mut self, content: &str) -> Result<()> {
         writeln!(self.writer, "{}", content)?;
         Ok(())
     }
 
-    /// Writes content without a newline
     pub fn write(&mut self, content: &str) -> Result<()> {
         write!(self.writer, "{}", content)?;
         Ok(())
     }
 
-    /// Writes a newline only
     pub fn newline(&mut self) -> Result<()> {
         writeln!(self.writer)?;
         Ok(())
     }
 
-    /// Flushes the buffer to ensure all content is written
     pub fn flush(&mut self) -> Result<()> {
         self.writer.flush()?;
         Ok(())
@@ -62,9 +53,7 @@ impl<W: Write> BufferedOutput<W> {
     }
 }
 
-/// Default implementation for stdout
 impl BufferedOutput<io::Stdout> {
-    /// Creates a BufferedOutput for stdout
     pub fn stdout() -> Self {
         Self::new(io::stdout())
     }
