@@ -12,6 +12,14 @@ pub trait MarkdownTheme {
     fn delimiter_style(&self) -> ThemeStyle;
     fn text_style(&self) -> ThemeStyle;
     fn focus_border_style(&self) -> ThemeStyle;
+
+    // Status bar specific colors
+    fn status_normal_color(&self) -> ThemeColor;
+    fn status_search_color(&self) -> ThemeColor;
+    fn status_help_color(&self) -> ThemeColor;
+    fn status_error_color(&self) -> ThemeColor;
+    fn status_message_color(&self) -> ThemeColor;
+    fn status_background_color(&self) -> ThemeColor;
 }
 
 /// Solarized Osaka theme implementation
@@ -19,46 +27,51 @@ pub trait MarkdownTheme {
 pub struct SolarizedOsaka;
 
 impl SolarizedOsaka {
-    const BASE02: ThemeColor = ThemeColor { r: 7, g: 54, b: 66 };
-    const BASE01: ThemeColor = ThemeColor {
+    pub const BASE02: ThemeColor = ThemeColor { r: 7, g: 54, b: 66 };
+    pub const BASE01: ThemeColor = ThemeColor {
         r: 88,
         g: 110,
         b: 117,
     };
-    const BASE0: ThemeColor = ThemeColor {
+    pub const BASE0: ThemeColor = ThemeColor {
         r: 131,
         g: 148,
         b: 150,
     };
-    const YELLOW: ThemeColor = ThemeColor {
+    pub const YELLOW: ThemeColor = ThemeColor {
         r: 181,
         g: 137,
         b: 0,
     };
-    const ORANGE: ThemeColor = ThemeColor {
+    pub const ORANGE: ThemeColor = ThemeColor {
         r: 203,
         g: 75,
         b: 22,
     };
-    const MAGENTA: ThemeColor = ThemeColor {
+    pub const MAGENTA: ThemeColor = ThemeColor {
         r: 211,
         g: 54,
         b: 130,
     };
-    const BLUE: ThemeColor = ThemeColor {
+    pub const BLUE: ThemeColor = ThemeColor {
         r: 38,
         g: 139,
         b: 210,
     };
-    const CYAN: ThemeColor = ThemeColor {
+    pub const CYAN: ThemeColor = ThemeColor {
         r: 42,
         g: 161,
         b: 152,
     };
-    const GREEN: ThemeColor = ThemeColor {
+    pub const GREEN: ThemeColor = ThemeColor {
         r: 133,
         g: 153,
         b: 0,
+    };
+    pub const RED: ThemeColor = ThemeColor {
+        r: 220,
+        g: 50,
+        b: 47,
     };
 
     const STRONG: ThemeStyle = ThemeStyle {
@@ -170,6 +183,30 @@ impl MarkdownTheme for SolarizedOsaka {
 
     fn focus_border_style(&self) -> ThemeStyle {
         Self::FOCUS_BORDER
+    }
+
+    fn status_normal_color(&self) -> ThemeColor {
+        Self::GREEN
+    }
+
+    fn status_search_color(&self) -> ThemeColor {
+        Self::YELLOW
+    }
+
+    fn status_help_color(&self) -> ThemeColor {
+        Self::BLUE
+    }
+
+    fn status_error_color(&self) -> ThemeColor {
+        Self::RED
+    }
+
+    fn status_message_color(&self) -> ThemeColor {
+        Self::YELLOW
+    }
+
+    fn status_background_color(&self) -> ThemeColor {
+        Self::BASE02
     }
 }
 
