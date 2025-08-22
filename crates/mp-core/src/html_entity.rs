@@ -6,13 +6,11 @@ use std::sync::LazyLock;
 use aho_corasick::AhoCorasick;
 use anyhow::{Context, Result};
 
-/// Efficient HTML entity decoder
 pub struct EntityDecoder {
     matcher: AhoCorasick,
     replacements: Vec<&'static str>,
 }
 
-/// Initialize entity decoder
 fn init_entity_decoder() -> Result<EntityDecoder> {
     let patterns = vec![
         "&lt;", "&gt;", "&amp;", "&quot;", "&apos;", "&#39;", "&nbsp;", "&copy;", "&reg;",
