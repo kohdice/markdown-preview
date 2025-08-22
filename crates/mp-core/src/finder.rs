@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use ignore::WalkBuilder;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct FinderConfig {
     pub hidden: bool,
     pub no_ignore: bool,
@@ -11,17 +11,98 @@ pub struct FinderConfig {
     pub no_global_ignore_file: bool,
 }
 
-/// Search for markdown files
+#[derive(Debug, Clone)]
+pub struct FileTreeNode {
+    pub path: PathBuf,
+    pub name: String,
+    pub is_dir: bool,
+    pub children: Vec<FileTreeNode>,
+}
+
 pub fn find_markdown_files(config: FinderConfig) -> Result<Vec<PathBuf>> {
     find_markdown_files_in_dir(".", config)
 }
 
-/// Search for markdown files in the specified directory (also used for testing)
 pub fn find_markdown_files_in_dir(dir: &str, config: FinderConfig) -> Result<Vec<PathBuf>> {
     let base_path = Path::new(dir);
 
     let mut builder = WalkBuilder::new(dir);
+    configure_walker(&mut builder, &config);
+    let walker = builder.build();
 
+    let mut files: Vec<PathBuf> = walker
+        .filter_map(|result| result.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.is_file() && path.extension().is_some_and(|ext| ext == "md") {
+                Some(make_relative_path(path, base_path))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    files.sort();
+    Ok(files)
+}
+
+pub fn build_markdown_tree(config: FinderConfig) -> Result<FileTreeNode> {
+    build_markdown_tree_in_dir(".", config)
+}
+
+pub fn build_markdown_tree_in_dir(dir: &str, config: FinderConfig) -> Result<FileTreeNode> {
+    let base_path = Path::new(dir);
+    let root_name = base_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(".")
+        .to_string();
+
+    let mut root = FileTreeNode {
+        path: base_path.to_path_buf(),
+        name: root_name,
+        is_dir: true,
+        children: Vec::new(),
+    };
+
+    // Create the walker with the same configuration as find_markdown_files
+    let mut builder = WalkBuilder::new(dir);
+    configure_walker(&mut builder, &config);
+    let walker = builder.build();
+
+    // Collect all paths first
+    let mut all_entries = Vec::new();
+    for entry in walker.flatten() {
+        let path = entry.path();
+        // Skip the root directory itself
+        if path == base_path {
+            continue;
+        }
+
+        // Check if it's a markdown file or a directory that might contain markdown files
+        if path.is_file() {
+            if path
+                .extension()
+                .is_some_and(|ext| ext == "md" || ext == "markdown")
+            {
+                all_entries.push(path.to_path_buf());
+            }
+        } else if path.is_dir() {
+            // Add directories that might contain markdown files
+            all_entries.push(path.to_path_buf());
+        }
+    }
+
+    // Build the tree structure from the collected paths
+    build_tree_from_paths(&mut root, &all_entries, base_path)?;
+
+    // Remove empty directories from the tree
+    remove_empty_directories(&mut root);
+
+    Ok(root)
+}
+
+fn configure_walker(builder: &mut WalkBuilder, config: &FinderConfig) {
     builder
         .hidden(!config.hidden)
         .parents(!config.no_ignore_parent)
@@ -40,23 +121,111 @@ pub fn find_markdown_files_in_dir(dir: &str, config: FinderConfig) -> Result<Vec
             .git_global(!config.no_global_ignore_file)
             .git_exclude(true);
     }
+}
 
-    let walker = builder.build();
+fn build_tree_from_paths(root: &mut FileTreeNode, paths: &[PathBuf], base: &Path) -> Result<()> {
+    for path in paths {
+        if let Ok(relative) = path.strip_prefix(base) {
+            insert_path_into_tree(root, relative, path)?;
+        }
+    }
 
-    let mut files: Vec<PathBuf> = walker
-        .filter_map(|result| result.ok())
-        .filter_map(|entry| {
-            let path = entry.path();
-            if path.is_file() && path.extension().is_some_and(|ext| ext == "md") {
-                Some(make_relative_path(path, base_path))
-            } else {
-                None
-            }
-        })
-        .collect();
+    // Sort children at each level
+    sort_tree_children(root);
 
-    files.sort();
-    Ok(files)
+    Ok(())
+}
+
+fn insert_path_into_tree(node: &mut FileTreeNode, relative: &Path, full_path: &Path) -> Result<()> {
+    let components: Vec<_> = relative.components().collect();
+
+    if components.is_empty() {
+        return Ok(());
+    }
+
+    let first = &components[0];
+    let first_str = first.as_os_str().to_string_lossy().to_string();
+
+    if components.len() == 1 {
+        // This is a direct child
+        let child = FileTreeNode {
+            path: full_path.to_path_buf(),
+            name: first_str,
+            is_dir: full_path.is_dir(),
+            children: Vec::new(),
+        };
+
+        // Check if this child already exists (in case of directories)
+        if !node.children.iter().any(|c| c.name == child.name) {
+            node.children.push(child);
+        }
+    } else {
+        // Need to recurse into subdirectory
+        let dir_name = first_str.clone();
+
+        // Find or create the directory node
+        let dir_node = if let Some(existing) = node
+            .children
+            .iter_mut()
+            .find(|c| c.name == dir_name && c.is_dir)
+        {
+            existing
+        } else {
+            // Create the directory node
+            let dir_path = node.path.join(&dir_name);
+            let new_dir = FileTreeNode {
+                path: dir_path,
+                name: dir_name,
+                is_dir: true,
+                children: Vec::new(),
+            };
+            node.children.push(new_dir);
+            node.children.last_mut().unwrap()
+        };
+
+        // Recurse with the remaining path
+        let remaining: PathBuf = components[1..].iter().collect();
+        insert_path_into_tree(dir_node, &remaining, full_path)?;
+    }
+
+    Ok(())
+}
+
+fn sort_tree_children(node: &mut FileTreeNode) {
+    node.children.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+    });
+
+    // Recursively sort children
+    for child in &mut node.children {
+        if child.is_dir {
+            sort_tree_children(child);
+        }
+    }
+}
+
+fn remove_empty_directories(node: &mut FileTreeNode) {
+    if !node.is_dir {
+        return;
+    }
+
+    // Recursively process children first
+    for child in &mut node.children {
+        remove_empty_directories(child);
+    }
+
+    // Remove empty directories from children
+    node.children.retain(|child| {
+        if child.is_dir {
+            // Keep directory only if it has children (after recursive processing)
+            !child.children.is_empty()
+        } else {
+            // Always keep files
+            true
+        }
+    });
 }
 
 /// Create a relative path with robust cross-platform support
@@ -228,5 +397,86 @@ mod tests {
         assert_eq!(file_names[0], "apple.md");
         assert_eq!(file_names[1], "banana.md");
         assert_eq!(file_names[2], "zebra.md");
+    }
+
+    #[test]
+    fn test_build_markdown_tree() {
+        let temp_dir = create_test_dir();
+
+        let config = FinderConfig::default();
+        let tree = build_markdown_tree_in_dir(temp_dir.path().to_str().unwrap(), config).unwrap();
+
+        // Check root
+        assert!(tree.is_dir);
+
+        // Should have at least 2 direct children (files) and 1 directory
+        let file_count = tree.children.iter().filter(|c| !c.is_dir).count();
+        let dir_count = tree.children.iter().filter(|c| c.is_dir).count();
+
+        assert_eq!(file_count, 2); // README.md and test.md
+        assert_eq!(dir_count, 1); // subdir
+
+        // Check that the subdir has the markdown file
+        let subdir = tree.children.iter().find(|c| c.name == "subdir").unwrap();
+        assert!(subdir.is_dir);
+        assert_eq!(subdir.children.len(), 1);
+        assert_eq!(subdir.children[0].name, "sub.md");
+    }
+
+    #[test]
+    fn test_tree_removes_empty_directories() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create a structure with some empty directories
+        fs::write(temp_dir.path().join("README.md"), "# Test").unwrap();
+
+        let empty_dir = temp_dir.path().join("empty");
+        fs::create_dir(&empty_dir).unwrap();
+
+        let dir_with_md = temp_dir.path().join("with_md");
+        fs::create_dir(&dir_with_md).unwrap();
+        fs::write(dir_with_md.join("test.md"), "Test").unwrap();
+
+        let config = FinderConfig::default();
+        let tree = build_markdown_tree_in_dir(temp_dir.path().to_str().unwrap(), config).unwrap();
+
+        // Should not include the empty directory
+        assert!(!tree.children.iter().any(|c| c.name == "empty"));
+
+        // Should include the directory with markdown
+        assert!(tree.children.iter().any(|c| c.name == "with_md"));
+    }
+
+    #[test]
+    fn test_tree_sorting() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create files and directories
+        fs::write(temp_dir.path().join("zebra.md"), "").unwrap();
+        fs::write(temp_dir.path().join("apple.md"), "").unwrap();
+
+        let dir_b = temp_dir.path().join("b_dir");
+        fs::create_dir(&dir_b).unwrap();
+        fs::write(dir_b.join("file.md"), "").unwrap();
+
+        let dir_a = temp_dir.path().join("a_dir");
+        fs::create_dir(&dir_a).unwrap();
+        fs::write(dir_a.join("file.md"), "").unwrap();
+
+        let config = FinderConfig::default();
+        let tree = build_markdown_tree_in_dir(temp_dir.path().to_str().unwrap(), config).unwrap();
+
+        // Directories should come first, then files, all sorted alphabetically
+        assert_eq!(tree.children[0].name, "a_dir");
+        assert!(tree.children[0].is_dir);
+
+        assert_eq!(tree.children[1].name, "b_dir");
+        assert!(tree.children[1].is_dir);
+
+        assert_eq!(tree.children[2].name, "apple.md");
+        assert!(!tree.children[2].is_dir);
+
+        assert_eq!(tree.children[3].name, "zebra.md");
+        assert!(!tree.children[3].is_dir);
     }
 }
