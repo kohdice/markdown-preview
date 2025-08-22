@@ -10,6 +10,7 @@ pub mod renderer;
 mod status_bar;
 mod theme_adapter;
 mod tree_builder;
+pub mod utils;
 pub mod widgets;
 
 pub use app::{App, AppFocus};
