@@ -1,5 +1,8 @@
-use std::path::{Path, PathBuf};
+use std::collections::HashSet;
+use std::path::PathBuf;
 
+use crate::tree_builder::{DefaultTreeBuilder, TreeBuilder};
+use mp_core::{FileTreeNode, FinderConfig};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -8,130 +11,124 @@ use ratatui::{
 };
 
 #[derive(Clone, Debug)]
-pub struct FileNode {
+pub struct DisplayNode {
     pub path: PathBuf,
     pub name: String,
     pub is_dir: bool,
     pub is_expanded: bool,
-    pub children: Vec<FileNode>,
     pub depth: usize,
-}
-
-impl FileNode {
-    fn contains_markdown(dir: &Path) -> bool {
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if (path.is_file()
-                    && path
-                        .extension()
-                        .map(|ext| ext == "md" || ext == "markdown")
-                        .unwrap_or(false))
-                    || (path.is_dir() && Self::contains_markdown(&path))
-                {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
-    pub fn new(path: PathBuf, depth: usize) -> Self {
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown")
-            .to_string();
-
-        let is_dir = path.is_dir();
-        let mut children = Vec::new();
-
-        if is_dir {
-            if let Ok(entries) = std::fs::read_dir(&path) {
-                for entry in entries.flatten() {
-                    let child_path = entry.path();
-                    if child_path.is_dir() {
-                        if Self::contains_markdown(&child_path) {
-                            children.push(FileNode::new(child_path, depth + 1));
-                        }
-                    } else if child_path
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .map(|ext| ext == "md" || ext == "markdown")
-                        .unwrap_or(false)
-                    {
-                        children.push(FileNode::new(child_path, depth + 1));
-                    }
-                }
-            }
-            children.sort_by(|a, b| match (a.is_dir, b.is_dir) {
-                (true, false) => std::cmp::Ordering::Less,
-                (false, true) => std::cmp::Ordering::Greater,
-                _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-            });
-        }
-
-        Self {
-            path,
-            name,
-            is_dir,
-            is_expanded: false,
-            children,
-            depth,
-        }
-    }
-
-    pub fn flatten(&self) -> Vec<FileNode> {
-        let mut result = vec![self.clone()];
-        if self.is_expanded {
-            for child in &self.children {
-                result.extend(child.flatten());
-            }
-        }
-        result
-    }
-
-    pub fn toggle_expanded(&mut self) {
-        if self.is_dir {
-            self.is_expanded = !self.is_expanded;
-        }
-    }
+    pub has_children: bool,
 }
 
 pub struct FileTreeWidget {
-    pub root: FileNode,
+    tree_data: FileTreeNode,
+    display_nodes: Vec<DisplayNode>,
     pub selected_index: usize,
     pub search_query: String,
     pub search_mode: bool,
-    pub filtered_indices: Vec<usize>,
     pub scroll_offset: usize,
+    finder_config: FinderConfig,
+    tree_builder: Box<dyn TreeBuilder>,
 }
 
 impl FileTreeWidget {
-    pub fn new(root_path: PathBuf) -> Self {
-        Self {
-            root: FileNode::new(root_path, 0),
+    pub fn new(_root_path: PathBuf) -> Self {
+        Self::with_builder(Box::new(DefaultTreeBuilder), FinderConfig::default())
+    }
+
+    pub fn with_builder(tree_builder: Box<dyn TreeBuilder>, finder_config: FinderConfig) -> Self {
+        // Build the tree using the provided builder
+        let tree_data = tree_builder.build_tree(finder_config).unwrap_or_else(|_| {
+            // Fallback to empty tree on error
+            FileTreeNode {
+                path: PathBuf::from("."),
+                name: "Current Directory".to_string(),
+                is_dir: true,
+                children: Vec::new(),
+            }
+        });
+
+        let mut widget = Self {
+            display_nodes: Vec::new(),
+            tree_data,
             selected_index: 0,
             search_query: String::new(),
             search_mode: false,
-            filtered_indices: Vec::new(),
             scroll_offset: 0,
+            finder_config,
+            tree_builder,
+        };
+
+        // Initialize display nodes with root expanded
+        let mut initial_expanded = HashSet::new();
+        initial_expanded.insert(widget.tree_data.path.clone());
+        widget.display_nodes.clear();
+        widget.add_node_to_display(&widget.tree_data.clone(), 0, true, &initial_expanded);
+
+        widget
+    }
+
+    fn rebuild_display_nodes(&mut self) {
+        // Save the expanded state before clearing
+        let expanded_paths: std::collections::HashSet<_> = self
+            .display_nodes
+            .iter()
+            .filter(|n| n.is_expanded)
+            .map(|n| n.path.clone())
+            .collect();
+
+        self.display_nodes.clear();
+        self.add_node_to_display(&self.tree_data.clone(), 0, true, &expanded_paths);
+    }
+
+    /// Recursively add nodes to the display list
+    fn add_node_to_display(
+        &mut self,
+        node: &FileTreeNode,
+        depth: usize,
+        is_root: bool,
+        expanded_paths: &std::collections::HashSet<PathBuf>,
+    ) {
+        // Check if this node was previously expanded
+        let was_expanded = if is_root && depth == 0 {
+            // Root is initially expanded
+            true
+        } else {
+            expanded_paths.contains(&node.path)
+        };
+
+        let display_node = DisplayNode {
+            path: node.path.clone(),
+            name: if is_root && node.name == "." {
+                "Current Directory".to_string()
+            } else {
+                node.name.clone()
+            },
+            is_dir: node.is_dir,
+            is_expanded: was_expanded,
+            depth,
+            has_children: !node.children.is_empty(),
+        };
+
+        let is_expanded = display_node.is_expanded;
+        self.display_nodes.push(display_node);
+
+        // Add children if expanded
+        if is_expanded {
+            for child in &node.children {
+                self.add_node_to_display(child, depth + 1, false, expanded_paths);
+            }
         }
     }
 
-    pub fn get_flat_list(&self) -> Vec<FileNode> {
-        self.root.flatten()
-    }
-
-    pub fn get_filtered_list(&self) -> Vec<(usize, FileNode)> {
-        let flat_list = self.get_flat_list();
-
+    /// Get the filtered list of display nodes based on search query
+    pub fn get_filtered_list(&self) -> Vec<(usize, &DisplayNode)> {
         if self.search_query.is_empty() {
-            flat_list.into_iter().enumerate().collect()
+            self.display_nodes.iter().enumerate().collect()
         } else {
             let query = self.search_query.to_lowercase();
-            flat_list
-                .into_iter()
+            self.display_nodes
+                .iter()
                 .enumerate()
                 .filter(|(_, node)| {
                     node.name.to_lowercase().contains(&query)
@@ -142,34 +139,35 @@ impl FileTreeWidget {
     }
 
     pub fn toggle_selected(&mut self) {
-        let flat_list = &mut self.get_flat_list();
-        if let Some(mut selected) = flat_list.get(self.selected_index).cloned() {
-            selected.toggle_expanded();
-            self.update_node(&selected);
-        }
-    }
+        let filtered = self.get_filtered_list();
+        if let Some((original_idx, node)) = filtered.get(self.selected_index) {
+            let original_idx = *original_idx;
+            let is_dir = node.is_dir;
+            let has_children = node.has_children;
 
-    fn update_node(&mut self, updated: &FileNode) {
-        Self::update_node_recursive(&mut self.root, updated);
-    }
+            if is_dir && has_children {
+                // Toggle the expansion state in our display nodes
+                if let Some(display_node) = self.display_nodes.get_mut(original_idx) {
+                    display_node.is_expanded = !display_node.is_expanded;
+                }
+                // Rebuild the display list
+                self.rebuild_display_nodes();
 
-    fn update_node_recursive(node: &mut FileNode, updated: &FileNode) -> bool {
-        if node.path == updated.path {
-            node.is_expanded = updated.is_expanded;
-            return true;
-        }
-
-        for child in &mut node.children {
-            if Self::update_node_recursive(child, updated) {
-                return true;
+                // Adjust selected index if needed
+                self.adjust_selection_after_toggle();
             }
         }
-        false
+    }
+
+    fn adjust_selection_after_toggle(&mut self) {
+        let filtered = self.get_filtered_list();
+        if self.selected_index >= filtered.len() && !filtered.is_empty() {
+            self.selected_index = filtered.len() - 1;
+        }
     }
 
     pub fn move_selection_up(&mut self) {
-        let filtered = self.get_filtered_list();
-        if !filtered.is_empty() && self.selected_index > 0 {
+        if self.selected_index > 0 {
             self.selected_index -= 1;
             self.adjust_scroll_for_selection();
         }
@@ -183,12 +181,16 @@ impl FileTreeWidget {
         }
     }
 
+    /// Get the currently selected file path (if it's a file)
     pub fn get_selected_file(&self) -> Option<PathBuf> {
-        let flat_list = self.get_flat_list();
-        flat_list
-            .get(self.selected_index)
-            .filter(|node| !node.is_dir)
-            .map(|node| node.path.clone())
+        let filtered = self.get_filtered_list();
+        filtered.get(self.selected_index).and_then(|(_, node)| {
+            if !node.is_dir {
+                Some(node.path.clone())
+            } else {
+                None
+            }
+        })
     }
 
     pub fn start_search(&mut self) {
@@ -199,7 +201,6 @@ impl FileTreeWidget {
     pub fn cancel_search(&mut self) {
         self.search_mode = false;
         self.search_query.clear();
-        self.filtered_indices.clear();
     }
 
     pub fn add_search_char(&mut self, c: char) {
@@ -212,33 +213,59 @@ impl FileTreeWidget {
         self.update_filter();
     }
 
+    /// Update the filter and adjust selection
     fn update_filter(&mut self) {
         let filtered = self.get_filtered_list();
-        self.filtered_indices = filtered.iter().map(|(i, _)| *i).collect();
 
-        if !self.filtered_indices.is_empty()
-            && !self.filtered_indices.contains(&self.selected_index)
-        {
-            self.selected_index = self.filtered_indices[0];
+        // If current selection is not in filtered list, select first item
+        if !filtered.is_empty() {
+            let current_path = self.display_nodes.get(self.selected_index).map(|n| &n.path);
+            let still_visible = filtered.iter().any(|(_, n)| Some(&n.path) == current_path);
+
+            if !still_visible {
+                self.selected_index = 0;
+            } else {
+                // Adjust index to filtered position
+                if let Some(pos) = filtered
+                    .iter()
+                    .position(|(_, n)| Some(&n.path) == current_path)
+                {
+                    self.selected_index = pos;
+                }
+            }
         }
     }
 
-    fn adjust_scroll_for_selection(&mut self) {}
+    /// Adjust scroll offset for current selection
+    fn adjust_scroll_for_selection(&mut self) {
+        // This can be implemented based on the visible area height
+        // For now, we'll leave it empty as the actual implementation
+        // would need to know the render area height
+    }
 
+    /// Render the file tree widget
     pub fn render(&self, frame: &mut Frame, area: Rect, is_focused: bool) {
         let filtered = self.get_filtered_list();
 
         let items: Vec<ListItem> = filtered
             .iter()
-            .map(|(idx, node)| {
+            .map(|(_, node)| {
                 let indent = "  ".repeat(node.depth);
                 let icon = if node.is_dir {
-                    if node.is_expanded { "▼ " } else { "▶ " }
+                    if node.has_children {
+                        if node.is_expanded { "▼ " } else { "▶ " }
+                    } else {
+                        "○ "
+                    }
                 } else {
-                    "⏺ "
+                    "• "
                 };
 
-                let style = if *idx == self.selected_index {
+                let style = if filtered
+                    .get(self.selected_index)
+                    .map(|(_, n)| n.path == node.path)
+                    .unwrap_or(false)
+                {
                     Style::default()
                         .fg(Color::Black)
                         .bg(Color::Rgb(38, 139, 210))
@@ -282,62 +309,80 @@ impl FileTreeWidget {
 
         frame.render_widget(list, area);
     }
+
+    /// Reload the file tree (useful for refreshing after file system changes)
+    pub fn reload(&mut self) {
+        if let Ok(new_tree) = self.tree_builder.build_tree(self.finder_config) {
+            self.tree_data = new_tree;
+            self.rebuild_display_nodes();
+        }
+    }
+
+    /// Update finder configuration
+    pub fn set_finder_config(&mut self, config: FinderConfig) {
+        self.finder_config = config;
+        self.reload();
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Result;
+    use mp_core::build_markdown_tree_in_dir;
     use std::fs;
     use tempfile::TempDir;
 
-    #[test]
-    fn test_file_node_creation() {
-        let temp_dir = TempDir::new().unwrap();
-        let path = temp_dir.path().to_path_buf();
+    /// Mock tree builder for testing
+    struct MockTreeBuilder {
+        tree_data: FileTreeNode,
+    }
 
-        let node = FileNode::new(path.clone(), 0);
-        assert_eq!(node.depth, 0);
-        assert!(node.is_dir);
-        assert!(!node.is_expanded);
-        assert!(node.children.is_empty());
+    impl MockTreeBuilder {
+        fn new(tree_data: FileTreeNode) -> Self {
+            Self { tree_data }
+        }
+
+        fn from_directory(path: &str, config: FinderConfig) -> Result<Self> {
+            let tree_data = build_markdown_tree_in_dir(path, config)?;
+            Ok(Self::new(tree_data))
+        }
+    }
+
+    impl TreeBuilder for MockTreeBuilder {
+        fn build_tree(&self, _config: FinderConfig) -> Result<FileTreeNode> {
+            Ok(self.tree_data.clone())
+        }
     }
 
     #[test]
-    fn test_file_tree_navigation() {
+    fn test_file_tree_widget_creation() {
         let temp_dir = TempDir::new().unwrap();
-        let root_path = temp_dir.path().to_path_buf();
+        let path = temp_dir.path().to_path_buf();
 
-        fs::write(root_path.join("test1.md"), "content").unwrap();
-        fs::write(root_path.join("test2.md"), "content").unwrap();
+        // Create some test files
+        fs::write(path.join("test.md"), "content").unwrap();
 
-        let mut widget = FileTreeWidget::new(root_path.clone());
-        widget.root.is_expanded = true;
+        let widget = FileTreeWidget::new(path.clone());
 
-        widget.root = FileNode::new(root_path, 0);
-        widget.root.is_expanded = true;
-
-        let flat_list = widget.get_flat_list();
-        assert!(flat_list.len() >= 3);
-
+        // Widget should be created with display nodes
+        assert!(!widget.display_nodes.is_empty());
         assert_eq!(widget.selected_index, 0);
-        widget.move_selection_down();
-        assert_eq!(widget.selected_index, 1);
-        widget.move_selection_up();
-        assert_eq!(widget.selected_index, 0);
+        assert!(!widget.search_mode);
     }
 
     #[test]
     fn test_search_functionality() {
         let temp_dir = TempDir::new().unwrap();
-        let root_path = temp_dir.path().to_path_buf();
+        let path = temp_dir.path().to_path_buf();
 
-        fs::write(root_path.join("hello.md"), "content").unwrap();
-        fs::write(root_path.join("world.md"), "content").unwrap();
-        fs::write(root_path.join("test.md"), "content").unwrap();
+        fs::write(path.join("hello.md"), "content").unwrap();
+        fs::write(path.join("world.md"), "content").unwrap();
 
-        let mut widget = FileTreeWidget::new(root_path.clone());
-        widget.root = FileNode::new(root_path, 0);
-        widget.root.is_expanded = true;
+        // Build tree directly for the temp directory
+        let config = FinderConfig::default();
+        let mock_builder = MockTreeBuilder::from_directory(path.to_str().unwrap(), config).unwrap();
+        let mut widget = FileTreeWidget::with_builder(Box::new(mock_builder), config);
 
         widget.start_search();
         assert!(widget.search_mode);
@@ -347,10 +392,116 @@ mod tests {
         assert_eq!(widget.search_query, "he");
 
         let filtered = widget.get_filtered_list();
-        assert!(filtered.iter().any(|(_, node)| node.name.contains("hello")));
+        // Check if any node contains "hello" in its name
+        let has_hello = filtered
+            .iter()
+            .any(|(_, node)| node.name.to_lowercase().contains("hello"));
+        assert!(
+            has_hello,
+            "Should find 'hello.md' in filtered list (found {} items matching 'he')",
+            filtered.len()
+        );
 
         widget.cancel_search();
         assert!(!widget.search_mode);
         assert!(widget.search_query.is_empty());
+    }
+
+    #[test]
+    fn test_navigation() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().to_path_buf();
+
+        fs::write(path.join("a.md"), "").unwrap();
+        fs::write(path.join("b.md"), "").unwrap();
+
+        // Build tree directly for the temp directory
+        let config = FinderConfig::default();
+        let mock_builder = MockTreeBuilder::from_directory(path.to_str().unwrap(), config).unwrap();
+        let mut widget = FileTreeWidget::with_builder(Box::new(mock_builder), config);
+
+        // The widget should have at least the root and some files
+        // Root is expanded, so we should see: root + 2 files = 3 nodes
+        assert!(
+            widget.display_nodes.len() >= 3,
+            "Should have root and files (got {} nodes)",
+            widget.display_nodes.len()
+        );
+
+        let initial_index = widget.selected_index;
+        assert_eq!(initial_index, 0);
+
+        // Try to move down
+        widget.move_selection_down();
+        assert!(widget.selected_index > initial_index, "Should move down");
+
+        // Move back up
+        widget.move_selection_up();
+        assert_eq!(
+            widget.selected_index, initial_index,
+            "Should move back to initial position"
+        );
+    }
+
+    #[test]
+    fn test_folder_expansion() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().to_path_buf();
+
+        // Create a subdirectory with a markdown file
+        let subdir = path.join("subdir");
+        fs::create_dir(&subdir).unwrap();
+        fs::write(subdir.join("test.md"), "content").unwrap();
+
+        // Build tree directly for the temp directory
+        let config = FinderConfig::default();
+        let mock_builder = MockTreeBuilder::from_directory(path.to_str().unwrap(), config).unwrap();
+        let mut widget = FileTreeWidget::with_builder(Box::new(mock_builder), config);
+
+        // Find the subdirectory in the display nodes
+        let subdir_index = widget
+            .display_nodes
+            .iter()
+            .position(|n| n.name == "subdir" && n.is_dir)
+            .expect("Should find subdir");
+
+        // Select the subdirectory
+        widget.selected_index = subdir_index;
+
+        // Initially, the subdirectory should not be expanded (except root)
+        let initial_node_count = widget.display_nodes.len();
+
+        // Toggle to expand the subdirectory
+        widget.toggle_selected();
+
+        // After expanding, we should have more nodes (the subdirectory's children)
+        assert!(
+            widget.display_nodes.len() > initial_node_count,
+            "Should have more nodes after expanding"
+        );
+
+        // Find the subdirectory again (position might have changed)
+        let subdir_index_after = widget
+            .display_nodes
+            .iter()
+            .position(|n| n.name == "subdir" && n.is_dir)
+            .expect("Should find subdir after toggle");
+
+        // The subdirectory should now be expanded
+        assert!(
+            widget.display_nodes[subdir_index_after].is_expanded,
+            "Subdirectory should be expanded"
+        );
+
+        // Toggle again to collapse
+        widget.selected_index = subdir_index_after;
+        widget.toggle_selected();
+
+        // After collapsing, we should have fewer nodes
+        assert_eq!(
+            widget.display_nodes.len(),
+            initial_node_count,
+            "Should return to initial node count after collapsing"
+        );
     }
 }

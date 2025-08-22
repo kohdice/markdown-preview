@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use mp_core::FinderConfig;
 use ratatui::DefaultTerminal;
 
 use crate::widgets::{FileTreeWidget, PreviewWidget, StatusBar, StatusMode};
@@ -24,10 +25,13 @@ pub enum AppFocus {
 
 impl App {
     pub fn new() -> Result<Self> {
+        Self::new_with_config(FinderConfig::default())
+    }
+
+    pub fn new_with_config(finder_config: FinderConfig) -> Result<Self> {
         let current_dir = std::env::current_dir()?;
         let mut file_tree = FileTreeWidget::new(current_dir);
-
-        file_tree.root.is_expanded = true;
+        file_tree.set_finder_config(finder_config);
 
         let mut app = Self {
             file_tree,

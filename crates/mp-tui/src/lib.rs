@@ -1,6 +1,7 @@
 use std::panic;
 
 use anyhow::Result;
+use mp_core::FinderConfig;
 
 mod app;
 mod file_tree;
@@ -8,16 +9,21 @@ mod preview;
 pub mod renderer;
 mod status_bar;
 mod theme_adapter;
+mod tree_builder;
 pub mod widgets;
 
 pub use app::{App, AppFocus};
 pub use renderer::MarkdownWidget;
 
 pub fn run_tui() -> Result<()> {
+    run_tui_with_config(FinderConfig::default())
+}
+
+pub fn run_tui_with_config(finder_config: FinderConfig) -> Result<()> {
     install_panic_handler();
 
     let terminal = ratatui::init();
-    let app_result = App::new()?.run(terminal);
+    let app_result = App::new_with_config(finder_config)?.run(terminal);
 
     ratatui::restore();
     app_result
