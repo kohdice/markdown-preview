@@ -69,7 +69,6 @@ impl FileTreeWidget {
             theme: SolarizedOsaka,
         };
 
-        // Initialize display nodes with root expanded
         let mut initial_expanded = HashSet::new();
         initial_expanded.insert(widget.tree_data.path.clone());
         widget.display_nodes.clear();
@@ -91,7 +90,6 @@ impl FileTreeWidget {
         self.add_node_to_display(&self.tree_data.clone(), 0, true, &expanded_paths);
     }
 
-    /// Recursively add nodes to the display list
     fn add_node_to_display(
         &mut self,
         node: &FileTreeNode,
@@ -119,7 +117,6 @@ impl FileTreeWidget {
         let is_expanded = display_node.is_expanded;
         self.display_nodes.push(display_node);
 
-        // Add children if expanded
         if is_expanded {
             for child in &node.children {
                 self.add_node_to_display(child, depth + 1, false, expanded_paths);
@@ -127,7 +124,6 @@ impl FileTreeWidget {
         }
     }
 
-    /// Get the filtered list of display nodes based on search query
     pub fn get_filtered_list(&self) -> Vec<(usize, &DisplayNode)> {
         if self.search_query.is_empty() {
             self.display_nodes.iter().enumerate().collect()
@@ -175,7 +171,6 @@ impl FileTreeWidget {
     pub fn move_selection_up(&mut self) {
         if self.selected_index > 0 {
             self.selected_index -= 1;
-            self.adjust_scroll_for_selection();
         }
     }
 
@@ -183,11 +178,9 @@ impl FileTreeWidget {
         let filtered = self.get_filtered_list();
         if !filtered.is_empty() && self.selected_index < filtered.len() - 1 {
             self.selected_index += 1;
-            self.adjust_scroll_for_selection();
         }
     }
 
-    /// Get the currently selected file path (if it's a file)
     pub fn get_selected_file(&self) -> Option<PathBuf> {
         let filtered = self.get_filtered_list();
         filtered.get(self.selected_index).and_then(|(_, node)| {
@@ -219,7 +212,6 @@ impl FileTreeWidget {
         self.update_filter();
     }
 
-    /// Update the filter and adjust selection
     fn update_filter(&mut self) {
         let filtered = self.get_filtered_list();
 
@@ -242,14 +234,6 @@ impl FileTreeWidget {
         }
     }
 
-    /// Adjust scroll offset for current selection
-    fn adjust_scroll_for_selection(&mut self) {
-        // This can be implemented based on the visible area height
-        // For now, we'll leave it empty as the actual implementation
-        // would need to know the render area height
-    }
-
-    /// Render the file tree widget
     pub fn render(&self, frame: &mut Frame, area: Rect, is_focused: bool) {
         let filtered = self.get_filtered_list();
 
@@ -314,7 +298,6 @@ impl FileTreeWidget {
         frame.render_widget(list, area);
     }
 
-    /// Reload the file tree (useful for refreshing after file system changes)
     pub fn reload(&mut self) {
         if let Ok(new_tree) = self.tree_builder.build_tree(self.finder_config) {
             self.tree_data = new_tree;
@@ -322,7 +305,6 @@ impl FileTreeWidget {
         }
     }
 
-    /// Update finder configuration
     pub fn set_finder_config(&mut self, config: FinderConfig) {
         self.finder_config = config;
         self.reload();
@@ -337,7 +319,6 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    /// Mock tree builder for testing
     struct MockTreeBuilder {
         tree_data: FileTreeNode,
     }

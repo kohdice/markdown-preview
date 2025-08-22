@@ -74,7 +74,6 @@ impl<T: MarkdownTheme> StatusBar<T> {
     pub fn render(&self, frame: &mut Frame, area: Rect) {
         let mut spans = Vec::new();
 
-        // Mode indicator
         let mode_span = match self.mode {
             StatusMode::Normal => Span::styled(
                 " NORMAL ",

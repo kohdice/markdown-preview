@@ -206,7 +206,6 @@ fn sort_tree_children(node: &mut FileTreeNode) {
         _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
     });
 
-    // Recursively sort children
     for child in &mut node.children {
         if child.is_dir {
             sort_tree_children(child);
@@ -224,13 +223,11 @@ fn remove_empty_directories(node: &mut FileTreeNode) {
         remove_empty_directories(child);
     }
 
-    // Remove empty directories from children
     node.children.retain(|child| {
         if child.is_dir {
             // Keep directory only if it has children (after recursive processing)
             !child.children.is_empty()
         } else {
-            // Always keep files
             true
         }
     });

@@ -48,7 +48,6 @@ pub fn run() -> Result<()> {
                 .with_context(|| format!("Failed to render markdown file: {}", path.display()))?;
         }
         None => {
-            // Create FinderConfig from CLI arguments
             let finder_config = mp_core::FinderConfig {
                 hidden: args.hidden,
                 no_ignore: args.no_ignore,

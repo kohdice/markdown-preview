@@ -265,7 +265,6 @@ impl Table {
             lines.push(self.render_separator());
         }
 
-        // Render data rows
         for row in &self.rows {
             lines.push(self.render_row(row));
         }
