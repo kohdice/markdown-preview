@@ -8,7 +8,7 @@ use mp_stdout::MarkdownRenderer;
 #[derive(Debug, Parser)]
 #[command(name = "mp", version, about = "Markdown previewer in terminal")]
 pub struct Args {
-    /// Markdown file to preview (optional, searches for .md files if not provided)
+    /// Markdown file to preview (optional, opens TUI mode if not provided)
     #[arg(name = "FILE")]
     pub file: Option<PathBuf>,
 
@@ -48,7 +48,16 @@ pub fn run() -> Result<()> {
                 .with_context(|| format!("Failed to render markdown file: {}", path.display()))?;
         }
         None => {
-            mp_tui::run_tui().map_err(|e| anyhow::anyhow!("Failed to run TUI mode: {}", e))?;
+            // Create FinderConfig from CLI arguments
+            let finder_config = mp_core::FinderConfig {
+                hidden: args.hidden,
+                no_ignore: args.no_ignore,
+                no_ignore_parent: args.no_ignore_parent,
+                no_global_ignore_file: args.no_global_ignore_file,
+            };
+
+            mp_tui::run_tui_with_config(finder_config)
+                .map_err(|e| anyhow::anyhow!("Failed to run TUI mode: {}", e))?;
         }
     }
 
