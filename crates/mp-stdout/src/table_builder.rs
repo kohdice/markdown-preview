@@ -1,11 +1,8 @@
-//! Table builder module for constructing tables with fluent API
-
 use std::fmt;
 
 use anyhow::Result;
 use pulldown_cmark::Alignment;
 
-/// A builder for constructing tables with a fluent API
 ///
 /// # Example
 /// ```
@@ -29,7 +26,6 @@ pub struct TableBuilder {
     alignment_config: TableAlignmentConfig,
 }
 
-/// Configuration for table alignment indicators
 #[derive(Debug, Clone)]
 pub struct TableAlignmentConfig {
     pub left: &'static str,

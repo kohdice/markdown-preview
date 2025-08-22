@@ -1,5 +1,3 @@
-//! Utility functions for the TUI module
-
 use unicode_width::UnicodeWidthStr;
 
 /// Truncates a Unicode string to fit within a specified display width.

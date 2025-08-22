@@ -4,7 +4,6 @@ use anyhow::Result;
 
 const DEFAULT_BUFFER_SIZE: usize = 8192;
 
-/// Buffered output wrapper using BufWriter for efficient I/O
 pub struct BufferedOutput<W: Write> {
     writer: BufWriter<W>,
 }
@@ -40,12 +39,10 @@ impl<W: Write> BufferedOutput<W> {
         Ok(())
     }
 
-    /// Gets a mutable reference to the underlying writer
     pub fn get_mut(&mut self) -> &mut BufWriter<W> {
         &mut self.writer
     }
 
-    /// Consumes the BufferedOutput and returns the underlying writer
     pub fn into_inner(self) -> Result<W> {
         self.writer
             .into_inner()

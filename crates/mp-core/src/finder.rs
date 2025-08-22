@@ -73,21 +73,17 @@ pub fn build_markdown_tree_in_dir(dir: &str, config: FinderConfig) -> Result<Fil
         children: Vec::new(),
     };
 
-    // Create the walker with the same configuration as find_markdown_files
     let mut builder = WalkBuilder::new(dir);
     configure_walker(&mut builder, &config);
     let walker = builder.build();
 
-    // Collect all paths first
     let mut all_entries = Vec::new();
     for entry in walker.flatten() {
         let path = entry.path();
-        // Skip the root directory itself
         if path == base_path {
             continue;
         }
 
-        // Check if it's a markdown file or a directory that might contain markdown files
         if path.is_file() {
             if path
                 .extension()
@@ -96,15 +92,12 @@ pub fn build_markdown_tree_in_dir(dir: &str, config: FinderConfig) -> Result<Fil
                 all_entries.push(path.to_path_buf());
             }
         } else if path.is_dir() {
-            // Add directories that might contain markdown files
             all_entries.push(path.to_path_buf());
         }
     }
 
-    // Build the tree structure from the collected paths
     build_tree_from_paths(&mut root, &all_entries, base_path)?;
 
-    // Remove empty directories from the tree
     remove_empty_directories(&mut root);
 
     Ok(root)
@@ -138,7 +131,6 @@ fn build_tree_from_paths(root: &mut FileTreeNode, paths: &[PathBuf], base: &Path
         }
     }
 
-    // Sort children at each level
     sort_tree_children(root);
 
     Ok(())
