@@ -8,12 +8,16 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-pub struct StatusBar {
+use crate::theme_adapter::RatatuiAdapter;
+use mp_core::theme::{MarkdownTheme, SolarizedOsaka};
+
+pub struct StatusBar<T: MarkdownTheme> {
     pub file_path: Option<String>,
     pub message: Option<String>,
     pub error: Option<String>,
     pub mode: StatusMode,
     pub search_query: Option<String>,
+    theme: T,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -23,14 +27,15 @@ pub enum StatusMode {
     Help,
 }
 
-impl StatusBar {
-    pub fn new() -> Self {
+impl<T: MarkdownTheme> StatusBar<T> {
+    pub fn new(theme: T) -> Self {
         Self {
             file_path: None,
             message: None,
             error: None,
             mode: StatusMode::Normal,
             search_query: None,
+            theme,
         }
     }
 
@@ -75,21 +80,21 @@ impl StatusBar {
                 " NORMAL ",
                 Style::default()
                     .fg(Color::Black)
-                    .bg(Color::Rgb(133, 153, 0))
+                    .bg(self.theme.status_normal_color().to_ratatui_color())
                     .add_modifier(Modifier::BOLD),
             ),
             StatusMode::Search => Span::styled(
                 " SEARCH ",
                 Style::default()
                     .fg(Color::Black)
-                    .bg(Color::Rgb(181, 137, 0))
+                    .bg(self.theme.status_search_color().to_ratatui_color())
                     .add_modifier(Modifier::BOLD),
             ),
             StatusMode::Help => Span::styled(
                 " HELP ",
                 Style::default()
                     .fg(Color::Black)
-                    .bg(Color::Rgb(38, 139, 210))
+                    .bg(self.theme.status_help_color().to_ratatui_color())
                     .add_modifier(Modifier::BOLD),
             ),
         };
@@ -101,14 +106,14 @@ impl StatusBar {
             spans.push(Span::styled(
                 error,
                 Style::default()
-                    .fg(Color::Rgb(220, 50, 47))
+                    .fg(self.theme.status_error_color().to_ratatui_color())
                     .add_modifier(Modifier::BOLD),
             ));
         } else if let Some(message) = &self.message {
             spans.push(Span::styled(
                 message,
                 Style::default()
-                    .fg(Color::Rgb(181, 137, 0))
+                    .fg(self.theme.status_message_color().to_ratatui_color())
                     .add_modifier(Modifier::ITALIC),
             ));
         } else if self.mode == StatusMode::Search {
@@ -116,21 +121,21 @@ impl StatusBar {
                 spans.push(Span::styled(
                     query,
                     Style::default()
-                        .fg(Color::Rgb(181, 137, 0))
+                        .fg(self.theme.status_message_color().to_ratatui_color())
                         .add_modifier(Modifier::BOLD),
                 ));
             } else {
                 spans.push(Span::styled(
                     "",
                     Style::default()
-                        .fg(Color::Rgb(181, 137, 0))
+                        .fg(self.theme.status_message_color().to_ratatui_color())
                         .add_modifier(Modifier::BOLD),
                 ));
             }
         } else if let Some(path) = &self.file_path {
             spans.push(Span::styled(
                 path,
-                Style::default().fg(Color::Rgb(131, 148, 150)),
+                Style::default().fg(self.theme.text_style().color.to_ratatui_color()),
             ));
         }
 
@@ -147,22 +152,22 @@ impl StatusBar {
             Span::styled(
                 help_text,
                 Style::default()
-                    .fg(Color::Rgb(88, 110, 117))
+                    .fg(self.theme.delimiter_style().color.to_ratatui_color())
                     .add_modifier(Modifier::ITALIC),
             ),
         ]);
 
         let paragraph = Paragraph::new(vec![line])
-            .style(Style::default().bg(Color::Rgb(7, 54, 66)))
+            .style(Style::default().bg(self.theme.status_background_color().to_ratatui_color()))
             .alignment(Alignment::Left);
 
         frame.render_widget(paragraph, area);
     }
 }
 
-impl Default for StatusBar {
+impl Default for StatusBar<SolarizedOsaka> {
     fn default() -> Self {
-        Self::new()
+        Self::new(SolarizedOsaka)
     }
 }
 
@@ -173,7 +178,7 @@ mod tests {
 
     #[test]
     fn test_status_bar_creation() {
-        let status = StatusBar::new();
+        let status = StatusBar::new(SolarizedOsaka);
         assert_eq!(status.mode, StatusMode::Normal);
         assert!(status.file_path.is_none());
         assert!(status.message.is_none());
@@ -182,7 +187,7 @@ mod tests {
 
     #[test]
     fn test_status_bar_file_path() {
-        let mut status = StatusBar::new();
+        let mut status = StatusBar::new(SolarizedOsaka);
         let path = PathBuf::from("/test/file.md");
 
         status.set_file(&path);
@@ -193,7 +198,7 @@ mod tests {
 
     #[test]
     fn test_status_bar_messages() {
-        let mut status = StatusBar::new();
+        let mut status = StatusBar::new(SolarizedOsaka);
 
         status.set_message("Test message");
         assert_eq!(status.message, Some("Test message".to_string()));
@@ -210,7 +215,7 @@ mod tests {
 
     #[test]
     fn test_status_bar_mode() {
-        let mut status = StatusBar::new();
+        let mut status = StatusBar::new(SolarizedOsaka);
 
         assert_eq!(status.mode, StatusMode::Normal);
 
