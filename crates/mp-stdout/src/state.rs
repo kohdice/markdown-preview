@@ -57,7 +57,6 @@ pub enum ActiveElement {
 
 #[derive(Debug, Default, Clone)]
 pub struct RenderState {
-    /// Current text emphasis (bold/italic) that applies to all text rendering
     pub emphasis: EmphasisState,
 
     /// Currently active complex element that requires text accumulation.
@@ -76,22 +75,6 @@ impl RenderState {
         Self::default()
     }
 
-    /// Routes text to the active element's text buffer.
-    /// Returns true if text was consumed by an active element, false otherwise.
-    pub fn add_text(&mut self, text: &str) -> bool {
-        match &mut self.active_element {
-            Some(ActiveElement::Link(link)) => {
-                link.text.push_str(text);
-                true
-            }
-            Some(ActiveElement::Image(image)) => {
-                image.alt_text.push_str(text);
-                true
-            }
-            _ => false,
-        }
-    }
-
     pub fn has_link(&self) -> bool {
         matches!(self.active_element, Some(ActiveElement::Link(_)))
     }
@@ -106,6 +89,64 @@ impl RenderState {
             (false, true, true) => (38, 139, 210),
             (false, false, true) => (38, 139, 210),
             _ => (147, 161, 161),
+        }
+    }
+}
+
+impl ActiveElement {
+    pub fn as_link(&self) -> Option<&LinkState> {
+        match self {
+            ActiveElement::Link(link) => Some(link),
+            _ => None,
+        }
+    }
+
+    pub fn as_link_mut(&mut self) -> Option<&mut LinkState> {
+        match self {
+            ActiveElement::Link(link) => Some(link),
+            _ => None,
+        }
+    }
+
+    pub fn as_image(&self) -> Option<&ImageState> {
+        match self {
+            ActiveElement::Image(image) => Some(image),
+            _ => None,
+        }
+    }
+
+    pub fn as_image_mut(&mut self) -> Option<&mut ImageState> {
+        match self {
+            ActiveElement::Image(image) => Some(image),
+            _ => None,
+        }
+    }
+
+    pub fn as_code_block(&self) -> Option<&CodeBlockState> {
+        match self {
+            ActiveElement::CodeBlock(code_block) => Some(code_block),
+            _ => None,
+        }
+    }
+
+    pub fn as_code_block_mut(&mut self) -> Option<&mut CodeBlockState> {
+        match self {
+            ActiveElement::CodeBlock(code_block) => Some(code_block),
+            _ => None,
+        }
+    }
+
+    pub fn as_table(&self) -> Option<&TableState> {
+        match self {
+            ActiveElement::Table(table) => Some(table),
+            _ => None,
+        }
+    }
+
+    pub fn as_table_mut(&mut self) -> Option<&mut TableState> {
+        match self {
+            ActiveElement::Table(table) => Some(table),
+            _ => None,
         }
     }
 }

@@ -1,10 +1,12 @@
-use std::io::{Stdout, Write};
+use std::fs::{self, File};
+use std::io::{Read, Stdout, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use pulldown_cmark::{Options, Parser};
 
 use mp_core::theme::SolarizedOsaka;
+use mp_core::utils::normalize_line_endings;
 
 pub mod buffered_output;
 pub mod builder;
@@ -12,25 +14,19 @@ pub mod output;
 pub mod state;
 
 mod config;
-mod element_accessor;
 mod formatting;
 mod handlers;
-mod io;
 mod styling;
 mod table_builder;
 mod theme_adapter;
 
 pub use builder::RendererBuilder;
 pub use config::RenderConfig;
-pub use element_accessor::{
-    CodeBlockAccessor, ElementData, ImageAccessor, LinkAccessor, TableAccessor,
-};
 pub use state::{ActiveElement, RenderState};
 pub use styling::TextStyle;
 pub use table_builder::{Table, TableBuilder};
 
 pub use self::buffered_output::BufferedOutput;
-use self::io::read_file;
 
 pub struct MarkdownRenderer<W: Write = Stdout> {
     pub theme: SolarizedOsaka,
@@ -70,7 +66,7 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     pub fn render_file(&mut self, path: &Path) -> Result<()> {
-        let content = read_file(path)
+        let content = read_markdown_file(path)
             .with_context(|| format!("Failed to read markdown file: {}", path.display()))?;
         self.render_content(&content)
     }
@@ -93,26 +89,6 @@ impl<W: Write> MarkdownRenderer<W> {
             self.render_code_block(&code_block)?;
         }
         Ok(())
-    }
-
-    pub fn get<T: ElementData>(&self) -> Option<&T::Output> {
-        self.state.active_element.as_ref().and_then(T::extract)
-    }
-
-    pub fn get_mut<T: ElementData>(&mut self) -> Option<&mut T::Output> {
-        self.state.active_element.as_mut().and_then(T::extract_mut)
-    }
-
-    pub fn get_cloned<T>(&self) -> Option<T::Output>
-    where
-        T: ElementData,
-        T::Output: Clone,
-    {
-        self.get::<T>().cloned()
-    }
-
-    pub fn set<T: ElementData>(&mut self, data: T::Output) {
-        self.state.active_element = Some(T::create(data));
     }
 
     pub fn set_strong_emphasis(&mut self, value: bool) {
@@ -142,11 +118,18 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     pub fn get_link(&self) -> Option<state::LinkState> {
-        self.get_cloned::<LinkAccessor>()
+        self.state
+            .active_element
+            .as_ref()
+            .and_then(|e| e.as_link())
+            .cloned()
     }
 
     pub fn get_link_mut(&mut self) -> Option<&mut state::LinkState> {
-        self.get_mut::<LinkAccessor>()
+        self.state
+            .active_element
+            .as_mut()
+            .and_then(|e| e.as_link_mut())
     }
 
     pub fn set_image(&mut self, url: String) {
@@ -161,11 +144,18 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     pub fn get_image(&self) -> Option<state::ImageState> {
-        self.get_cloned::<ImageAccessor>()
+        self.state
+            .active_element
+            .as_ref()
+            .and_then(|e| e.as_image())
+            .cloned()
     }
 
     pub fn get_image_mut(&mut self) -> Option<&mut state::ImageState> {
-        self.get_mut::<ImageAccessor>()
+        self.state
+            .active_element
+            .as_mut()
+            .and_then(|e| e.as_image_mut())
     }
 
     pub fn set_code_block(&mut self, kind: pulldown_cmark::CodeBlockKind<'static>) {
@@ -190,11 +180,18 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     pub fn get_code_block(&self) -> Option<state::CodeBlockState> {
-        self.get_cloned::<CodeBlockAccessor>()
+        self.state
+            .active_element
+            .as_ref()
+            .and_then(|e| e.as_code_block())
+            .cloned()
     }
 
     pub fn get_code_block_mut(&mut self) -> Option<&mut state::CodeBlockState> {
-        self.get_mut::<CodeBlockAccessor>()
+        self.state
+            .active_element
+            .as_mut()
+            .and_then(|e| e.as_code_block_mut())
     }
 
     pub fn set_table(&mut self, alignments: Vec<pulldown_cmark::Alignment>) {
@@ -211,11 +208,18 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     pub fn get_table(&self) -> Option<state::TableState> {
-        self.get_cloned::<TableAccessor>()
+        self.state
+            .active_element
+            .as_ref()
+            .and_then(|e| e.as_table())
+            .cloned()
     }
 
     pub fn get_table_mut(&mut self) -> Option<&mut state::TableState> {
-        self.get_mut::<TableAccessor>()
+        self.state
+            .active_element
+            .as_mut()
+            .and_then(|e| e.as_table_mut())
     }
 
     /// Build a table using the TableBuilder API
@@ -248,6 +252,25 @@ impl<W: Write> MarkdownRenderer<W> {
     pub fn clear_active_element(&mut self) {
         self.state.active_element = None;
     }
+}
+
+fn read_markdown_file(path: &Path) -> Result<String> {
+    if !path.exists() {
+        return Err(anyhow::anyhow!("File not found: {}", path.display()));
+    }
+
+    let metadata = fs::metadata(path)
+        .with_context(|| format!("Failed to get metadata for: {}", path.display()))?;
+    let file_size = metadata.len();
+
+    let mut file =
+        File::open(path).with_context(|| format!("Failed to open file: {}", path.display()))?;
+
+    let mut content = String::with_capacity(file_size as usize);
+    file.read_to_string(&mut content)
+        .with_context(|| format!("Failed to read file: {}", path.display()))?;
+
+    Ok(normalize_line_endings(&content).into_owned())
 }
 
 #[cfg(test)]
