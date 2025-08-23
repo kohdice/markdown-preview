@@ -93,7 +93,6 @@ mod tests {
         };
         let ratatui_style = theme_style.to_ratatui_style();
 
-        // Check color
         match ratatui_style.fg {
             Some(Color::Rgb(r, g, b)) => {
                 assert_eq!(r, 255);
@@ -103,7 +102,6 @@ mod tests {
             _ => panic!("Expected RGB color"),
         }
 
-        // Check modifiers
         assert!(ratatui_style.add_modifier.contains(Modifier::BOLD));
         assert!(ratatui_style.add_modifier.contains(Modifier::UNDERLINED));
         assert!(!ratatui_style.add_modifier.contains(Modifier::ITALIC));
