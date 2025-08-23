@@ -42,7 +42,6 @@ impl FileTreeWidget {
     }
 
     pub fn with_builder(tree_builder: Box<dyn TreeBuilder>, finder_config: FinderConfig) -> Self {
-        // Build the tree using the provided builder
         let tree_data = tree_builder.build_tree(finder_config).unwrap_or_else(|_| {
             let name = std::env::current_dir()
                 .ok()
@@ -78,7 +77,6 @@ impl FileTreeWidget {
     }
 
     fn rebuild_display_nodes(&mut self) {
-        // Save the expanded state before clearing
         let expanded_paths: std::collections::HashSet<_> = self
             .display_nodes
             .iter()
@@ -97,9 +95,7 @@ impl FileTreeWidget {
         is_root: bool,
         expanded_paths: &std::collections::HashSet<PathBuf>,
     ) {
-        // Check if this node was previously expanded
         let was_expanded = if is_root && depth == 0 {
-            // Root is initially expanded
             true
         } else {
             expanded_paths.contains(&node.path)
@@ -152,10 +148,8 @@ impl FileTreeWidget {
                 if let Some(display_node) = self.display_nodes.get_mut(original_idx) {
                     display_node.is_expanded = !display_node.is_expanded;
                 }
-                // Rebuild the display list
                 self.rebuild_display_nodes();
 
-                // Adjust selected index if needed
                 self.adjust_selection_after_toggle();
             }
         }
@@ -345,12 +339,10 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().to_path_buf();
 
-        // Create some test files
         fs::write(path.join("test.md"), "content").unwrap();
 
         let widget = FileTreeWidget::new(path.clone());
 
-        // Widget should be created with display nodes
         assert!(!widget.display_nodes.is_empty());
         assert_eq!(widget.selected_index, 0);
         assert!(!widget.search_mode);
@@ -364,7 +356,6 @@ mod tests {
         fs::write(path.join("hello.md"), "content").unwrap();
         fs::write(path.join("world.md"), "content").unwrap();
 
-        // Build tree directly for the temp directory
         let config = FinderConfig::default();
         let mock_builder = MockTreeBuilder::from_directory(path.to_str().unwrap(), config).unwrap();
         let mut widget = FileTreeWidget::with_builder(Box::new(mock_builder), config);
@@ -377,7 +368,6 @@ mod tests {
         assert_eq!(widget.search_query, "he");
 
         let filtered = widget.get_filtered_list();
-        // Check if any node contains "hello" in its name
         let has_hello = filtered
             .iter()
             .any(|(_, node)| node.name.to_lowercase().contains("hello"));
@@ -400,12 +390,10 @@ mod tests {
         fs::write(path.join("a.md"), "").unwrap();
         fs::write(path.join("b.md"), "").unwrap();
 
-        // Build tree directly for the temp directory
         let config = FinderConfig::default();
         let mock_builder = MockTreeBuilder::from_directory(path.to_str().unwrap(), config).unwrap();
         let mut widget = FileTreeWidget::with_builder(Box::new(mock_builder), config);
 
-        // The widget should have at least the root and some files
         // Root is expanded, so we should see: root + 2 files = 3 nodes
         assert!(
             widget.display_nodes.len() >= 3,
@@ -416,11 +404,9 @@ mod tests {
         let initial_index = widget.selected_index;
         assert_eq!(initial_index, 0);
 
-        // Try to move down
         widget.move_selection_down();
         assert!(widget.selected_index > initial_index, "Should move down");
 
-        // Move back up
         widget.move_selection_up();
         assert_eq!(
             widget.selected_index, initial_index,
@@ -433,12 +419,10 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().to_path_buf();
 
-        // Create a subdirectory with a markdown file
         let subdir = path.join("subdir");
         fs::create_dir(&subdir).unwrap();
         fs::write(subdir.join("test.md"), "content").unwrap();
 
-        // Build tree directly for the temp directory
         let config = FinderConfig::default();
         let mock_builder = MockTreeBuilder::from_directory(path.to_str().unwrap(), config).unwrap();
         let mut widget = FileTreeWidget::with_builder(Box::new(mock_builder), config);

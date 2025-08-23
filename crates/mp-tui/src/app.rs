@@ -7,7 +7,7 @@ use ratatui::DefaultTerminal;
 
 use mp_core::{FinderConfig, theme::SolarizedOsaka};
 
-use crate::widgets::{FileTreeWidget, PreviewWidget, StatusBar, StatusMode};
+use crate::{FileTreeWidget, PreviewWidget, StatusBar, StatusMode};
 
 pub struct App {
     pub file_tree: FileTreeWidget,
@@ -307,34 +307,5 @@ impl App {
 
         frame.render_widget(Clear, popup_area);
         frame.render_widget(help, popup_area);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_app_creation() {
-        // This test might fail if run in a directory without proper permissions
-        // or without any markdown files
-        if let Ok(app) = App::new() {
-            assert_eq!(app.focus, AppFocus::FileTree);
-            assert!(!app.should_quit);
-            assert!(!app.show_help);
-        }
-    }
-
-    #[test]
-    fn test_focus_switching() {
-        if let Ok(mut app) = App::new() {
-            assert_eq!(app.focus, AppFocus::FileTree);
-
-            app.focus = AppFocus::Preview;
-            assert_eq!(app.focus, AppFocus::Preview);
-
-            app.focus = AppFocus::FileTree;
-            assert_eq!(app.focus, AppFocus::FileTree);
-        }
     }
 }

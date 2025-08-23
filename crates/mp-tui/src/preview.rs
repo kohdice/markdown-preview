@@ -67,7 +67,6 @@ impl PreviewWidget {
             // We'll use a conservative estimate of visible lines
             self.scroll_offset = line_count.saturating_sub(1) as u16;
         } else {
-            // Fallback for plain text - scroll to a large value
             self.scroll_offset = u16::MAX;
         }
         self.markdown_state.scroll_offset = self.scroll_offset;
@@ -90,7 +89,6 @@ impl PreviewWidget {
             Style::default().fg(delimiter_color.to_ratatui_color())
         };
 
-        // If we have a markdown widget, use it
         if let Some(widget) = &self.markdown_widget {
             let block = Block::default()
                 .borders(Borders::ALL)
@@ -101,7 +99,6 @@ impl PreviewWidget {
             frame.render_widget(block, area);
             frame.render_stateful_widget(widget, inner_area, &mut self.markdown_state);
         } else {
-            // Fallback to simple text rendering
             let paragraph = Paragraph::new(self.content.as_str())
                 .block(
                     Block::default()

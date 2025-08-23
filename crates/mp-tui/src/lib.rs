@@ -11,10 +11,12 @@ mod status_bar;
 mod theme_adapter;
 mod tree_builder;
 pub mod utils;
-pub mod widgets;
 
 pub use app::{App, AppFocus};
+pub use file_tree::FileTreeWidget;
+pub use preview::PreviewWidget;
 pub use renderer::MarkdownWidget;
+pub use status_bar::{StatusBar, StatusMode};
 
 pub fn run_tui() -> Result<()> {
     run_tui_with_config(FinderConfig::default())
