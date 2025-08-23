@@ -1,4 +1,3 @@
-/// Represents the phase of a Markdown element (start or end).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ElementPhase {
     Start,
@@ -15,8 +14,6 @@ pub enum ElementKind {
     Table(TableVariant),
 }
 
-/// Represents different types of Markdown elements in terminal output.
-/// These types help determine appropriate styling and formatting for each element.
 pub enum OutputType {
     /// A structural element with a start/end phase
     Element {

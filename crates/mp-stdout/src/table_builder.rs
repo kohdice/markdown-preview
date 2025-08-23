@@ -3,7 +3,6 @@ use std::fmt;
 use anyhow::Result;
 use pulldown_cmark::Alignment;
 
-///
 /// # Example
 /// ```
 /// use mp_stdout::TableBuilder;
@@ -56,7 +55,6 @@ pub struct Table {
 }
 
 impl TableBuilder {
-    /// Creates a new table builder with default settings
     pub fn new() -> Self {
         Self {
             headers: None,
@@ -67,7 +65,6 @@ impl TableBuilder {
         }
     }
 
-    /// Sets the header row
     pub fn header<I, S>(mut self, headers: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -76,7 +73,6 @@ impl TableBuilder {
         let header_vec: Vec<String> = headers.into_iter().map(|s| s.into()).collect();
         let column_count = header_vec.len();
 
-        // Auto-generate alignments if not set
         if self.alignments.is_empty() {
             self.alignments = vec![Alignment::None; column_count];
         }
@@ -85,13 +81,11 @@ impl TableBuilder {
         self
     }
 
-    /// Sets column alignments
     pub fn alignments(mut self, alignments: Vec<Alignment>) -> Self {
         self.alignments = alignments;
         self
     }
 
-    /// Adds a data row
     pub fn row<I, S>(mut self, row: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -101,7 +95,6 @@ impl TableBuilder {
         self
     }
 
-    /// Adds multiple rows at once
     pub fn rows<I, R, S>(mut self, rows: I) -> Self
     where
         I: IntoIterator<Item = R>,
@@ -114,13 +107,11 @@ impl TableBuilder {
         self
     }
 
-    /// Sets a custom separator character
     pub fn separator(mut self, separator: &'static str) -> Self {
         self.separator = separator;
         self
     }
 
-    /// Sets custom alignment configuration
     pub fn alignment_config(mut self, config: TableAlignmentConfig) -> Self {
         self.alignment_config = config;
         self
@@ -179,12 +170,10 @@ impl Default for TableBuilder {
 }
 
 impl Table {
-    /// Gets the headers if present
     pub fn headers(&self) -> Option<&Vec<String>> {
         self.headers.as_ref()
     }
 
-    /// Gets the data rows
     pub fn rows(&self) -> &Vec<Vec<String>> {
         &self.rows
     }
@@ -255,7 +244,6 @@ impl Table {
         let estimated_lines = if self.headers.is_some() { 2 } else { 0 } + self.rows.len();
         let mut lines = Vec::with_capacity(estimated_lines);
 
-        // Render header if present
         if let Some(ref headers) = self.headers {
             lines.push(self.render_row(headers));
             lines.push(self.render_separator());
@@ -298,12 +286,10 @@ impl fmt::Display for Table {
 mod tests {
     use super::*;
 
-    // Helper function to create a basic table with default configuration
     fn create_test_table() -> TableBuilder {
         TableBuilder::new()
     }
 
-    // Helper function to create a table with header and rows
     fn create_table_with_data(header: Vec<&str>, rows: Vec<Vec<&str>>) -> Result<Table> {
         let mut builder = TableBuilder::new().header(header);
         for row in rows {
@@ -312,13 +298,11 @@ mod tests {
         builder.build()
     }
 
-    // Helper function to assert table dimensions
     fn assert_table_dimensions(table: &Table, expected_columns: usize, expected_rows: usize) {
         assert_eq!(table.column_count(), expected_columns);
         assert_eq!(table.row_count(), expected_rows);
     }
 
-    // Helper function to verify alignments
     fn assert_alignments(table: &Table, expected: Vec<Alignment>) {
         let alignments = table.alignments();
         assert_eq!(alignments.len(), expected.len());

@@ -18,7 +18,6 @@ impl ThemeAdapter for CrosstermThemeAdapter {
     }
 
     fn to_style(&self, style: &ThemeStyle) -> Self::Style {
-        // This returns a base styled content that can be applied to text
         let mut styled = String::new().with(self.to_color(&style.color));
         if style.bold {
             styled = styled.attribute(Attribute::Bold);

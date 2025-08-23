@@ -1,5 +1,3 @@
-//! Builder pattern implementation for MarkdownRenderer
-
 use std::io::{Stdout, Write};
 
 use pulldown_cmark::Options;
@@ -8,8 +6,6 @@ use mp_core::theme::SolarizedOsaka;
 
 use crate::{BufferedOutput, MarkdownRenderer, RenderConfig, RenderState};
 
-/// Builder for creating configured MarkdownRenderer instances
-///
 /// # Example
 /// ```
 /// use mp_stdout::RendererBuilder;
@@ -55,7 +51,6 @@ impl RendererBuilder<Stdout> {
         }
     }
 
-    /// Build with default stdout output
     pub fn build(self) -> MarkdownRenderer<Stdout> {
         let options = self.options.unwrap_or_else(|| {
             let mut opts = Options::empty();
@@ -145,7 +140,6 @@ impl<W: Write> RendererBuilder<W> {
         self
     }
 
-    /// Build with custom writer
     pub fn build_with_writer(self) -> MarkdownRenderer<W> {
         let options = self.options.unwrap_or_else(|| {
             let mut opts = Options::empty();
