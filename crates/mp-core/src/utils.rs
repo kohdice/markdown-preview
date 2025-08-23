@@ -2,7 +2,6 @@
 
 use std::borrow::Cow;
 
-/// Normalize line endings to Unix format (LF only).
 pub fn normalize_line_endings(text: &str) -> Cow<'_, str> {
     if !text.contains('\r') {
         return Cow::Borrowed(text);

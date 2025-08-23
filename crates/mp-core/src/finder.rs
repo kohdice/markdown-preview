@@ -155,7 +155,6 @@ fn insert_path_into_tree(node: &mut FileTreeNode, relative: &Path, full_path: &P
             children: Vec::new(),
         };
 
-        // Check if this child already exists (in case of directories)
         if !node.children.iter().any(|c| c.name == child.name) {
             node.children.push(child);
         }
