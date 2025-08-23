@@ -11,8 +11,8 @@ use crate::output::{ElementKind, ElementPhase, OutputType, TableVariant};
 impl<W: Write> MarkdownRenderer<W> {
     pub fn process_event(&mut self, event: Event) -> Result<()> {
         match event {
-            Event::Start(tag) => self.handle_tag(tag, true),
-            Event::End(tag_end) => self.handle_tag_end_direct(tag_end),
+            Event::Start(tag) => self.handle_tag_start(tag),
+            Event::End(tag_end) => self.handle_tag_end(tag_end),
             Event::Text(text) => self.handle_content(ContentType::Text(&text)),
             Event::Code(code) => self.handle_content(ContentType::Code(&code)),
             Event::Html(html) => self.handle_content(ContentType::Html(&html)),
@@ -25,14 +25,6 @@ impl<W: Write> MarkdownRenderer<W> {
                 self.handle_content(ContentType::Text(&footnote_text))
             }
             _ => Ok(()),
-        }
-    }
-
-    pub(super) fn handle_tag(&mut self, tag: Tag, is_start: bool) -> Result<()> {
-        if is_start {
-            self.handle_tag_start(tag)
-        } else {
-            self.handle_tag_end(tag)
         }
     }
 
@@ -66,42 +58,7 @@ impl<W: Write> MarkdownRenderer<W> {
         Ok(())
     }
 
-    fn handle_tag_end(&mut self, tag: Tag) -> Result<()> {
-        match tag {
-            Tag::Heading { .. } => {
-                self.handle_element(ElementKind::Heading(0), ElementPhase::End)?
-            }
-            Tag::Paragraph => self.handle_element(ElementKind::Paragraph, ElementPhase::End)?,
-            Tag::Strong => self.set_strong_emphasis(false),
-            Tag::Emphasis => self.set_italic_emphasis(false),
-            Tag::Link { .. } => self.print_output(OutputType::Link)?,
-            Tag::List(_) => self.handle_list_end(),
-            Tag::Item => self.handle_element(ElementKind::ListItem, ElementPhase::End)?,
-            Tag::CodeBlock(_) => self.print_output(OutputType::CodeBlock)?,
-            Tag::Table(_) => {
-                self.handle_table_end();
-            }
-            Tag::TableHead => self.handle_element(
-                ElementKind::Table(TableVariant::HeadEnd),
-                ElementPhase::Start,
-            )?,
-            Tag::TableRow => self.handle_element(
-                ElementKind::Table(TableVariant::RowEnd),
-                ElementPhase::Start,
-            )?,
-            Tag::BlockQuote(_) => {
-                self.handle_element(ElementKind::BlockQuote, ElementPhase::End)?
-            }
-            Tag::Image { .. } => self.print_output(OutputType::Image)?,
-            Tag::FootnoteDefinition(_) => {
-                self.output.newline().ok();
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn handle_tag_end_direct(&mut self, tag_end: TagEnd) -> Result<()> {
+    fn handle_tag_end(&mut self, tag_end: TagEnd) -> Result<()> {
         match tag_end {
             TagEnd::Heading(_) => {
                 self.handle_element(ElementKind::Heading(0), ElementPhase::End)?
