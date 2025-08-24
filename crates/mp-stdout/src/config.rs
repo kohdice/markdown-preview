@@ -87,7 +87,7 @@ mod tests {
     fn test_create_horizontal_rule() {
         let config = RenderConfig::default();
         let rule = config.create_horizontal_rule();
-        assert!(rule.chars().count() > 0);
+        assert!(!rule.is_empty());
         assert!(rule.chars().count() <= 100);
         assert!(rule.chars().all(|c| c == '─'));
     }
