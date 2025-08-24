@@ -370,8 +370,8 @@ mod tests {
         let file_count = tree.children.iter().filter(|c| !c.is_dir).count();
         let dir_count = tree.children.iter().filter(|c| c.is_dir).count();
 
-        assert_eq!(file_count, 2); // README.md and test.md
-        assert_eq!(dir_count, 1); // subdir
+        assert_eq!(file_count, 2);
+        assert_eq!(dir_count, 1);
         let subdir = tree.children.iter().find(|c| c.name == "subdir").unwrap();
         assert!(subdir.is_dir);
         assert_eq!(subdir.children.len(), 1);
