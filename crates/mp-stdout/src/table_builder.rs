@@ -1,5 +1,6 @@
 use std::fmt;
 
+use crate::config::TableAlignmentConfig;
 use anyhow::Result;
 use pulldown_cmark::Alignment;
 
@@ -23,25 +24,6 @@ pub struct TableBuilder {
     alignments: Vec<Alignment>,
     separator: &'static str,
     alignment_config: TableAlignmentConfig,
-}
-
-#[derive(Debug, Clone)]
-pub struct TableAlignmentConfig {
-    pub left: &'static str,
-    pub center: &'static str,
-    pub right: &'static str,
-    pub none: &'static str,
-}
-
-impl Default for TableAlignmentConfig {
-    fn default() -> Self {
-        Self {
-            left: ":---",
-            center: ":---:",
-            right: "---:",
-            none: "---",
-        }
-    }
 }
 
 /// Represents a built table ready for rendering

@@ -225,7 +225,7 @@ impl<W: Write> MarkdownRenderer<W> {
     pub fn build_table(&self) -> TableBuilder {
         TableBuilder::new()
             .separator(self.config.table_separator)
-            .alignment_config(table_builder::TableAlignmentConfig {
+            .alignment_config(config::TableAlignmentConfig {
                 left: self.config.table_alignment.left,
                 center: self.config.table_alignment.center,
                 right: self.config.table_alignment.right,
