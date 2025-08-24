@@ -17,11 +17,7 @@ pub use preview::PreviewWidget;
 pub use renderer::MarkdownWidget;
 pub use status_bar::{StatusBar, StatusMode};
 
-pub fn run_tui() -> Result<()> {
-    run_tui_with_config(FinderConfig::default())
-}
-
-pub fn run_tui_with_config(finder_config: FinderConfig) -> Result<()> {
+pub fn run_tui(finder_config: FinderConfig) -> Result<()> {
     install_panic_handler();
 
     let terminal = ratatui::init();
