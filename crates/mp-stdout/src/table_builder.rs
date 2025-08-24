@@ -4,19 +4,6 @@ use crate::config::TableAlignmentConfig;
 use anyhow::Result;
 use pulldown_cmark::Alignment;
 
-/// # Example
-/// ```
-/// use mp_stdout::TableBuilder;
-/// use pulldown_cmark::Alignment;
-///
-/// let table = TableBuilder::new()
-///     .header(vec!["Name", "Age", "City"])
-///     .alignments(vec![Alignment::Left, Alignment::Right, Alignment::Center])
-///     .row(vec!["Alice", "30", "New York"])
-///     .row(vec!["Bob", "25", "London"])
-///     .build()
-///     .expect("Failed to build table");
-/// ```
 #[derive(Debug, Clone)]
 pub struct TableBuilder {
     headers: Option<Vec<String>>,
@@ -26,7 +13,6 @@ pub struct TableBuilder {
     alignment_config: TableAlignmentConfig,
 }
 
-/// Represents a built table ready for rendering
 #[derive(Debug, Clone)]
 pub struct Table {
     headers: Option<Vec<String>>,

@@ -2,7 +2,6 @@ use ratatui::style::{Color, Modifier, Style};
 
 use mp_core::theme::{ThemeAdapter, ThemeColor, ThemeStyle};
 
-/// Ratatui-specific theme adapter
 pub struct RatatuiThemeAdapter;
 
 impl ThemeAdapter for RatatuiThemeAdapter {

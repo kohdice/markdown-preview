@@ -2,7 +2,6 @@ use crossterm::style::{Attribute, Color, StyledContent, Stylize};
 
 use mp_core::theme::{ThemeAdapter, ThemeColor, ThemeStyle};
 
-/// Crossterm-specific theme adapter
 pub struct CrosstermThemeAdapter;
 
 impl ThemeAdapter for CrosstermThemeAdapter {
@@ -43,23 +42,12 @@ impl CrosstermAdapter for ThemeColor {
     }
 }
 
-/// Helper function to apply style to text
 pub fn styled_text<S: AsRef<str>>(text: S, style: &ThemeStyle) -> StyledContent<String> {
-    styled_text_v2(text, style)
-}
-
-/// Helper function to apply style with background color
-pub fn styled_text_with_bg<S: AsRef<str>>(
-    text: S,
-    style: &ThemeStyle,
-    bg: &ThemeColor,
-) -> StyledContent<String> {
     let adapter = CrosstermThemeAdapter;
     let mut styled = text
         .as_ref()
         .to_string()
-        .with(adapter.to_color(&style.color))
-        .on(adapter.to_color(bg));
+        .with(adapter.to_color(&style.color));
     if style.bold {
         styled = styled.attribute(Attribute::Bold);
     }
@@ -72,13 +60,17 @@ pub fn styled_text_with_bg<S: AsRef<str>>(
     styled
 }
 
-/// Helper function using the new adapter
-pub fn styled_text_v2<S: AsRef<str>>(text: S, style: &ThemeStyle) -> StyledContent<String> {
+pub fn styled_text_with_bg<S: AsRef<str>>(
+    text: S,
+    style: &ThemeStyle,
+    bg: &ThemeColor,
+) -> StyledContent<String> {
     let adapter = CrosstermThemeAdapter;
     let mut styled = text
         .as_ref()
         .to_string()
-        .with(adapter.to_color(&style.color));
+        .with(adapter.to_color(&style.color))
+        .on(adapter.to_color(bg));
     if style.bold {
         styled = styled.attribute(Attribute::Bold);
     }

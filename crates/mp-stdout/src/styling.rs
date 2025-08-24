@@ -7,7 +7,6 @@ use mp_core::theme::{MarkdownTheme, ThemeColor};
 
 use super::MarkdownRenderer;
 
-/// Text styling for Markdown elements
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TextStyle {
     Normal,
@@ -88,13 +87,6 @@ impl<W: Write> MarkdownRenderer<W> {
         Cow::Owned(format!("{}", self.apply_text_style(marker, style)))
     }
 
-    pub fn create_styled_url(&self, url: &str) -> Cow<'static, str> {
-        Cow::Owned(format!(
-            "{}",
-            self.apply_text_style(&format!(" ({})", url), TextStyle::Delimiter)
-        ))
-    }
-
     pub fn add_text_to_state(&mut self, text: &str) -> bool {
         if let Some(ref mut link) = self.get_link_mut() {
             link.text.push_str(text);
@@ -121,17 +113,6 @@ impl<W: Write> MarkdownRenderer<W> {
         }
 
         false
-    }
-
-    pub fn create_list_marker(&self, list_type: &mut crate::state::ListType) -> String {
-        match list_type {
-            crate::state::ListType::Unordered => "- ".to_string(),
-            crate::state::ListType::Ordered { current } => {
-                let marker = format!("{}. ", current);
-                *current += 1;
-                marker
-            }
-        }
     }
 
     pub fn create_styled_text(
