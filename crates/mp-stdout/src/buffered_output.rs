@@ -38,16 +38,6 @@ impl<W: Write> BufferedOutput<W> {
         self.writer.flush()?;
         Ok(())
     }
-
-    pub fn get_mut(&mut self) -> &mut BufWriter<W> {
-        &mut self.writer
-    }
-
-    pub fn into_inner(self) -> Result<W> {
-        self.writer
-            .into_inner()
-            .map_err(|e| anyhow::anyhow!("Failed to flush BufferedOutput: {}", e))
-    }
 }
 
 impl BufferedOutput<io::Stdout> {
