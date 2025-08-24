@@ -55,7 +55,7 @@ pub fn run() -> Result<()> {
                 no_global_ignore_file: args.no_global_ignore_file,
             };
 
-            mp_tui::run_tui_with_config(finder_config)
+            mp_tui::run_tui(finder_config)
                 .map_err(|e| anyhow::anyhow!("Failed to run TUI mode: {}", e))?;
         }
     }
