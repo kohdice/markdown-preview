@@ -58,8 +58,8 @@ impl TableBuilder {
     pub fn new() -> Self {
         Self {
             headers: None,
-            rows: Vec::with_capacity(10), // Pre-allocate for typical table size
-            alignments: Vec::with_capacity(5), // Tables typically have 2-5 columns
+            rows: Vec::with_capacity(10),
+            alignments: Vec::with_capacity(5),
             separator: "|",
             alignment_config: TableAlignmentConfig::default(),
         }
@@ -117,7 +117,6 @@ impl TableBuilder {
         self
     }
 
-    /// Validates the table structure
     fn validate(&self) -> Result<()> {
         let column_count = if let Some(ref headers) = self.headers {
             headers.len()
@@ -149,7 +148,6 @@ impl TableBuilder {
         Ok(())
     }
 
-    /// Builds the table, returning an error if validation fails
     pub fn build(self) -> Result<Table> {
         self.validate()?;
 
@@ -178,7 +176,6 @@ impl Table {
         &self.rows
     }
 
-    /// Gets the column alignments
     pub fn alignments(&self) -> &Vec<Alignment> {
         &self.alignments
     }
@@ -256,7 +253,6 @@ impl Table {
         lines
     }
 
-    /// Gets the column count
     pub fn column_count(&self) -> usize {
         if let Some(ref headers) = self.headers {
             headers.len()
@@ -267,7 +263,6 @@ impl Table {
         }
     }
 
-    /// Gets the row count (excluding header)
     pub fn row_count(&self) -> usize {
         self.rows.len()
     }

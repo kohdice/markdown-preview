@@ -15,7 +15,6 @@ pub mod state;
 
 mod config;
 mod formatting;
-mod handlers;
 mod styling;
 mod table_builder;
 mod theme_adapter;
@@ -370,15 +369,6 @@ fn main() {
         assert!(result.is_ok(), "Failed to render: {}", content);
     }
 
-    fn set_emphasis_state<W: Write>(
-        renderer: &mut MarkdownRenderer<W>,
-        strong: bool,
-        italic: bool,
-    ) {
-        renderer.state.emphasis.strong = strong;
-        renderer.state.emphasis.italic = italic;
-    }
-
     #[test]
     fn test_renderer_creation() {
         let renderer = create_renderer();
@@ -415,7 +405,8 @@ fn main() {
     ) {
         let mut renderer = create_renderer();
 
-        set_emphasis_state(&mut renderer, strong, italic);
+        renderer.state.emphasis.strong = strong;
+        renderer.state.emphasis.italic = italic;
 
         if has_link {
             renderer.set_link("test".to_string());

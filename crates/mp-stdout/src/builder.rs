@@ -52,22 +52,7 @@ impl RendererBuilder<Stdout> {
     }
 
     pub fn build(self) -> MarkdownRenderer<Stdout> {
-        let options = self.options.unwrap_or_else(|| {
-            let mut opts = Options::empty();
-            if self.enable_strikethrough {
-                opts.insert(Options::ENABLE_STRIKETHROUGH);
-            }
-            if self.enable_tables {
-                opts.insert(Options::ENABLE_TABLES);
-            }
-            if self.enable_tasklists {
-                opts.insert(Options::ENABLE_TASKLISTS);
-            }
-            if self.enable_footnotes {
-                opts.insert(Options::ENABLE_FOOTNOTES);
-            }
-            opts
-        });
+        let options = self.build_options();
 
         let output = if let Some(size) = self.buffer_size {
             BufferedOutput::stdout_with_capacity(size)
@@ -98,6 +83,25 @@ impl<W: Write> RendererBuilder<W> {
             enable_tasklists: true,
             enable_footnotes: true,
         }
+    }
+
+    fn build_options(&self) -> Options {
+        self.options.unwrap_or_else(|| {
+            let mut opts = Options::empty();
+            if self.enable_strikethrough {
+                opts.insert(Options::ENABLE_STRIKETHROUGH);
+            }
+            if self.enable_tables {
+                opts.insert(Options::ENABLE_TABLES);
+            }
+            if self.enable_tasklists {
+                opts.insert(Options::ENABLE_TASKLISTS);
+            }
+            if self.enable_footnotes {
+                opts.insert(Options::ENABLE_FOOTNOTES);
+            }
+            opts
+        })
     }
 
     pub fn theme(mut self, theme: SolarizedOsaka) -> Self {
@@ -141,22 +145,7 @@ impl<W: Write> RendererBuilder<W> {
     }
 
     pub fn build_with_writer(self) -> MarkdownRenderer<W> {
-        let options = self.options.unwrap_or_else(|| {
-            let mut opts = Options::empty();
-            if self.enable_strikethrough {
-                opts.insert(Options::ENABLE_STRIKETHROUGH);
-            }
-            if self.enable_tables {
-                opts.insert(Options::ENABLE_TABLES);
-            }
-            if self.enable_tasklists {
-                opts.insert(Options::ENABLE_TASKLISTS);
-            }
-            if self.enable_footnotes {
-                opts.insert(Options::ENABLE_FOOTNOTES);
-            }
-            opts
-        });
+        let options = self.build_options();
 
         let writer = self
             .writer
@@ -220,7 +209,6 @@ mod tests {
 
     #[test]
     fn test_builder_with_custom_writer() {
-        // Allocate reasonable capacity for test output
         let writer = Vec::with_capacity(256);
         let renderer = RendererBuilder::with_writer(writer)
             .enable_tables(false)

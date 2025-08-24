@@ -59,38 +59,11 @@ pub enum ActiveElement {
 pub struct RenderState {
     pub emphasis: EmphasisState,
 
-    /// Currently active complex element that requires text accumulation.
-    /// Enforces single-context parsing - only one of link/image/code/table can be active
     pub active_element: Option<ActiveElement>,
 
-    /// Stack tracking nested list contexts for proper indentation and numbering
     pub list_stack: Vec<ListType>,
 
-    /// Buffer for accumulating text within the current line
     pub current_line: String,
-}
-
-impl RenderState {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn has_link(&self) -> bool {
-        matches!(self.active_element, Some(ActiveElement::Link(_)))
-    }
-
-    /// Determines text color based on emphasis combination and link context.
-    /// Priority: strong+italic > strong > italic, with link state affecting color choices.
-    pub fn get_text_color(&self) -> (u8, u8, u8) {
-        match (self.emphasis.strong, self.emphasis.italic, self.has_link()) {
-            (true, true, _) => (181, 137, 0),
-            (true, false, _) => (203, 75, 22),
-            (false, true, false) => (133, 153, 0),
-            (false, true, true) => (38, 139, 210),
-            (false, false, true) => (38, 139, 210),
-            _ => (147, 161, 161),
-        }
-    }
 }
 
 impl ActiveElement {

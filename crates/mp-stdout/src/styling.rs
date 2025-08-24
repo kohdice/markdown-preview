@@ -42,14 +42,13 @@ impl<W: Write> MarkdownRenderer<W> {
                 styled_text_with_bg(text, &style, &bg)
             }
             TextStyle::Custom { color, bold } => {
-                // Handle custom color by converting from crossterm Color to ThemeColor
                 let theme_color = match color {
                     Color::Rgb { r, g, b } => ThemeColor { r, g, b },
                     _ => ThemeColor {
                         r: 255,
                         g: 255,
                         b: 255,
-                    }, // Default to white for non-RGB colors
+                    },
                 };
                 let theme_style = mp_core::theme::ThemeStyle {
                     color: theme_color,
@@ -63,12 +62,11 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     pub fn render_styled_text(&mut self, text: &str) {
-        let styled = self.create_styled_text(text);
+        let styled = self.create_styled_text_with_state(text);
         self.output.write(&styled).ok();
     }
 
-    /// Create styled text based on current emphasis state
-    pub fn create_styled_text(&self, text: &str) -> Cow<'static, str> {
+    pub fn create_styled_text_with_state(&self, text: &str) -> Cow<'static, str> {
         let style = if self.state.emphasis.strong {
             TextStyle::Strong
         } else if self.state.emphasis.italic {
@@ -81,7 +79,6 @@ impl<W: Write> MarkdownRenderer<W> {
         Cow::Owned(format!("{}", self.apply_text_style(text, style)))
     }
 
-    /// Create styled marker text
     pub fn create_styled_marker(
         &self,
         marker: &str,
@@ -127,5 +124,63 @@ impl<W: Write> MarkdownRenderer<W> {
         }
 
         false
+    }
+
+    /// Create list marker based on list type
+    pub fn create_list_marker(&self, list_type: &mut crate::state::ListType) -> String {
+        match list_type {
+            crate::state::ListType::Unordered => "- ".to_string(),
+            crate::state::ListType::Ordered { current } => {
+                let marker = format!("{}. ", current);
+                *current += 1;
+                marker
+            }
+        }
+    }
+
+    /// Create styled text with explicit color and style
+    pub fn create_styled_text(
+        &self,
+        text: &str,
+        color: Color,
+        bold: bool,
+        italic: bool,
+        underline: bool,
+    ) -> Cow<'static, str> {
+        let theme_color = match color {
+            Color::Rgb { r, g, b } => ThemeColor { r, g, b },
+            _ => ThemeColor {
+                r: 147,
+                g: 161,
+                b: 161,
+            }, // Default color
+        };
+        let theme_style = mp_core::theme::ThemeStyle {
+            color: theme_color,
+            bold,
+            italic,
+            underline,
+        };
+        use crate::theme_adapter::styled_text;
+        Cow::Owned(format!("{}", styled_text(text, &theme_style)))
+    }
+
+    /// Create styled code line
+    pub fn create_styled_code_line(&self, line: &str) -> String {
+        format!("{}", self.apply_text_style(line, TextStyle::Code))
+    }
+
+    /// Create code fence for code blocks
+    pub fn create_code_fence(&self, language: Option<&str>) -> String {
+        if let Some(lang) = language {
+            format!("```{}", lang)
+        } else {
+            "```".to_string()
+        }
+    }
+
+    /// Process table cell content
+    pub fn process_table_cell(&self, cell: &str) -> String {
+        cell.to_string()
     }
 }

@@ -1,20 +1,200 @@
-use std::borrow::Cow;
 use std::io::Write;
 
 use anyhow::Result;
-use pulldown_cmark::Alignment;
+use pulldown_cmark::{Alignment, Event, Tag, TagEnd};
 
+use mp_core::html_entity::decode_html_entities;
 use mp_core::theme::MarkdownTheme;
 
 use super::{
     MarkdownRenderer,
-    state::{CodeBlockState, ListType},
+    state::{CodeBlockState, ContentType},
     styling::TextStyle,
 };
 use crate::output::{ElementKind, ElementPhase, OutputType, TableVariant};
 use crate::theme_adapter::CrosstermAdapter;
 
 impl<W: Write> MarkdownRenderer<W> {
+    pub fn process_event(&mut self, event: Event) -> Result<()> {
+        match event {
+            Event::Start(tag) => self.handle_tag_start(tag),
+            Event::End(tag_end) => self.handle_tag_end(tag_end),
+            Event::Text(text) => self.handle_content(ContentType::Text(&text)),
+            Event::Code(code) => self.handle_content(ContentType::Code(&code)),
+            Event::Html(html) => self.handle_content(ContentType::Html(&html)),
+            Event::SoftBreak => self.handle_content(ContentType::SoftBreak),
+            Event::HardBreak => self.handle_content(ContentType::HardBreak),
+            Event::Rule => self.handle_content(ContentType::Rule),
+            Event::TaskListMarker(checked) => self.handle_content(ContentType::TaskMarker(checked)),
+            Event::FootnoteReference(label) => {
+                let footnote_text = format!("[^{}]", label.as_ref());
+                self.handle_content(ContentType::Text(&footnote_text))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn handle_tag_start(&mut self, tag: Tag) -> Result<()> {
+        match tag {
+            Tag::Heading { level, .. } => {
+                self.handle_element(ElementKind::Heading(level as u8), ElementPhase::Start)?
+            }
+            Tag::Paragraph => self.handle_element(ElementKind::Paragraph, ElementPhase::Start)?,
+            Tag::Strong => self.set_strong_emphasis(true),
+            Tag::Emphasis => self.set_italic_emphasis(true),
+            Tag::Link { dest_url, .. } => self.set_link(dest_url.as_ref().to_owned()),
+            Tag::List(start) => self.handle_list_start(start),
+            Tag::Item => self.handle_element(ElementKind::ListItem, ElementPhase::Start)?,
+            Tag::CodeBlock(kind) => self.handle_code_block_start(kind),
+            Tag::Table(alignments) => self.set_table(alignments),
+            Tag::TableHead => self.handle_element(
+                ElementKind::Table(TableVariant::HeadStart),
+                ElementPhase::Start,
+            )?,
+            Tag::BlockQuote(_) => {
+                self.handle_element(ElementKind::BlockQuote, ElementPhase::Start)?
+            }
+            Tag::Image { dest_url, .. } => self.set_image(dest_url.as_ref().to_owned()),
+            Tag::FootnoteDefinition(label) => {
+                self.output.newline().ok();
+                self.output.write(&format!("[{}]: ", label.as_ref())).ok();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_tag_end(&mut self, tag_end: TagEnd) -> Result<()> {
+        match tag_end {
+            TagEnd::Heading(_) => {
+                self.handle_element(ElementKind::Heading(0), ElementPhase::End)?
+            }
+            TagEnd::Paragraph => self.handle_element(ElementKind::Paragraph, ElementPhase::End)?,
+            TagEnd::Strong => self.set_strong_emphasis(false),
+            TagEnd::Emphasis => self.set_italic_emphasis(false),
+            TagEnd::Link => self.print_output(OutputType::Link)?,
+            TagEnd::List(_) => self.handle_list_end(),
+            TagEnd::Item => self.handle_element(ElementKind::ListItem, ElementPhase::End)?,
+            TagEnd::CodeBlock => self.print_output(OutputType::CodeBlock)?,
+            TagEnd::Table => self.handle_table_end(),
+            TagEnd::TableHead => self.handle_element(
+                ElementKind::Table(TableVariant::HeadEnd),
+                ElementPhase::Start,
+            )?,
+            TagEnd::TableRow => self.handle_element(
+                ElementKind::Table(TableVariant::RowEnd),
+                ElementPhase::Start,
+            )?,
+            TagEnd::BlockQuote(_) => {
+                self.handle_element(ElementKind::BlockQuote, ElementPhase::End)?
+            }
+            TagEnd::Image => self.print_output(OutputType::Image)?,
+            TagEnd::FootnoteDefinition => {
+                self.output.newline().ok();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_element(&mut self, kind: ElementKind, phase: ElementPhase) -> Result<()> {
+        self.print_output(OutputType::Element { kind, phase })
+    }
+
+    fn handle_list_start(&mut self, start: Option<u64>) {
+        if !self.state.list_stack.is_empty() {
+            self.output.newline().ok();
+        }
+        self.push_list(start);
+    }
+
+    fn handle_list_end(&mut self) {
+        self.pop_list();
+        if self.state.list_stack.is_empty() {
+            self.output.newline().ok();
+        }
+    }
+
+    fn handle_code_block_start(&mut self, kind: pulldown_cmark::CodeBlockKind) {
+        let static_kind = match kind {
+            pulldown_cmark::CodeBlockKind::Indented => pulldown_cmark::CodeBlockKind::Indented,
+            pulldown_cmark::CodeBlockKind::Fenced(lang) => {
+                pulldown_cmark::CodeBlockKind::Fenced(lang.to_string().into())
+            }
+        };
+        self.set_code_block(static_kind);
+    }
+
+    fn handle_table_end(&mut self) {
+        self.clear_table();
+        self.output.newline().ok();
+    }
+
+    pub(super) fn handle_content(&mut self, content: ContentType) -> Result<()> {
+        match content {
+            ContentType::Text(text) => self.handle_text_content(text),
+            ContentType::Code(code) => self.handle_code_content(code),
+            ContentType::Html(html) => self.handle_html_content(html),
+            ContentType::SoftBreak => self.handle_soft_break(),
+            ContentType::HardBreak => self.handle_hard_break(),
+            ContentType::Rule => self.handle_rule(),
+            ContentType::TaskMarker(checked) => self.handle_task_marker(checked),
+        }
+    }
+
+    fn handle_text_content(&mut self, text: &str) -> Result<()> {
+        let decoded_text = decode_html_entities(text);
+        if !self.add_text_to_state(&decoded_text) {
+            self.render_styled_text(&decoded_text);
+        }
+        Ok(())
+    }
+
+    fn handle_code_content(&mut self, code: &str) -> Result<()> {
+        if let Some(ref mut cb) = self.get_code_block_mut() {
+            cb.content.push_str(code);
+        } else {
+            self.print_output(OutputType::InlineCode {
+                code: code.to_string(),
+            })?;
+        }
+        Ok(())
+    }
+
+    fn handle_html_content(&mut self, html: &str) -> Result<()> {
+        let decoded = decode_html_entities(html);
+        if !self.add_text_to_state(&decoded) {
+            self.render_styled_text(&decoded);
+        }
+        Ok(())
+    }
+
+    fn handle_soft_break(&mut self) -> Result<()> {
+        self.output.write(" ")?;
+        Ok(())
+    }
+
+    fn handle_hard_break(&mut self) -> Result<()> {
+        self.output.newline()?;
+        Ok(())
+    }
+
+    fn handle_rule(&mut self) -> Result<()> {
+        let line = self.config.create_horizontal_rule();
+        let styled_line = format!(
+            "{}",
+            self.apply_text_style(&line, super::styling::TextStyle::Delimiter)
+        );
+        self.output.writeln("")?;
+        self.output.writeln(&styled_line)?;
+        self.output.writeln("")?;
+        Ok(())
+    }
+
+    fn handle_task_marker(&mut self, checked: bool) -> Result<()> {
+        self.print_output(OutputType::TaskMarker { checked })
+    }
+
     pub fn print_output(&mut self, output_type: OutputType) -> Result<()> {
         match output_type {
             OutputType::Element { kind, phase } => self.handle_element_output(kind, phase),
@@ -53,31 +233,57 @@ impl<W: Write> MarkdownRenderer<W> {
 
     fn render_link(&mut self) -> Result<()> {
         if let Some(link) = self.get_link() {
-            self.clear_link();
-            let styled_link = format!("{}", self.apply_text_style(&link.text, TextStyle::Link));
-            let url_text = self.create_styled_url(&link.url);
-            self.output.write(&styled_link)?;
-            self.output.write(&url_text)?;
+            if !link.text.is_empty() {
+                let hyperlink = format!("\x1b]8;;{}\x1b\\{}\x1b]8;;\x1b\\", link.url, link.text);
+                self.output.write(&hyperlink)?;
+            } else {
+                let link_style = self.theme.link_style();
+                let styled_url = self.create_styled_text(
+                    &link.url,
+                    link_style.color.to_crossterm_color(),
+                    false,
+                    false,
+                    link_style.underline,
+                );
+                self.output.write(&styled_url)?;
+            }
         }
+        self.clear_link();
         Ok(())
     }
 
     fn render_image(&mut self) -> Result<()> {
         if let Some(image) = self.get_image() {
-            self.clear_image();
-            let display_text = if image.alt_text.is_empty() {
-                "[Image]"
+            let display_text = if !image.alt_text.is_empty() {
+                format!("[{}]", image.alt_text)
             } else {
-                &image.alt_text
+                "[Image]".to_string()
             };
-            let styled_alt = format!(
-                "{}",
-                self.apply_text_style(display_text, TextStyle::Emphasis)
+
+            let image_style = self.theme.link_style();
+            let styled_text = self.create_styled_text(
+                &display_text,
+                image_style.color.to_crossterm_color(),
+                false,
+                false,
+                false,
             );
-            let url_text = self.create_styled_url(&image.url);
-            self.output.write(&styled_alt)?;
-            self.output.write(&url_text)?;
+            self.output.write(&styled_text)?;
+
+            let styled_url = self.create_styled_text(
+                &format!(" ({})", image.url),
+                crossterm::style::Color::Rgb {
+                    r: 133,
+                    g: 153,
+                    b: 0,
+                },
+                false,
+                true,
+                false,
+            );
+            self.output.write(&styled_url)?;
         }
+        self.clear_image();
         Ok(())
     }
 
@@ -90,182 +296,162 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     fn handle_element_output(&mut self, kind: ElementKind, phase: ElementPhase) -> Result<()> {
-        match kind {
-            ElementKind::Heading(level) => self.render_heading(level, phase),
-            ElementKind::Paragraph => self.render_paragraph(phase),
-            ElementKind::ListItem => self.render_list_item(phase),
-            ElementKind::BlockQuote => self.render_blockquote(phase),
-            ElementKind::Table(ref variant) => self.render_table_element(variant),
+        match (kind, phase) {
+            (ElementKind::Heading(level), ElementPhase::Start) => {
+                self.render_heading_start(level)?
+            }
+            (ElementKind::Heading(_), ElementPhase::End) => self.render_heading_end()?,
+            (ElementKind::Paragraph, ElementPhase::Start) => {}
+            (ElementKind::Paragraph, ElementPhase::End) => self.output.newline()?,
+            (ElementKind::ListItem, ElementPhase::Start) => self.render_list_item()?,
+            (ElementKind::ListItem, ElementPhase::End) => {}
+            (ElementKind::BlockQuote, ElementPhase::Start) => self.render_blockquote_start()?,
+            (ElementKind::BlockQuote, ElementPhase::End) => self.output.newline()?,
+            (ElementKind::Table(variant), ElementPhase::Start) => {
+                self.handle_table_variant(variant)?
+            }
+            _ => {}
         }
+        Ok(())
     }
 
-    fn render_heading(&mut self, level: u8, phase: ElementPhase) -> Result<()> {
-        if phase == ElementPhase::End {
-            self.output.writeln("")?;
-            self.output.writeln("")?
-        } else {
-            let heading_marker = "#".repeat(level as usize);
-            let heading_style = self.theme.heading_style(level);
-            let mut marker_with_space = heading_marker;
-            marker_with_space.push(' ');
-            let marker = self.create_styled_marker(
-                &marker_with_space,
-                heading_style.color.to_crossterm_color(),
-                heading_style.bold,
+    fn render_heading_start(&mut self, level: u8) -> Result<()> {
+        let heading_style = self.theme.heading_style(level);
+        let prefix = "#".repeat(level as usize);
+        let styled_prefix = self.create_styled_text(
+            &prefix,
+            heading_style.color.to_crossterm_color(),
+            heading_style.bold,
+            false,
+            heading_style.underline,
+        );
+        self.output.write(&styled_prefix)?;
+        self.output.write(" ")?;
+        Ok(())
+    }
+
+    fn render_heading_end(&mut self) -> Result<()> {
+        self.output.newline()?;
+        self.output.newline()?;
+        Ok(())
+    }
+
+    fn render_list_item(&mut self) -> Result<()> {
+        let indent_level = self.state.list_stack.len().saturating_sub(1);
+        let indent = self.config.create_indent(indent_level);
+        self.output.write(&indent)?;
+
+        let marker = match self.state.list_stack.last_mut() {
+            Some(crate::state::ListType::Unordered) => "- ".to_string(),
+            Some(crate::state::ListType::Ordered { current }) => {
+                let marker = format!("{}. ", current);
+                *current += 1;
+                marker
+            }
+            None => String::new(),
+        };
+
+        if !marker.is_empty() {
+            let list_marker_style = self.theme.list_marker_style();
+            let styled_marker = self.create_styled_marker(
+                &marker,
+                list_marker_style.color.to_crossterm_color(),
+                list_marker_style.bold,
             );
-            self.output.write(&marker)?;
+            self.output.write(&styled_marker)?;
         }
         Ok(())
     }
 
-    fn render_paragraph(&mut self, phase: ElementPhase) -> Result<()> {
-        if phase == ElementPhase::End {
-            self.output.newline()?;
-        }
+    fn render_blockquote_start(&mut self) -> Result<()> {
+        let quote_style = self.theme.code_style(); // Using code_style for blockquote
+        let styled_marker = self.create_styled_text(
+            "> ",
+            quote_style.color.to_crossterm_color(),
+            quote_style.bold,
+            quote_style.italic,
+            false,
+        );
+        self.output.write(&styled_marker)?;
         Ok(())
     }
 
-    fn render_list_item(&mut self, phase: ElementPhase) -> Result<()> {
-        if phase == ElementPhase::End {
-            self.output.newline()?;
-        } else {
-            let depth = self.state.list_stack.len();
-            let indent = self.config.create_indent(depth.saturating_sub(1));
-            self.output.write(&indent)?;
-
-            if let Some(list_type) = self.state.list_stack.last_mut() {
-                let marker = match list_type {
-                    ListType::Unordered => Cow::Borrowed("• "),
-                    ListType::Ordered { current } => {
-                        let mut m = current.to_string();
-                        m.push_str(".  ");
-                        *current += 1;
-                        Cow::Owned(m)
+    fn handle_table_variant(&mut self, variant: TableVariant) -> Result<()> {
+        match variant {
+            TableVariant::HeadStart => {}
+            TableVariant::HeadEnd => {
+                let (current_row, alignments) = {
+                    if let Some(table) = self.get_table_mut() {
+                        let row = table.current_row.clone();
+                        let align = table.alignments.clone();
+                        table.current_row.clear();
+                        table.is_header = false;
+                        (row, align)
+                    } else {
+                        (vec![], vec![])
                     }
                 };
-                let list_marker_style = self.theme.list_marker_style();
-                let styled_marker = self.create_styled_marker(
-                    &marker,
-                    list_marker_style.color.to_crossterm_color(),
-                    false,
-                );
-                self.output.write(&styled_marker)?;
+                if !current_row.is_empty() {
+                    self.render_table_row(&current_row)?;
+                    self.render_table_separator(&alignments)?;
+                }
+            }
+            TableVariant::RowEnd => {
+                let current_row = {
+                    if let Some(table) = self.get_table_mut() {
+                        let row = table.current_row.clone();
+                        table.current_row.clear();
+                        row
+                    } else {
+                        vec![]
+                    }
+                };
+                if !current_row.is_empty() {
+                    self.render_table_row(&current_row)?;
+                }
             }
         }
         Ok(())
     }
 
-    fn render_blockquote(&mut self, phase: ElementPhase) -> Result<()> {
-        if phase == ElementPhase::End {
-            self.output.newline()?;
-        } else {
-            let delimiter_style = self.theme.delimiter_style();
-            let marker =
-                self.create_styled_marker("> ", delimiter_style.color.to_crossterm_color(), false);
-            self.output.write(&marker)?;
-        }
-        Ok(())
-    }
-
-    fn render_table_element(&mut self, variant: &TableVariant) -> Result<()> {
-        match variant {
-            TableVariant::HeadStart => self.render_table_head_start(),
-            TableVariant::HeadEnd => self.render_table_head_end()?,
-            TableVariant::RowEnd => self.render_table_row_end()?,
-        }
-        Ok(())
-    }
-
-    fn render_table_head_start(&mut self) {
-        if let Some(ref mut table) = self.get_table_mut() {
-            table.is_header = true;
-        }
-    }
-
-    fn render_table_head_end(&mut self) -> Result<()> {
-        if let Some(table) = self.get_table() {
-            self.render_table_row(&table.current_row, true)?;
-            self.render_table_separator(&table.alignments)?;
-        }
-
-        if let Some(ref mut table) = self.get_table_mut() {
-            table.current_row.clear();
-            table.is_header = false;
-        }
-        Ok(())
-    }
-
-    fn render_table_row_end(&mut self) -> Result<()> {
-        if let Some(table) = self.get_table() {
-            self.render_table_row(&table.current_row, false)?;
-        }
-
-        if let Some(ref mut table) = self.get_table_mut() {
-            table.current_row.clear();
-        }
-        Ok(())
-    }
-
-    pub(super) fn render_code_block(&mut self, code_block: &CodeBlockState) -> Result<()> {
-        self.render_code_fence(code_block.language.as_deref())?;
-        self.render_code_content(&code_block.content)?;
-        self.render_code_fence(None)?;
-        Ok(())
-    }
-
-    pub(super) fn render_code_fence(&mut self, language: Option<&str>) -> Result<()> {
-        let fence = self.create_code_fence(language);
-        self.output.writeln(&fence)?;
-        Ok(())
-    }
-
-    pub(super) fn create_code_fence(&self, language: Option<&str>) -> String {
-        let delimiter_style = self.theme.delimiter_style();
-        let fence =
-            self.create_styled_marker("```", delimiter_style.color.to_crossterm_color(), false);
-        if let Some(lang) = language {
-            let code_style = self.theme.code_style();
-            let lang_text =
-                self.create_styled_marker(lang, code_style.color.to_crossterm_color(), false);
-            let mut result = fence.into_owned();
-            result.push_str(&lang_text);
-            result
-        } else {
-            fence.into_owned()
-        }
-    }
-
     pub(super) fn render_code_content(&mut self, content: &str) -> Result<()> {
-        // Collect styled lines first to avoid multiple borrows
         let styled_lines: Vec<String> = content
             .lines()
             .map(|line| self.create_styled_code_line(line))
             .collect();
 
-        // Then write them all
         for styled_line in styled_lines {
             self.output.writeln(&styled_line)?;
         }
         Ok(())
     }
 
-    pub(super) fn create_styled_code_line(&self, line: &str) -> String {
-        self.apply_text_style(line, TextStyle::CodeBlock)
-            .to_string()
+    pub(super) fn render_code_block(&mut self, code_block: &CodeBlockState) -> Result<()> {
+        let fence = self.create_code_fence(code_block.language.as_deref());
+        let code_style = self.theme.code_style();
+        let styled_fence = self.create_styled_text(
+            &fence,
+            code_style.color.to_crossterm_color(),
+            false,
+            false,
+            false,
+        );
+
+        self.output.newline()?;
+        self.output.writeln(&styled_fence)?;
+        self.render_code_content(&code_block.content)?;
+        self.output.writeln(&styled_fence)?;
+        self.output.newline()?;
+        Ok(())
     }
 
-    pub fn render_table_row(&mut self, row: &[String], is_header: bool) -> Result<()> {
-        let estimated_size: usize = row.iter().map(|s| s.len() + 4).sum::<usize>() + 1;
-        let mut output = String::with_capacity(estimated_size);
+    fn render_table_row(&mut self, cells: &[String]) -> Result<()> {
+        let mut output = String::new();
         output.push_str(self.config.table_separator);
-        for cell in row {
+        for cell in cells {
             output.push(' ');
-            if is_header {
-                let styled = self.apply_text_style(cell, TextStyle::Heading(1));
-                output.push_str(&styled.to_string());
-            } else {
-                output.push_str(cell);
-            }
+            let processed_cell = self.process_table_cell(cell);
+            output.push_str(&processed_cell);
             output.push(' ');
             output.push_str(self.config.table_separator);
         }
@@ -273,8 +459,8 @@ impl<W: Write> MarkdownRenderer<W> {
         Ok(())
     }
 
-    pub fn render_table_separator(&mut self, alignments: &[Alignment]) -> Result<()> {
-        let mut output = String::with_capacity(alignments.len() * 8 + 1);
+    fn render_table_separator(&mut self, alignments: &[Alignment]) -> Result<()> {
+        let mut output = String::new();
         output.push_str(self.config.table_separator);
         for alignment in alignments {
             let separator = match alignment {
@@ -295,9 +481,12 @@ impl<W: Write> MarkdownRenderer<W> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::{
-        BufferedOutput, MarkdownRenderer,
-        output::{ElementKind, ElementPhase, OutputType, TableVariant},
+        MarkdownRenderer,
+        buffered_output::BufferedOutput,
+        output::{ElementKind, OutputType},
+        state::ActiveElement,
     };
     use rstest::rstest;
     use std::io::Write;
@@ -326,7 +515,6 @@ mod tests {
     }
 
     fn create_test_renderer() -> MarkdownRenderer<MockWriter> {
-        // Typical test output is around 1KB
         let buffer = Arc::new(Mutex::new(Vec::with_capacity(1024)));
         let mock_writer = MockWriter::new_with_buffer(buffer);
         let output = BufferedOutput::new(mock_writer);
@@ -369,7 +557,6 @@ mod tests {
         let mut renderer = create_test_renderer();
         renderer.set_table(vec![]);
 
-        // Add test data for HeadEnd and RowEnd cases
         if matches!(variant, TableVariant::HeadEnd | TableVariant::RowEnd)
             && let Some(table) = renderer.get_table_mut()
         {
@@ -404,110 +591,118 @@ mod tests {
         }
         let result = renderer.print_output(OutputType::Link);
         assert!(result.is_ok());
+        assert!(!renderer.has_link());
     }
 
     #[test]
     fn test_print_output_image() {
         let mut renderer = create_test_renderer();
-        renderer.set_image("https://example.com/image.jpg".to_string());
+        renderer.set_image("https://example.com/image.png".to_string());
         if let Some(image) = renderer.get_image_mut() {
             image.alt_text = "Example Image".to_string();
         }
         let result = renderer.print_output(OutputType::Image);
         assert!(result.is_ok());
+        assert!(renderer.get_image().is_none());
     }
 
     #[test]
     fn test_print_output_code_block() {
         let mut renderer = create_test_renderer();
         renderer.set_code_block(pulldown_cmark::CodeBlockKind::Fenced("rust".into()));
-        if let Some(code) = renderer.get_code_block_mut() {
-            code.content = "fn main() {}".to_string();
+        if let Some(cb) = renderer.get_code_block_mut() {
+            cb.content = "fn main() {\n    println!(\"Hello\");\n}".to_string();
         }
         let result = renderer.print_output(OutputType::CodeBlock);
         assert!(result.is_ok());
-    }
-
-    #[rstest]
-    #[case("# Heading 1\n## Heading 2", "headings")]
-    #[case("- Item 1\n- Item 2\n1. Ordered item", "lists")]
-    #[case("> This is a quote", "blockquote")]
-    #[case("| Header |\n|--------|\n| Cell |", "table")]
-    #[case("```rust\nfn main() {}\n```", "code_block")]
-    #[case("**bold** *italic* `code`", "inline_elements")]
-    #[case("[Link](https://example.com)", "link")]
-    #[case("---", "horizontal_rule")]
-    fn test_render_content_markdown_elements(#[case] markdown: &str, #[case] _description: &str) {
-        let mut renderer = create_test_renderer();
-        let result = renderer.render_content(markdown);
-        assert!(result.is_ok(), "Failed to render {}", _description);
+        assert!(renderer.get_code_block().is_none());
     }
 
     #[test]
-    fn test_complex_markdown_rendering() {
+    fn test_handle_content_text() {
         let mut renderer = create_test_renderer();
-
-        let complex_markdown = r#"
-# Main Title
-
-This is a paragraph with **bold** and *italic* text.
-
-## Lists
-
-- Unordered item 1
-- Unordered item 2
-  - Nested item
-
-1. Ordered item 1
-2. Ordered item 2
-
-## Code
-
-```rust
-fn hello() {
-    println!("Hello, world!");
-}
-```
-
-## Table
-
-| Column 1 | Column 2 |
-|----------|----------|
-| Data 1   | Data 2   |
-
-> A blockquote with multiple
-> lines of text
-
----
-
-[Link](https://example.com)
-"#;
-
-        let result = renderer.render_content(complex_markdown);
+        renderer.set_link("".to_string());
+        let result = renderer.handle_content(ContentType::Text("test text"));
         assert!(result.is_ok());
+        assert_eq!(renderer.get_link().unwrap().text, "test text");
     }
 
-    #[rstest]
-    #[case(1)]
-    #[case(2)]
-    #[case(3)]
-    #[case(4)]
-    #[case(5)]
-    #[case(6)]
-    fn test_heading_levels(#[case] level: u8) {
+    #[test]
+    fn test_handle_content_code() {
         let mut renderer = create_test_renderer();
-        let markdown = format!("{} Heading Level {}", "#".repeat(level as usize), level);
-        let result = renderer.render_content(&markdown);
-        assert!(result.is_ok(), "Failed to render heading level {}", level);
+        renderer.set_code_block(pulldown_cmark::CodeBlockKind::Indented);
+        let result = renderer.handle_content(ContentType::Code("let x = 5;"));
+        assert!(result.is_ok());
+        assert_eq!(renderer.get_code_block().unwrap().content, "let x = 5;");
     }
 
-    #[rstest]
-    #[case("- [ ] Unchecked task")]
-    #[case("- [x] Checked task")]
-    #[case("- [X] Also checked task")]
-    fn test_task_lists(#[case] markdown: &str) {
+    #[test]
+    fn test_nested_lists() {
         let mut renderer = create_test_renderer();
-        let result = renderer.render_content(markdown);
-        assert!(result.is_ok(), "Failed to render task list: {}", markdown);
+        renderer.push_list(None);
+        renderer.push_list(Some(1));
+        assert_eq!(renderer.state.list_stack.len(), 2);
+
+        let result = renderer.print_output(OutputType::Element {
+            kind: ElementKind::ListItem,
+            phase: ElementPhase::Start,
+        });
+        assert!(result.is_ok());
+
+        renderer.pop_list();
+        renderer.pop_list();
+        assert!(renderer.state.list_stack.is_empty());
+    }
+
+    #[test]
+    fn test_table_with_alignments() {
+        let mut renderer = create_test_renderer();
+        let alignments = vec![
+            Alignment::Left,
+            Alignment::Center,
+            Alignment::Right,
+            Alignment::None,
+        ];
+        renderer.set_table(alignments.clone());
+
+        let table = renderer.get_table();
+        assert!(table.is_some());
+        let table = table.unwrap();
+        assert_eq!(table.alignments, alignments);
+        assert!(table.is_header);
+    }
+
+    #[test]
+    fn test_emphasis_states() {
+        let mut renderer = create_test_renderer();
+        renderer.set_strong_emphasis(true);
+        assert!(renderer.state.emphasis.strong);
+
+        renderer.set_italic_emphasis(true);
+        assert!(renderer.state.emphasis.italic);
+
+        renderer.set_strong_emphasis(false);
+        assert!(!renderer.state.emphasis.strong);
+        assert!(renderer.state.emphasis.italic);
+    }
+
+    #[test]
+    fn test_active_element_transitions() {
+        let mut renderer = create_test_renderer();
+
+        renderer.set_link("url1".to_string());
+        assert!(matches!(
+            renderer.state.active_element,
+            Some(ActiveElement::Link(_))
+        ));
+
+        renderer.set_image("url2".to_string());
+        assert!(matches!(
+            renderer.state.active_element,
+            Some(ActiveElement::Image(_))
+        ));
+
+        renderer.clear_active_element();
+        assert!(renderer.state.active_element.is_none());
     }
 }
