@@ -6,18 +6,6 @@ use mp_core::theme::SolarizedOsaka;
 
 use crate::{BufferedOutput, MarkdownRenderer, RenderConfig, RenderState};
 
-/// # Example
-/// ```
-/// use mp_stdout::RendererBuilder;
-/// use mp_core::theme::SolarizedOsaka;
-///
-/// let renderer = RendererBuilder::new()
-///     .theme(SolarizedOsaka::default())
-///     .enable_strikethrough(true)
-///     .enable_tables(true)
-///     .buffer_size(16 * 1024)
-///     .build();
-/// ```
 pub struct RendererBuilder<W: Write = Stdout> {
     theme: Option<SolarizedOsaka>,
     options: Option<Options>,
