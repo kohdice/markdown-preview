@@ -17,17 +17,7 @@ impl ThemeAdapter for CrosstermThemeAdapter {
     }
 
     fn to_style(&self, style: &ThemeStyle) -> Self::Style {
-        let mut styled = String::new().with(self.to_color(&style.color));
-        if style.bold {
-            styled = styled.attribute(Attribute::Bold);
-        }
-        if style.italic {
-            styled = styled.attribute(Attribute::Italic);
-        }
-        if style.underline {
-            styled = styled.attribute(Attribute::Underlined);
-        }
-        styled
+        apply_style_attributes(String::new().with(self.to_color(&style.color)), style)
     }
 }
 
@@ -42,12 +32,10 @@ impl CrosstermAdapter for ThemeColor {
     }
 }
 
-pub fn styled_text<S: AsRef<str>>(text: S, style: &ThemeStyle) -> StyledContent<String> {
-    let adapter = CrosstermThemeAdapter;
-    let mut styled = text
-        .as_ref()
-        .to_string()
-        .with(adapter.to_color(&style.color));
+fn apply_style_attributes(
+    mut styled: StyledContent<String>,
+    style: &ThemeStyle,
+) -> StyledContent<String> {
     if style.bold {
         styled = styled.attribute(Attribute::Bold);
     }
@@ -60,27 +48,27 @@ pub fn styled_text<S: AsRef<str>>(text: S, style: &ThemeStyle) -> StyledContent<
     styled
 }
 
+pub fn styled_text<S: AsRef<str>>(text: S, style: &ThemeStyle) -> StyledContent<String> {
+    let adapter = CrosstermThemeAdapter;
+    let styled = text
+        .as_ref()
+        .to_string()
+        .with(adapter.to_color(&style.color));
+    apply_style_attributes(styled, style)
+}
+
 pub fn styled_text_with_bg<S: AsRef<str>>(
     text: S,
     style: &ThemeStyle,
     bg: &ThemeColor,
 ) -> StyledContent<String> {
     let adapter = CrosstermThemeAdapter;
-    let mut styled = text
+    let styled = text
         .as_ref()
         .to_string()
         .with(adapter.to_color(&style.color))
         .on(adapter.to_color(bg));
-    if style.bold {
-        styled = styled.attribute(Attribute::Bold);
-    }
-    if style.italic {
-        styled = styled.attribute(Attribute::Italic);
-    }
-    if style.underline {
-        styled = styled.attribute(Attribute::Underlined);
-    }
-    styled
+    apply_style_attributes(styled, style)
 }
 
 #[cfg(test)]
