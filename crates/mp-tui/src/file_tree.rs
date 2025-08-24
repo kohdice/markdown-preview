@@ -306,7 +306,7 @@ impl FileTreeWidget {
 mod tests {
     use super::*;
     use anyhow::Result;
-    use mp_core::build_markdown_tree_in_dir;
+    use mp_core::build_markdown_tree;
     use std::fs;
     use tempfile::TempDir;
 
@@ -320,7 +320,7 @@ mod tests {
         }
 
         fn from_directory(path: &str, config: FinderConfig) -> Result<Self> {
-            let tree_data = build_markdown_tree_in_dir(path, config)?;
+            let tree_data = build_markdown_tree(path, config)?;
             Ok(Self::new(tree_data))
         }
     }

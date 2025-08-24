@@ -13,7 +13,7 @@ use regex::Regex;
 use mp_core::theme::{MarkdownTheme, SolarizedOsaka, ThemeAdapter};
 
 use crate::theme_adapter::RatatuiThemeAdapter;
-use crate::utils::truncate_unicode_string;
+use unicode_width::UnicodeWidthStr;
 
 pub struct MarkdownWidget {
     content: Arc<String>,
@@ -375,6 +375,23 @@ impl MarkdownWidget {
         lines.push(Line::from(""));
         lines
     }
+}
+
+fn truncate_unicode_string(text: &str, max_width: usize) -> (String, usize) {
+    let mut current_width = 0;
+    let mut char_count = 0;
+
+    for ch in text.chars() {
+        let ch_width = ch.to_string().width();
+        if current_width + ch_width > max_width {
+            break;
+        }
+        current_width += ch_width;
+        char_count += 1;
+    }
+
+    let truncated: String = text.chars().take(char_count).collect();
+    (truncated, current_width)
 }
 
 impl StatefulWidget for &MarkdownWidget {
