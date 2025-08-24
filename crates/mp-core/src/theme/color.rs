@@ -1,4 +1,3 @@
-/// Color representation for themes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ThemeColor {
     pub r: u8,
@@ -145,7 +144,6 @@ mod tests {
         assert_eq!(darker.g, 50);
         assert_eq!(darker.b, 50);
 
-        // Test clamping
         let very_bright = adjust_brightness(&color, 200);
         assert_eq!(very_bright.r, 255);
         assert_eq!(very_bright.g, 255);

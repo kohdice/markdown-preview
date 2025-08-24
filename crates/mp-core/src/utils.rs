@@ -1,5 +1,3 @@
-//! Cross-platform text processing utilities
-
 use std::borrow::Cow;
 
 pub fn normalize_line_endings(text: &str) -> Cow<'_, str> {

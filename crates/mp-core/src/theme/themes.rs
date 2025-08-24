@@ -217,8 +217,6 @@ mod tests {
     #[test]
     fn test_solarized_osaka_theme_styles() {
         let theme = SolarizedOsaka;
-
-        // Test heading styles
         let h1_style = theme.heading_style(1);
         assert_eq!(h1_style.color, SolarizedOsaka::BLUE);
         assert!(h1_style.bold);
@@ -244,8 +242,6 @@ mod tests {
         let h6_style = theme.heading_style(6);
         assert_eq!(h6_style.color, SolarizedOsaka::MAGENTA);
         assert!(!h6_style.bold);
-
-        // Test text styles
         let strong_style = theme.strong_style();
         assert_eq!(strong_style.color, SolarizedOsaka::ORANGE);
         assert!(strong_style.bold);
@@ -265,8 +261,6 @@ mod tests {
         assert!(!code_style.bold);
         assert!(!code_style.italic);
         assert!(!code_style.underline);
-
-        // Test colors
         assert_eq!(theme.code_background(), SolarizedOsaka::BASE02);
 
         let list_marker_style = theme.list_marker_style();

@@ -1,6 +1,5 @@
 use super::color::ThemeColor;
 
-/// Style representation for themes
 #[derive(Debug, Clone, Copy)]
 pub struct ThemeStyle {
     pub color: ThemeColor,

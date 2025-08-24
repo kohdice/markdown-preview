@@ -147,7 +147,6 @@ fn insert_path_into_tree(node: &mut FileTreeNode, relative: &Path, full_path: &P
     let first_str = first.as_os_str().to_string_lossy().to_string();
 
     if components.len() == 1 {
-        // This is a direct child
         let child = FileTreeNode {
             path: full_path.to_path_buf(),
             name: first_str,
@@ -159,10 +158,8 @@ fn insert_path_into_tree(node: &mut FileTreeNode, relative: &Path, full_path: &P
             node.children.push(child);
         }
     } else {
-        // Need to recurse into subdirectory
         let dir_name = first_str.clone();
 
-        // Find or create the directory node
         let dir_node = if let Some(existing) = node
             .children
             .iter_mut()
@@ -170,7 +167,6 @@ fn insert_path_into_tree(node: &mut FileTreeNode, relative: &Path, full_path: &P
         {
             existing
         } else {
-            // Create the directory node
             let dir_path = node.path.join(&dir_name);
             let new_dir = FileTreeNode {
                 path: dir_path,
@@ -182,7 +178,6 @@ fn insert_path_into_tree(node: &mut FileTreeNode, relative: &Path, full_path: &P
             node.children.last_mut().unwrap()
         };
 
-        // Recurse with the remaining path
         let remaining: PathBuf = components[1..].iter().collect();
         insert_path_into_tree(dir_node, &remaining, full_path)?;
     }
@@ -209,14 +204,12 @@ fn remove_empty_directories(node: &mut FileTreeNode) {
         return;
     }
 
-    // Recursively process children first
     for child in &mut node.children {
         remove_empty_directories(child);
     }
 
     node.children.retain(|child| {
         if child.is_dir {
-            // Keep directory only if it has children (after recursive processing)
             !child.children.is_empty()
         } else {
             true
@@ -224,7 +217,6 @@ fn remove_empty_directories(node: &mut FileTreeNode) {
     });
 }
 
-/// Create a relative path with robust cross-platform support
 fn make_relative_path(path: &Path, base: &Path) -> PathBuf {
     let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let canonical_base = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
@@ -247,6 +239,19 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    fn assert_path_contains(paths: &[String], expected: &str) {
+        let path_to_check = if cfg!(windows) {
+            expected.replace('/', "\\")
+        } else {
+            expected.to_string()
+        };
+        assert!(
+            paths.iter().any(|p| p.contains(&path_to_check)),
+            "Expected to find path containing: {}",
+            expected
+        );
+    }
 
     fn create_test_dir() -> TempDir {
         let dir = TempDir::new().unwrap();
@@ -280,17 +285,7 @@ mod tests {
 
         assert!(file_names.iter().any(|f| f.ends_with("README.md")));
         assert!(file_names.iter().any(|f| f.ends_with("test.md")));
-
-        #[cfg(windows)]
-        {
-            assert!(file_names.iter().any(|f| f.ends_with("subdir\\sub.md")));
-        }
-
-        #[cfg(not(windows))]
-        {
-            assert!(file_names.iter().any(|f| f.ends_with("subdir/sub.md")));
-        }
-
+        assert_path_contains(&file_names, "subdir/sub.md");
         assert!(!file_names.iter().any(|f| f.ends_with(".hidden.md")));
     }
 
@@ -312,16 +307,7 @@ mod tests {
             .collect();
 
         assert!(file_names.iter().any(|f| f.ends_with(".hidden.md")));
-
-        #[cfg(windows)]
-        {
-            assert!(file_names.iter().any(|f| f.ends_with("subdir\\sub.md")));
-        }
-
-        #[cfg(not(windows))]
-        {
-            assert!(file_names.iter().any(|f| f.ends_with("subdir/sub.md")));
-        }
+        assert_path_contains(&file_names, "subdir/sub.md");
     }
 
     #[test]
@@ -336,21 +322,7 @@ mod tests {
             .map(|p| p.to_string_lossy().to_string())
             .collect();
 
-        #[cfg(windows)]
-        {
-            assert!(
-                raw_paths.iter().any(|f| f.contains("subdir\\sub.md")),
-                "Windows paths should contain backslashes"
-            );
-        }
-
-        #[cfg(not(windows))]
-        {
-            assert!(
-                raw_paths.iter().any(|f| f.contains("subdir/sub.md")),
-                "Unix paths should contain forward slashes"
-            );
-        }
+        assert_path_contains(&raw_paths, "subdir/sub.md");
         let normalized_paths: Vec<String> = files
             .iter()
             .map(|p| p.to_string_lossy().replace('\\', "/"))
@@ -402,17 +374,12 @@ mod tests {
         let config = FinderConfig::default();
         let tree = build_markdown_tree_in_dir(temp_dir.path().to_str().unwrap(), config).unwrap();
 
-        // Check root
         assert!(tree.is_dir);
-
-        // Should have at least 2 direct children (files) and 1 directory
         let file_count = tree.children.iter().filter(|c| !c.is_dir).count();
         let dir_count = tree.children.iter().filter(|c| c.is_dir).count();
 
         assert_eq!(file_count, 2); // README.md and test.md
         assert_eq!(dir_count, 1); // subdir
-
-        // Check that the subdir has the markdown file
         let subdir = tree.children.iter().find(|c| c.name == "subdir").unwrap();
         assert!(subdir.is_dir);
         assert_eq!(subdir.children.len(), 1);
@@ -422,8 +389,6 @@ mod tests {
     #[test]
     fn test_tree_removes_empty_directories() {
         let temp_dir = TempDir::new().unwrap();
-
-        // Create a structure with some empty directories
         fs::write(temp_dir.path().join("README.md"), "# Test").unwrap();
 
         let empty_dir = temp_dir.path().join("empty");
@@ -436,18 +401,13 @@ mod tests {
         let config = FinderConfig::default();
         let tree = build_markdown_tree_in_dir(temp_dir.path().to_str().unwrap(), config).unwrap();
 
-        // Should not include the empty directory
         assert!(!tree.children.iter().any(|c| c.name == "empty"));
-
-        // Should include the directory with markdown
         assert!(tree.children.iter().any(|c| c.name == "with_md"));
     }
 
     #[test]
     fn test_tree_sorting() {
         let temp_dir = TempDir::new().unwrap();
-
-        // Create files and directories
         fs::write(temp_dir.path().join("zebra.md"), "").unwrap();
         fs::write(temp_dir.path().join("apple.md"), "").unwrap();
 
@@ -462,7 +422,6 @@ mod tests {
         let config = FinderConfig::default();
         let tree = build_markdown_tree_in_dir(temp_dir.path().to_str().unwrap(), config).unwrap();
 
-        // Directories should come first, then files, all sorted alphabetically
         assert_eq!(tree.children[0].name, "a_dir");
         assert!(tree.children[0].is_dir);
 
