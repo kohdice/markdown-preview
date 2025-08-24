@@ -12,10 +12,6 @@ pub struct RendererBuilder<W: Write = Stdout> {
     config: Option<RenderConfig>,
     writer: Option<W>,
     buffer_size: Option<usize>,
-    enable_strikethrough: bool,
-    enable_tables: bool,
-    enable_tasklists: bool,
-    enable_footnotes: bool,
 }
 
 impl Default for RendererBuilder<Stdout> {
@@ -32,15 +28,11 @@ impl RendererBuilder<Stdout> {
             config: None,
             writer: None,
             buffer_size: None,
-            enable_strikethrough: true,
-            enable_tables: true,
-            enable_tasklists: true,
-            enable_footnotes: true,
         }
     }
 
     pub fn build(self) -> MarkdownRenderer<Stdout> {
-        let options = self.build_options();
+        let options = self.options.unwrap_or_else(Self::default_options);
 
         let output = if let Some(size) = self.buffer_size {
             BufferedOutput::stdout_with_capacity(size)
@@ -59,6 +51,15 @@ impl RendererBuilder<Stdout> {
 }
 
 impl<W: Write> RendererBuilder<W> {
+    fn default_options() -> Options {
+        let mut opts = Options::empty();
+        opts.insert(Options::ENABLE_STRIKETHROUGH);
+        opts.insert(Options::ENABLE_TABLES);
+        opts.insert(Options::ENABLE_TASKLISTS);
+        opts.insert(Options::ENABLE_FOOTNOTES);
+        opts
+    }
+
     pub fn with_writer(writer: W) -> Self {
         Self {
             theme: None,
@@ -66,30 +67,7 @@ impl<W: Write> RendererBuilder<W> {
             config: None,
             writer: Some(writer),
             buffer_size: None,
-            enable_strikethrough: true,
-            enable_tables: true,
-            enable_tasklists: true,
-            enable_footnotes: true,
         }
-    }
-
-    fn build_options(&self) -> Options {
-        self.options.unwrap_or_else(|| {
-            let mut opts = Options::empty();
-            if self.enable_strikethrough {
-                opts.insert(Options::ENABLE_STRIKETHROUGH);
-            }
-            if self.enable_tables {
-                opts.insert(Options::ENABLE_TABLES);
-            }
-            if self.enable_tasklists {
-                opts.insert(Options::ENABLE_TASKLISTS);
-            }
-            if self.enable_footnotes {
-                opts.insert(Options::ENABLE_FOOTNOTES);
-            }
-            opts
-        })
     }
 
     pub fn theme(mut self, theme: SolarizedOsaka) -> Self {
@@ -108,22 +86,42 @@ impl<W: Write> RendererBuilder<W> {
     }
 
     pub fn enable_strikethrough(mut self, enable: bool) -> Self {
-        self.enable_strikethrough = enable;
+        let opts = self.options.get_or_insert_with(Self::default_options);
+        if enable {
+            opts.insert(Options::ENABLE_STRIKETHROUGH);
+        } else {
+            opts.remove(Options::ENABLE_STRIKETHROUGH);
+        }
         self
     }
 
     pub fn enable_tables(mut self, enable: bool) -> Self {
-        self.enable_tables = enable;
+        let opts = self.options.get_or_insert_with(Self::default_options);
+        if enable {
+            opts.insert(Options::ENABLE_TABLES);
+        } else {
+            opts.remove(Options::ENABLE_TABLES);
+        }
         self
     }
 
     pub fn enable_tasklists(mut self, enable: bool) -> Self {
-        self.enable_tasklists = enable;
+        let opts = self.options.get_or_insert_with(Self::default_options);
+        if enable {
+            opts.insert(Options::ENABLE_TASKLISTS);
+        } else {
+            opts.remove(Options::ENABLE_TASKLISTS);
+        }
         self
     }
 
     pub fn enable_footnotes(mut self, enable: bool) -> Self {
-        self.enable_footnotes = enable;
+        let opts = self.options.get_or_insert_with(Self::default_options);
+        if enable {
+            opts.insert(Options::ENABLE_FOOTNOTES);
+        } else {
+            opts.remove(Options::ENABLE_FOOTNOTES);
+        }
         self
     }
 
@@ -133,7 +131,7 @@ impl<W: Write> RendererBuilder<W> {
     }
 
     pub fn build_with_writer(self) -> MarkdownRenderer<W> {
-        let options = self.build_options();
+        let options = self.options.unwrap_or_else(Self::default_options);
 
         let writer = self
             .writer

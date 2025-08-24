@@ -364,7 +364,7 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     fn render_blockquote_start(&mut self) -> Result<()> {
-        let quote_style = self.theme.code_style(); // Using code_style for blockquote
+        let quote_style = self.theme.code_style();
         let styled_marker = self.create_styled_text(
             "> ",
             quote_style.color.to_crossterm_color(),
@@ -450,8 +450,7 @@ impl<W: Write> MarkdownRenderer<W> {
         output.push_str(self.config.table_separator);
         for cell in cells {
             output.push(' ');
-            let processed_cell = self.process_table_cell(cell);
-            output.push_str(&processed_cell);
+            output.push_str(cell);
             output.push(' ');
             output.push_str(self.config.table_separator);
         }

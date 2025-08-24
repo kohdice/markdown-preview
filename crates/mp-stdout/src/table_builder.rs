@@ -162,7 +162,6 @@ impl Table {
         &self.alignments
     }
 
-    /// Helper function to format table row with common logic
     fn format_table_row<I, F>(&self, items: I, formatter: F, estimated_cell_size: usize) -> String
     where
         I: IntoIterator,
@@ -186,7 +185,6 @@ impl Table {
         output
     }
 
-    /// Renders a single row as a string
     pub fn render_row(&self, row: &[String]) -> String {
         let avg_cell_size = if row.is_empty() {
             4
@@ -201,7 +199,6 @@ impl Table {
         )
     }
 
-    /// Renders the alignment separator row
     pub fn render_separator(&self) -> String {
         self.format_table_row(
             &self.alignments,
@@ -218,7 +215,6 @@ impl Table {
         )
     }
 
-    /// Renders the entire table
     pub fn render(&self) -> Vec<String> {
         let estimated_lines = if self.headers.is_some() { 2 } else { 0 } + self.rows.len();
         let mut lines = Vec::with_capacity(estimated_lines);

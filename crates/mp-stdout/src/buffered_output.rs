@@ -55,7 +55,6 @@ impl BufferedOutput<io::Stdout> {
         Self::new(io::stdout())
     }
 
-    /// Creates a BufferedOutput for stdout with specified buffer capacity
     pub fn stdout_with_capacity(capacity: usize) -> Self {
         Self::with_capacity(capacity, io::stdout())
     }

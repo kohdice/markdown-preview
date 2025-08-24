@@ -32,8 +32,6 @@ impl ThemeAdapter for CrosstermThemeAdapter {
     }
 }
 
-/// Legacy adapter trait for converting ThemeColor to Crossterm Color
-/// Kept for backward compatibility
 pub trait CrosstermAdapter {
     fn to_crossterm_color(&self) -> Color;
 }

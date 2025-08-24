@@ -7,14 +7,6 @@ pub struct RenderConfig {
     pub table_separator: &'static str,
 
     pub table_alignment: TableAlignmentConfig,
-
-    pub enable_colors: bool,
-
-    pub enable_bold: bool,
-
-    pub enable_italic: bool,
-
-    pub enable_underline: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -31,10 +23,6 @@ impl Default for RenderConfig {
             indent_width: 2,
             table_separator: "|",
             table_alignment: TableAlignmentConfig::default(),
-            enable_colors: true,
-            enable_bold: true,
-            enable_italic: true,
-            enable_underline: true,
         }
     }
 }
@@ -85,8 +73,6 @@ mod tests {
         let config = RenderConfig::default();
         assert_eq!(config.indent_width, 2);
         assert_eq!(config.table_separator, "|");
-        assert!(config.enable_colors);
-        assert!(config.enable_bold);
     }
 
     #[test]

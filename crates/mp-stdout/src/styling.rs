@@ -23,7 +23,6 @@ pub enum TextStyle {
 }
 
 impl<W: Write> MarkdownRenderer<W> {
-    /// Apply text styling based on TextStyle enum
     pub fn apply_text_style(&self, text: &str, style: TextStyle) -> StyledContent<String> {
         use crate::theme_adapter::{styled_text, styled_text_with_bg};
 
@@ -89,7 +88,6 @@ impl<W: Write> MarkdownRenderer<W> {
         Cow::Owned(format!("{}", self.apply_text_style(marker, style)))
     }
 
-    /// Format URLs with delimiters
     pub fn create_styled_url(&self, url: &str) -> Cow<'static, str> {
         Cow::Owned(format!(
             "{}",
@@ -97,7 +95,6 @@ impl<W: Write> MarkdownRenderer<W> {
         ))
     }
 
-    /// Route text to active element buffer
     pub fn add_text_to_state(&mut self, text: &str) -> bool {
         if let Some(ref mut link) = self.get_link_mut() {
             link.text.push_str(text);
@@ -126,7 +123,6 @@ impl<W: Write> MarkdownRenderer<W> {
         false
     }
 
-    /// Create list marker based on list type
     pub fn create_list_marker(&self, list_type: &mut crate::state::ListType) -> String {
         match list_type {
             crate::state::ListType::Unordered => "- ".to_string(),
@@ -138,7 +134,6 @@ impl<W: Write> MarkdownRenderer<W> {
         }
     }
 
-    /// Create styled text with explicit color and style
     pub fn create_styled_text(
         &self,
         text: &str,
@@ -153,7 +148,7 @@ impl<W: Write> MarkdownRenderer<W> {
                 r: 147,
                 g: 161,
                 b: 161,
-            }, // Default color
+            },
         };
         let theme_style = mp_core::theme::ThemeStyle {
             color: theme_color,
@@ -165,22 +160,15 @@ impl<W: Write> MarkdownRenderer<W> {
         Cow::Owned(format!("{}", styled_text(text, &theme_style)))
     }
 
-    /// Create styled code line
     pub fn create_styled_code_line(&self, line: &str) -> String {
         format!("{}", self.apply_text_style(line, TextStyle::Code))
     }
 
-    /// Create code fence for code blocks
     pub fn create_code_fence(&self, language: Option<&str>) -> String {
         if let Some(lang) = language {
             format!("```{}", lang)
         } else {
             "```".to_string()
         }
-    }
-
-    /// Process table cell content
-    pub fn process_table_cell(&self, cell: &str) -> String {
-        cell.to_string()
     }
 }
