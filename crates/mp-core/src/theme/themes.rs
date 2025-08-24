@@ -1,6 +1,5 @@
 use super::{color::ThemeColor, style::ThemeStyle};
 
-/// Markdown theme trait for defining theme colors and styles
 pub trait MarkdownTheme {
     fn heading_style(&self, level: u8) -> ThemeStyle;
     fn strong_style(&self) -> ThemeStyle;
