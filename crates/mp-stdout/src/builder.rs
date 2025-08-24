@@ -85,43 +85,32 @@ impl<W: Write> RendererBuilder<W> {
         self
     }
 
-    pub fn enable_strikethrough(mut self, enable: bool) -> Self {
+    fn set_option(&mut self, option: Options, enable: bool) {
         let opts = self.options.get_or_insert_with(Self::default_options);
         if enable {
-            opts.insert(Options::ENABLE_STRIKETHROUGH);
+            opts.insert(option);
         } else {
-            opts.remove(Options::ENABLE_STRIKETHROUGH);
+            opts.remove(option);
         }
+    }
+
+    pub fn enable_strikethrough(mut self, enable: bool) -> Self {
+        self.set_option(Options::ENABLE_STRIKETHROUGH, enable);
         self
     }
 
     pub fn enable_tables(mut self, enable: bool) -> Self {
-        let opts = self.options.get_or_insert_with(Self::default_options);
-        if enable {
-            opts.insert(Options::ENABLE_TABLES);
-        } else {
-            opts.remove(Options::ENABLE_TABLES);
-        }
+        self.set_option(Options::ENABLE_TABLES, enable);
         self
     }
 
     pub fn enable_tasklists(mut self, enable: bool) -> Self {
-        let opts = self.options.get_or_insert_with(Self::default_options);
-        if enable {
-            opts.insert(Options::ENABLE_TASKLISTS);
-        } else {
-            opts.remove(Options::ENABLE_TASKLISTS);
-        }
+        self.set_option(Options::ENABLE_TASKLISTS, enable);
         self
     }
 
     pub fn enable_footnotes(mut self, enable: bool) -> Self {
-        let opts = self.options.get_or_insert_with(Self::default_options);
-        if enable {
-            opts.insert(Options::ENABLE_FOOTNOTES);
-        } else {
-            opts.remove(Options::ENABLE_FOOTNOTES);
-        }
+        self.set_option(Options::ENABLE_FOOTNOTES, enable);
         self
     }
 
