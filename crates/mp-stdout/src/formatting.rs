@@ -180,15 +180,7 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     fn handle_rule(&mut self) -> Result<()> {
-        let line = self.config.create_horizontal_rule();
-        let styled_line = format!(
-            "{}",
-            self.apply_text_style(&line, super::styling::TextStyle::Delimiter)
-        );
-        self.output.writeln("")?;
-        self.output.writeln(&styled_line)?;
-        self.output.writeln("")?;
-        Ok(())
+        self.render_horizontal_rule()
     }
 
     fn handle_task_marker(&mut self, checked: bool) -> Result<()> {
