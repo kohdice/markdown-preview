@@ -62,8 +62,6 @@ pub struct RenderState {
     pub active_element: Option<ActiveElement>,
 
     pub list_stack: Vec<ListType>,
-
-    pub current_line: String,
 }
 
 impl ActiveElement {
