@@ -13,7 +13,6 @@ pub trait MarkdownTheme {
     fn text_style(&self) -> ThemeStyle;
     fn focus_border_style(&self) -> ThemeStyle;
 
-    // Status bar specific colors
     fn status_normal_color(&self) -> ThemeColor;
     fn status_search_color(&self) -> ThemeColor;
     fn status_help_color(&self) -> ThemeColor;
