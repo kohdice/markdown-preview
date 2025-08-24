@@ -613,8 +613,7 @@ mod tests {
         if let Some(cb) = renderer.get_code_block_mut() {
             cb.content = "fn main() {\n    println!(\"Hello\");\n}".to_string();
         }
-        let result = renderer.print_output(OutputType::CodeBlock);
-        assert!(result.is_ok());
+        assert!(renderer.print_output(OutputType::CodeBlock).is_ok());
         assert!(renderer.get_code_block().is_none());
     }
 
@@ -622,8 +621,11 @@ mod tests {
     fn test_handle_content_text() {
         let mut renderer = create_test_renderer();
         renderer.set_link("".to_string());
-        let result = renderer.handle_content(ContentType::Text("test text"));
-        assert!(result.is_ok());
+        assert!(
+            renderer
+                .handle_content(ContentType::Text("test text"))
+                .is_ok()
+        );
         assert_eq!(renderer.get_link().unwrap().text, "test text");
     }
 
@@ -631,8 +633,11 @@ mod tests {
     fn test_handle_content_code() {
         let mut renderer = create_test_renderer();
         renderer.set_code_block(pulldown_cmark::CodeBlockKind::Indented);
-        let result = renderer.handle_content(ContentType::Code("let x = 5;"));
-        assert!(result.is_ok());
+        assert!(
+            renderer
+                .handle_content(ContentType::Code("let x = 5;"))
+                .is_ok()
+        );
         assert_eq!(renderer.get_code_block().unwrap().content, "let x = 5;");
     }
 

@@ -331,7 +331,7 @@ mod tests {
     fn test_table_validation_column_mismatch() {
         let result = create_test_table()
             .header(vec!["A", "B"])
-            .row(vec!["1", "2", "3"]) // Too many columns
+            .row(vec!["1", "2", "3"])
             .build();
 
         assert!(result.is_err());
@@ -341,7 +341,7 @@ mod tests {
     fn test_table_validation_alignment_mismatch() {
         let result = create_test_table()
             .header(vec!["A", "B", "C"])
-            .alignments(vec![Alignment::Left, Alignment::Right]) // Too few alignments
+            .alignments(vec![Alignment::Left, Alignment::Right])
             .build();
 
         assert!(result.is_err());
