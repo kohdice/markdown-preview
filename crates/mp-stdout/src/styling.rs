@@ -7,6 +7,17 @@ use mp_core::theme::{MarkdownTheme, ThemeColor};
 
 use super::MarkdownRenderer;
 
+fn convert_color_to_theme(color: Color) -> ThemeColor {
+    match color {
+        Color::Rgb { r, g, b } => ThemeColor { r, g, b },
+        _ => ThemeColor {
+            r: 147,
+            g: 161,
+            b: 161,
+        },
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TextStyle {
     Normal,
@@ -40,14 +51,7 @@ impl<W: Write> MarkdownRenderer<W> {
                 styled_text_with_bg(text, &style, &bg)
             }
             TextStyle::Custom { color, bold } => {
-                let theme_color = match color {
-                    Color::Rgb { r, g, b } => ThemeColor { r, g, b },
-                    _ => ThemeColor {
-                        r: 255,
-                        g: 255,
-                        b: 255,
-                    },
-                };
+                let theme_color = convert_color_to_theme(color);
                 let theme_style = mp_core::theme::ThemeStyle {
                     color: theme_color,
                     bold,
@@ -123,14 +127,7 @@ impl<W: Write> MarkdownRenderer<W> {
         italic: bool,
         underline: bool,
     ) -> Cow<'static, str> {
-        let theme_color = match color {
-            Color::Rgb { r, g, b } => ThemeColor { r, g, b },
-            _ => ThemeColor {
-                r: 147,
-                g: 161,
-                b: 161,
-            },
-        };
+        let theme_color = convert_color_to_theme(color);
         let theme_style = mp_core::theme::ThemeStyle {
             color: theme_color,
             bold,
