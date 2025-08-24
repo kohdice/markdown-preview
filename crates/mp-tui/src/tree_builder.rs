@@ -9,6 +9,6 @@ pub struct DefaultTreeBuilder;
 
 impl TreeBuilder for DefaultTreeBuilder {
     fn build_tree(&self, config: FinderConfig) -> Result<FileTreeNode> {
-        mp_core::build_markdown_tree(config)
+        mp_core::build_markdown_tree(".", config)
     }
 }
