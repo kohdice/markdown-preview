@@ -27,7 +27,7 @@ pub fn find_markdown_files(dir: &str, config: FinderConfig) -> Result<Vec<PathBu
     let walker = builder.build();
 
     let mut files: Vec<PathBuf> = walker
-        .filter_map(|result| result.ok())
+        .filter_map(std::result::Result::ok)
         .filter_map(|entry| {
             let path = entry.path();
             if path.is_file() && path.extension().is_some_and(|ext| ext == "md") {
@@ -222,8 +222,7 @@ fn make_relative_path(path: &Path, base: &Path) -> PathBuf {
     }
 
     path.file_name()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| path.to_path_buf())
+        .map_or_else(|| path.to_path_buf(), PathBuf::from)
 }
 
 #[cfg(test)]
