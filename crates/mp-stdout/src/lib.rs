@@ -22,7 +22,6 @@ mod theme_adapter;
 pub use builder::RendererBuilder;
 pub use config::RenderConfig;
 pub use state::{ActiveElement, RenderState};
-pub use styling::TextStyle;
 pub use table_builder::{Table, TableBuilder};
 
 pub use self::buffered_output::BufferedOutput;
