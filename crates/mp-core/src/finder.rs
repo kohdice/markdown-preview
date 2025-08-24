@@ -19,11 +19,7 @@ pub struct FileTreeNode {
     pub children: Vec<FileTreeNode>,
 }
 
-pub fn find_markdown_files(config: FinderConfig) -> Result<Vec<PathBuf>> {
-    find_markdown_files_in_dir(".", config)
-}
-
-pub fn find_markdown_files_in_dir(dir: &str, config: FinderConfig) -> Result<Vec<PathBuf>> {
+pub fn find_markdown_files(dir: &str, config: FinderConfig) -> Result<Vec<PathBuf>> {
     let base_path = Path::new(dir);
 
     let mut builder = WalkBuilder::new(dir);
@@ -46,11 +42,7 @@ pub fn find_markdown_files_in_dir(dir: &str, config: FinderConfig) -> Result<Vec
     Ok(files)
 }
 
-pub fn build_markdown_tree(config: FinderConfig) -> Result<FileTreeNode> {
-    build_markdown_tree_in_dir(".", config)
-}
-
-pub fn build_markdown_tree_in_dir(dir: &str, config: FinderConfig) -> Result<FileTreeNode> {
+pub fn build_markdown_tree(dir: &str, config: FinderConfig) -> Result<FileTreeNode> {
     let base_path = Path::new(dir);
 
     let root_name = if dir == "." {
@@ -274,7 +266,7 @@ mod tests {
         let temp_dir = create_test_dir();
 
         let config = FinderConfig::default();
-        let files = find_markdown_files_in_dir(temp_dir.path().to_str().unwrap(), config).unwrap();
+        let files = find_markdown_files(temp_dir.path().to_str().unwrap(), config).unwrap();
 
         assert_eq!(files.len(), 3);
 
@@ -297,7 +289,7 @@ mod tests {
             hidden: true,
             ..Default::default()
         };
-        let files = find_markdown_files_in_dir(temp_dir.path().to_str().unwrap(), config).unwrap();
+        let files = find_markdown_files(temp_dir.path().to_str().unwrap(), config).unwrap();
 
         assert_eq!(files.len(), 4);
 
@@ -315,7 +307,7 @@ mod tests {
         let temp_dir = create_test_dir();
 
         let config = FinderConfig::default();
-        let files = find_markdown_files_in_dir(temp_dir.path().to_str().unwrap(), config).unwrap();
+        let files = find_markdown_files(temp_dir.path().to_str().unwrap(), config).unwrap();
 
         let raw_paths: Vec<String> = files
             .iter()
@@ -341,7 +333,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
 
         let config = FinderConfig::default();
-        let files = find_markdown_files_in_dir(temp_dir.path().to_str().unwrap(), config).unwrap();
+        let files = find_markdown_files(temp_dir.path().to_str().unwrap(), config).unwrap();
 
         assert!(files.is_empty());
     }
@@ -355,7 +347,7 @@ mod tests {
         fs::write(temp_dir.path().join("banana.md"), "").unwrap();
 
         let config = FinderConfig::default();
-        let files = find_markdown_files_in_dir(temp_dir.path().to_str().unwrap(), config).unwrap();
+        let files = find_markdown_files(temp_dir.path().to_str().unwrap(), config).unwrap();
 
         let file_names: Vec<String> = files
             .iter()
@@ -372,7 +364,7 @@ mod tests {
         let temp_dir = create_test_dir();
 
         let config = FinderConfig::default();
-        let tree = build_markdown_tree_in_dir(temp_dir.path().to_str().unwrap(), config).unwrap();
+        let tree = build_markdown_tree(temp_dir.path().to_str().unwrap(), config).unwrap();
 
         assert!(tree.is_dir);
         let file_count = tree.children.iter().filter(|c| !c.is_dir).count();
@@ -399,7 +391,7 @@ mod tests {
         fs::write(dir_with_md.join("test.md"), "Test").unwrap();
 
         let config = FinderConfig::default();
-        let tree = build_markdown_tree_in_dir(temp_dir.path().to_str().unwrap(), config).unwrap();
+        let tree = build_markdown_tree(temp_dir.path().to_str().unwrap(), config).unwrap();
 
         assert!(!tree.children.iter().any(|c| c.name == "empty"));
         assert!(tree.children.iter().any(|c| c.name == "with_md"));
@@ -420,7 +412,7 @@ mod tests {
         fs::write(dir_a.join("file.md"), "").unwrap();
 
         let config = FinderConfig::default();
-        let tree = build_markdown_tree_in_dir(temp_dir.path().to_str().unwrap(), config).unwrap();
+        let tree = build_markdown_tree(temp_dir.path().to_str().unwrap(), config).unwrap();
 
         assert_eq!(tree.children[0].name, "a_dir");
         assert!(tree.children[0].is_dir);

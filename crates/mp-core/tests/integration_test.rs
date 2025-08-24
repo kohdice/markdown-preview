@@ -2,7 +2,7 @@ use std::fs;
 
 use tempfile::TempDir;
 
-use mp_core::finder::{FinderConfig, find_markdown_files_in_dir};
+use mp_core::finder::{FinderConfig, find_markdown_files};
 use mp_core::html_entity::decode_html_entities;
 
 #[test]
@@ -19,7 +19,7 @@ fn test_workspace_integration() {
         no_global_ignore_file: false,
     };
 
-    let files = find_markdown_files_in_dir(temp_dir.path().to_str().unwrap(), config).unwrap();
+    let files = find_markdown_files(temp_dir.path().to_str().unwrap(), config).unwrap();
     assert_eq!(files.len(), 2);
     assert!(files.iter().any(|f| f.ends_with("test1.md")));
     assert!(files.iter().any(|f| f.ends_with("test2.md")));
@@ -49,7 +49,7 @@ fn test_cross_crate_functionality() {
         no_global_ignore_file: false,
     };
 
-    let files = find_markdown_files_in_dir(temp_dir.path().to_str().unwrap(), config).unwrap();
+    let files = find_markdown_files(temp_dir.path().to_str().unwrap(), config).unwrap();
     assert_eq!(files.len(), 1);
 
     let full_path = temp_dir.path().join(&files[0]);
