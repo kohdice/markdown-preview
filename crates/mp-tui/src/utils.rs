@@ -90,7 +90,6 @@ mod tests {
 
     #[test]
     fn test_emoji() {
-        // Most emojis have width 2
         let (result, width) = truncate_unicode_string("👍Test", 3);
         assert_eq!(result, "👍T");
         assert_eq!(width, 3);

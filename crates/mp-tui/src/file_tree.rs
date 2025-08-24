@@ -8,10 +8,10 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem},
 };
 
-use mp_core::theme::{MarkdownTheme, SolarizedOsaka};
+use mp_core::theme::{MarkdownTheme, SolarizedOsaka, ThemeAdapter};
 use mp_core::{FileTreeNode, FinderConfig};
 
-use crate::theme_adapter::RatatuiAdapter;
+use crate::theme_adapter::RatatuiThemeAdapter;
 use crate::tree_builder::{DefaultTreeBuilder, TreeBuilder};
 
 #[derive(Clone, Debug)]
@@ -144,7 +144,6 @@ impl FileTreeWidget {
             let has_children = node.has_children;
 
             if is_dir && has_children {
-                // Toggle the expansion state in our display nodes
                 if let Some(display_node) = self.display_nodes.get_mut(original_idx) {
                     display_node.is_expanded = !display_node.is_expanded;
                 }
@@ -209,21 +208,17 @@ impl FileTreeWidget {
     fn update_filter(&mut self) {
         let filtered = self.get_filtered_list();
 
-        // If current selection is not in filtered list, select first item
         if !filtered.is_empty() {
             let current_path = self.display_nodes.get(self.selected_index).map(|n| &n.path);
             let still_visible = filtered.iter().any(|(_, n)| Some(&n.path) == current_path);
 
             if !still_visible {
                 self.selected_index = 0;
-            } else {
-                // Adjust index to filtered position
-                if let Some(pos) = filtered
-                    .iter()
-                    .position(|(_, n)| Some(&n.path) == current_path)
-                {
-                    self.selected_index = pos;
-                }
+            } else if let Some(pos) = filtered
+                .iter()
+                .position(|(_, n)| Some(&n.path) == current_path)
+            {
+                self.selected_index = pos;
             }
         }
     }
@@ -274,10 +269,12 @@ impl FileTreeWidget {
 
         let border_style = if is_focused {
             let focus_color = self.theme.focus_border_style().color;
-            Style::default().fg(focus_color.to_ratatui_color())
+            let adapter = RatatuiThemeAdapter;
+            Style::default().fg(adapter.to_color(&focus_color))
         } else {
             let delimiter_color = self.theme.delimiter_style().color;
-            Style::default().fg(delimiter_color.to_ratatui_color())
+            let adapter = RatatuiThemeAdapter;
+            Style::default().fg(adapter.to_color(&delimiter_color))
         };
 
         let title = "Files".to_string();
@@ -394,7 +391,6 @@ mod tests {
         let mock_builder = MockTreeBuilder::from_directory(path.to_str().unwrap(), config).unwrap();
         let mut widget = FileTreeWidget::with_builder(Box::new(mock_builder), config);
 
-        // Root is expanded, so we should see: root + 2 files = 3 nodes
         assert!(
             widget.display_nodes.len() >= 3,
             "Should have root and files (got {} nodes)",
@@ -426,47 +422,32 @@ mod tests {
         let config = FinderConfig::default();
         let mock_builder = MockTreeBuilder::from_directory(path.to_str().unwrap(), config).unwrap();
         let mut widget = FileTreeWidget::with_builder(Box::new(mock_builder), config);
-
-        // Find the subdirectory in the display nodes
         let subdir_index = widget
             .display_nodes
             .iter()
             .position(|n| n.name == "subdir" && n.is_dir)
             .expect("Should find subdir");
 
-        // Select the subdirectory
         widget.selected_index = subdir_index;
-
-        // Initially, the subdirectory should not be expanded (except root)
         let initial_node_count = widget.display_nodes.len();
 
-        // Toggle to expand the subdirectory
         widget.toggle_selected();
-
-        // After expanding, we should have more nodes (the subdirectory's children)
         assert!(
             widget.display_nodes.len() > initial_node_count,
             "Should have more nodes after expanding"
         );
-
-        // Find the subdirectory again (position might have changed)
         let subdir_index_after = widget
             .display_nodes
             .iter()
             .position(|n| n.name == "subdir" && n.is_dir)
             .expect("Should find subdir after toggle");
-
-        // The subdirectory should now be expanded
         assert!(
             widget.display_nodes[subdir_index_after].is_expanded,
             "Subdirectory should be expanded"
         );
 
-        // Toggle again to collapse
         widget.selected_index = subdir_index_after;
         widget.toggle_selected();
-
-        // After collapsing, we should have fewer nodes
         assert_eq!(
             widget.display_nodes.len(),
             initial_node_count,

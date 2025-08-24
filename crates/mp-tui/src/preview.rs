@@ -7,10 +7,10 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use mp_core::theme::{MarkdownTheme, SolarizedOsaka};
+use mp_core::theme::{MarkdownTheme, SolarizedOsaka, ThemeAdapter};
 
 use crate::renderer::{MarkdownWidget, MarkdownWidgetState};
-use crate::theme_adapter::RatatuiAdapter;
+use crate::theme_adapter::RatatuiThemeAdapter;
 
 pub struct PreviewWidget {
     pub content: Arc<String>,
@@ -60,11 +60,8 @@ impl PreviewWidget {
     }
 
     pub fn scroll_to_bottom(&mut self) {
-        // Calculate the maximum scroll offset based on content height
         if let Some(widget) = &self.markdown_widget {
             let line_count = widget.line_count();
-            // Set scroll to show the last lines (accounting for visible area)
-            // We'll use a conservative estimate of visible lines
             self.scroll_offset = line_count.saturating_sub(1) as u16;
         } else {
             self.scroll_offset = u16::MAX;
@@ -83,10 +80,12 @@ impl PreviewWidget {
     pub fn render(&mut self, frame: &mut Frame, area: Rect, is_focused: bool) {
         let border_style = if is_focused {
             let focus_color = self.theme.focus_border_style().color;
-            Style::default().fg(focus_color.to_ratatui_color())
+            let adapter = RatatuiThemeAdapter;
+            Style::default().fg(adapter.to_color(&focus_color))
         } else {
             let delimiter_color = self.theme.delimiter_style().color;
-            Style::default().fg(delimiter_color.to_ratatui_color())
+            let adapter = RatatuiThemeAdapter;
+            Style::default().fg(adapter.to_color(&delimiter_color))
         };
 
         if let Some(widget) = &self.markdown_widget {

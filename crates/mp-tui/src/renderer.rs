@@ -10,9 +10,9 @@ use ratatui::{
 };
 use regex::Regex;
 
-use mp_core::theme::{MarkdownTheme, SolarizedOsaka};
+use mp_core::theme::{MarkdownTheme, SolarizedOsaka, ThemeAdapter};
 
-use crate::theme_adapter::{RatatuiAdapter, RatatuiStyleAdapter};
+use crate::theme_adapter::RatatuiThemeAdapter;
 use crate::utils::truncate_unicode_string;
 
 pub struct MarkdownWidget {
@@ -120,15 +120,18 @@ impl MarkdownWidget {
                             pulldown_cmark::HeadingLevel::H6 => 6,
                         };
                         let heading_style = self.theme.heading_style(heading_level);
-                        current_style = heading_style.to_ratatui_style();
+                        let adapter = RatatuiThemeAdapter;
+                        current_style = adapter.to_style(&heading_style);
                     }
                     Tag::Emphasis => {
                         let emphasis_style = self.theme.emphasis_style();
-                        current_style = emphasis_style.to_ratatui_style();
+                        let adapter = RatatuiThemeAdapter;
+                        current_style = adapter.to_style(&emphasis_style);
                     }
                     Tag::Strong => {
                         let strong_style = self.theme.strong_style();
-                        current_style = strong_style.to_ratatui_style();
+                        let adapter = RatatuiThemeAdapter;
+                        current_style = adapter.to_style(&strong_style);
                     }
                     Tag::List(start) => {
                         if in_list_item && !current_line.is_empty() {
@@ -163,7 +166,8 @@ impl MarkdownWidget {
                     }
                     Tag::Link { .. } => {
                         let link_style = self.theme.link_style();
-                        let color = link_style.color.to_ratatui_color();
+                        let adapter = RatatuiThemeAdapter;
+                        let color = adapter.to_color(&link_style.color);
                         current_style = Style::default()
                             .fg(color)
                             .add_modifier(Modifier::UNDERLINED);
@@ -174,7 +178,8 @@ impl MarkdownWidget {
                                 .push(Line::from(std::mem::take(&mut current_line)));
                         }
                         let footnote_style = self.theme.emphasis_style();
-                        let color = footnote_style.color.to_ratatui_color();
+                        let adapter = RatatuiThemeAdapter;
+                        let color = adapter.to_color(&footnote_style.color);
                         current_line.push(Span::styled(
                             format!("[{}]: ", label.as_ref()),
                             Style::default().fg(color),
@@ -280,8 +285,9 @@ impl MarkdownWidget {
                         current_cell.push_str(&format!("`{}`", code));
                     } else {
                         let code_style = self.theme.code_style();
-                        let fg_color = code_style.color.to_ratatui_color();
-                        let bg_color = self.theme.code_background().to_ratatui_color();
+                        let adapter = RatatuiThemeAdapter;
+                        let fg_color = adapter.to_color(&code_style.color);
+                        let bg_color = adapter.to_color(&self.theme.code_background());
                         current_line.push(Span::styled(
                             format!("`{}`", code),
                             Style::default().fg(fg_color).bg(bg_color),
@@ -301,7 +307,8 @@ impl MarkdownWidget {
                 }
                 Event::FootnoteReference(label) => {
                     let footnote_style = self.theme.emphasis_style();
-                    let color = footnote_style.color.to_ratatui_color();
+                    let adapter = RatatuiThemeAdapter;
+                    let color = adapter.to_color(&footnote_style.color);
                     current_line.push(Span::styled(
                         format!("[^{}]", label.as_ref()),
                         Style::default().fg(color).add_modifier(Modifier::ITALIC),
@@ -343,7 +350,8 @@ impl MarkdownWidget {
         let content_lines = content.lines().count();
         let mut lines = Vec::with_capacity(content_lines + 2);
         let delimiter_style = self.theme.delimiter_style();
-        let fence_color = delimiter_style.color.to_ratatui_color();
+        let adapter = RatatuiThemeAdapter;
+        let fence_color = adapter.to_color(&delimiter_style.color);
         let fence_style = Style::default().fg(fence_color);
 
         let opening = if let Some(lang) = language {
@@ -355,7 +363,8 @@ impl MarkdownWidget {
         lines.push(Line::from(Span::styled(opening, fence_style)));
 
         let theme_code_style = self.theme.code_style();
-        let code_color = theme_code_style.color.to_ratatui_color();
+        let adapter = RatatuiThemeAdapter;
+        let code_color = adapter.to_color(&theme_code_style.color);
         let code_style = Style::default().fg(code_color);
 
         for line in content.lines() {
@@ -372,7 +381,6 @@ impl StatefulWidget for &MarkdownWidget {
     type State = MarkdownWidgetState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        // Don't render borders here - let PreviewWidget handle the borders
         let visible_lines = area.height as usize;
         let skip_lines = state.scroll_offset as usize;
 
@@ -390,7 +398,6 @@ impl StatefulWidget for &MarkdownWidget {
                 let content = span.content.as_ref();
                 let remaining_width = (area.width as usize).saturating_sub((x - area.x) as usize);
 
-                // Use the helper function to properly handle Unicode width
                 let (truncated, actual_width) = truncate_unicode_string(content, remaining_width);
 
                 if !truncated.is_empty() {

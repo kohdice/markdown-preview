@@ -35,32 +35,6 @@ impl ThemeAdapter for RatatuiThemeAdapter {
     }
 }
 
-/// Legacy adapter trait for converting ThemeColor to Ratatui Color
-/// Kept for backward compatibility
-pub trait RatatuiAdapter {
-    fn to_ratatui_color(&self) -> Color;
-}
-
-/// Legacy adapter trait for converting ThemeStyle to Ratatui Style
-/// Kept for backward compatibility
-pub trait RatatuiStyleAdapter {
-    fn to_ratatui_style(&self) -> Style;
-}
-
-impl RatatuiAdapter for ThemeColor {
-    fn to_ratatui_color(&self) -> Color {
-        let adapter = RatatuiThemeAdapter;
-        adapter.to_color(self)
-    }
-}
-
-impl RatatuiStyleAdapter for ThemeStyle {
-    fn to_ratatui_style(&self) -> Style {
-        let adapter = RatatuiThemeAdapter;
-        adapter.to_style(self)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,7 +46,8 @@ mod tests {
             g: 128,
             b: 64,
         };
-        let ratatui_color = theme_color.to_ratatui_color();
+        let adapter = RatatuiThemeAdapter;
+        let ratatui_color = adapter.to_color(&theme_color);
         match ratatui_color {
             Color::Rgb(r, g, b) => {
                 assert_eq!(r, 255);
@@ -91,7 +66,8 @@ mod tests {
             italic: false,
             underline: true,
         };
-        let ratatui_style = theme_style.to_ratatui_style();
+        let adapter = RatatuiThemeAdapter;
+        let ratatui_style = adapter.to_style(&theme_style);
 
         match ratatui_style.fg {
             Some(Color::Rgb(r, g, b)) => {
@@ -115,7 +91,8 @@ mod tests {
             italic: true,
             underline: true,
         };
-        let ratatui_style = theme_style.to_ratatui_style();
+        let adapter = RatatuiThemeAdapter;
+        let ratatui_style = adapter.to_style(&theme_style);
 
         assert!(ratatui_style.add_modifier.contains(Modifier::BOLD));
         assert!(ratatui_style.add_modifier.contains(Modifier::ITALIC));
@@ -134,7 +111,8 @@ mod tests {
             italic: false,
             underline: false,
         };
-        let ratatui_style = theme_style.to_ratatui_style();
+        let adapter = RatatuiThemeAdapter;
+        let ratatui_style = adapter.to_style(&theme_style);
 
         assert!(ratatui_style.add_modifier.is_empty());
     }

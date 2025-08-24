@@ -8,8 +8,8 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::theme_adapter::RatatuiAdapter;
-use mp_core::theme::{MarkdownTheme, SolarizedOsaka};
+use crate::theme_adapter::RatatuiThemeAdapter;
+use mp_core::theme::{MarkdownTheme, SolarizedOsaka, ThemeAdapter};
 
 pub struct StatusBar<T: MarkdownTheme> {
     pub file_path: Option<String>,
@@ -79,40 +79,54 @@ impl<T: MarkdownTheme> StatusBar<T> {
                 " NORMAL ",
                 Style::default()
                     .fg(Color::Black)
-                    .bg(self.theme.status_normal_color().to_ratatui_color())
+                    .bg({
+                        let adapter = RatatuiThemeAdapter;
+                        adapter.to_color(&self.theme.status_normal_color())
+                    })
                     .add_modifier(Modifier::BOLD),
             ),
             StatusMode::Search => Span::styled(
                 " SEARCH ",
                 Style::default()
                     .fg(Color::Black)
-                    .bg(self.theme.status_search_color().to_ratatui_color())
+                    .bg({
+                        let adapter = RatatuiThemeAdapter;
+                        adapter.to_color(&self.theme.status_search_color())
+                    })
                     .add_modifier(Modifier::BOLD),
             ),
             StatusMode::Help => Span::styled(
                 " HELP ",
                 Style::default()
                     .fg(Color::Black)
-                    .bg(self.theme.status_help_color().to_ratatui_color())
+                    .bg({
+                        let adapter = RatatuiThemeAdapter;
+                        adapter.to_color(&self.theme.status_help_color())
+                    })
                     .add_modifier(Modifier::BOLD),
             ),
         };
         spans.push(mode_span);
         spans.push(Span::raw(" "));
 
-        // File path or message or search query
         if let Some(error) = &self.error {
             spans.push(Span::styled(
                 error,
                 Style::default()
-                    .fg(self.theme.status_error_color().to_ratatui_color())
+                    .fg({
+                        let adapter = RatatuiThemeAdapter;
+                        adapter.to_color(&self.theme.status_error_color())
+                    })
                     .add_modifier(Modifier::BOLD),
             ));
         } else if let Some(message) = &self.message {
             spans.push(Span::styled(
                 message,
                 Style::default()
-                    .fg(self.theme.status_message_color().to_ratatui_color())
+                    .fg({
+                        let adapter = RatatuiThemeAdapter;
+                        adapter.to_color(&self.theme.status_message_color())
+                    })
                     .add_modifier(Modifier::ITALIC),
             ));
         } else if self.mode == StatusMode::Search {
@@ -120,25 +134,33 @@ impl<T: MarkdownTheme> StatusBar<T> {
                 spans.push(Span::styled(
                     query,
                     Style::default()
-                        .fg(self.theme.status_message_color().to_ratatui_color())
+                        .fg({
+                            let adapter = RatatuiThemeAdapter;
+                            adapter.to_color(&self.theme.status_message_color())
+                        })
                         .add_modifier(Modifier::BOLD),
                 ));
             } else {
                 spans.push(Span::styled(
                     "",
                     Style::default()
-                        .fg(self.theme.status_message_color().to_ratatui_color())
+                        .fg({
+                            let adapter = RatatuiThemeAdapter;
+                            adapter.to_color(&self.theme.status_message_color())
+                        })
                         .add_modifier(Modifier::BOLD),
                 ));
             }
         } else if let Some(path) = &self.file_path {
             spans.push(Span::styled(
                 path,
-                Style::default().fg(self.theme.text_style().color.to_ratatui_color()),
+                Style::default().fg({
+                    let adapter = RatatuiThemeAdapter;
+                    adapter.to_color(&self.theme.text_style().color)
+                }),
             ));
         }
 
-        // Help text on the right
         let help_text = match self.mode {
             StatusMode::Normal => "Tab: Switch | q: Quit | /: Search | ?: Help",
             StatusMode::Search => "Enter: Confirm | Esc: Cancel | Type to search",
@@ -151,13 +173,19 @@ impl<T: MarkdownTheme> StatusBar<T> {
             Span::styled(
                 help_text,
                 Style::default()
-                    .fg(self.theme.delimiter_style().color.to_ratatui_color())
+                    .fg({
+                        let adapter = RatatuiThemeAdapter;
+                        adapter.to_color(&self.theme.delimiter_style().color)
+                    })
                     .add_modifier(Modifier::ITALIC),
             ),
         ]);
 
         let paragraph = Paragraph::new(vec![line])
-            .style(Style::default().bg(self.theme.status_background_color().to_ratatui_color()))
+            .style(Style::default().bg({
+                let adapter = RatatuiThemeAdapter;
+                adapter.to_color(&self.theme.status_background_color())
+            }))
             .alignment(Alignment::Left);
 
         frame.render_widget(paragraph, area);
