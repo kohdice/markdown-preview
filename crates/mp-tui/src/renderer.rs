@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use ratatui::{
@@ -430,7 +430,8 @@ impl StatefulWidget for &MarkdownWidget {
     }
 }
 
+static ANSI_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\x1b\[[0-9;]*[mGKHF]").unwrap());
+
 fn strip_ansi_codes(s: &str) -> String {
-    let ansi_regex = Regex::new(r"\x1b\[[0-9;]*[mGKHF]").unwrap();
-    ansi_regex.replace_all(s, "").into_owned()
+    ANSI_REGEX.replace_all(s, "").into_owned()
 }

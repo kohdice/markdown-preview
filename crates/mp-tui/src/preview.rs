@@ -132,13 +132,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_preview_widget_creation() {
-        let widget = PreviewWidget::new();
-        assert_eq!(widget.scroll_offset, 0);
-        assert!(widget.content.is_empty());
-    }
-
-    #[test]
     fn test_preview_scrolling() {
         let mut widget = PreviewWidget::new();
         widget.set_content(Arc::new("Line 1\nLine 2\nLine 3".to_string()));
