@@ -161,25 +161,7 @@ impl<T: MarkdownTheme> StatusBar<T> {
             ));
         }
 
-        let help_text = match self.mode {
-            StatusMode::Normal => "Tab: Switch | q: Quit | /: Search | ?: Help",
-            StatusMode::Search => "Enter: Confirm | Esc: Cancel | Type to search",
-            StatusMode::Help => "Press any key to exit help",
-        };
-
         let line = Line::from(spans);
-        let _help_line = Line::from(vec![
-            Span::raw(" ".repeat(area.width.saturating_sub(help_text.len() as u16) as usize)),
-            Span::styled(
-                help_text,
-                Style::default()
-                    .fg({
-                        let adapter = RatatuiThemeAdapter;
-                        adapter.to_color(&self.theme.delimiter_style().color)
-                    })
-                    .add_modifier(Modifier::ITALIC),
-            ),
-        ]);
 
         let paragraph = Paragraph::new(vec![line])
             .style(Style::default().bg({

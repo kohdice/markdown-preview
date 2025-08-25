@@ -14,7 +14,6 @@ pub struct App {
     pub preview: PreviewWidget,
     pub status_bar: StatusBar<SolarizedOsaka>,
     pub focus: AppFocus,
-    pub should_quit: bool,
     pub show_help: bool,
 }
 
@@ -39,7 +38,6 @@ impl App {
             preview: PreviewWidget::new(),
             status_bar: StatusBar::new(SolarizedOsaka),
             focus: AppFocus::FileTree,
-            should_quit: false,
             show_help: false,
         };
 
@@ -101,7 +99,6 @@ impl App {
 
         match (self.focus, key.code, key.modifiers) {
             (_, KeyCode::Char('q'), _) | (_, KeyCode::Esc, _) => {
-                self.should_quit = true;
                 return Ok(true);
             }
             (_, KeyCode::Char('?'), _) => {
