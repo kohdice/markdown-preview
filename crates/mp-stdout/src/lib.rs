@@ -6,7 +6,6 @@ use anyhow::{Context, Result};
 use pulldown_cmark::{Options, Parser};
 
 use mp_core::theme::SolarizedOsaka;
-use mp_core::utils::normalize_line_endings;
 
 pub mod buffered_output;
 pub mod builder;
@@ -268,7 +267,7 @@ fn read_markdown_file(path: &Path) -> Result<String> {
     file.read_to_string(&mut content)
         .with_context(|| format!("Failed to read file: {}", path.display()))?;
 
-    Ok(normalize_line_endings(&content).into_owned())
+    Ok(content)
 }
 
 #[cfg(test)]
