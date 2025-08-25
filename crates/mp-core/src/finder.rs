@@ -263,7 +263,11 @@ mod tests {
 
         assert!(file_names.iter().any(|f| f.ends_with("README.md")));
         assert!(file_names.iter().any(|f| f.ends_with("test.md")));
-        assert_path_contains(&file_names, "subdir/sub.md");
+        assert!(
+            file_names.iter().any(|p| p.contains("subdir/sub.md")),
+            "Expected path containing 'subdir/sub.md' not found in {:?}",
+            file_names
+        );
         assert!(!file_names.iter().any(|f| f.ends_with(".hidden.md")));
     }
 
@@ -285,7 +289,11 @@ mod tests {
             .collect();
 
         assert!(file_names.iter().any(|f| f.ends_with(".hidden.md")));
-        assert_path_contains(&file_names, "subdir/sub.md");
+        assert!(
+            file_names.iter().any(|p| p.contains("subdir/sub.md")),
+            "Expected path containing 'subdir/sub.md' not found in {:?}",
+            file_names
+        );
     }
 
     #[test]
@@ -300,7 +308,11 @@ mod tests {
             .map(|p| p.to_string_lossy().to_string())
             .collect();
 
-        assert_path_contains(&raw_paths, "subdir/sub.md");
+        assert!(
+            raw_paths.iter().any(|p| p.contains("subdir/sub.md")),
+            "Expected path containing 'subdir/sub.md' not found in {:?}",
+            raw_paths
+        );
         let normalized_paths: Vec<String> = files
             .iter()
             .map(|p| p.to_string_lossy().replace('\\', "/"))
