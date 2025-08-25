@@ -231,19 +231,6 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    fn assert_path_contains(paths: &[String], expected: &str) {
-        let path_to_check = if cfg!(windows) {
-            expected.replace('/', "\\")
-        } else {
-            expected.to_string()
-        };
-        assert!(
-            paths.iter().any(|p| p.contains(&path_to_check)),
-            "Expected to find path containing: {}",
-            expected
-        );
-    }
-
     fn create_test_dir() -> TempDir {
         let dir = TempDir::new().unwrap();
 
