@@ -18,7 +18,6 @@ mod styling;
 mod table_builder;
 mod theme_adapter;
 
-pub use builder::RendererBuilder;
 pub use config::RenderConfig;
 pub use state::{ActiveElement, RenderState};
 pub use table_builder::{Table, TableBuilder};
