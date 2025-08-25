@@ -4,7 +4,6 @@ pub enum ElementPhase {
     End,
 }
 
-/// Represents different kinds of Markdown elements.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ElementKind {
     Heading(u8),
@@ -15,12 +14,10 @@ pub enum ElementKind {
 }
 
 pub enum OutputType {
-    /// A structural element with a start/end phase
     Element {
         kind: ElementKind,
         phase: ElementPhase,
     },
-    /// Standalone output types that don't have phases
     HorizontalRule,
     InlineCode {
         code: String,
