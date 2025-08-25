@@ -51,6 +51,16 @@ impl<W: Write> MarkdownRenderer<W> {
                 ElementKind::Table(TableVariant::HeadStart),
                 ElementPhase::Start,
             )?,
+            Tag::TableRow => {
+                if let Some(table) = self.get_table_mut() {
+                    table.current_row.clear();
+                }
+            }
+            Tag::TableCell => {
+                if let Some(table) = self.get_table_mut() {
+                    table.current_row.push(String::new());
+                }
+            }
             Tag::BlockQuote(_) => {
                 self.handle_element(ElementKind::BlockQuote, ElementPhase::Start)?
             }
@@ -85,6 +95,7 @@ impl<W: Write> MarkdownRenderer<W> {
                 ElementKind::Table(TableVariant::RowEnd),
                 ElementPhase::Start,
             )?,
+            TagEnd::TableCell => {}
             TagEnd::BlockQuote(_) => {
                 self.handle_element(ElementKind::BlockQuote, ElementPhase::End)?
             }
@@ -126,6 +137,9 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     fn handle_table_end(&mut self) {
+        if let Some(table) = self.get_table() {
+            self.render_formatted_table(&table).ok();
+        }
         self.clear_table();
         self.output.newline().ok();
     }
@@ -153,7 +167,7 @@ impl<W: Write> MarkdownRenderer<W> {
     fn handle_code_content(&mut self, code: &str) -> Result<()> {
         if let Some(ref mut cb) = self.get_code_block_mut() {
             cb.content.push_str(code);
-        } else {
+        } else if !self.add_text_to_state(&format!("`{}`", code)) {
             self.print_output(OutputType::InlineCode {
                 code: code.to_string(),
             })?;
@@ -372,34 +386,18 @@ impl<W: Write> MarkdownRenderer<W> {
         match variant {
             TableVariant::HeadStart => {}
             TableVariant::HeadEnd => {
-                let (current_row, alignments) = {
-                    if let Some(table) = self.get_table_mut() {
-                        let row = table.current_row.clone();
-                        let align = table.alignments.clone();
-                        table.current_row.clear();
-                        table.is_header = false;
-                        (row, align)
-                    } else {
-                        (vec![], vec![])
-                    }
-                };
-                if !current_row.is_empty() {
-                    self.render_table_row(&current_row)?;
-                    self.render_table_separator(&alignments)?;
+                if let Some(table) = self.get_table_mut() {
+                    table.headers = table.current_row.clone();
+                    table.current_row.clear();
+                    table.is_header = false;
                 }
             }
             TableVariant::RowEnd => {
-                let current_row = {
-                    if let Some(table) = self.get_table_mut() {
-                        let row = table.current_row.clone();
-                        table.current_row.clear();
-                        row
-                    } else {
-                        vec![]
-                    }
-                };
-                if !current_row.is_empty() {
-                    self.render_table_row(&current_row)?;
+                if let Some(table) = self.get_table_mut()
+                    && !table.current_row.is_empty()
+                {
+                    table.rows.push(table.current_row.clone());
+                    table.current_row.clear();
                 }
             }
         }
@@ -437,35 +435,72 @@ impl<W: Write> MarkdownRenderer<W> {
         Ok(())
     }
 
-    fn render_table_row(&mut self, cells: &[String]) -> Result<()> {
-        let mut output = String::new();
-        output.push_str(self.config.table_separator);
-        for cell in cells {
-            output.push(' ');
-            output.push_str(cell);
-            output.push(' ');
-            output.push_str(self.config.table_separator);
-        }
-        self.output.writeln(&output)?;
-        Ok(())
-    }
+    fn render_formatted_table(&mut self, table: &crate::state::TableState) -> Result<()> {
+        let mut column_widths = vec![0; table.alignments.len()];
 
-    fn render_table_separator(&mut self, alignments: &[Alignment]) -> Result<()> {
-        let mut output = String::new();
-        output.push_str(self.config.table_separator);
-        for alignment in alignments {
-            let separator = match alignment {
-                Alignment::Left => &self.config.table_alignment.left,
-                Alignment::Center => &self.config.table_alignment.center,
-                Alignment::Right => &self.config.table_alignment.right,
-                Alignment::None => &self.config.table_alignment.none,
-            };
-            output.push(' ');
-            output.push_str(separator);
-            output.push(' ');
-            output.push_str(self.config.table_separator);
+        for (i, header) in table.headers.iter().enumerate() {
+            if i < column_widths.len() {
+                column_widths[i] = column_widths[i].max(header.len());
+            }
         }
-        self.output.writeln(&output)?;
+
+        for row in &table.rows {
+            for (i, cell) in row.iter().enumerate() {
+                if i < column_widths.len() {
+                    column_widths[i] = column_widths[i].max(cell.len());
+                }
+            }
+        }
+
+        if !table.headers.is_empty() {
+            let mut output = String::new();
+            output.push_str(self.config.table_separator);
+            for (i, header) in table.headers.iter().enumerate() {
+                let width = column_widths.get(i).copied().unwrap_or(0);
+                output.push(' ');
+                output.push_str(&format!("{:<width$}", header, width = width));
+                output.push(' ');
+                output.push_str(self.config.table_separator);
+            }
+            self.output.writeln(&output)?;
+
+            let mut sep_output = String::new();
+            sep_output.push_str(self.config.table_separator);
+            for (i, alignment) in table.alignments.iter().enumerate() {
+                let width = column_widths.get(i).copied().unwrap_or(3).max(3);
+                let separator = match alignment {
+                    Alignment::Left => format!(":{}", "-".repeat(width - 1)),
+                    Alignment::Center => format!(":{}:", "-".repeat(width - 2)),
+                    Alignment::Right => format!("{}:", "-".repeat(width - 1)),
+                    Alignment::None => "-".repeat(width),
+                };
+                sep_output.push(' ');
+                sep_output.push_str(&separator);
+                sep_output.push(' ');
+                sep_output.push_str(self.config.table_separator);
+            }
+            self.output.writeln(&sep_output)?;
+        }
+
+        for row in &table.rows {
+            let mut output = String::new();
+            output.push_str(self.config.table_separator);
+            for (i, cell) in row.iter().enumerate() {
+                let width = column_widths.get(i).copied().unwrap_or(0);
+                let alignment = table.alignments.get(i).unwrap_or(&Alignment::None);
+                let formatted_cell = match alignment {
+                    Alignment::Left | Alignment::None => format!("{:<width$}", cell, width = width),
+                    Alignment::Center => format!("{:^width$}", cell, width = width),
+                    Alignment::Right => format!("{:>width$}", cell, width = width),
+                };
+                output.push(' ');
+                output.push_str(&formatted_cell);
+                output.push(' ');
+                output.push_str(self.config.table_separator);
+            }
+            self.output.writeln(&output)?;
+        }
+
         Ok(())
     }
 }
@@ -505,7 +540,7 @@ mod tests {
         }
     }
 
-    fn create_test_renderer() -> MarkdownRenderer<MockWriter> {
+    fn create_renderer() -> MarkdownRenderer<MockWriter> {
         let buffer = Arc::new(Mutex::new(Vec::with_capacity(1024)));
         let mock_writer = MockWriter::new_with_buffer(buffer);
         let output = BufferedOutput::new(mock_writer);
@@ -520,7 +555,7 @@ mod tests {
     #[case(OutputType::Element { kind: ElementKind::BlockQuote, phase: ElementPhase::Start })]
     #[case(OutputType::Element { kind: ElementKind::BlockQuote, phase: ElementPhase::End })]
     fn test_print_output_element_types(#[case] output_type: OutputType) {
-        let mut renderer = create_test_renderer();
+        let mut renderer = create_renderer();
         let result = renderer.print_output(output_type);
         assert!(result.is_ok());
     }
@@ -533,7 +568,7 @@ mod tests {
         #[case] output_type: OutputType,
         #[case] list_start: Option<u64>,
     ) {
-        let mut renderer = create_test_renderer();
+        let mut renderer = create_renderer();
         renderer.push_list(list_start);
         let result = renderer.print_output(output_type);
         assert!(result.is_ok());
@@ -545,7 +580,7 @@ mod tests {
     #[case(TableVariant::HeadEnd)]
     #[case(TableVariant::RowEnd)]
     fn test_print_output_table_elements(#[case] variant: TableVariant) {
-        let mut renderer = create_test_renderer();
+        let mut renderer = create_renderer();
         renderer.set_table(vec![]);
 
         if matches!(variant, TableVariant::HeadEnd | TableVariant::RowEnd)
@@ -568,14 +603,14 @@ mod tests {
     #[case(OutputType::TaskMarker { checked: true })]
     #[case(OutputType::TaskMarker { checked: false })]
     fn test_print_output_inline_types(#[case] output_type: OutputType) {
-        let mut renderer = create_test_renderer();
+        let mut renderer = create_renderer();
         let result = renderer.print_output(output_type);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_print_output_link() {
-        let mut renderer = create_test_renderer();
+        let mut renderer = create_renderer();
         renderer.set_link("https://example.com".to_string());
         if let Some(link) = renderer.get_link_mut() {
             link.text = "Example Link".to_string();
@@ -587,7 +622,7 @@ mod tests {
 
     #[test]
     fn test_print_output_image() {
-        let mut renderer = create_test_renderer();
+        let mut renderer = create_renderer();
         renderer.set_image("https://example.com/image.png".to_string());
         if let Some(image) = renderer.get_image_mut() {
             image.alt_text = "Example Image".to_string();
@@ -599,7 +634,7 @@ mod tests {
 
     #[test]
     fn test_print_output_code_block() {
-        let mut renderer = create_test_renderer();
+        let mut renderer = create_renderer();
         renderer.set_code_block(pulldown_cmark::CodeBlockKind::Fenced("rust".into()));
         if let Some(cb) = renderer.get_code_block_mut() {
             cb.content = "fn main() {\n    println!(\"Hello\");\n}".to_string();
@@ -610,7 +645,7 @@ mod tests {
 
     #[test]
     fn test_handle_content_text() {
-        let mut renderer = create_test_renderer();
+        let mut renderer = create_renderer();
         renderer.set_link("".to_string());
         assert!(
             renderer
@@ -622,7 +657,7 @@ mod tests {
 
     #[test]
     fn test_handle_content_code() {
-        let mut renderer = create_test_renderer();
+        let mut renderer = create_renderer();
         renderer.set_code_block(pulldown_cmark::CodeBlockKind::Indented);
         assert!(
             renderer
@@ -634,7 +669,7 @@ mod tests {
 
     #[test]
     fn test_nested_lists() {
-        let mut renderer = create_test_renderer();
+        let mut renderer = create_renderer();
         renderer.push_list(None);
         renderer.push_list(Some(1));
         assert_eq!(renderer.state.list_stack.len(), 2);
@@ -652,7 +687,7 @@ mod tests {
 
     #[test]
     fn test_table_with_alignments() {
-        let mut renderer = create_test_renderer();
+        let mut renderer = create_renderer();
         let alignments = vec![
             Alignment::Left,
             Alignment::Center,
@@ -670,7 +705,7 @@ mod tests {
 
     #[test]
     fn test_emphasis_states() {
-        let mut renderer = create_test_renderer();
+        let mut renderer = create_renderer();
         renderer.set_strong_emphasis(true);
         assert!(renderer.state.emphasis.strong);
 
@@ -684,7 +719,7 @@ mod tests {
 
     #[test]
     fn test_active_element_transitions() {
-        let mut renderer = create_test_renderer();
+        let mut renderer = create_renderer();
 
         renderer.set_link("url1".to_string());
         assert!(matches!(

@@ -196,6 +196,8 @@ impl<W: Write> MarkdownRenderer<W> {
             alignments,
             current_row: Vec::with_capacity(column_count),
             is_header: true,
+            headers: Vec::with_capacity(column_count),
+            rows: Vec::new(),
         }));
     }
 
@@ -218,7 +220,6 @@ impl<W: Write> MarkdownRenderer<W> {
             .and_then(|e| e.as_table_mut())
     }
 
-    /// Build a table using the TableBuilder API
     pub fn build_table(&self) -> TableBuilder {
         TableBuilder::new()
             .separator(self.config.table_separator)

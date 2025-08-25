@@ -39,6 +39,8 @@ pub struct TableState {
     pub alignments: Vec<Alignment>,
     pub current_row: Vec<String>,
     pub is_header: bool,
+    pub headers: Vec<String>,
+    pub rows: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
