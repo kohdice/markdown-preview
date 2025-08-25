@@ -1,5 +1,5 @@
 [package]
-name = "mp-stdout"
+name = "mp-tui"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,7 +14,9 @@ anyhow = { workspace = true }
 crossterm = { workspace = true }
 pulldown-cmark = { workspace = true }
 
-terminal_size = "0.4"
+ratatui = "0.29"
+regex = "1.11"
+unicode-width = "0.2"
 
 [dev-dependencies]
-rstest = { workspace = true }
+tempfile = { workspace = true }

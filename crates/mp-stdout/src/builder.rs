@@ -1,36 +1,17 @@
-//! Builder pattern implementation for MarkdownRenderer
-
 use std::io::{Stdout, Write};
 
 use pulldown_cmark::Options;
 
-use crate::{BufferedOutput, MarkdownRenderer, RenderConfig, RenderState};
 use mp_core::theme::SolarizedOsaka;
 
-/// Builder for creating configured MarkdownRenderer instances
-///
-/// # Example
-/// ```
-/// use mp_stdout::RendererBuilder;
-/// use mp_core::theme::SolarizedOsaka;
-///
-/// let renderer = RendererBuilder::new()
-///     .theme(SolarizedOsaka::default())
-///     .enable_strikethrough(true)
-///     .enable_tables(true)
-///     .buffer_size(16 * 1024)
-///     .build();
-/// ```
+use crate::{BufferedOutput, MarkdownRenderer, RenderConfig, RenderState};
+
 pub struct RendererBuilder<W: Write = Stdout> {
     theme: Option<SolarizedOsaka>,
     options: Option<Options>,
     config: Option<RenderConfig>,
     writer: Option<W>,
     buffer_size: Option<usize>,
-    enable_strikethrough: bool,
-    enable_tables: bool,
-    enable_footnotes: bool,
-    enable_tasklists: bool,
 }
 
 impl Default for RendererBuilder<Stdout> {
@@ -47,31 +28,11 @@ impl RendererBuilder<Stdout> {
             config: None,
             writer: None,
             buffer_size: None,
-            enable_strikethrough: true,
-            enable_tables: true,
-            enable_footnotes: true,
-            enable_tasklists: true,
         }
     }
 
-    /// Build with default stdout output
     pub fn build(self) -> MarkdownRenderer<Stdout> {
-        let options = self.options.unwrap_or_else(|| {
-            let mut opts = Options::empty();
-            if self.enable_strikethrough {
-                opts.insert(Options::ENABLE_STRIKETHROUGH);
-            }
-            if self.enable_tables {
-                opts.insert(Options::ENABLE_TABLES);
-            }
-            if self.enable_footnotes {
-                opts.insert(Options::ENABLE_FOOTNOTES);
-            }
-            if self.enable_tasklists {
-                opts.insert(Options::ENABLE_TASKLISTS);
-            }
-            opts
-        });
+        let options = self.options.unwrap_or_else(Self::default_options);
 
         let output = if let Some(size) = self.buffer_size {
             BufferedOutput::stdout_with_capacity(size)
@@ -90,6 +51,15 @@ impl RendererBuilder<Stdout> {
 }
 
 impl<W: Write> RendererBuilder<W> {
+    fn default_options() -> Options {
+        let mut opts = Options::empty();
+        opts.insert(Options::ENABLE_STRIKETHROUGH);
+        opts.insert(Options::ENABLE_TABLES);
+        opts.insert(Options::ENABLE_TASKLISTS);
+        opts.insert(Options::ENABLE_FOOTNOTES);
+        opts
+    }
+
     pub fn with_writer(writer: W) -> Self {
         Self {
             theme: None,
@@ -97,10 +67,6 @@ impl<W: Write> RendererBuilder<W> {
             config: None,
             writer: Some(writer),
             buffer_size: None,
-            enable_strikethrough: true,
-            enable_tables: true,
-            enable_footnotes: true,
-            enable_tasklists: true,
         }
     }
 
@@ -119,24 +85,32 @@ impl<W: Write> RendererBuilder<W> {
         self
     }
 
+    fn set_option(&mut self, option: Options, enable: bool) {
+        let opts = self.options.get_or_insert_with(Self::default_options);
+        if enable {
+            opts.insert(option);
+        } else {
+            opts.remove(option);
+        }
+    }
+
     pub fn enable_strikethrough(mut self, enable: bool) -> Self {
-        self.enable_strikethrough = enable;
+        self.set_option(Options::ENABLE_STRIKETHROUGH, enable);
         self
     }
 
     pub fn enable_tables(mut self, enable: bool) -> Self {
-        self.enable_tables = enable;
-        self
-    }
-
-    /// Enable or disable footnote parsing
-    pub fn enable_footnotes(mut self, enable: bool) -> Self {
-        self.enable_footnotes = enable;
+        self.set_option(Options::ENABLE_TABLES, enable);
         self
     }
 
     pub fn enable_tasklists(mut self, enable: bool) -> Self {
-        self.enable_tasklists = enable;
+        self.set_option(Options::ENABLE_TASKLISTS, enable);
+        self
+    }
+
+    pub fn enable_footnotes(mut self, enable: bool) -> Self {
+        self.set_option(Options::ENABLE_FOOTNOTES, enable);
         self
     }
 
@@ -145,24 +119,8 @@ impl<W: Write> RendererBuilder<W> {
         self
     }
 
-    /// Build with custom writer
     pub fn build_with_writer(self) -> MarkdownRenderer<W> {
-        let options = self.options.unwrap_or_else(|| {
-            let mut opts = Options::empty();
-            if self.enable_strikethrough {
-                opts.insert(Options::ENABLE_STRIKETHROUGH);
-            }
-            if self.enable_tables {
-                opts.insert(Options::ENABLE_TABLES);
-            }
-            if self.enable_footnotes {
-                opts.insert(Options::ENABLE_FOOTNOTES);
-            }
-            if self.enable_tasklists {
-                opts.insert(Options::ENABLE_TASKLISTS);
-            }
-            opts
-        });
+        let options = self.options.unwrap_or_else(Self::default_options);
 
         let writer = self
             .writer
@@ -192,8 +150,8 @@ mod tests {
         let renderer = RendererBuilder::new().build();
         assert!(renderer.options.contains(Options::ENABLE_STRIKETHROUGH));
         assert!(renderer.options.contains(Options::ENABLE_TABLES));
-        assert!(renderer.options.contains(Options::ENABLE_FOOTNOTES));
         assert!(renderer.options.contains(Options::ENABLE_TASKLISTS));
+        assert!(renderer.options.contains(Options::ENABLE_FOOTNOTES));
     }
 
     #[test]
@@ -201,21 +159,19 @@ mod tests {
         let renderer = RendererBuilder::new()
             .enable_strikethrough(false)
             .enable_tables(true)
-            .enable_footnotes(false)
             .enable_tasklists(true)
+            .enable_footnotes(false)
             .build();
 
         assert!(!renderer.options.contains(Options::ENABLE_STRIKETHROUGH));
         assert!(renderer.options.contains(Options::ENABLE_TABLES));
-        assert!(!renderer.options.contains(Options::ENABLE_FOOTNOTES));
         assert!(renderer.options.contains(Options::ENABLE_TASKLISTS));
+        assert!(!renderer.options.contains(Options::ENABLE_FOOTNOTES));
     }
 
     #[test]
     fn test_builder_with_buffer_size() {
         let renderer = RendererBuilder::new().buffer_size(32 * 1024).build();
-        // The buffer size is internal to BufferedOutput, so we can't directly test it
-        // But we can verify the renderer is created successfully
         assert!(renderer.options.contains(Options::ENABLE_TABLES));
     }
 
@@ -223,13 +179,12 @@ mod tests {
     fn test_builder_with_custom_config() {
         let config = RenderConfig::default();
         let renderer = RendererBuilder::new().config(config.clone()).build();
-        // Verify the renderer has the custom config
         assert_eq!(renderer.config.table_separator, config.table_separator);
     }
 
     #[test]
     fn test_builder_with_custom_writer() {
-        let writer = Vec::new();
+        let writer = Vec::with_capacity(256);
         let renderer = RendererBuilder::with_writer(writer)
             .enable_tables(false)
             .build_with_writer();

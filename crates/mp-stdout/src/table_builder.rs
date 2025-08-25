@@ -1,25 +1,9 @@
-//! Table builder module for constructing tables with fluent API
-
 use std::fmt;
 
+use crate::config::TableAlignmentConfig;
 use anyhow::Result;
 use pulldown_cmark::Alignment;
 
-/// A builder for constructing tables with a fluent API
-///
-/// # Example
-/// ```
-/// use mp_stdout::TableBuilder;
-/// use pulldown_cmark::Alignment;
-///
-/// let table = TableBuilder::new()
-///     .header(vec!["Name", "Age", "City"])
-///     .alignments(vec![Alignment::Left, Alignment::Right, Alignment::Center])
-///     .row(vec!["Alice", "30", "New York"])
-///     .row(vec!["Bob", "25", "London"])
-///     .build()
-///     .expect("Failed to build table");
-/// ```
 #[derive(Debug, Clone)]
 pub struct TableBuilder {
     headers: Option<Vec<String>>,
@@ -29,27 +13,6 @@ pub struct TableBuilder {
     alignment_config: TableAlignmentConfig,
 }
 
-/// Configuration for table alignment indicators
-#[derive(Debug, Clone)]
-pub struct TableAlignmentConfig {
-    pub left: &'static str,
-    pub center: &'static str,
-    pub right: &'static str,
-    pub none: &'static str,
-}
-
-impl Default for TableAlignmentConfig {
-    fn default() -> Self {
-        Self {
-            left: ":---",
-            center: ":---:",
-            right: "---:",
-            none: "---",
-        }
-    }
-}
-
-/// Represents a built table ready for rendering
 #[derive(Debug, Clone)]
 pub struct Table {
     headers: Option<Vec<String>>,
@@ -60,18 +23,16 @@ pub struct Table {
 }
 
 impl TableBuilder {
-    /// Creates a new table builder with default settings
     pub fn new() -> Self {
         Self {
             headers: None,
-            rows: Vec::new(),
-            alignments: Vec::new(),
+            rows: Vec::with_capacity(10),
+            alignments: Vec::with_capacity(5),
             separator: "|",
             alignment_config: TableAlignmentConfig::default(),
         }
     }
 
-    /// Sets the header row
     pub fn header<I, S>(mut self, headers: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -80,7 +41,6 @@ impl TableBuilder {
         let header_vec: Vec<String> = headers.into_iter().map(|s| s.into()).collect();
         let column_count = header_vec.len();
 
-        // Auto-generate alignments if not set
         if self.alignments.is_empty() {
             self.alignments = vec![Alignment::None; column_count];
         }
@@ -89,13 +49,11 @@ impl TableBuilder {
         self
     }
 
-    /// Sets column alignments
     pub fn alignments(mut self, alignments: Vec<Alignment>) -> Self {
         self.alignments = alignments;
         self
     }
 
-    /// Adds a data row
     pub fn row<I, S>(mut self, row: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -105,7 +63,6 @@ impl TableBuilder {
         self
     }
 
-    /// Adds multiple rows at once
     pub fn rows<I, R, S>(mut self, rows: I) -> Self
     where
         I: IntoIterator<Item = R>,
@@ -118,19 +75,16 @@ impl TableBuilder {
         self
     }
 
-    /// Sets a custom separator character
     pub fn separator(mut self, separator: &'static str) -> Self {
         self.separator = separator;
         self
     }
 
-    /// Sets custom alignment configuration
     pub fn alignment_config(mut self, config: TableAlignmentConfig) -> Self {
         self.alignment_config = config;
         self
     }
 
-    /// Validates the table structure
     fn validate(&self) -> Result<()> {
         let column_count = if let Some(ref headers) = self.headers {
             headers.len()
@@ -162,7 +116,6 @@ impl TableBuilder {
         Ok(())
     }
 
-    /// Builds the table, returning an error if validation fails
     pub fn build(self) -> Result<Table> {
         self.validate()?;
 
@@ -183,22 +136,18 @@ impl Default for TableBuilder {
 }
 
 impl Table {
-    /// Gets the headers if present
     pub fn headers(&self) -> Option<&Vec<String>> {
         self.headers.as_ref()
     }
 
-    /// Gets the data rows
     pub fn rows(&self) -> &Vec<Vec<String>> {
         &self.rows
     }
 
-    /// Gets the column alignments
     pub fn alignments(&self) -> &Vec<Alignment> {
         &self.alignments
     }
 
-    /// Helper function to format table row with common logic
     fn format_table_row<I, F>(&self, items: I, formatter: F, estimated_cell_size: usize) -> String
     where
         I: IntoIterator,
@@ -222,7 +171,6 @@ impl Table {
         output
     }
 
-    /// Renders a single row as a string
     pub fn render_row(&self, row: &[String]) -> String {
         let avg_cell_size = if row.is_empty() {
             4
@@ -237,7 +185,6 @@ impl Table {
         )
     }
 
-    /// Renders the alignment separator row
     pub fn render_separator(&self) -> String {
         self.format_table_row(
             &self.alignments,
@@ -254,19 +201,15 @@ impl Table {
         )
     }
 
-    /// Renders the entire table
     pub fn render(&self) -> Vec<String> {
-        // Pre-allocate capacity based on expected table size
         let estimated_lines = if self.headers.is_some() { 2 } else { 0 } + self.rows.len();
         let mut lines = Vec::with_capacity(estimated_lines);
 
-        // Render header if present
         if let Some(ref headers) = self.headers {
             lines.push(self.render_row(headers));
             lines.push(self.render_separator());
         }
 
-        // Render data rows
         for row in &self.rows {
             lines.push(self.render_row(row));
         }
@@ -274,7 +217,6 @@ impl Table {
         lines
     }
 
-    /// Gets the column count
     pub fn column_count(&self) -> usize {
         if let Some(ref headers) = self.headers {
             headers.len()
@@ -285,7 +227,6 @@ impl Table {
         }
     }
 
-    /// Gets the row count (excluding header)
     pub fn row_count(&self) -> usize {
         self.rows.len()
     }
@@ -304,54 +245,75 @@ impl fmt::Display for Table {
 mod tests {
     use super::*;
 
+    fn create_test_table() -> TableBuilder {
+        TableBuilder::new()
+    }
+
+    fn create_table_with_data(header: Vec<&str>, rows: Vec<Vec<&str>>) -> Result<Table> {
+        let mut builder = TableBuilder::new().header(header);
+        for row in rows {
+            builder = builder.row(row);
+        }
+        builder.build()
+    }
+
+    fn assert_table_dimensions(table: &Table, expected_columns: usize, expected_rows: usize) {
+        assert_eq!(table.column_count(), expected_columns);
+        assert_eq!(table.row_count(), expected_rows);
+    }
+
+    fn assert_alignments(table: &Table, expected: Vec<Alignment>) {
+        let alignments = table.alignments();
+        assert_eq!(alignments.len(), expected.len());
+        for (actual, expected) in alignments.iter().zip(expected.iter()) {
+            assert_eq!(actual, expected);
+        }
+    }
+
     #[test]
     fn test_basic_table_builder() {
-        let table = TableBuilder::new()
-            .header(vec!["Name", "Age"])
-            .row(vec!["Alice", "30"])
-            .row(vec!["Bob", "25"])
-            .build()
-            .unwrap();
+        let table = create_table_with_data(
+            vec!["Name", "Age"],
+            vec![vec!["Alice", "30"], vec!["Bob", "25"]],
+        )
+        .unwrap();
 
-        assert_eq!(table.column_count(), 2);
-        assert_eq!(table.row_count(), 2);
+        assert_table_dimensions(&table, 2, 2);
         assert!(table.headers().is_some());
     }
 
     #[test]
     fn test_table_without_header() {
-        let table = TableBuilder::new()
+        let table = create_test_table()
             .row(vec!["A", "B", "C"])
             .row(vec!["D", "E", "F"])
             .build()
             .unwrap();
 
-        assert_eq!(table.column_count(), 3);
-        assert_eq!(table.row_count(), 2);
+        assert_table_dimensions(&table, 3, 2);
         assert!(table.headers().is_none());
     }
 
     #[test]
     fn test_table_with_alignments() {
-        let table = TableBuilder::new()
+        let table = create_test_table()
             .header(vec!["Left", "Center", "Right"])
             .alignments(vec![Alignment::Left, Alignment::Center, Alignment::Right])
             .row(vec!["A", "B", "C"])
             .build()
             .unwrap();
 
-        let alignments = table.alignments();
-        assert_eq!(alignments.len(), 3);
-        assert_eq!(alignments[0], Alignment::Left);
-        assert_eq!(alignments[1], Alignment::Center);
-        assert_eq!(alignments[2], Alignment::Right);
+        assert_alignments(
+            &table,
+            vec![Alignment::Left, Alignment::Center, Alignment::Right],
+        );
     }
 
     #[test]
     fn test_table_validation_column_mismatch() {
-        let result = TableBuilder::new()
+        let result = create_test_table()
             .header(vec!["A", "B"])
-            .row(vec!["1", "2", "3"]) // Too many columns
+            .row(vec!["1", "2", "3"])
             .build();
 
         assert!(result.is_err());
@@ -359,9 +321,9 @@ mod tests {
 
     #[test]
     fn test_table_validation_alignment_mismatch() {
-        let result = TableBuilder::new()
+        let result = create_test_table()
             .header(vec!["A", "B", "C"])
-            .alignments(vec![Alignment::Left, Alignment::Right]) // Too few alignments
+            .alignments(vec![Alignment::Left, Alignment::Right])
             .build();
 
         assert!(result.is_err());
@@ -369,7 +331,7 @@ mod tests {
 
     #[test]
     fn test_custom_separator() {
-        let table = TableBuilder::new()
+        let table = create_test_table()
             .separator("||")
             .header(vec!["A", "B"])
             .row(vec!["1", "2"])
@@ -383,14 +345,13 @@ mod tests {
 
     #[test]
     fn test_empty_table() {
-        let table = TableBuilder::new().build().unwrap();
-        assert_eq!(table.column_count(), 0);
-        assert_eq!(table.row_count(), 0);
+        let table = create_test_table().build().unwrap();
+        assert_table_dimensions(&table, 0, 0);
     }
 
     #[test]
     fn test_table_rendering() {
-        let table = TableBuilder::new()
+        let table = create_test_table()
             .header(vec!["Name", "Value"])
             .alignments(vec![Alignment::Left, Alignment::Right])
             .row(vec!["foo", "123"])
@@ -408,7 +369,7 @@ mod tests {
 
     #[test]
     fn test_builder_method_chaining() {
-        let _table = TableBuilder::new()
+        let _table = create_test_table()
             .separator("!")
             .header(vec!["A"])
             .alignments(vec![Alignment::Center])
@@ -421,11 +382,7 @@ mod tests {
 
     #[test]
     fn test_auto_alignment_generation() {
-        let table = TableBuilder::new()
-            .header(vec!["A", "B", "C"])
-            .row(vec!["1", "2", "3"])
-            .build()
-            .unwrap();
+        let table = create_table_with_data(vec!["A", "B", "C"], vec![vec!["1", "2", "3"]]).unwrap();
 
         let alignments = table.alignments();
         assert_eq!(alignments.len(), 3);

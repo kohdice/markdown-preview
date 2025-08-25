@@ -1,0 +1,237 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "LSMCP Configuration Schema",
+  "description": "Configuration schema for Language Server MCP (LSMCP)",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Path to this schema file"
+    },
+    "preset": {
+      "type": "string",
+      "description": "Preset configuration for specific language servers",
+      "enum": [
+        "rust-analyzer",
+        "tsgo",
+        "typescript",
+        "pyright",
+        "gopls",
+        "deno",
+        "moonbit",
+        "fsharp",
+        "hls",
+        "ocaml"
+      ]
+    },
+    "files": {
+      "type": "array",
+      "description": "File patterns to index",
+      "items": {
+        "type": "string"
+      },
+      "examples": [
+        ["**/*.rs"],
+        ["**/*.ts", "**/*.tsx"],
+        ["**/*.py"],
+        ["**/*.go"]
+      ]
+    },
+    "indexFiles": {
+      "type": "array",
+      "description": "Alternative to 'files' - file patterns to index",
+      "items": {
+        "type": "string"
+      }
+    },
+    "settings": {
+      "type": "object",
+      "description": "General settings for indexing and performance",
+      "properties": {
+        "autoIndex": {
+          "type": "boolean",
+          "description": "Enable automatic indexing on file changes",
+          "default": false
+        },
+        "indexConcurrency": {
+          "type": "integer",
+          "description": "Number of files to process concurrently",
+          "minimum": 1,
+          "maximum": 20,
+          "default": 5
+        },
+        "autoIndexDelay": {
+          "type": "integer",
+          "description": "Delay in milliseconds before auto-indexing",
+          "minimum": 100,
+          "maximum": 5000,
+          "default": 500
+        },
+        "enableWatchers": {
+          "type": "boolean",
+          "description": "Enable file system watchers",
+          "default": true
+        },
+        "memoryLimit": {
+          "type": "integer",
+          "description": "Memory limit for indexing in MB",
+          "minimum": 100,
+          "maximum": 4096,
+          "default": 1024
+        },
+        "maxFileSize": {
+          "type": "integer",
+          "description": "Maximum file size to index in bytes",
+          "minimum": 1000,
+          "default": 1048576
+        }
+      },
+      "additionalProperties": false
+    },
+    "ignorePatterns": {
+      "type": "array",
+      "description": "Patterns for files and directories to ignore",
+      "items": {
+        "type": "string"
+      },
+      "examples": [
+        ["**/target/**", "**/.git/**"],
+        ["**/node_modules/**", "**/dist/**"]
+      ]
+    },
+    "symbolFilter": {
+      "type": "object",
+      "description": "Filter symbols during indexing",
+      "properties": {
+        "excludeKinds": {
+          "type": "array",
+          "description": "Symbol kinds to exclude from indexing",
+          "items": {
+            "type": "string",
+            "enum": [
+              "File",
+              "Module",
+              "Namespace",
+              "Package",
+              "Class",
+              "Method",
+              "Property",
+              "Field",
+              "Constructor",
+              "Enum",
+              "Interface",
+              "Function",
+              "Variable",
+              "Constant",
+              "String",
+              "Number",
+              "Boolean",
+              "Array",
+              "Object",
+              "Key",
+              "Null",
+              "EnumMember",
+              "Struct",
+              "Event",
+              "Operator",
+              "TypeParameter"
+            ]
+          }
+        },
+        "excludePatterns": {
+          "type": "array",
+          "description": "Regular expression patterns for symbol names to exclude",
+          "items": {
+            "type": "string"
+          }
+        },
+        "includeOnlyTopLevel": {
+          "type": "boolean",
+          "description": "Only index top-level symbols",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "adapter": {
+      "type": "object",
+      "description": "Language server adapter configuration",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Adapter identifier"
+        },
+        "name": {
+          "type": "string",
+          "description": "Adapter display name"
+        },
+        "baseLanguage": {
+          "type": "string",
+          "description": "Base language for the adapter"
+        },
+        "description": {
+          "type": "string",
+          "description": "Adapter description"
+        },
+        "bin": {
+          "type": "string",
+          "description": "Binary path or command for the language server"
+        },
+        "args": {
+          "type": "array",
+          "description": "Command line arguments for the language server",
+          "items": {
+            "type": "string"
+          }
+        },
+        "initializationOptions": {
+          "type": "object",
+          "description": "Language server specific initialization options",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "experimentalMemories": {
+      "type": "boolean",
+      "description": "Enable experimental memory features",
+      "default": false
+    },
+    "lspServers": {
+      "type": "object",
+      "description": "Language server specific configurations",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "Command to launch the language server"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Arguments for the language server"
+          },
+          "rootPatterns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Patterns to identify project root"
+          },
+          "fileExtensions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "File extensions handled by this server"
+          }
+        }
+      }
+    }
+  },
+  "required": ["preset"],
+  "additionalProperties": false
+}

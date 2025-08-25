@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 
-/// Configuration for markdown rendering behavior and visual settings.
 #[derive(Debug, Clone)]
 pub struct RenderConfig {
     pub indent_width: usize,
@@ -8,14 +7,6 @@ pub struct RenderConfig {
     pub table_separator: &'static str,
 
     pub table_alignment: TableAlignmentConfig,
-
-    pub enable_colors: bool,
-
-    pub enable_bold: bool,
-
-    pub enable_italic: bool,
-
-    pub enable_underline: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -32,10 +23,6 @@ impl Default for RenderConfig {
             indent_width: 2,
             table_separator: "|",
             table_alignment: TableAlignmentConfig::default(),
-            enable_colors: true,
-            enable_bold: true,
-            enable_italic: true,
-            enable_underline: true,
         }
     }
 }
@@ -86,8 +73,6 @@ mod tests {
         let config = RenderConfig::default();
         assert_eq!(config.indent_width, 2);
         assert_eq!(config.table_separator, "|");
-        assert!(config.enable_colors);
-        assert!(config.enable_bold);
     }
 
     #[test]
@@ -102,7 +87,7 @@ mod tests {
     fn test_create_horizontal_rule() {
         let config = RenderConfig::default();
         let rule = config.create_horizontal_rule();
-        assert!(rule.chars().count() > 0);
+        assert!(!rule.is_empty());
         assert!(rule.chars().count() <= 100);
         assert!(rule.chars().all(|c| c == '─'));
     }

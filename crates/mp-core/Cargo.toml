@@ -9,9 +9,9 @@ repository.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-colored = { workspace = true }
-aho-corasick = "1.1.3"
-ignore = "0.4.23"
+
+aho-corasick = "1.1"
+ignore = "0.4"
 
 [dev-dependencies]
 rstest = { workspace = true }

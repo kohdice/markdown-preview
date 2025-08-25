@@ -3,29 +3,23 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use mp_core::finder::{FinderConfig, display_files, find_markdown_files};
 use mp_stdout::MarkdownRenderer;
 
 #[derive(Debug, Parser)]
 #[command(name = "mp", version, about = "Markdown previewer in terminal")]
 pub struct Args {
-    /// Markdown file to preview (optional, searches for .md files if not provided)
     #[arg(name = "FILE")]
     pub file: Option<PathBuf>,
 
-    /// Show hidden files (files starting with '.')
     #[arg(long = "hidden")]
     pub hidden: bool,
 
-    /// Do not respect .gitignore files
     #[arg(long = "no-ignore")]
     pub no_ignore: bool,
 
-    /// Do not respect .gitignore files in parent directories
     #[arg(long = "no-ignore-parent")]
     pub no_ignore_parent: bool,
 
-    /// Do not respect the global gitignore file
     #[arg(long = "no-global-ignore-file")]
     pub no_global_ignore_file: bool,
 }
@@ -49,15 +43,15 @@ pub fn run() -> Result<()> {
                 .with_context(|| format!("Failed to render markdown file: {}", path.display()))?;
         }
         None => {
-            let config = FinderConfig {
+            let finder_config = mp_core::FinderConfig {
                 hidden: args.hidden,
                 no_ignore: args.no_ignore,
                 no_ignore_parent: args.no_ignore_parent,
                 no_global_ignore_file: args.no_global_ignore_file,
             };
 
-            let files = find_markdown_files(config)?;
-            display_files(&files);
+            mp_tui::run_tui(finder_config)
+                .map_err(|e| anyhow::anyhow!("Failed to run TUI mode: {}", e))?;
         }
     }
 

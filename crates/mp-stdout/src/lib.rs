@@ -1,4 +1,5 @@
-use std::io::{Stdout, Write};
+use std::fs::File;
+use std::io::{Read, Stdout, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -12,24 +13,16 @@ pub mod output;
 pub mod state;
 
 mod config;
-mod element_accessor;
 mod formatting;
-mod handlers;
-mod io;
 mod styling;
 mod table_builder;
+mod theme_adapter;
 
-pub use builder::RendererBuilder;
 pub use config::RenderConfig;
-pub use element_accessor::{
-    CodeBlockAccessor, ElementData, ImageAccessor, LinkAccessor, TableAccessor,
-};
 pub use state::{ActiveElement, RenderState};
-pub use styling::TextStyle;
 pub use table_builder::{Table, TableBuilder};
 
 pub use self::buffered_output::BufferedOutput;
-use self::io::read_file;
 
 pub struct MarkdownRenderer<W: Write = Stdout> {
     pub theme: SolarizedOsaka,
@@ -56,8 +49,8 @@ impl<W: Write> MarkdownRenderer<W> {
         let mut options = Options::empty();
         options.insert(Options::ENABLE_STRIKETHROUGH);
         options.insert(Options::ENABLE_TABLES);
-        options.insert(Options::ENABLE_FOOTNOTES);
         options.insert(Options::ENABLE_TASKLISTS);
+        options.insert(Options::ENABLE_FOOTNOTES);
 
         Self {
             theme: SolarizedOsaka,
@@ -69,7 +62,7 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     pub fn render_file(&mut self, path: &Path) -> Result<()> {
-        let content = read_file(path)
+        let content = read_markdown_file(path)
             .with_context(|| format!("Failed to read markdown file: {}", path.display()))?;
         self.render_content(&content)
     }
@@ -92,26 +85,6 @@ impl<W: Write> MarkdownRenderer<W> {
             self.render_code_block(&code_block)?;
         }
         Ok(())
-    }
-
-    pub fn get<T: ElementData>(&self) -> Option<&T::Output> {
-        self.state.active_element.as_ref().and_then(T::extract)
-    }
-
-    pub fn get_mut<T: ElementData>(&mut self) -> Option<&mut T::Output> {
-        self.state.active_element.as_mut().and_then(T::extract_mut)
-    }
-
-    pub fn get_cloned<T>(&self) -> Option<T::Output>
-    where
-        T: ElementData,
-        T::Output: Clone,
-    {
-        self.get::<T>().cloned()
-    }
-
-    pub fn set<T: ElementData>(&mut self, data: T::Output) {
-        self.state.active_element = Some(T::create(data));
     }
 
     pub fn set_strong_emphasis(&mut self, value: bool) {
@@ -141,11 +114,18 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     pub fn get_link(&self) -> Option<state::LinkState> {
-        self.get_cloned::<LinkAccessor>()
+        self.state
+            .active_element
+            .as_ref()
+            .and_then(|e| e.as_link())
+            .cloned()
     }
 
     pub fn get_link_mut(&mut self) -> Option<&mut state::LinkState> {
-        self.get_mut::<LinkAccessor>()
+        self.state
+            .active_element
+            .as_mut()
+            .and_then(|e| e.as_link_mut())
     }
 
     pub fn set_image(&mut self, url: String) {
@@ -160,11 +140,18 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     pub fn get_image(&self) -> Option<state::ImageState> {
-        self.get_cloned::<ImageAccessor>()
+        self.state
+            .active_element
+            .as_ref()
+            .and_then(|e| e.as_image())
+            .cloned()
     }
 
     pub fn get_image_mut(&mut self) -> Option<&mut state::ImageState> {
-        self.get_mut::<ImageAccessor>()
+        self.state
+            .active_element
+            .as_mut()
+            .and_then(|e| e.as_image_mut())
     }
 
     pub fn set_code_block(&mut self, kind: pulldown_cmark::CodeBlockKind<'static>) {
@@ -189,18 +176,28 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     pub fn get_code_block(&self) -> Option<state::CodeBlockState> {
-        self.get_cloned::<CodeBlockAccessor>()
+        self.state
+            .active_element
+            .as_ref()
+            .and_then(|e| e.as_code_block())
+            .cloned()
     }
 
     pub fn get_code_block_mut(&mut self) -> Option<&mut state::CodeBlockState> {
-        self.get_mut::<CodeBlockAccessor>()
+        self.state
+            .active_element
+            .as_mut()
+            .and_then(|e| e.as_code_block_mut())
     }
 
     pub fn set_table(&mut self, alignments: Vec<pulldown_cmark::Alignment>) {
+        let column_count = alignments.len();
         self.state.active_element = Some(ActiveElement::Table(state::TableState {
             alignments,
-            current_row: Vec::new(),
+            current_row: Vec::with_capacity(column_count),
             is_header: true,
+            headers: Vec::with_capacity(column_count),
+            rows: Vec::new(),
         }));
     }
 
@@ -209,18 +206,24 @@ impl<W: Write> MarkdownRenderer<W> {
     }
 
     pub fn get_table(&self) -> Option<state::TableState> {
-        self.get_cloned::<TableAccessor>()
+        self.state
+            .active_element
+            .as_ref()
+            .and_then(|e| e.as_table())
+            .cloned()
     }
 
     pub fn get_table_mut(&mut self) -> Option<&mut state::TableState> {
-        self.get_mut::<TableAccessor>()
+        self.state
+            .active_element
+            .as_mut()
+            .and_then(|e| e.as_table_mut())
     }
 
-    /// Build a table using the TableBuilder API
     pub fn build_table(&self) -> TableBuilder {
         TableBuilder::new()
             .separator(self.config.table_separator)
-            .alignment_config(table_builder::TableAlignmentConfig {
+            .alignment_config(config::TableAlignmentConfig {
                 left: self.config.table_alignment.left,
                 center: self.config.table_alignment.center,
                 right: self.config.table_alignment.right,
@@ -246,6 +249,25 @@ impl<W: Write> MarkdownRenderer<W> {
     pub fn clear_active_element(&mut self) {
         self.state.active_element = None;
     }
+}
+
+fn read_markdown_file(path: &Path) -> Result<String> {
+    if !path.exists() {
+        return Err(anyhow::anyhow!("File not found: {}", path.display()));
+    }
+
+    let metadata = std::fs::metadata(path)
+        .with_context(|| format!("Failed to get metadata for: {}", path.display()))?;
+    let file_size = metadata.len();
+
+    let mut file =
+        File::open(path).with_context(|| format!("Failed to open file: {}", path.display()))?;
+
+    let mut content = String::with_capacity(file_size as usize);
+    file.read_to_string(&mut content)
+        .with_context(|| format!("Failed to read file: {}", path.display()))?;
+
+    Ok(content)
 }
 
 #[cfg(test)]
@@ -333,7 +355,7 @@ fn main() {
     }
 
     fn create_renderer() -> MarkdownRenderer<MockWriter> {
-        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let buffer = Arc::new(Mutex::new(Vec::with_capacity(1024)));
         let mock_writer = MockWriter::new_with_buffer(buffer);
         let output = BufferedOutput::new(mock_writer);
         MarkdownRenderer::with_output(output)
@@ -345,22 +367,13 @@ fn main() {
         assert!(result.is_ok(), "Failed to render: {}", content);
     }
 
-    fn set_emphasis_state<W: Write>(
-        renderer: &mut MarkdownRenderer<W>,
-        strong: bool,
-        italic: bool,
-    ) {
-        renderer.state.emphasis.strong = strong;
-        renderer.state.emphasis.italic = italic;
-    }
-
     #[test]
     fn test_renderer_creation() {
         let renderer = create_renderer();
         assert!(renderer.options.contains(Options::ENABLE_TABLES));
         assert!(renderer.options.contains(Options::ENABLE_STRIKETHROUGH));
-        assert!(renderer.options.contains(Options::ENABLE_FOOTNOTES));
         assert!(renderer.options.contains(Options::ENABLE_TASKLISTS));
+        assert!(renderer.options.contains(Options::ENABLE_FOOTNOTES));
     }
 
     #[test]
@@ -390,7 +403,8 @@ fn main() {
     ) {
         let mut renderer = create_renderer();
 
-        set_emphasis_state(&mut renderer, strong, italic);
+        renderer.state.emphasis.strong = strong;
+        renderer.state.emphasis.italic = italic;
 
         if has_link {
             renderer.set_link("test".to_string());
@@ -478,7 +492,6 @@ fn main() {
     fn test_table_builder_integration() {
         let renderer = create_renderer();
 
-        // Test building a table with the integrated builder
         let table = renderer
             .build_table()
             .header(vec!["Column 1", "Column 2", "Column 3"])

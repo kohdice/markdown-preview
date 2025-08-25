@@ -1,19 +1,14 @@
-//! HTML entity decoding with AhoCorasick algorithm
-
 use std::borrow::Cow;
 use std::sync::LazyLock;
 
 use aho_corasick::AhoCorasick;
-use anyhow::{Context, Result};
 
-/// Efficient HTML entity decoder
 pub struct EntityDecoder {
     matcher: AhoCorasick,
     replacements: Vec<&'static str>,
 }
 
-/// Initialize entity decoder
-fn init_entity_decoder() -> Result<EntityDecoder> {
+fn init_entity_decoder() -> EntityDecoder {
     let patterns = vec![
         "&lt;", "&gt;", "&amp;", "&quot;", "&apos;", "&#39;", "&nbsp;", "&copy;", "&reg;",
         "&trade;", "&euro;", "&pound;", "&yen;", "&cent;", "&sect;", "&para;", "&bull;",
@@ -31,21 +26,16 @@ fn init_entity_decoder() -> Result<EntityDecoder> {
     let matcher = AhoCorasick::builder()
         .match_kind(aho_corasick::MatchKind::LeftmostFirst)
         .build(patterns)
-        .context("Failed to build AhoCorasick matcher for HTML entity decoding")?;
+        .expect("Failed to build AhoCorasick matcher for HTML entity decoding");
 
-    Ok(EntityDecoder {
+    EntityDecoder {
         matcher,
         replacements,
-    })
+    }
 }
 
-/// Global entity decoder
-static ENTITY_DECODER: LazyLock<EntityDecoder> = LazyLock::new(|| {
-    init_entity_decoder()
-        .expect("Failed to initialize HTML entity decoder - this is a critical error")
-});
+static ENTITY_DECODER: LazyLock<EntityDecoder> = LazyLock::new(init_entity_decoder);
 
-/// Decode HTML entities using AhoCorasick pattern matching
 pub fn decode_html_entities(text: &str) -> Cow<'_, str> {
     if !text.contains('&') {
         return Cow::Borrowed(text);
@@ -65,7 +55,6 @@ pub fn decode_html_entities(text: &str) -> Cow<'_, str> {
     Cow::Owned(decode_numeric_entities(&result))
 }
 
-/// Decode numeric HTML entities
 fn decode_numeric_entities(text: &str) -> String {
     if !text.contains("&#") {
         return text.to_string();
