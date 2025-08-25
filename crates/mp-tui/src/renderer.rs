@@ -4,7 +4,7 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::StatefulWidget,
 };
@@ -24,7 +24,6 @@ pub struct MarkdownWidget {
 #[derive(Default, Clone)]
 pub struct MarkdownWidgetState {
     pub scroll_offset: u16,
-    pub border_style: Style,
 }
 
 impl MarkdownWidget {
@@ -55,7 +54,7 @@ impl MarkdownWidget {
         let mut in_list_item = false;
 
         let mut in_table = false;
-        let mut is_header_row = false;
+        let mut first_table_row = true;
         let mut table_headers: Vec<String> = Vec::with_capacity(10);
         let mut table_rows: Vec<Vec<String>> = Vec::with_capacity(20);
         let mut current_row: Vec<String> = Vec::with_capacity(10);
@@ -80,12 +79,11 @@ impl MarkdownWidget {
                                 .push(Line::from(std::mem::take(&mut current_line)));
                         }
                         in_table = true;
+                        first_table_row = true;
                         table_headers.clear();
                         table_rows.clear();
                     }
-                    Tag::TableHead => {
-                        is_header_row = true;
-                    }
+                    Tag::TableHead => {}
                     Tag::TableRow => {
                         current_row.clear();
                     }
@@ -195,14 +193,15 @@ impl MarkdownWidget {
                         table_headers.clear();
                         table_rows.clear();
                     }
-                    TagEnd::TableHead => {
-                        is_header_row = false;
-                    }
+                    TagEnd::TableHead => {}
                     TagEnd::TableRow => {
-                        if is_header_row {
-                            table_headers = std::mem::take(&mut current_row);
-                        } else {
-                            table_rows.push(std::mem::take(&mut current_row));
+                        if !current_row.is_empty() {
+                            if first_table_row {
+                                table_headers = current_row.clone();
+                                first_table_row = false;
+                            } else {
+                                table_rows.push(current_row.clone());
+                            }
                         }
                         current_row.clear();
                     }
@@ -323,18 +322,84 @@ impl MarkdownWidget {
         }
     }
 
+    fn pad_unicode_str(s: &str, target_width: usize) -> String {
+        let current_width = s.width();
+        if current_width >= target_width {
+            s.to_string()
+        } else {
+            let padding = " ".repeat(target_width - current_width);
+            format!("{}{}", s, padding)
+        }
+    }
+
     fn create_table_lines(headers: &[String], rows: &[Vec<String>]) -> Vec<Line<'static>> {
         let mut lines = Vec::with_capacity(rows.len() + 3);
-        let header_line = headers.join(" | ");
-        lines.push(Line::from(vec![Span::styled(
-            header_line,
-            Style::default().add_modifier(Modifier::BOLD),
-        )]));
 
-        lines.push(Line::from("-".repeat(40)));
+        let num_columns = if !headers.is_empty() {
+            headers.len()
+        } else if !rows.is_empty() && !rows[0].is_empty() {
+            rows[0].len()
+        } else {
+            0
+        };
+
+        if num_columns == 0 {
+            return lines;
+        }
+
+        let mut column_widths = vec![0; num_columns];
+
+        for (i, header) in headers.iter().enumerate() {
+            if i < column_widths.len() {
+                column_widths[i] = column_widths[i].max(header.width());
+            }
+        }
 
         for row in rows {
-            let row_line = row.join(" | ");
+            for (i, cell) in row.iter().enumerate() {
+                if i < column_widths.len() {
+                    column_widths[i] = column_widths[i].max(cell.width());
+                }
+            }
+        }
+
+        for width in &mut column_widths {
+            *width = (*width).max(3);
+        }
+
+        if !headers.is_empty() {
+            let mut header_cells = Vec::new();
+            for (i, header) in headers.iter().enumerate() {
+                let width = column_widths.get(i).copied().unwrap_or(3);
+                let padded = Self::pad_unicode_str(header, width);
+                header_cells.push(padded);
+            }
+            let header_line = header_cells.join(" | ");
+
+            lines.push(Line::from(vec![Span::styled(
+                header_line.clone(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )]));
+
+            let separator_cells: Vec<String> = column_widths
+                .iter()
+                .map(|&width| "-".repeat(width))
+                .collect();
+            let separator_line = separator_cells.join("-+-");
+            lines.push(Line::from(separator_line));
+        }
+
+        for row in rows {
+            let mut row_cells = Vec::new();
+            for i in 0..num_columns {
+                let width = column_widths.get(i).copied().unwrap_or(3);
+                let cell = row.get(i).map(|s| s.as_str()).unwrap_or("");
+                let padded = Self::pad_unicode_str(cell, width);
+                row_cells.push(padded);
+            }
+            let row_line = row_cells.join(" | ");
             lines.push(Line::from(row_line));
         }
 
