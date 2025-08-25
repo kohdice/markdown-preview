@@ -1,4 +1,4 @@
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{Read, Stdout, Write};
 use std::path::Path;
 
@@ -255,7 +255,7 @@ fn read_markdown_file(path: &Path) -> Result<String> {
         return Err(anyhow::anyhow!("File not found: {}", path.display()));
     }
 
-    let metadata = fs::metadata(path)
+    let metadata = std::fs::metadata(path)
         .with_context(|| format!("Failed to get metadata for: {}", path.display()))?;
     let file_size = metadata.len();
 
