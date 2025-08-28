@@ -9,7 +9,7 @@ use ratatui::{
 };
 
 use crate::theme_adapter::RatatuiThemeAdapter;
-use mp_core::theme::{MarkdownTheme, SolarizedOsaka, ThemeAdapter};
+use mp_core::theme::{DefaultTheme, MarkdownTheme, ThemeAdapter};
 
 pub struct StatusBar<T: MarkdownTheme> {
     pub file_path: Option<String>,
@@ -174,9 +174,9 @@ impl<T: MarkdownTheme> StatusBar<T> {
     }
 }
 
-impl Default for StatusBar<SolarizedOsaka> {
+impl Default for StatusBar<DefaultTheme> {
     fn default() -> Self {
-        Self::new(SolarizedOsaka)
+        Self::new(DefaultTheme)
     }
 }
 
@@ -187,7 +187,7 @@ mod tests {
 
     #[test]
     fn test_status_bar_creation() {
-        let status = StatusBar::new(SolarizedOsaka);
+        let status = StatusBar::new(DefaultTheme);
         assert_eq!(status.mode, StatusMode::Normal);
         assert!(status.file_path.is_none());
         assert!(status.message.is_none());
@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn test_status_bar_file_path() {
-        let mut status = StatusBar::new(SolarizedOsaka);
+        let mut status = StatusBar::new(DefaultTheme);
         let path = PathBuf::from("/test/file.md");
 
         status.set_file(&path);
@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn test_status_bar_messages() {
-        let mut status = StatusBar::new(SolarizedOsaka);
+        let mut status = StatusBar::new(DefaultTheme);
 
         status.set_message("Test message");
         assert_eq!(status.message, Some("Test message".to_string()));
@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn test_status_bar_mode() {
-        let mut status = StatusBar::new(SolarizedOsaka);
+        let mut status = StatusBar::new(DefaultTheme);
 
         assert_eq!(status.mode, StatusMode::Normal);
 

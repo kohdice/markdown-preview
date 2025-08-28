@@ -8,7 +8,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem},
 };
 
-use mp_core::theme::{MarkdownTheme, SolarizedOsaka, ThemeAdapter};
+use mp_core::theme::{DefaultTheme, MarkdownTheme, ThemeAdapter};
 use mp_core::{FileTreeNode, FinderConfig};
 
 use crate::theme_adapter::RatatuiThemeAdapter;
@@ -32,7 +32,7 @@ pub struct FileTreeWidget {
     pub search_mode: bool,
     finder_config: FinderConfig,
     tree_builder: Box<dyn TreeBuilder>,
-    theme: SolarizedOsaka,
+    theme: DefaultTheme,
 }
 
 impl FileTreeWidget {
@@ -63,7 +63,7 @@ impl FileTreeWidget {
             search_mode: false,
             finder_config,
             tree_builder,
-            theme: SolarizedOsaka,
+            theme: DefaultTheme,
         };
 
         let mut initial_expanded = HashSet::new();

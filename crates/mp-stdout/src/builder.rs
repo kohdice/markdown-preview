@@ -2,12 +2,12 @@ use std::io::{Stdout, Write};
 
 use pulldown_cmark::Options;
 
-use mp_core::theme::SolarizedOsaka;
+use mp_core::theme::DefaultTheme;
 
 use crate::{BufferedOutput, MarkdownRenderer, RenderConfig, RenderState};
 
 pub struct RendererBuilder<W: Write = Stdout> {
-    theme: Option<SolarizedOsaka>,
+    theme: Option<DefaultTheme>,
     options: Option<Options>,
     config: Option<RenderConfig>,
     writer: Option<W>,
@@ -70,7 +70,7 @@ impl<W: Write> RendererBuilder<W> {
         }
     }
 
-    pub fn theme(mut self, theme: SolarizedOsaka) -> Self {
+    pub fn theme(mut self, theme: DefaultTheme) -> Self {
         self.theme = Some(theme);
         self
     }

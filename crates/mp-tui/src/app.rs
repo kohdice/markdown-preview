@@ -5,14 +5,14 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::DefaultTerminal;
 
-use mp_core::{FinderConfig, theme::SolarizedOsaka};
+use mp_core::{FinderConfig, theme::DefaultTheme};
 
 use crate::{FileTreeWidget, PreviewWidget, StatusBar, StatusMode};
 
 pub struct App {
     pub file_tree: FileTreeWidget,
     pub preview: PreviewWidget,
-    pub status_bar: StatusBar<SolarizedOsaka>,
+    pub status_bar: StatusBar<DefaultTheme>,
     pub focus: AppFocus,
     pub show_help: bool,
 }
@@ -36,7 +36,7 @@ impl App {
         let mut app = Self {
             file_tree,
             preview: PreviewWidget::new(),
-            status_bar: StatusBar::new(SolarizedOsaka),
+            status_bar: StatusBar::new(DefaultTheme),
             focus: AppFocus::FileTree,
             show_help: false,
         };

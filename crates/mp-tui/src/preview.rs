@@ -7,7 +7,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use mp_core::theme::{MarkdownTheme, SolarizedOsaka, ThemeAdapter};
+use mp_core::theme::{DefaultTheme, MarkdownTheme, ThemeAdapter};
 
 use crate::renderer::{MarkdownWidget, MarkdownWidgetState};
 use crate::theme_adapter::RatatuiThemeAdapter;
@@ -17,7 +17,7 @@ pub struct PreviewWidget {
     pub scroll_offset: u16,
     pub markdown_widget: Option<MarkdownWidget>,
     pub markdown_state: MarkdownWidgetState,
-    theme: SolarizedOsaka,
+    theme: DefaultTheme,
 }
 
 impl Default for PreviewWidget {
@@ -27,7 +27,7 @@ impl Default for PreviewWidget {
             scroll_offset: 0,
             markdown_widget: None,
             markdown_state: MarkdownWidgetState::default(),
-            theme: SolarizedOsaka,
+            theme: DefaultTheme,
         }
     }
 }

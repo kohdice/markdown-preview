@@ -10,7 +10,7 @@ use ratatui::{
 };
 use regex::Regex;
 
-use mp_core::theme::{MarkdownTheme, SolarizedOsaka, ThemeAdapter};
+use mp_core::theme::{DefaultTheme, MarkdownTheme, ThemeAdapter};
 
 use crate::theme_adapter::RatatuiThemeAdapter;
 use unicode_width::UnicodeWidthStr;
@@ -18,7 +18,7 @@ use unicode_width::UnicodeWidthStr;
 pub struct MarkdownWidget {
     content: Arc<String>,
     lines: Vec<Line<'static>>,
-    theme: SolarizedOsaka,
+    theme: DefaultTheme,
 }
 
 #[derive(Default, Clone)]
@@ -31,7 +31,7 @@ impl MarkdownWidget {
         let mut widget = Self {
             content,
             lines: Vec::with_capacity(100),
-            theme: SolarizedOsaka,
+            theme: DefaultTheme,
         };
         widget.parse_markdown();
         widget

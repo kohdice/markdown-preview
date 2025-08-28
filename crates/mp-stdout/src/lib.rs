@@ -5,7 +5,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use pulldown_cmark::{Options, Parser};
 
-use mp_core::theme::SolarizedOsaka;
+use mp_core::theme::DefaultTheme;
 
 pub mod buffered_output;
 pub mod builder;
@@ -25,7 +25,7 @@ pub use table_builder::{Table, TableBuilder};
 pub use self::buffered_output::BufferedOutput;
 
 pub struct MarkdownRenderer<W: Write = Stdout> {
-    pub theme: SolarizedOsaka,
+    pub theme: DefaultTheme,
     pub state: RenderState,
     pub options: Options,
     pub config: RenderConfig,
@@ -53,7 +53,7 @@ impl<W: Write> MarkdownRenderer<W> {
         options.insert(Options::ENABLE_FOOTNOTES);
 
         Self {
-            theme: SolarizedOsaka,
+            theme: DefaultTheme,
             state: RenderState::default(),
             options,
             config: RenderConfig::default(),
