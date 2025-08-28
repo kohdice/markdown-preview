@@ -8,14 +8,14 @@ A beautiful and feature-rich CLI tool for previewing Markdown files directly in 
 
 ![demo](./demo.gif)
 
-## ✨ Features
+## Features
 
 - **Beautiful Rendering**: Syntax-highlighted Markdown
-- **Two Modes**: 
+- **Two Modes**:
   - **Stdout Mode**: Quick preview of a single file
   - **TUI Mode**: Interactive file browser with live preview
 - **Fast & Efficient**: Built with Rust for optimal performance
-- **Full Markdown Support**: 
+- **Full Markdown Support**:
   - Tables with alignment
   - Code blocks with syntax highlighting
   - Nested lists (ordered, unordered, task lists)
@@ -79,18 +79,18 @@ mp --no-ignore-parent   # Don't respect parent .gitignore files
 
 ### Keyboard Shortcuts (TUI Mode)
 
-| Key | Action |
-|-----|--------|
-| `↑/k` | Navigate up in file tree |
-| `↓/j` | Navigate down in file tree |
-| `Enter` | Select/preview file |
-| `Space` | Expand/collapse directory |
-| `Tab` | Switch focus between tree and preview |
-| `h/←` | Scroll preview left |
-| `l/→` | Scroll preview right |
-| `g` | Jump to top |
-| `G` | Jump to bottom |
-| `q/Esc` | Quit application |
+| Key     | Action                                |
+| ------- | ------------------------------------- |
+| `↑/k`   | Navigate up in file tree              |
+| `↓/j`   | Navigate down in file tree            |
+| `Enter` | Select/preview file                   |
+| `Space` | Expand/collapse directory             |
+| `Tab`   | Switch focus between tree and preview |
+| `h/←`   | Scroll preview left                   |
+| `l/→`   | Scroll preview right                  |
+| `g`     | Jump to top                           |
+| `G`     | Jump to bottom                        |
+| `q/Esc` | Quit application                      |
 
 ## Supported Markdown Elements
 
@@ -109,6 +109,7 @@ mp --no-ignore-parent   # Don't respect parent .gitignore files
 ## Theme
 
 The application uses a color scheme inspired by **Solarized Osaka**, providing:
+
 - High contrast for optimal readability
 - Consistent and harmonious color palette
 - Syntax highlighting for code blocks
