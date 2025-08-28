@@ -20,11 +20,11 @@ pub trait MarkdownTheme {
     fn status_background_color(&self) -> ThemeColor;
 }
 
-/// Solarized Osaka theme implementation
+/// Default theme implementation (inspired by Solarized Osaka color scheme)
 #[derive(Debug, Clone, Copy, Default)]
-pub struct SolarizedOsaka;
+pub struct DefaultTheme;
 
-impl SolarizedOsaka {
+impl DefaultTheme {
     pub const BASE02: ThemeColor = ThemeColor { r: 7, g: 54, b: 66 };
     pub const BASE01: ThemeColor = ThemeColor {
         r: 88,
@@ -129,7 +129,7 @@ impl SolarizedOsaka {
     };
 }
 
-impl MarkdownTheme for SolarizedOsaka {
+impl MarkdownTheme for DefaultTheme {
     fn heading_style(&self, level: u8) -> ThemeStyle {
         let color = match level {
             1 => Self::BLUE,
@@ -213,61 +213,61 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_solarized_osaka_theme_styles() {
-        let theme = SolarizedOsaka;
+    fn test_default_theme_styles() {
+        let theme = DefaultTheme;
         let h1_style = theme.heading_style(1);
-        assert_eq!(h1_style.color, SolarizedOsaka::BLUE);
+        assert_eq!(h1_style.color, DefaultTheme::BLUE);
         assert!(h1_style.bold);
         assert!(!h1_style.italic);
         assert!(!h1_style.underline);
 
         let h2_style = theme.heading_style(2);
-        assert_eq!(h2_style.color, SolarizedOsaka::GREEN);
+        assert_eq!(h2_style.color, DefaultTheme::GREEN);
         assert!(h2_style.bold);
 
         let h3_style = theme.heading_style(3);
-        assert_eq!(h3_style.color, SolarizedOsaka::CYAN);
+        assert_eq!(h3_style.color, DefaultTheme::CYAN);
         assert!(!h3_style.bold);
 
         let h4_style = theme.heading_style(4);
-        assert_eq!(h4_style.color, SolarizedOsaka::YELLOW);
+        assert_eq!(h4_style.color, DefaultTheme::YELLOW);
         assert!(!h4_style.bold);
 
         let h5_style = theme.heading_style(5);
-        assert_eq!(h5_style.color, SolarizedOsaka::ORANGE);
+        assert_eq!(h5_style.color, DefaultTheme::ORANGE);
         assert!(!h5_style.bold);
 
         let h6_style = theme.heading_style(6);
-        assert_eq!(h6_style.color, SolarizedOsaka::MAGENTA);
+        assert_eq!(h6_style.color, DefaultTheme::MAGENTA);
         assert!(!h6_style.bold);
         let strong_style = theme.strong_style();
-        assert_eq!(strong_style.color, SolarizedOsaka::ORANGE);
+        assert_eq!(strong_style.color, DefaultTheme::ORANGE);
         assert!(strong_style.bold);
         assert!(!strong_style.italic);
 
         let emphasis_style = theme.emphasis_style();
-        assert_eq!(emphasis_style.color, SolarizedOsaka::GREEN);
+        assert_eq!(emphasis_style.color, DefaultTheme::GREEN);
         assert!(!emphasis_style.bold);
         assert!(emphasis_style.italic);
 
         let link_style = theme.link_style();
-        assert_eq!(link_style.color, SolarizedOsaka::CYAN);
+        assert_eq!(link_style.color, DefaultTheme::CYAN);
         assert!(link_style.underline);
 
         let code_style = theme.code_style();
-        assert_eq!(code_style.color, SolarizedOsaka::GREEN);
+        assert_eq!(code_style.color, DefaultTheme::GREEN);
         assert!(!code_style.bold);
         assert!(!code_style.italic);
         assert!(!code_style.underline);
-        assert_eq!(theme.code_background(), SolarizedOsaka::BASE02);
+        assert_eq!(theme.code_background(), DefaultTheme::BASE02);
 
         let list_marker_style = theme.list_marker_style();
-        assert_eq!(list_marker_style.color, SolarizedOsaka::BLUE);
+        assert_eq!(list_marker_style.color, DefaultTheme::BLUE);
 
         let delimiter_style = theme.delimiter_style();
-        assert_eq!(delimiter_style.color, SolarizedOsaka::BASE01);
+        assert_eq!(delimiter_style.color, DefaultTheme::BASE01);
 
         let text_style = theme.text_style();
-        assert_eq!(text_style.color, SolarizedOsaka::BASE0);
+        assert_eq!(text_style.color, DefaultTheme::BASE0);
     }
 }

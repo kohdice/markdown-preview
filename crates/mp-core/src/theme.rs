@@ -6,4 +6,4 @@ pub mod themes;
 pub use adapter::ThemeAdapter;
 pub use color::ThemeColor;
 pub use style::ThemeStyle;
-pub use themes::{MarkdownTheme, SolarizedOsaka};
+pub use themes::{DefaultTheme, MarkdownTheme};
