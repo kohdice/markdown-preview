@@ -179,28 +179,6 @@ cargo clippy            # Lint check
 cargo clippy -- -D warnings  # Treat warnings as errors
 ```
 
-## Architecture
-
-### Module Structure
-
-- **cli.rs**: CLI parser and entry point (`Args` struct, `run` function)
-- **renderer/**: Core rendering implementation
-  - `markdown.rs`: MarkdownRenderer implementation
-  - `base.rs`: BaseRenderer base implementation
-  - `terminal.rs`: Terminal output interface
-  - `theme.rs`: Theme configuration (SolarizedOsaka)
-  - `state.rs`: Parser and rendering state management
-  - `handlers.rs`: Event handler interface
-  - `traits.rs`: MarkdownProcessor, TableRenderer traits
-- **html_entity.rs**: HTML entity decoding
-
-### Key Dependencies
-
-- `pulldown-cmark`: Markdown parsing
-- `colored`: Terminal color output
-- `clap`: CLI parsing
-- `anyhow`: Error handling
-
 ## Running
 
 ```bash
