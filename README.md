@@ -6,26 +6,26 @@
 
 A beautiful and feature-rich CLI tool for previewing Markdown files directly in your terminal with syntax highlighting and interactive file browsing.
 
-![Demo](https://via.placeholder.com/800x400?text=markdown-preview+demo)
+![demo](./demo.gif)
 
 ## ✨ Features
 
-- 🎨 **Beautiful Rendering**: Syntax-highlighted Markdown with Solarized Osaka theme
-- 📁 **Two Modes**: 
+- **Beautiful Rendering**: Syntax-highlighted Markdown
+- **Two Modes**: 
   - **Stdout Mode**: Quick preview of a single file
   - **TUI Mode**: Interactive file browser with live preview
-- 🚀 **Fast & Efficient**: Built with Rust for optimal performance
-- 📊 **Full Markdown Support**: 
+- **Fast & Efficient**: Built with Rust for optimal performance
+- **Full Markdown Support**: 
   - Tables with alignment
   - Code blocks with syntax highlighting
   - Nested lists (ordered, unordered, task lists)
   - Blockquotes
   - Links and images (as alt text)
   - HTML entities
-- 🎯 **Smart File Finding**: Respects .gitignore and hidden files
-- ⌨️ **Keyboard Navigation**: Intuitive shortcuts for efficient browsing
+- **Smart File Finding**: Respects .gitignore and hidden files
+- ⌨**Keyboard Navigation**: Intuitive shortcuts for efficient browsing
 
-## 📦 Installation
+## Installation
 
 ### From crates.io
 
@@ -49,7 +49,7 @@ cargo install --path crates/mp
 - Rust 1.89 or higher (2024 Edition)
 - Cargo package manager
 
-## 🚀 Usage
+## Usage
 
 ### Basic Usage (Stdout Mode)
 
@@ -92,7 +92,7 @@ mp --no-ignore-parent   # Don't respect parent .gitignore files
 | `G` | Jump to bottom |
 | `q/Esc` | Quit application |
 
-## 📋 Supported Markdown Elements
+## Supported Markdown Elements
 
 - **Headings** (H1-H6)
 - **Emphasis** (bold, italic, strikethrough)
@@ -106,7 +106,7 @@ mp --no-ignore-parent   # Don't respect parent .gitignore files
 - **HTML entities** (&copy;, &reg;, etc.)
 - **Escape sequences**
 
-## 🎨 Theme
+## Theme
 
 The application uses a color scheme inspired by **Solarized Osaka**, providing:
 - High contrast for optimal readability
@@ -116,7 +116,7 @@ The application uses a color scheme inspired by **Solarized Osaka**, providing:
 
 The color values are based on the Solarized Osaka theme by @craftzdog, which itself is inspired by the original Solarized color scheme by Ethan Schoonover.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - [pulldown-cmark](https://github.com/raphlinus/pulldown-cmark) - Markdown parsing
 - [ratatui](https://github.com/ratatui-org/ratatui) - Terminal UI framework
