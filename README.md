@@ -23,7 +23,7 @@ A beautiful and feature-rich CLI tool for previewing Markdown files directly in 
   - Links and images (as alt text)
   - HTML entities
 - **Smart File Finding**: Respects .gitignore and hidden files
-- ⌨**Keyboard Navigation**: Intuitive shortcuts for efficient browsing
+- **Keyboard Navigation**: Intuitive shortcuts for efficient browsing
 
 ## Installation
 
@@ -125,3 +125,4 @@ The color values are based on the Solarized Osaka theme by @craftzdog, which its
 - [clap](https://github.com/clap-rs/clap) - Command-line argument parsing
 - [Solarized Osaka](https://github.com/craftzdog/solarized-osaka.nvim) by @craftzdog - Color scheme inspiration
 - [Solarized](https://ethanschoonover.com/solarized/) by Ethan Schoonover - Original color palette
+
