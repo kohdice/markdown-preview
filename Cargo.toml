@@ -24,4 +24,4 @@ pulldown-cmark = "0.13"
 
 # Test dependencies
 rstest = "0.26"
-tempfile = "3.22"
+tempfile = "3.23"
