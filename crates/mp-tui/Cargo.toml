@@ -15,7 +15,7 @@ crossterm = { workspace = true }
 pulldown-cmark = { workspace = true }
 
 ratatui = "0.29"
-regex = "1.11"
+regex = "1.12"
 unicode-width = "0.2"
 
 [dev-dependencies]
