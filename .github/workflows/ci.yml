@@ -37,7 +37,7 @@ jobs:
           rustup default stable
           rustup component add clippy
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/bin/
@@ -48,7 +48,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
       - name: Cache cargo target
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: target
           key: ${{ runner.os }}-cargo-target-clippy-${{ hashFiles('**/Cargo.lock') }}
@@ -73,7 +73,7 @@ jobs:
           rustup update stable
           rustup default stable
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/bin/
@@ -84,7 +84,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
       - name: Cache cargo target
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: target
           key: ${{ runner.os }}-cargo-target-test-${{ hashFiles('**/Cargo.lock') }}
@@ -109,7 +109,7 @@ jobs:
           rustup update stable
           rustup default stable
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/bin/
@@ -120,7 +120,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
       - name: Cache cargo target
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: target
           key: ${{ runner.os }}-cargo-target-build-${{ hashFiles('**/Cargo.lock') }}
