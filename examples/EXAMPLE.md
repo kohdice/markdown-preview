@@ -6,7 +6,7 @@ This document demonstrates all Markdown elements supported by the terminal previ
 
 ### Basic Formatting
 
-This is **bold text** and this is *italic text*. You can also use `inline code` and combine ***bold and italic*** formatting.
+This is **bold text** and this is _italic text_. You can also use `inline code` and combine **_bold and italic_** formatting.
 
 You can also use ~~strikethrough text~~ when needed.
 
@@ -20,20 +20,26 @@ This is a new paragraph after a blank line.
 ## Headings
 
 # Heading Level 1
+
 ## Heading Level 2
+
 ### Heading Level 3
+
 #### Heading Level 4
+
 ##### Heading Level 5
+
 ###### Heading Level 6
 
 ## Blockquotes
 
 > This is a blockquote.
 > It can span multiple lines.
-> 
+>
 > > You can also nest blockquotes.
+> >
 > > > And even deeper nesting is possible.
-> 
+>
 > Back to the first level.
 
 ## Lists
@@ -82,14 +88,15 @@ Use `git status` to check your repository status.
 
 ### Code Blocks
 
-```rust
-// Rust code example
-fn main() {
-    println!("Hello, Markdown Preview!");
-    
-    let numbers = vec![1, 2, 3, 4, 5];
-    for num in numbers {
-        println!("Number: {}", num);
+```zig
+const std = @import("std");
+
+pub fn main() void {
+    std.debug.print("Hello, {s}!\n", .{"Markdown Preview"});
+
+    const numbers = [_]u32{ 1, 2, 3, 4, 5 };
+    for (numbers) |num| {
+        std.debug.print("Number: {}\n", .{num});
     }
 }
 ```
@@ -104,7 +111,7 @@ def fibonacci(n):
         return [0]
     elif n == 2:
         return [0, 1]
-    
+
     fib = [0, 1]
     for i in range(2, n):
         fib.append(fib[-1] + fib[-2])
@@ -116,17 +123,17 @@ print(fibonacci(10))
 ```javascript
 // JavaScript code example
 const fetchData = async (url) => {
-    try {
-        const response = await fetch(url);
-        const data = await response.json();
-        console.log('Data received:', data);
-        return data;
-    } catch (error) {
-        console.error('Error fetching data:', error);
-    }
+  try {
+    const response = await fetch(url);
+    const data = await response.json();
+    console.log("Data received:", data);
+    return data;
+  } catch (error) {
+    console.error("Error fetching data:", error);
+  }
 };
 
-fetchData('https://api.example.com/data');
+fetchData("https://api.example.com/data");
 ```
 
 ```bash
@@ -136,10 +143,10 @@ fetchData('https://api.example.com/data');
 echo "Starting deployment..."
 
 # Build the project
-cargo build --release
+zig build -Doptimize=ReleaseSafe
 
 # Run tests
-cargo test
+zig build test
 
 # Deploy
 if [ $? -eq 0 ]; then
@@ -164,37 +171,40 @@ It can contain any text format.
 ### Simple Table
 
 | Column 1 | Column 2 | Column 3 |
-|----------|----------|----------|
+| -------- | -------- | -------- |
 | Data 1   | Data 2   | Data 3   |
 | Data 4   | Data 5   | Data 6   |
 
 ### Table with Alignment
 
 | Left Aligned | Center Aligned | Right Aligned |
-|:-------------|:--------------:|--------------:|
-| Left         | Center         | Right         |
-| 123          | 456            | 789           |
-| Lorem        | Ipsum          | Dolor         |
+| :----------- | :------------: | ------------: |
+| Left         |     Center     |         Right |
+| 123          |      456       |           789 |
+| Lorem        |     Ipsum      |         Dolor |
 
 ### Complex Table
 
-| Feature | Description | Status | Priority |
-|---------|-------------|--------|----------|
-| **TUI Mode** | Terminal UI with file tree and preview | ✅ Complete | High |
-| **Syntax Highlighting** | Color coding for different Markdown elements | ✅ Complete | High |
-| **Tables** | Support for rendering tables | ✅ Complete | Medium |
-| **Code Blocks** | Syntax highlighted code blocks | ✅ Complete | High |
-| **Lists** | Nested lists support | ✅ Complete | Medium |
-| **Links** | Clickable links in terminal | 🚧 In Progress | Low |
-| **Images** | ASCII art representation | ❌ Not Started | Low |
+| Feature             | Description                                 | Status    | Priority |
+| ------------------- | ------------------------------------------- | --------- | -------- |
+| **Headings**        | All 6 levels with bold styling              | Supported | High     |
+| **Unordered Lists** | Nested lists with -, \*, + markers          | Supported | High     |
+| **Code Blocks**     | Fenced code blocks with language hints      | Supported | High     |
+| **Inline Code**     | Backtick-delimited inline code              | Supported | High     |
+| **Blockquotes**     | Quoted text with > prefix                   | Supported | Medium   |
+| **Links**           | Inline links with [text](url) syntax        | Supported | Medium   |
+| **Thematic Breaks** | Horizontal rules (---, \*\*\*, \_\_\_)      | Supported | Medium   |
+| **ANSI Colors**     | Solarized Dark theme with true color output | Supported | High     |
+| **Tables**          | Markdown table rendering                    | Not Yet   | Low      |
+| **Emphasis**        | Bold and italic text styling                | Not Yet   | Low      |
 
 ## Horizontal Rules
 
 ---
 
-***
+---
 
-___
+---
 
 ## HTML Entities
 
@@ -227,36 +237,40 @@ Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu 
 
 ### Section 1: Architecture Overview
 
-The application is built using Rust and leverages several key libraries:
+The application is built using Zig and organized into the following modules:
 
-- **Ratatui**: Terminal UI framework
-- **pulldown-cmark**: Markdown parser
-- **crossterm**: Terminal manipulation
-- **clap**: Command-line argument parsing
+- **main.zig**: Entry point, argument handling and process setup
+- **lib.zig**: Public API surface and module re-exports
+- **cli.zig**: Command-line interface logic and file dispatch
+- **document.zig**: File reading and text preprocessing
+- **render.zig**: Markdown parsing and ANSI rendering engine
+- **ansi.zig**: ANSI escape sequence generation (bold, dim, underline, true color)
+- **theme.zig**: Color theme definitions (Solarized Dark palette)
 
-### Section 2: Performance Optimizations
+### Section 2: Design Principles
 
-1. **Caching Strategy**: Pre-parse Markdown content and cache the rendered widgets
-2. **Event-Driven Rendering**: Only redraw when user input is detected
-3. **Virtual Scrolling**: Render only visible portions of the content
-4. **Lazy Loading**: Load files on demand rather than all at once
+1. **Zero Dependencies**: Pure Zig with only the standard library
+2. **Line-by-Line Rendering**: Processes input line by line after loading the file into memory
+3. **TTY-Aware**: Automatic ANSI color detection based on output destination
+4. **NO_COLOR Compliant**: Respects the NO_COLOR environment variable convention
 
 ### Section 3: Features
 
 #### Core Features
 
-- Fast Markdown parsing and rendering
-- Syntax highlighting with customizable themes
-- File tree navigation
-- Keyboard shortcuts for efficient navigation
-- Support for all major Markdown elements
+- Fast Markdown parsing and ANSI-styled rendering
+- Solarized Dark color theme with true color (24-bit) support
+- Heading, list, blockquote, and code block recognition
+- Inline code and link highlighting
+- Thematic break rendering
 
-#### Advanced Features
+#### Rendering Pipeline
 
-- Multiple viewing modes (stdout, TUI)
-- Theme customization
-- Plugin system for extensions
-- Export to various formats
+- Read file into memory
+- Process line-by-line with block-level detection
+- Apply inline styling for code spans and links
+- Emit ANSI escape sequences when outputting to a TTY
+- Fall back to plain text when piped or NO_COLOR is set
 
 ### Section 4: Usage Examples
 
@@ -264,17 +278,33 @@ The application is built using Rust and leverages several key libraries:
 # Basic usage
 mp README.md
 
-# TUI mode
-mp --tui
+# Preview any Markdown file
+mp CONTRIBUTING.md
 
-# With custom theme
-mp --theme dark README.md
+# Pipe output (ANSI colors are automatically disabled)
+mp README.md | less
 
-# Multiple files
-mp *.md
+# Disable colors explicitly
+NO_COLOR=1 mp README.md
 ```
 
-### Section 5: Contributing
+### Section 5: Building from Source
+
+```bash
+# Debug build
+zig build
+
+# Release build
+zig build -Doptimize=ReleaseSafe
+
+# Run directly
+zig build run -- README.md
+
+# Run tests
+zig build test
+```
+
+### Section 6: Contributing
 
 We welcome contributions! Please follow these guidelines:
 
@@ -284,7 +314,7 @@ We welcome contributions! Please follow these guidelines:
 4. Ensure all tests pass
 5. Submit a pull request
 
-### Section 6: License
+### Section 7: License
 
 This project is licensed under the MIT License. See the LICENSE file for details.
 
@@ -298,16 +328,18 @@ The following sections are repeated content for testing scrolling performance:
 
 Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vestibulum euismod, nisl eget ultricies tincidunt, nunc nisl aliquam nunc, eget aliquam nunc nisl eget nunc.
 
-```rust
-fn test_function_1() {
-    for i in 0..100 {
-        println!("Iteration: {}", i);
+```zig
+const std = @import("std");
+
+fn testFunction1() void {
+    for (0..100) |i| {
+        std.debug.print("Iteration: {}\n", .{i});
     }
 }
 ```
 
 | Test | Value | Result |
-|------|-------|--------|
+| ---- | ----- | ------ |
 | A    | 100   | Pass   |
 | B    | 200   | Pass   |
 | C    | 300   | Fail   |
@@ -349,23 +381,23 @@ Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deseru
 
 Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vestibulum euismod, nisl eget ultricies tincidunt.
 
-**Bold text** and *italic text* and ***bold italic text*** for testing rendering.
+**Bold text** and _italic text_ and **_bold italic text_** for testing rendering.
 
 ### Test Section 6
 
 ```javascript
 function testFunction6() {
-    const items = [1, 2, 3, 4, 5];
-    items.forEach(item => {
-        console.log(`Item: ${item}`);
-    });
+  const items = [1, 2, 3, 4, 5];
+  items.forEach((item) => {
+    console.log(`Item: ${item}`);
+  });
 }
 ```
 
 ### Test Section 7
 
 | Header 1 | Header 2 | Header 3 | Header 4 |
-|----------|----------|----------|----------|
+| -------- | -------- | -------- | -------- |
 | Cell 1   | Cell 2   | Cell 3   | Cell 4   |
 | Cell 5   | Cell 6   | Cell 7   | Cell 8   |
 | Cell 9   | Cell 10  | Cell 11  | Cell 12  |
@@ -386,7 +418,7 @@ This section contains `inline code` examples and more text to test scrolling per
 Final section with mixed content:
 
 1. **Bold ordered item**
-2. *Italic ordered item*
+2. _Italic ordered item_
 3. `Code ordered item`
 
 > Blockquote at the end
