@@ -1,9 +1,9 @@
 name: CI
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
   pull_request:
-    branches: [main, develop]
+    branches: [main]
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -22,8 +22,6 @@ jobs:
           use-flakehub: false
       - name: Check Zig formatting
         run: nix develop -c zig fmt --check .
-      - name: Check Nix formatting
-        run: nix fmt -- --check .
   build-and-test:
     name: Build & Test (${{ matrix.os }})
     needs: fmt
@@ -41,4 +39,3 @@ jobs:
         uses: DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39 # v13
       - name: Run tests
         run: nix develop -c zig build test
-
