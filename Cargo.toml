@@ -1,16 +1,27 @@
-[package]
-name = "markdown-preview"
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+default-members = ["crates/mp"]
+
+[workspace.package]
 version = "0.1.0"
-authors = ["kohdice <kohdice.biz@gmail.com>"]
 edition = "2024"
 rust-version = "1.89"
+authors = ["kohdice <kohdice.biz@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/kohdice/markdown-preview"
 
-[[bin]]
-name = "mp"
-path = "src/main.rs"
+[workspace.dependencies]
+# Internal crates
+mp-core = { version = "0.1.0", path = "crates/mp-core" }
+mp-stdout = { version = "0.1.0", path = "crates/mp-stdout" }
+mp-tui = { version = "0.1.0", path = "crates/mp-tui" }
 
-[dependencies]
-anyhow = "1.0.98"
-clap = { version = "4.5.43", features = ["derive"] }
+# Common external dependencies
+anyhow = "1"
+crossterm = "0.29"
+pulldown-cmark = "0.13"
+
+# Test dependencies
+rstest = "0.26"
+tempfile = "3.24"
