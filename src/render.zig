@@ -5,6 +5,16 @@ const table = @import("table.zig");
 const theme = @import("theme.zig");
 const width = @import("width.zig");
 
+// CommonMark spec limits
+const max_block_indent = 3;
+const max_heading_level = 6;
+const min_fence_len = 3;
+const min_thematic_break_markers = 3;
+const max_ordered_digits = 9;
+const max_ref_label_len = 256;
+const min_table_col_width = 3;
+const thematic_break_display = "--------------------------------";
+
 const LinkDef = struct {
     url: []const u8,
     title: ?[]const u8 = null,
@@ -52,7 +62,6 @@ const BlockQuote = struct {
 pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, input: []const u8, opts: RenderOptions) !void {
     if (input.len == 0) return;
 
-    // First pass: collect reference link definitions
     var link_defs = try collectLinkDefinitions(allocator, input);
     defer {
         var it = link_defs.keyIterator();
@@ -84,8 +93,6 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                 }, raw_line);
             }
         } else {
-            // Outside code fence: use raw_line for block-level detection,
-            // apply stripHardBreak only to inline content before rendering
             const line = raw_line;
 
             if (parseFence(line)) |fence| {
@@ -98,7 +105,6 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                 if (!prev_was_blank) {
                     prev_was_blank = true;
                 } else {
-                    // Skip consecutive blank lines
                     line_start = line_end + @intFromBool(has_newline);
                     continue;
                 }
@@ -108,16 +114,14 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                 try ansi.writeStyled(writer, opts.enable_ansi, .{
                     .fg = palette.subtle,
                     .dim = true,
-                }, "--------------------------------");
+                }, thematic_break_display);
             } else if (try tryRenderTable(allocator, writer, input, line, line_end, opts.enable_ansi, palette, &link_defs)) |new_start| {
-                // Table was rendered; advance past all table lines
                 prev_was_blank = false;
                 line_start = new_start;
                 continue;
             } else if (parseHeading(line)) |heading| {
                 try renderInline(allocator, writer, stripHardBreak(heading.content), opts.enable_ansi, heading_styles[heading.level - 1], palette, &link_defs);
             } else if (parseBlockQuote(line)) |quote| {
-                // Try to detect a table spanning consecutive blockquote lines
                 if (std.mem.indexOfScalar(u8, quote.content, '|') != null) {
                     if (try tryRenderBlockQuoteTable(allocator, writer, input, line_start, opts.enable_ansi, palette, &link_defs)) |new_start| {
                         prev_was_blank = false;
@@ -164,9 +168,7 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                 prev_was_blank = false;
                 continue;
             } else {
-                // Plain paragraph text: strip hard break indicators
                 if (opts.wrap_width) |wrap_w| {
-                    // Render to buffer, then wrap to terminal width
                     var buf: std.io.Writer.Allocating = .init(allocator);
                     defer buf.deinit();
                     try renderInline(allocator, &buf.writer, stripHardBreak(line), opts.enable_ansi, .{
@@ -186,7 +188,6 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                 }
             }
 
-            // Reset blank-line flag for non-blank lines
             if (std.mem.trim(u8, line, " \t").len != 0) prev_was_blank = false;
         }
 
@@ -207,10 +208,8 @@ fn tryRenderTable(
     palette: theme.Palette,
     link_defs: *const LinkDefMap,
 ) !?usize {
-    // A table header line must contain `|`
     if (std.mem.indexOfScalar(u8, header_line, '|') == null) return null;
 
-    // Look ahead to the next line — it must be a delimiter row
     const after_header = header_end + 1;
     if (after_header >= input.len) return null;
 
@@ -219,14 +218,12 @@ fn tryRenderTable(
 
     if (!table.isDelimiterRow(delim_line)) return null;
 
-    // Validate column count: header and delimiter must have same number of columns
     const header_cells = try table.parseCells(allocator, header_line);
     defer allocator.free(header_cells);
     const alignments = try table.parseAlignments(allocator, delim_line);
     defer allocator.free(alignments);
     if (header_cells.len != alignments.len) return null;
 
-    // Collect body rows — stop at blank lines, lines without `|`, or block-level structures
     var body_lines: std.ArrayListUnmanaged([]const u8) = .{};
     defer body_lines.deinit(allocator);
 
@@ -235,16 +232,13 @@ fn tryRenderTable(
         const row_end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
         const row_line = std.mem.trimEnd(u8, input[pos..row_end], "\r");
 
-        // Stop at blank lines or lines without `|`
         if (std.mem.trim(u8, row_line, " \t").len == 0 or std.mem.indexOfScalar(u8, row_line, '|') == null) break;
-        // Stop at block-level structures (headings, lists, blockquotes, fences, thematic breaks)
         if (isBlockLevelStart(row_line)) break;
 
         try body_lines.append(allocator, row_line);
         pos = row_end + 1;
     }
 
-    // Parse body rows
     var body_rows: std.ArrayListUnmanaged([][]const u8) = .{};
     defer {
         for (body_rows.items) |row| allocator.free(row);
@@ -256,8 +250,6 @@ fn tryRenderTable(
 
     const col_count = alignments.len;
 
-    // Compute column widths using rendered display width (accounts for entity
-    // decoding, emphasis delimiter removal, and link syntax transformation)
     var col_widths = try allocator.alloc(usize, col_count);
     defer allocator.free(col_widths);
     for (col_widths) |*w| w.* = 0;
@@ -269,21 +261,18 @@ fn tryRenderTable(
             if (c < row.len)
                 col_widths[c] = @max(col_widths[c], try renderedDisplayWidth(allocator, row[c], palette, link_defs));
         }
-        col_widths[c] = @max(col_widths[c], 3);
+        col_widths[c] = @max(col_widths[c], min_table_col_width);
     }
 
-    // Render header row with inline parsing
     try renderTableRow(allocator, writer, header_cells, col_widths, alignments, col_count, enable_ansi, .{
         .fg = palette.body,
         .bold = true,
     }, palette, link_defs);
     try writer.writeByte('\n');
 
-    // Render separator
     try renderTableSeparator(writer, col_widths, col_count, enable_ansi, palette);
     try writer.writeByte('\n');
 
-    // Render body rows with inline parsing
     for (body_rows.items) |row| {
         try renderTableRow(allocator, writer, row, col_widths, alignments, col_count, enable_ansi, .{
             .fg = palette.body,
@@ -305,7 +294,6 @@ fn tryRenderBlockQuoteTable(
     palette: theme.Palette,
     link_defs: *const LinkDefMap,
 ) !?usize {
-    // Parse first blockquote line (header candidate)
     var pos = start_pos;
     if (pos >= input.len) return null;
     var end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
@@ -316,7 +304,6 @@ fn tryRenderBlockQuoteTable(
     const bq_indent = first_bq.indent;
     pos = end + @intFromBool(has_nl);
 
-    // Parse second blockquote line (delimiter candidate)
     if (pos >= input.len) return null;
     end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
     has_nl = end < input.len;
@@ -325,14 +312,12 @@ fn tryRenderBlockQuoteTable(
     if (!table.isDelimiterRow(second_bq.content)) return null;
     pos = end + @intFromBool(has_nl);
 
-    // Validate column count
     const header_cells = try table.parseCells(allocator, first_bq.content);
     defer allocator.free(header_cells);
     const alignments = try table.parseAlignments(allocator, second_bq.content);
     defer allocator.free(alignments);
     if (header_cells.len != alignments.len) return null;
 
-    // Collect body rows from subsequent blockquote lines
     var body_rows: std.ArrayListUnmanaged([][]const u8) = .{};
     defer {
         for (body_rows.items) |row| allocator.free(row);
@@ -354,7 +339,6 @@ fn tryRenderBlockQuoteTable(
 
     const col_count = alignments.len;
 
-    // Compute column widths
     var col_widths = try allocator.alloc(usize, col_count);
     defer allocator.free(col_widths);
     for (col_widths) |*w| w.* = 0;
@@ -366,10 +350,9 @@ fn tryRenderBlockQuoteTable(
             if (c < row.len)
                 col_widths[c] = @max(col_widths[c], try renderedDisplayWidth(allocator, row[c], palette, link_defs));
         }
-        col_widths[c] = @max(col_widths[c], 3);
+        col_widths[c] = @max(col_widths[c], min_table_col_width);
     }
 
-    // Render header row with blockquote prefix
     try writer.splatByteAll(' ', bq_indent);
     try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true }, "| ");
     try renderTableRow(allocator, writer, header_cells, col_widths, alignments, col_count, enable_ansi, .{
@@ -378,13 +361,11 @@ fn tryRenderBlockQuoteTable(
     }, palette, link_defs);
     try writer.writeByte('\n');
 
-    // Render separator with blockquote prefix
     try writer.splatByteAll(' ', bq_indent);
     try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true }, "| ");
     try renderTableSeparator(writer, col_widths, col_count, enable_ansi, palette);
     try writer.writeByte('\n');
 
-    // Render body rows with blockquote prefix
     for (body_rows.items) |row| {
         try writer.splatByteAll(' ', bq_indent);
         try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true }, "| ");
@@ -471,12 +452,10 @@ fn isBlockLevelStart(line: []const u8) bool {
 fn stripHardBreak(line: []const u8) []const u8 {
     if (line.len == 0) return line;
 
-    // Backslash hard break: trailing `\` (not escaped — must be last char)
     if (line[line.len - 1] == '\\') {
         return line[0 .. line.len - 1];
     }
 
-    // Trailing 2+ spaces hard break
     var end = line.len;
     while (end > 0 and line[end - 1] == ' ') : (end -= 1) {}
     if (line.len - end >= 2) {
@@ -486,11 +465,11 @@ fn stripHardBreak(line: []const u8) []const u8 {
 }
 
 fn parseHeading(line: []const u8) ?Heading {
-    var index = countIndentUpTo(line, 3);
+    var index = countIndentUpTo(line, max_block_indent);
     if (index >= line.len or line[index] != '#') return null;
 
     var level: u8 = 0;
-    while (index < line.len and line[index] == '#' and level < 6) : (index += 1) {
+    while (index < line.len and line[index] == '#' and level < max_heading_level) : (index += 1) {
         level += 1;
     }
 
@@ -560,7 +539,7 @@ fn parseOrderedListItem(line: []const u8) ?OrderedListItem {
     while (digit_end < line.len and line[digit_end] >= '0' and line[digit_end] <= '9') : (digit_end += 1) {}
 
     const digit_count = digit_end - digit_start;
-    if (digit_count == 0 or digit_count > 9) return null;
+    if (digit_count == 0 or digit_count > max_ordered_digits) return null;
 
     if (digit_end >= line.len) return null;
     const marker = line[digit_end];
@@ -673,7 +652,7 @@ fn renderBlockQuoteContent(
 }
 
 fn parseBlockQuote(line: []const u8) ?BlockQuote {
-    const indent = countIndentUpTo(line, 3);
+    const indent = countIndentUpTo(line, max_block_indent);
     if (indent >= line.len or line[indent] != '>') return null;
 
     var content_index = indent + 1;
@@ -686,19 +665,17 @@ fn parseBlockQuote(line: []const u8) ?BlockQuote {
 }
 
 fn parseFence(line: []const u8) ?Fence {
-    const index = countIndentUpTo(line, 3);
+    const index = countIndentUpTo(line, max_block_indent);
     if (index >= line.len) return null;
 
     const fence_char = line[index];
     if (fence_char != '`' and fence_char != '~') return null;
 
     const fence_len = countRepeatedByte(line[index..], fence_char);
-    if (fence_len < 3) return null;
+    if (fence_len < min_fence_len) return null;
 
-    // Extract language info string: first token after fence chars, trimmed
     const info_start = index + fence_len;
     const info = std.mem.trim(u8, line[info_start..], " \t");
-    // Language is the first word (up to first space)
     const lang_end = std.mem.indexOfAny(u8, info, " \t") orelse info.len;
 
     return .{
@@ -709,7 +686,7 @@ fn parseFence(line: []const u8) ?Fence {
 }
 
 fn isClosingFence(line: []const u8, fence: Fence) bool {
-    const index = countIndentUpTo(line, 3);
+    const index = countIndentUpTo(line, max_block_indent);
     if (index >= line.len) return false;
     if (line[index] != fence.fence_char) return false;
 
@@ -721,7 +698,7 @@ fn isClosingFence(line: []const u8, fence: Fence) bool {
 
 fn isThematicBreak(line: []const u8) bool {
     const trimmed = std.mem.trim(u8, line, " \t");
-    if (trimmed.len < 3) return false;
+    if (trimmed.len < min_thematic_break_markers) return false;
 
     const marker = trimmed[0];
     if (marker != '-' and marker != '_' and marker != '*') return false;
@@ -737,7 +714,7 @@ fn isThematicBreak(line: []const u8) bool {
         }
     }
 
-    return marker_count >= 3;
+    return marker_count >= min_thematic_break_markers;
 }
 
 const InlineKind = enum { text, code_span, link_text, link_url, link_title, autolink, image_alt, image_url, emphasis, strong, bold_italic, strikethrough };
@@ -807,12 +784,9 @@ fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segments:
     while (index < text.len) {
         switch (text[index]) {
             '\\' => {
-                // Backslash escape: consume the backslash, keep the next char as literal
                 if (index + 1 < text.len and isEscapable(text[index + 1])) {
-                    // Flush text before the backslash
                     if (plain_start < index)
                         try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
-                    // Emit the escaped character as plain text (skip the backslash)
                     try segments.append(allocator, .{ .kind = .text, .content = text[index + 1 .. index + 2] });
                     index += 2;
                     plain_start = index;
@@ -832,7 +806,6 @@ fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segments:
                 index += 1;
             },
             '!' => {
-                // Image syntax: ![alt](url) or ![alt](url "title")
                 if (index + 1 < text.len and text[index + 1] == '[') {
                     if (findLinkParts(text, index + 1)) |link| {
                         if (plain_start < index)
@@ -860,7 +833,6 @@ fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segments:
                     plain_start = index;
                     continue;
                 }
-                // Try reference-style link: [text][ref] or [text][]
                 if (tryParseRefLink(text, index, link_defs)) |ref| {
                     if (plain_start < index)
                         try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
@@ -900,7 +872,6 @@ fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segments:
                 if (tryParseAutolink(text, index)) |al| {
                     if (plain_start < index)
                         try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
-                    // Autolink: render URL literally (no entity/emphasis processing)
                     try segments.append(allocator, .{ .kind = .autolink, .content = al.url });
                     index = al.end;
                     plain_start = index;
@@ -909,7 +880,6 @@ fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segments:
                 index += 1;
             },
             else => {
-                // GFM extended autolink: bare http:// or https:// URLs
                 if (text[index] == 'h') {
                     if (tryParseBareUrl(text, index)) |bare| {
                         if (plain_start < index)
@@ -932,12 +902,10 @@ fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segments:
 /// Find end of a code span. Matches opening backtick run length per CommonMark.
 /// Returns the index of the last backtick in the closing run.
 fn findCodeSpanEnd(text: []const u8, start: usize) ?usize {
-    // Count opening backtick run
     var open_len: usize = 0;
     while (start + open_len < text.len and text[start + open_len] == '`') : (open_len += 1) {}
     if (open_len == 0) return null;
 
-    // Find matching closing run of same length
     var pos = start + open_len;
     while (pos < text.len) {
         if (text[pos] == '`') {
@@ -964,7 +932,6 @@ const LinkParts = struct {
 };
 
 fn findLinkParts(text: []const u8, start: usize) ?LinkParts {
-    // Find matching ']' with balanced bracket tracking
     var bracket_depth: usize = 1;
     var bpos = start + 1;
     while (bpos < text.len) : (bpos += 1) {
@@ -975,7 +942,6 @@ fn findLinkParts(text: []const u8, start: usize) ?LinkParts {
                 if (bracket_depth == 0) break;
             },
             '\\' => {
-                // Skip escaped character
                 if (bpos + 1 < text.len) bpos += 1;
             },
             else => {},
@@ -1036,7 +1002,6 @@ fn extractTitle(inner: []const u8) TitleInfo {
     var i = trimmed.len - 2;
     while (i > 0) : (i -= 1) {
         if (trimmed[i] == open_quote) {
-            // Check that quote is preceded by whitespace (separating URL from title)
             if (i > 0 and (trimmed[i - 1] == ' ' or trimmed[i - 1] == '\t')) {
                 const url_part = std.mem.trimEnd(u8, trimmed[0 .. i - 1], " \t");
                 if (url_part.len == 0) return .{ .url_len = inner.len, .title = null };
@@ -1124,13 +1089,9 @@ fn cpClass(cp: ?u21) CharClass {
 /// Check flanking status per CommonMark 6.2.
 /// Returns whether a delimiter run at the given boundaries is left-flanking and/or right-flanking.
 fn checkFlanking(before: CharClass, after: CharClass) struct { left: bool, right: bool } {
-    // Left-flanking: NOT followed by whitespace AND
-    // (NOT followed by punctuation OR preceded by whitespace or punctuation)
     const left = after != .whitespace and
         (after != .punctuation or before == .whitespace or before == .punctuation);
 
-    // Right-flanking: NOT preceded by whitespace AND
-    // (NOT preceded by punctuation OR followed by whitespace or punctuation)
     const right = before != .whitespace and
         (before != .punctuation or after == .whitespace or after == .punctuation);
 
@@ -1164,15 +1125,13 @@ fn tryParseEmphasis(text: []const u8, start: usize) ?EmphasisResult {
     // OR preceded by punctuation
     if (delim_char == '_' and open_flank.right and open_before != .punctuation) return null;
 
-    // Find matching closing delimiter
     var pos = after_delim;
     while (pos < text.len) {
-        // Skip backslash-escaped characters
         if (text[pos] == '\\' and pos + 1 < text.len and isEscapable(text[pos + 1])) {
             pos += 2;
             continue;
         }
-        // Skip code spans inside emphasis
+        // Code spans inside emphasis take precedence
         if (text[pos] == '`') {
             if (findCodeSpanEnd(text, pos)) |code_end| {
                 pos = code_end + 1;
@@ -1253,10 +1212,8 @@ fn tryParseStrikethrough(text: []const u8, start: usize) ?StrikethroughResult {
     if (after_delim >= text.len) return null;
     if (text[after_delim] == ' ' or text[after_delim] == '\t') return null;
 
-    // Find matching closing tildes
     var pos = after_delim;
     while (pos < text.len) {
-        // Skip backslash-escaped characters
         if (text[pos] == '\\' and pos + 1 < text.len and isEscapable(text[pos + 1])) {
             pos += 2;
             continue;
@@ -1291,16 +1248,13 @@ const AutolinkResult = struct {
 fn tryParseAutolink(text: []const u8, start: usize) ?AutolinkResult {
     if (start >= text.len or text[start] != '<') return null;
 
-    // Find closing '>'
     var pos = start + 1;
-    var scheme_end: usize = 0; // position after "://"
+    var scheme_end: usize = 0;
     while (pos < text.len) {
         switch (text[pos]) {
             '>' => {
-                // Validate: must have scheme (alpha chars before "://")
                 if (scheme_end == 0) return null;
-                // Scheme must start with a letter and contain only [a-zA-Z0-9+.-]
-                const scheme = text[start + 1 .. scheme_end - 3]; // before "://"
+                const scheme = text[start + 1 .. scheme_end - 3];
                 if (scheme.len == 0) return null;
                 if (!std.ascii.isAlphabetic(scheme[0])) return null;
                 return .{
@@ -1331,26 +1285,24 @@ const BareUrlResult = struct {
 /// Parse a GFM-style extended autolink (bare URL without angle brackets).
 /// Matches http:// or https:// followed by URL characters.
 fn tryParseBareUrl(text: []const u8, start: usize) ?BareUrlResult {
-    // Must start with http:// or https://
     const rest = text[start..];
-    const prefix_len: usize = if (std.mem.startsWith(u8, rest, "https://"))
-        8
-    else if (std.mem.startsWith(u8, rest, "http://"))
-        7
+    const https: []const u8 = "https://";
+    const http: []const u8 = "http://";
+    const prefix_len: usize = if (std.mem.startsWith(u8, rest, https))
+        https.len
+    else if (std.mem.startsWith(u8, rest, http))
+        http.len
     else
         return null;
 
-    // Boundary check: must be at start of text, or preceded by whitespace/punctuation
     if (start > 0) {
         const prev = text[start - 1];
         if (std.ascii.isAlphanumeric(prev) or prev == '.' or prev == '/' or prev == ':')
             return null;
     }
 
-    // URL must have at least one character after the scheme
     if (start + prefix_len >= text.len) return null;
 
-    // Scan URL characters: stop at whitespace, <, >, or control chars
     var pos = start + prefix_len;
     while (pos < text.len) {
         switch (text[pos]) {
@@ -1381,11 +1333,8 @@ fn tryParseBareUrl(text: []const u8, start: usize) ?BareUrlResult {
         }
     }
 
-    // Must have content after scheme
     if (pos <= start + prefix_len) return null;
 
-    // Valid domain check: the domain part (between scheme and first / or end)
-    // must contain at least one dot
     const domain_start = start + prefix_len;
     const path_start = std.mem.indexOfScalarPos(u8, text[0..pos], domain_start, '/') orelse pos;
     const domain = text[domain_start..path_start];
@@ -1416,7 +1365,6 @@ fn collectLinkDefinitions(allocator: std.mem.Allocator, input: []const u8) !Link
             active_prepass_fence = fence;
         } else {
             if (parseLinkDefinition(line)) |def| {
-                // Normalize label to lowercase for case-insensitive lookup
                 const lower = std.ascii.allocLowerString(allocator, def.label) catch null;
                 if (lower) |key| {
                     const result = defs.getOrPut(allocator, key) catch {
@@ -1425,7 +1373,6 @@ fn collectLinkDefinitions(allocator: std.mem.Allocator, input: []const u8) !Link
                         continue;
                     };
                     if (result.found_existing) {
-                        // First definition wins; free the duplicate key
                         allocator.free(key);
                     } else {
                         result.value_ptr.* = .{ .url = def.url, .title = def.title };
@@ -1447,23 +1394,20 @@ const LinkDefinition = struct {
 
 /// Parse a link definition line: [label]: url "title"
 fn parseLinkDefinition(line: []const u8) ?LinkDefinition {
-    const indent = countIndentUpTo(line, 3);
+    const indent = countIndentUpTo(line, max_block_indent);
     if (indent >= line.len or line[indent] != '[') return null;
 
-    // Find closing ]
     const close = std.mem.indexOfScalarPos(u8, line, indent + 1, ']') orelse return null;
     if (close + 1 >= line.len or line[close + 1] != ':') return null;
 
     const label = line[indent + 1 .. close];
     if (label.len == 0) return null;
 
-    // Skip ": " after the label
     var pos = close + 2;
     while (pos < line.len and (line[pos] == ' ' or line[pos] == '\t')) : (pos += 1) {}
 
     if (pos >= line.len) return null;
 
-    // Parse URL (may be in angle brackets)
     var url_start = pos;
     var url_end = pos;
     if (line[pos] == '<') {
@@ -1478,7 +1422,6 @@ fn parseLinkDefinition(line: []const u8) ?LinkDefinition {
     const url = line[url_start..url_end];
     if (url.len == 0) return null;
 
-    // Optional title
     while (pos < line.len and (line[pos] == ' ' or line[pos] == '\t')) : (pos += 1) {}
 
     var title: ?[]const u8 = null;
@@ -1490,12 +1433,10 @@ fn parseLinkDefinition(line: []const u8) ?LinkDefinition {
             title = line[title_start..title_end];
             pos = title_end + 1;
         } else {
-            // Non-whitespace after URL that isn't a title opener — not a valid definition
             return null;
         }
     }
 
-    // No further non-whitespace characters allowed after URL/title
     const remaining = std.mem.trim(u8, line[pos..], " \t");
     if (remaining.len > 0) return null;
 
@@ -1513,7 +1454,6 @@ const RefLinkResult = struct {
 fn tryParseRefLink(text: []const u8, start: usize, link_defs: *const LinkDefMap) ?RefLinkResult {
     if (start >= text.len or text[start] != '[') return null;
 
-    // Find first closing bracket for text
     var bracket_depth: usize = 1;
     var bpos = start + 1;
     while (bpos < text.len) : (bpos += 1) {
@@ -1531,18 +1471,16 @@ fn tryParseRefLink(text: []const u8, start: usize, link_defs: *const LinkDefMap)
     }
     if (bracket_depth != 0) return null;
 
-    const text_end = bpos; // position of first ]
+    const text_end = bpos;
     const link_text = text[start + 1 .. text_end];
 
-    // Check for [ref] part
     if (text_end + 1 < text.len and text[text_end + 1] == '[') {
         // Full form: [text][ref]
         const ref_start = text_end + 2;
         const ref_end = std.mem.indexOfScalarPos(u8, text, ref_start, ']') orelse return null;
         const ref_label = if (ref_end > ref_start) text[ref_start..ref_end] else link_text;
 
-        // Lowercase lookup
-        var lower_buf: [256]u8 = undefined;
+        var lower_buf: [max_ref_label_len]u8 = undefined;
         if (ref_label.len > lower_buf.len) return null;
         const lower_key = std.ascii.lowerString(lower_buf[0..ref_label.len], ref_label);
 
@@ -1557,11 +1495,10 @@ fn tryParseRefLink(text: []const u8, start: usize, link_defs: *const LinkDefMap)
     }
 
     // Shortcut form: [text] alone (text is the ref label)
-    // Only if not followed by ( or [
     if (text_end + 1 < text.len and (text[text_end + 1] == '(' or text[text_end + 1] == '['))
         return null;
 
-    var lower_buf: [256]u8 = undefined;
+    var lower_buf: [max_ref_label_len]u8 = undefined;
     if (link_text.len > lower_buf.len) return null;
     const lower_key = std.ascii.lowerString(lower_buf[0..link_text.len], link_text);
 
@@ -1602,10 +1539,8 @@ fn writeTextWithEntities(
     while (pos < text.len) {
         if (text[pos] == '&') {
             if (entity.decode(text, pos)) |result| {
-                // Flush text before the entity
                 if (plain_start < pos)
                     try ansi.writeStyled(writer, enable_ansi, style, text[plain_start..pos]);
-                // Write decoded entity bytes
                 try ansi.writeStyled(writer, enable_ansi, style, result.bytes[0..result.len]);
                 pos = result.end;
                 plain_start = pos;

@@ -86,7 +86,6 @@ const CellIterator = struct {
 
     fn init(text: []const u8) CellIterator {
         var start: usize = 0;
-        // Skip leading pipe
         if (text.len > 0 and text[0] == '|') start = 1;
         return .{ .text = text, .pos = start, .done = false };
     }
@@ -101,12 +100,12 @@ const CellIterator = struct {
         const start = self.pos;
         while (self.pos < self.text.len) {
             if (self.text[self.pos] == '\\' and self.pos + 1 < self.text.len) {
-                self.pos += 2; // skip escaped char
+                self.pos += 2;
                 continue;
             }
             if (self.text[self.pos] == '|') {
                 const cell = self.text[start..self.pos];
-                self.pos += 1; // skip pipe
+                self.pos += 1;
 
                 // If this pipe is the trailing one and nothing follows, don't emit empty cell
                 if (self.pos >= self.text.len or
