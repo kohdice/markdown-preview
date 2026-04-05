@@ -52,4 +52,6 @@ test {
     _ = @import("document.zig");
     _ = @import("render.zig");
     _ = @import("theme.zig");
+    _ = @import("width.zig");
+    _ = @import("table.zig");
 }

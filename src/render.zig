@@ -1,7 +1,9 @@
 const std = @import("std");
 const ansi = @import("ansi.zig");
 const document = @import("document.zig");
+const table = @import("table.zig");
 const theme = @import("theme.zig");
+const width = @import("width.zig");
 
 pub const RenderOptions = struct {
     enable_ansi: bool = false,
@@ -74,6 +76,10 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                 .fg = palette.subtle,
                 .dim = true,
             });
+        } else if (try tryRenderTable(allocator, writer, input, line, line_end, opts.enable_ansi, palette)) |new_start| {
+            // Table was rendered; advance past all table lines
+            line_start = new_start;
+            continue;
         } else if (parseHeading(line)) |heading| {
             try renderInline(allocator, writer, heading.content, opts.enable_ansi, headingStyle(heading.level), palette);
         } else if (parseBlockQuote(line)) |quote| {
@@ -114,6 +120,170 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
         if (has_newline) try writer.writeByte('\n');
         line_start = line_end + @intFromBool(has_newline);
     }
+}
+
+/// Try to detect and render a table starting at the current line.
+/// Returns the new line_start position if a table was rendered, or null if not a table.
+fn tryRenderTable(
+    allocator: std.mem.Allocator,
+    writer: *std.io.Writer,
+    input: []const u8,
+    header_line: []const u8,
+    header_end: usize,
+    enable_ansi: bool,
+    palette: theme.Palette,
+) !?usize {
+    // A table header line must contain `|`
+    if (std.mem.indexOfScalar(u8, header_line, '|') == null) return null;
+
+    // Look ahead to the next line — it must be a delimiter row
+    const after_header = header_end + 1;
+    if (after_header >= input.len) return null;
+
+    const delim_end = std.mem.indexOfScalarPos(u8, input, after_header, '\n') orelse input.len;
+    const delim_line = document.trimCarriageReturn(input[after_header..delim_end]);
+
+    if (!table.isDelimiterRow(delim_line)) return null;
+
+    // Validate column count: header and delimiter must have same number of columns
+    const header_cells = try table.parseCells(allocator, header_line);
+    defer allocator.free(header_cells);
+    const alignments = try table.parseAlignments(allocator, delim_line);
+    defer allocator.free(alignments);
+    if (header_cells.len != alignments.len) return null;
+
+    // Collect body rows — stop at blank lines, lines without `|`, or block-level structures
+    var body_lines: std.ArrayListUnmanaged([]const u8) = .{};
+    defer body_lines.deinit(allocator);
+
+    var pos = delim_end + 1;
+    while (pos < input.len) {
+        const row_end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
+        const row_line = document.trimCarriageReturn(input[pos..row_end]);
+
+        // Stop at blank lines or lines without `|`
+        if (isBlankLine(row_line) or std.mem.indexOfScalar(u8, row_line, '|') == null) break;
+        // Stop at block-level structures (headings, lists, blockquotes, fences, thematic breaks)
+        if (isBlockLevelStart(row_line)) break;
+
+        try body_lines.append(allocator, row_line);
+        pos = row_end + 1;
+    }
+
+    // Parse body rows
+    var body_rows: std.ArrayListUnmanaged([][]const u8) = .{};
+    defer {
+        for (body_rows.items) |row| allocator.free(row);
+        body_rows.deinit(allocator);
+    }
+    for (body_lines.items) |bl| {
+        try body_rows.append(allocator, try table.parseCells(allocator, bl));
+    }
+
+    const col_count = alignments.len;
+
+    // Compute column widths using display width of raw cell text
+    var col_widths = try allocator.alloc(usize, col_count);
+    defer allocator.free(col_widths);
+    for (col_widths) |*w| w.* = 0;
+
+    for (0..col_count) |c| {
+        if (c < header_cells.len)
+            col_widths[c] = @max(col_widths[c], width.displayWidth(header_cells[c]));
+        for (body_rows.items) |row| {
+            if (c < row.len)
+                col_widths[c] = @max(col_widths[c], width.displayWidth(row[c]));
+        }
+        col_widths[c] = @max(col_widths[c], 3);
+    }
+
+    // Render header row with inline parsing
+    try renderTableRow(allocator, writer, header_cells, col_widths, alignments, col_count, enable_ansi, .{
+        .fg = palette.body,
+        .bold = true,
+    }, palette);
+    try writer.writeByte('\n');
+
+    // Render separator
+    try renderTableSeparator(writer, col_widths, col_count, enable_ansi, palette);
+    try writer.writeByte('\n');
+
+    // Render body rows with inline parsing
+    for (body_rows.items) |row| {
+        try renderTableRow(allocator, writer, row, col_widths, alignments, col_count, enable_ansi, .{
+            .fg = palette.body,
+        }, palette);
+        try writer.writeByte('\n');
+    }
+
+    return pos;
+}
+
+fn renderTableRow(
+    allocator: std.mem.Allocator,
+    writer: *std.io.Writer,
+    cells: []const []const u8,
+    col_widths: []const usize,
+    alignments: []const table.Alignment,
+    col_count: usize,
+    enable_ansi: bool,
+    style: ansi.TextStyle,
+    palette: theme.Palette,
+) !void {
+    try ansi.writeStyled(writer, enable_ansi, .{ .dim = true }, "| ");
+    for (0..col_count) |c| {
+        const cell_text = if (c < cells.len) cells[c] else "";
+        const cell_width = width.displayWidth(cell_text);
+        const col_w = col_widths[c];
+        const padding = if (col_w > cell_width) col_w - cell_width else 0;
+        const col_align = if (c < alignments.len) alignments[c] else .left;
+
+        const left_pad = switch (col_align) {
+            .left => 0,
+            .right => padding,
+            .center => padding / 2,
+        };
+        const right_pad = padding - left_pad;
+
+        for (0..left_pad) |_| try writer.writeByte(' ');
+        try renderInline(allocator, writer, cell_text, enable_ansi, style, palette);
+        for (0..right_pad) |_| try writer.writeByte(' ');
+
+        if (c + 1 < col_count) {
+            try ansi.writeStyled(writer, enable_ansi, .{ .dim = true }, " | ");
+        }
+    }
+    try ansi.writeStyled(writer, enable_ansi, .{ .dim = true }, " |");
+}
+
+fn renderTableSeparator(
+    writer: *std.io.Writer,
+    col_widths: []const usize,
+    col_count: usize,
+    enable_ansi: bool,
+    palette: theme.Palette,
+) !void {
+    const style: ansi.TextStyle = .{ .fg = palette.subtle, .dim = true };
+    try ansi.writeStyled(writer, enable_ansi, style, "|-");
+    for (0..col_count) |c| {
+        for (0..col_widths[c]) |_| {
+            try ansi.writeStyled(writer, enable_ansi, style, "-");
+        }
+        if (c + 1 < col_count) {
+            try ansi.writeStyled(writer, enable_ansi, style, "-+-");
+        }
+    }
+    try ansi.writeStyled(writer, enable_ansi, style, "-|");
+}
+
+fn isBlockLevelStart(line: []const u8) bool {
+    if (parseHeading(line) != null) return true;
+    if (parseBlockQuote(line) != null) return true;
+    if (parseListItem(line) != null) return true;
+    if (parseOrderedListItem(line) != null) return true;
+    if (parseFence(line) != null) return true;
+    if (isThematicBreak(line)) return true;
+    return false;
 }
 
 fn isBlankLine(line: []const u8) bool {
@@ -1186,6 +1356,42 @@ test "code fence language is captured in Fence struct" {
 
     // Fence line preserved as-is; language extraction is internal (for future syntax highlighting)
     try std.testing.expectEqualStrings("```javascript mocha\nconsole.log();\n```\n", rendered);
+}
+
+test "simple table renders with aligned columns" {
+    const allocator = std.testing.allocator;
+    const source = "| A | B |\n| --- | --- |\n| 1 | 2 |\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "A"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "B"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "1"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "2"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "|"));
+}
+
+test "table inside code fence is not detected" {
+    const allocator = std.testing.allocator;
+    const source = "```\n| A | B |\n| --- | --- |\n| 1 | 2 |\n```\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    // Should preserve raw table syntax inside code fence
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "| A | B |"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "| --- | --- |"));
+}
+
+test "line with pipe but no delimiter row is not a table" {
+    const allocator = std.testing.allocator;
+    const source = "a | b\nnot a table\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("a | b\nnot a table\n", rendered);
 }
 
 test "backslash escaped underscore is literal" {
