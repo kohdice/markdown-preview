@@ -1,9 +1,18 @@
 const std = @import("std");
-const render = @import("render.zig");
+const root = @import("root.zig");
 
 const max_file_bytes = 10 * 1024 * 1024;
 
-pub fn runWithDir(
+pub fn getTerminalWidth(handle: std.posix.fd_t) ?usize {
+    var winsize: std.posix.winsize = .{ .row = 0, .col = 0, .xpixel = 0, .ypixel = 0 };
+    const err = std.posix.system.ioctl(handle, std.posix.T.IOCGWINSZ, @intFromPtr(&winsize));
+    if (std.posix.errno(err) == .SUCCESS and winsize.col > 0) {
+        return @intCast(winsize.col);
+    }
+    return null;
+}
+
+pub fn run(
     allocator: std.mem.Allocator,
     dir: std.fs.Dir,
     args: []const []const u8,
@@ -24,7 +33,7 @@ pub fn runWithDir(
     };
     defer allocator.free(source);
 
-    try render.renderMarkdown(allocator, stdout, source, .{
+    try root.renderMarkdown(allocator, stdout, source, .{
         .enable_ansi = enable_ansi,
         .theme = .solarized_dark,
         .wrap_width = wrap_width,
@@ -32,13 +41,13 @@ pub fn runWithDir(
     return 0;
 }
 
-test "runWithDir reports usage errors" {
+test "run reports usage errors" {
     var stdout: std.io.Writer.Allocating = .init(std.testing.allocator);
     defer stdout.deinit();
     var stderr: std.io.Writer.Allocating = .init(std.testing.allocator);
     defer stderr.deinit();
 
-    const exit_code = try runWithDir(
+    const exit_code = try run(
         std.testing.allocator,
         std.fs.cwd(),
         &.{"mp"},
@@ -56,7 +65,7 @@ test "runWithDir reports usage errors" {
     );
 }
 
-test "runWithDir reports missing files" {
+test "run reports missing files" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -65,7 +74,7 @@ test "runWithDir reports missing files" {
     var stderr: std.io.Writer.Allocating = .init(std.testing.allocator);
     defer stderr.deinit();
 
-    const exit_code = try runWithDir(
+    const exit_code = try run(
         std.testing.allocator,
         tmp.dir,
         &.{ "mp", "missing.md" },
@@ -80,7 +89,7 @@ test "runWithDir reports missing files" {
     try std.testing.expect(std.mem.containsAtLeast(u8, stderr.writer.buffered(), 1, "missing.md"));
 }
 
-test "runWithDir renders markdown files" {
+test "run renders markdown files" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -98,7 +107,7 @@ test "runWithDir renders markdown files" {
     var stderr: std.io.Writer.Allocating = .init(std.testing.allocator);
     defer stderr.deinit();
 
-    const exit_code = try runWithDir(
+    const exit_code = try run(
         std.testing.allocator,
         tmp.dir,
         &.{ "mp", "example.md" },
