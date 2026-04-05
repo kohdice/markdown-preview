@@ -1,5 +1,24 @@
 const std = @import("std");
 
+const ESC = 0x1b;
+const ZWJ = 0x200D; // Zero Width Joiner
+
+/// ANSI CSI parameter byte range (0x20–0x3f per ECMA-48 §5.4)
+fn isCsiParamByte(byte: u8) bool {
+    return byte >= 0x20 and byte <= 0x3f;
+}
+
+/// Skip an ANSI CSI escape sequence starting at text[i].
+/// Returns the index past the final byte, or null if not a CSI sequence.
+fn skipAnsiCsi(text: []const u8, start: usize) ?usize {
+    if (start + 1 >= text.len) return null;
+    if (text[start] != ESC or text[start + 1] != '[') return null;
+    var i = start + 2;
+    while (i < text.len and isCsiParamByte(text[i])) : (i += 1) {}
+    if (i < text.len) i += 1;
+    return i;
+}
+
 /// Calculate the display width of a UTF-8 string in terminal columns.
 /// ASCII printable characters are width 1, CJK characters are width 2,
 /// ANSI escape sequences are width 0, control characters are width 0.
@@ -12,15 +31,11 @@ pub fn displayWidth(text: []const u8) usize {
     var suppress_next_emoji = false;
 
     while (i < text.len) {
-        // Skip ANSI escape sequences (CSI: ESC [ ... final_byte)
-        if (text[i] == 0x1b and i + 1 < text.len and text[i + 1] == '[') {
-            i += 2;
-            while (i < text.len and text[i] >= 0x20 and text[i] <= 0x3f) : (i += 1) {}
-            if (i < text.len) i += 1; // skip final byte
+        if (skipAnsiCsi(text, i)) |after| {
+            i = after;
             continue;
         }
 
-        // Decode UTF-8 codepoint
         const len = std.unicode.utf8ByteSequenceLength(text[i]) catch {
             i += 1;
             continue;
@@ -33,13 +48,12 @@ pub fn displayWidth(text: []const u8) usize {
         };
         i += len;
 
-        // ZWJ emoji sequence: suppress width of the emoji after ZWJ
         if (suppress_next_emoji) {
             suppress_next_emoji = false;
             if (isEmoji(cp)) continue;
         }
 
-        if (cp == 0x200D) {
+        if (cp == ZWJ) {
             suppress_next_emoji = true;
             continue;
         }
@@ -55,11 +69,8 @@ pub fn sliceToWidth(text: []const u8, max_width: usize) []const u8 {
     var width: usize = 0;
     var i: usize = 0;
     while (i < text.len) {
-        // Pass through ANSI escape sequences (zero width)
-        if (text[i] == 0x1b and i + 1 < text.len and text[i + 1] == '[') {
-            i += 2;
-            while (i < text.len and text[i] >= 0x20 and text[i] <= 0x3f) : (i += 1) {}
-            if (i < text.len) i += 1;
+        if (skipAnsiCsi(text, i)) |after| {
+            i = after;
             continue;
         }
 
@@ -92,18 +103,14 @@ pub fn sliceToWidthAlloc(allocator: std.mem.Allocator, text: []const u8, max_wid
     var suppress_next_emoji = false;
 
     while (i < text.len) {
-        if (text[i] == 0x1b and i + 1 < text.len and text[i + 1] == '[') {
-            const seq_start = i;
-            i += 2;
-            while (i < text.len and text[i] >= 0x20 and text[i] <= 0x3f) : (i += 1) {}
-            if (i < text.len) i += 1;
-            // Detect reset: \x1b[0m
-            const seq = text[seq_start..i];
+        if (skipAnsiCsi(text, i)) |after| {
+            const seq = text[i..after];
             if (seq.len == 4 and seq[2] == '0' and seq[3] == 'm') {
                 ansi_active = false;
             } else {
                 ansi_active = true;
             }
+            i = after;
             continue;
         }
 
@@ -120,7 +127,6 @@ pub fn sliceToWidthAlloc(allocator: std.mem.Allocator, text: []const u8, max_wid
             continue;
         };
 
-        // ZWJ emoji sequence: suppress width of the emoji after ZWJ
         if (suppress_next_emoji) {
             suppress_next_emoji = false;
             if (isEmoji(cp)) {
@@ -129,7 +135,7 @@ pub fn sliceToWidthAlloc(allocator: std.mem.Allocator, text: []const u8, max_wid
             }
         }
 
-        if (cp == 0x200D) {
+        if (cp == ZWJ) {
             suppress_next_emoji = true;
             i += len;
             continue;
@@ -164,23 +170,17 @@ pub fn wrapText(allocator: std.mem.Allocator, text: []const u8, max_width: usize
     var col: usize = 0;
     // Track the last space position in result buffer for word-wrap backtracking
     var last_space_result: ?usize = null;
-    // Track the column width at the position just after the last space
     var col_after_last_space: usize = 0;
     var i: usize = 0;
     var suppress_next_emoji = false;
 
     while (i < text.len) {
-        // Pass through ANSI escape sequences (zero display width)
-        if (text[i] == 0x1b and i + 1 < text.len and text[i + 1] == '[') {
-            const start = i;
-            i += 2;
-            while (i < text.len and text[i] >= 0x20 and text[i] <= 0x3f) : (i += 1) {}
-            if (i < text.len) i += 1; // skip final byte
-            try result.appendSlice(allocator, text[start..i]);
+        if (skipAnsiCsi(text, i)) |after| {
+            try result.appendSlice(allocator, text[i..after]);
+            i = after;
             continue;
         }
 
-        // Existing newlines reset column tracking
         if (text[i] == '\n') {
             try result.append(allocator, '\n');
             col = 0;
@@ -190,7 +190,6 @@ pub fn wrapText(allocator: std.mem.Allocator, text: []const u8, max_width: usize
             continue;
         }
 
-        // Decode UTF-8 codepoint
         const len = std.unicode.utf8ByteSequenceLength(text[i]) catch {
             try result.append(allocator, text[i]);
             i += 1;
@@ -206,7 +205,6 @@ pub fn wrapText(allocator: std.mem.Allocator, text: []const u8, max_width: usize
             continue;
         };
 
-        // ZWJ emoji sequence: pass through without counting width
         if (suppress_next_emoji) {
             suppress_next_emoji = false;
             if (isEmoji(cp)) {
@@ -216,7 +214,7 @@ pub fn wrapText(allocator: std.mem.Allocator, text: []const u8, max_width: usize
             }
         }
 
-        if (cp == 0x200D) {
+        if (cp == ZWJ) {
             suppress_next_emoji = true;
             try result.appendSlice(allocator, text[i..][0..len]);
             i += len;
@@ -225,7 +223,6 @@ pub fn wrapText(allocator: std.mem.Allocator, text: []const u8, max_width: usize
 
         const cw = codepointWidth(cp);
 
-        // Check if adding this character would exceed the width limit
         if (col + cw > max_width) {
             if (text[i] == ' ') {
                 // Space at overflow boundary — use it as break point directly
@@ -247,7 +244,6 @@ pub fn wrapText(allocator: std.mem.Allocator, text: []const u8, max_width: usize
             }
         }
 
-        // Track spaces as potential word-break points
         if (text[i] == ' ') {
             last_space_result = result.items.len;
             try result.appendSlice(allocator, text[i..][0..len]);
@@ -274,14 +270,12 @@ fn isEmoji(cp: u21) bool {
 }
 
 fn codepointWidth(cp: u21) usize {
-    // Control characters and zero-width
     if (cp < 0x20) return 0;
     if (cp == 0x7f) return 0;
 
-    // Zero-width characters
     if (cp == 0x200B) return 0; // Zero Width Space
     if (cp == 0x200C) return 0; // Zero Width Non-Joiner
-    if (cp == 0x200D) return 0; // Zero Width Joiner
+    if (cp == ZWJ) return 0;
     if (cp == 0x2060) return 0; // Word Joiner
     if (cp == 0xFEFF) return 0; // BOM / Zero Width No-Break Space
     if (cp == 0x00AD) return 0; // Soft Hyphen
@@ -345,7 +339,6 @@ fn codepointWidth(cp: u21) usize {
     if (cp >= 0x1FA00 and cp <= 0x1FA6F) return 2;
     if (cp >= 0x1FA70 and cp <= 0x1FAFF) return 2;
 
-    // Everything else is width 1
     return 1;
 }
 
