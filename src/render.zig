@@ -53,83 +53,90 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
     while (line_start < input.len) {
         const line_end = std.mem.indexOfScalarPos(u8, input, line_start, '\n') orelse input.len;
         const has_newline = line_end < input.len;
-        const line = document.trimCarriageReturn(input[line_start..line_end]);
+        const raw_line = document.trimCarriageReturn(input[line_start..line_end]);
 
         if (active_fence) |fence| {
-            if (isClosingFence(line, fence)) {
-                try writeStyledLine(writer, line, opts.enable_ansi, .{
+            // Inside code fence: preserve content as-is (no hard break stripping)
+            if (isClosingFence(raw_line, fence)) {
+                try writeStyledLine(writer, raw_line, opts.enable_ansi, .{
                     .fg = palette.code_fence,
                     .dim = true,
                 });
                 active_fence = null;
             } else {
-                try writeStyledLine(writer, line, opts.enable_ansi, .{
+                try writeStyledLine(writer, raw_line, opts.enable_ansi, .{
                     .fg = palette.inline_code,
                 });
             }
-        } else if (parseFence(line)) |fence| {
-            active_fence = fence;
-            try writeStyledLine(writer, line, opts.enable_ansi, .{
-                .fg = palette.code_fence,
-                .dim = true,
-            });
-        } else if (isBlankLine(line)) {
-            if (!prev_was_blank) {
-                prev_was_blank = true;
-            } else {
-                // Skip consecutive blank lines
-                line_start = line_end + @intFromBool(has_newline);
-                continue;
-            }
-        } else if (isThematicBreak(line)) {
-            try writeStyledLine(writer, "--------------------------------", opts.enable_ansi, .{
-                .fg = palette.subtle,
-                .dim = true,
-            });
-        } else if (try tryRenderTable(allocator, writer, input, line, line_end, opts.enable_ansi, palette)) |new_start| {
-            // Table was rendered; advance past all table lines
-            prev_was_blank = false;
-            line_start = new_start;
-            continue;
-        } else if (parseHeading(line)) |heading| {
-            try renderInline(allocator, writer, heading.content, opts.enable_ansi, headingStyle(heading.level), palette);
-        } else if (parseBlockQuote(line)) |quote| {
-            try writeIndent(writer, quote.indent);
-            try renderBlockQuoteContent(allocator, writer, quote.content, opts.enable_ansi, palette);
-        } else if (parseOrderedListItem(line)) |ordered| {
-            try writeIndent(writer, ordered.indent);
-            try ansi.writeStyled(writer, opts.enable_ansi, .{
-                .fg = palette.list_marker,
-                .bold = true,
-            }, ordered.number);
-            const marker_buf: [2]u8 = .{ ordered.marker, ' ' };
-            try ansi.writeStyled(writer, opts.enable_ansi, .{
-                .fg = palette.list_marker,
-                .bold = true,
-            }, &marker_buf);
-            try renderCheckbox(writer, ordered.checked, opts.enable_ansi, palette);
-            try renderInline(allocator, writer, ordered.content, opts.enable_ansi, .{
-                .fg = palette.body,
-            }, palette);
-        } else if (parseListItem(line)) |item| {
-            try writeIndent(writer, item.indent);
-            var marker: [2]u8 = .{ item.marker, ' ' };
-            try ansi.writeStyled(writer, opts.enable_ansi, .{
-                .fg = palette.list_marker,
-                .bold = true,
-            }, &marker);
-            try renderCheckbox(writer, item.checked, opts.enable_ansi, palette);
-            try renderInline(allocator, writer, item.content, opts.enable_ansi, .{
-                .fg = palette.body,
-            }, palette);
         } else {
-            try renderInline(allocator, writer, line, opts.enable_ansi, .{
-                .fg = palette.body,
-            }, palette);
-        }
+            // Outside code fence: strip hard break indicators (trailing 2+ spaces or trailing \)
+            const line = stripHardBreak(raw_line);
 
-        // Reset blank-line flag for non-blank lines
-        if (!isBlankLine(line)) prev_was_blank = false;
+            if (parseFence(line)) |fence| {
+                active_fence = fence;
+                // Use raw_line to preserve fence opener as-is (no hard break stripping)
+                try writeStyledLine(writer, raw_line, opts.enable_ansi, .{
+                    .fg = palette.code_fence,
+                    .dim = true,
+                });
+            } else if (isBlankLine(line)) {
+                if (!prev_was_blank) {
+                    prev_was_blank = true;
+                } else {
+                    // Skip consecutive blank lines
+                    line_start = line_end + @intFromBool(has_newline);
+                    continue;
+                }
+            } else if (isThematicBreak(line)) {
+                try writeStyledLine(writer, "--------------------------------", opts.enable_ansi, .{
+                    .fg = palette.subtle,
+                    .dim = true,
+                });
+            } else if (try tryRenderTable(allocator, writer, input, line, line_end, opts.enable_ansi, palette)) |new_start| {
+                // Table was rendered; advance past all table lines
+                prev_was_blank = false;
+                line_start = new_start;
+                continue;
+            } else if (parseHeading(line)) |heading| {
+                try renderInline(allocator, writer, heading.content, opts.enable_ansi, headingStyle(heading.level), palette);
+            } else if (parseBlockQuote(line)) |quote| {
+                try writeIndent(writer, quote.indent);
+                try renderBlockQuoteContent(allocator, writer, quote.content, opts.enable_ansi, palette);
+            } else if (parseOrderedListItem(line)) |ordered| {
+                try writeIndent(writer, ordered.indent);
+                try ansi.writeStyled(writer, opts.enable_ansi, .{
+                    .fg = palette.list_marker,
+                    .bold = true,
+                }, ordered.number);
+                const marker_buf: [2]u8 = .{ ordered.marker, ' ' };
+                try ansi.writeStyled(writer, opts.enable_ansi, .{
+                    .fg = palette.list_marker,
+                    .bold = true,
+                }, &marker_buf);
+                try renderCheckbox(writer, ordered.checked, opts.enable_ansi, palette);
+                try renderInline(allocator, writer, ordered.content, opts.enable_ansi, .{
+                    .fg = palette.body,
+                }, palette);
+            } else if (parseListItem(line)) |item| {
+                try writeIndent(writer, item.indent);
+                var marker: [2]u8 = .{ item.marker, ' ' };
+                try ansi.writeStyled(writer, opts.enable_ansi, .{
+                    .fg = palette.list_marker,
+                    .bold = true,
+                }, &marker);
+                try renderCheckbox(writer, item.checked, opts.enable_ansi, palette);
+                try renderInline(allocator, writer, item.content, opts.enable_ansi, .{
+                    .fg = palette.body,
+                }, palette);
+            } else {
+                try renderInline(allocator, writer, line, opts.enable_ansi, .{
+                    .fg = palette.body,
+                }, palette);
+            }
+
+            // Reset blank-line flag for non-blank lines
+            if (!isBlankLine(line)) prev_was_blank = false;
+        }
 
         if (has_newline) try writer.writeByte('\n');
         line_start = line_end + @intFromBool(has_newline);
@@ -299,6 +306,26 @@ fn isBlockLevelStart(line: []const u8) bool {
     if (parseFence(line) != null) return true;
     if (isThematicBreak(line)) return true;
     return false;
+}
+
+/// Strip hard break indicators from the end of a line.
+/// CommonMark hard break: trailing 2+ spaces, or trailing backslash.
+/// The newline itself is already handled by the line-by-line rendering loop.
+fn stripHardBreak(line: []const u8) []const u8 {
+    if (line.len == 0) return line;
+
+    // Backslash hard break: trailing `\` (not escaped — must be last char)
+    if (line[line.len - 1] == '\\') {
+        return line[0 .. line.len - 1];
+    }
+
+    // Trailing 2+ spaces hard break
+    var end = line.len;
+    while (end > 0 and line[end - 1] == ' ') : (end -= 1) {}
+    if (line.len - end >= 2) {
+        return line[0..end];
+    }
+    return line;
 }
 
 fn isBlankLine(line: []const u8) bool {
@@ -512,7 +539,7 @@ fn isThematicBreak(line: []const u8) bool {
     return marker_count >= 3;
 }
 
-const InlineKind = enum { text, code_span, link_text, link_url, image_alt, image_url, emphasis, strong, bold_italic, strikethrough };
+const InlineKind = enum { text, code_span, link_text, link_url, link_title, image_alt, image_url, emphasis, strong, bold_italic, strikethrough };
 
 const InlineSegment = struct {
     kind: InlineKind,
@@ -537,14 +564,28 @@ fn renderInline(
             .text => try writeTextWithEntities(writer, enable_ansi, base_style, seg.content),
             .code_span => try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.inline_code }, seg.content),
             .link_text => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .fg = palette.link, .underline = true }), palette),
-            .link_url => try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true }, seg.content),
+            .link_url => {
+                const muted_dim: ansi.TextStyle = .{ .fg = palette.muted, .dim = true };
+                try ansi.writeStyled(writer, enable_ansi, muted_dim, "(");
+                try ansi.writeStyled(writer, enable_ansi, muted_dim, seg.content);
+                try ansi.writeStyled(writer, enable_ansi, muted_dim, ")");
+            },
+            .link_title => {
+                try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true, .italic = true }, " — ");
+                try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true, .italic = true }, seg.content);
+            },
             .image_alt => {
                 const img_style: ansi.TextStyle = .{ .fg = palette.muted, .italic = true };
                 try ansi.writeStyled(writer, enable_ansi, img_style, "[img: ");
                 try renderInline(allocator, writer, seg.content, enable_ansi, img_style, palette);
                 try ansi.writeStyled(writer, enable_ansi, img_style, "]");
             },
-            .image_url => try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true }, seg.content),
+            .image_url => {
+                const muted_dim: ansi.TextStyle = .{ .fg = palette.muted, .dim = true };
+                try ansi.writeStyled(writer, enable_ansi, muted_dim, "(");
+                try ansi.writeStyled(writer, enable_ansi, muted_dim, seg.content);
+                try ansi.writeStyled(writer, enable_ansi, muted_dim, ")");
+            },
             .emphasis => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .italic = true }), palette),
             .strong => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .bold = true }), palette),
             .bold_italic => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .bold = true, .italic = true }), palette),
@@ -585,13 +626,15 @@ fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segments:
                 index += 1;
             },
             '!' => {
-                // Image syntax: ![alt](url)
+                // Image syntax: ![alt](url) or ![alt](url "title")
                 if (index + 1 < text.len and text[index + 1] == '[') {
                     if (findLinkParts(text, index + 1)) |link| {
                         if (plain_start < index)
                             try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
                         try segments.append(allocator, .{ .kind = .image_alt, .content = text[link.text_start..link.text_end] });
                         try segments.append(allocator, .{ .kind = .image_url, .content = text[link.url_start..link.url_end] });
+                        if (link.title) |title|
+                            try segments.append(allocator, .{ .kind = .link_title, .content = title });
                         index = link.full_end;
                         plain_start = index;
                         continue;
@@ -605,6 +648,8 @@ fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segments:
                         try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
                     try segments.append(allocator, .{ .kind = .link_text, .content = text[link.text_start..link.text_end] });
                     try segments.append(allocator, .{ .kind = .link_url, .content = text[link.url_start..link.url_end] });
+                    if (link.title) |title|
+                        try segments.append(allocator, .{ .kind = .link_title, .content = title });
                     index = link.full_end;
                     plain_start = index;
                     continue;
@@ -685,6 +730,7 @@ const LinkParts = struct {
     text_end: usize,
     url_start: usize,
     url_end: usize,
+    title: ?[]const u8 = null,
     full_end: usize,
 };
 
@@ -700,11 +746,16 @@ fn findLinkParts(text: []const u8, start: usize) ?LinkParts {
             ')' => {
                 depth -= 1;
                 if (depth == 0) {
+                    const inner_start = close_bracket + 2;
+                    const inner_end = pos;
+                    const title_info = extractTitle(text[inner_start..inner_end]);
+
                     return .{
                         .text_start = start + 1,
                         .text_end = close_bracket,
-                        .url_start = close_bracket + 1,
-                        .url_end = pos + 1,
+                        .url_start = inner_start,
+                        .url_end = inner_start + title_info.url_len,
+                        .title = title_info.title,
                         .full_end = pos + 1,
                     };
                 }
@@ -713,6 +764,44 @@ fn findLinkParts(text: []const u8, start: usize) ?LinkParts {
         }
     }
     return null;
+}
+
+const TitleInfo = struct {
+    url_len: usize,
+    title: ?[]const u8,
+};
+
+/// Extract optional title from the inner content of a link destination.
+/// Input is the content between '(' and ')' (e.g., `url "title"` or `url`).
+fn extractTitle(inner: []const u8) TitleInfo {
+    const trimmed = std.mem.trimRight(u8, inner, " \t");
+    // Need at least: URL + space + quote + quote (minimum 4 chars, e.g., `u ""`)
+    if (trimmed.len < 4) return .{ .url_len = inner.len, .title = null };
+
+    const last = trimmed[trimmed.len - 1];
+    const open_quote: u8 = switch (last) {
+        '"' => '"',
+        '\'' => '\'',
+        else => return .{ .url_len = inner.len, .title = null },
+    };
+
+    // Search backwards for the opening quote (must be preceded by whitespace)
+    var i = trimmed.len - 2;
+    while (i > 0) : (i -= 1) {
+        if (trimmed[i] == open_quote) {
+            // Check that quote is preceded by whitespace (separating URL from title)
+            if (i > 0 and (trimmed[i - 1] == ' ' or trimmed[i - 1] == '\t')) {
+                const url_part = std.mem.trimRight(u8, trimmed[0 .. i - 1], " \t");
+                if (url_part.len == 0) return .{ .url_len = inner.len, .title = null };
+                return .{
+                    .url_len = url_part.len,
+                    .title = trimmed[i + 1 .. trimmed.len - 1],
+                };
+            }
+        }
+    }
+
+    return .{ .url_len = inner.len, .title = null };
 }
 
 const EmphasisResult = struct {
@@ -765,7 +854,11 @@ fn tryParseEmphasis(text: []const u8, start: usize) ?EmphasisResult {
                         continue;
                     }
 
-                    const content = text[after_delim..pos];
+                    // When closing run is longer than opening, include extra
+                    // delimiter chars in content so nested emphasis can match.
+                    // e.g., **bold *italic*** → content = "bold *italic*"
+                    const extra = close_len - delim_len;
+                    const content = text[after_delim .. pos + extra];
                     if (content.len == 0) {
                         pos += close_len;
                         continue;
@@ -781,7 +874,7 @@ fn tryParseEmphasis(text: []const u8, start: usize) ?EmphasisResult {
                     return .{
                         .kind = kind,
                         .content = content,
-                        .end = pos + delim_len,
+                        .end = pos + close_len,
                     };
                 }
             }
@@ -1032,11 +1125,13 @@ test "renderMarkdown emits Solarized Dark ANSI styling for headings and links" {
     });
     defer allocator.free(rendered);
 
-    // link text: underline + link color; URL: dim + muted color
+    // link text: underline + link color; URL: dim + muted color (parens rendered separately)
     try std.testing.expectEqualStrings(
         "\x1b[1m\x1b[4m\x1b[38;2;181;137;0mTitle\x1b[0m\n" ++
             "\x1b[4m\x1b[38;2;108;113;196mlink\x1b[0m" ++
-            "\x1b[2m\x1b[38;2;88;110;117m(https://example.com)\x1b[0m",
+            "\x1b[2m\x1b[38;2;88;110;117m(\x1b[0m" ++
+            "\x1b[2m\x1b[38;2;88;110;117mhttps://example.com\x1b[0m" ++
+            "\x1b[2m\x1b[38;2;88;110;117m)\x1b[0m",
         rendered,
     );
 }
@@ -1546,6 +1641,50 @@ test "single blank line between paragraphs is preserved" {
     try std.testing.expectEqualStrings("First\n\nSecond\n", rendered);
 }
 
+test "hard break trailing spaces are stripped" {
+    const allocator = std.testing.allocator;
+    const source = "Line one  \nLine two\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    // Trailing 2 spaces should be stripped; lines remain separate
+    try std.testing.expectEqualStrings("Line one\nLine two\n", rendered);
+}
+
+test "hard break with backslash at end of line" {
+    const allocator = std.testing.allocator;
+    const source = "Line one\\\nLine two\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    // Trailing backslash should be stripped
+    try std.testing.expectEqualStrings("Line one\nLine two\n", rendered);
+}
+
+test "single trailing space is preserved" {
+    const allocator = std.testing.allocator;
+    const source = "Line with one trailing space \nNext line\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    // Only 1 trailing space — not a hard break, should be preserved
+    try std.testing.expectEqualStrings("Line with one trailing space \nNext line\n", rendered);
+}
+
+test "hard break inside code fence is not stripped" {
+    const allocator = std.testing.allocator;
+    const source = "```\ncode with trailing spaces  \n```\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    // Inside code fence, trailing spaces should be preserved
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "code with trailing spaces  "));
+}
+
 test "blank lines between different block elements are normalized" {
     const allocator = std.testing.allocator;
     const source = "# Heading\n\n\n\nParagraph\n\n\n- list\n";
@@ -1748,4 +1887,92 @@ test "autolink with ftp scheme" {
     defer allocator.free(rendered);
 
     try std.testing.expectEqualStrings("ftp://files.example.com/readme", rendered);
+}
+
+test "link with title renders title" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\[GitHub](https://github.com "GitHub Homepage")
+    ;
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("GitHub(https://github.com) — GitHub Homepage", rendered);
+}
+
+test "link with single-quote title" {
+    const allocator = std.testing.allocator;
+    const source = "[link](url 'My Title')";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("link(url) — My Title", rendered);
+}
+
+test "link without title unchanged" {
+    const allocator = std.testing.allocator;
+    const source = "[link](https://example.com)";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("link(https://example.com)", rendered);
+}
+
+test "link title with ANSI styling" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\[text](url "title")
+    ;
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{
+        .enable_ansi = true,
+    });
+    defer allocator.free(rendered);
+
+    // Title should have italic + dim + muted
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[2m\x1b[3m"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "title"));
+}
+
+test "same-delimiter nesting **bold *italic***" {
+    const allocator = std.testing.allocator;
+    const source = "**bold *italic***";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("bold italic", rendered);
+}
+
+test "same-delimiter nesting *italic **bold***" {
+    const allocator = std.testing.allocator;
+    const source = "*italic **bold***";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("italic bold", rendered);
+}
+
+test "same-delimiter nesting with ANSI" {
+    const allocator = std.testing.allocator;
+    const source = "**bold *italic***";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{
+        .enable_ansi = true,
+    });
+    defer allocator.free(rendered);
+
+    // Should have bold
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[1m"));
+    // Should have italic
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[3m"));
+    // Content should be present
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "bold"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "italic"));
+    // No delimiters
+    try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, "***"));
 }
