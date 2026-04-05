@@ -69,13 +69,13 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                 });
             }
         } else {
-            // Outside code fence: strip hard break indicators (trailing 2+ spaces or trailing \)
-            const line = stripHardBreak(raw_line);
+            // Outside code fence: use raw_line for block-level detection,
+            // apply stripHardBreak only to inline content before rendering
+            const line = raw_line;
 
             if (parseFence(line)) |fence| {
                 active_fence = fence;
-                // Use raw_line to preserve fence opener as-is (no hard break stripping)
-                try writeStyledLine(writer, raw_line, opts.enable_ansi, .{
+                try writeStyledLine(writer, line, opts.enable_ansi, .{
                     .fg = palette.code_fence,
                     .dim = true,
                 });
@@ -98,7 +98,7 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                 line_start = new_start;
                 continue;
             } else if (parseHeading(line)) |heading| {
-                try renderInline(allocator, writer, heading.content, opts.enable_ansi, headingStyle(heading.level), palette);
+                try renderInline(allocator, writer, stripHardBreak(heading.content), opts.enable_ansi, headingStyle(heading.level), palette);
             } else if (parseBlockQuote(line)) |quote| {
                 try writeIndent(writer, quote.indent);
                 try renderBlockQuoteContent(allocator, writer, quote.content, opts.enable_ansi, palette);
@@ -114,7 +114,7 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                     .bold = true,
                 }, &marker_buf);
                 try renderCheckbox(writer, ordered.checked, opts.enable_ansi, palette);
-                try renderInline(allocator, writer, ordered.content, opts.enable_ansi, .{
+                try renderInline(allocator, writer, stripHardBreak(ordered.content), opts.enable_ansi, .{
                     .fg = palette.body,
                 }, palette);
             } else if (parseListItem(line)) |item| {
@@ -125,11 +125,12 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                     .bold = true,
                 }, &marker);
                 try renderCheckbox(writer, item.checked, opts.enable_ansi, palette);
-                try renderInline(allocator, writer, item.content, opts.enable_ansi, .{
+                try renderInline(allocator, writer, stripHardBreak(item.content), opts.enable_ansi, .{
                     .fg = palette.body,
                 }, palette);
             } else {
-                try renderInline(allocator, writer, line, opts.enable_ansi, .{
+                // Plain paragraph text: strip hard break indicators
+                try renderInline(allocator, writer, stripHardBreak(line), opts.enable_ansi, .{
                     .fg = palette.body,
                 }, palette);
             }
@@ -539,7 +540,7 @@ fn isThematicBreak(line: []const u8) bool {
     return marker_count >= 3;
 }
 
-const InlineKind = enum { text, code_span, link_text, link_url, link_title, image_alt, image_url, emphasis, strong, bold_italic, strikethrough };
+const InlineKind = enum { text, code_span, link_text, link_url, link_title, autolink, image_alt, image_url, emphasis, strong, bold_italic, strikethrough };
 
 const InlineSegment = struct {
     kind: InlineKind,
@@ -573,6 +574,10 @@ fn renderInline(
             .link_title => {
                 try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true, .italic = true }, " — ");
                 try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true, .italic = true }, seg.content);
+            },
+            .autolink => {
+                // Render URL literally with link styling — no entity decoding or emphasis parsing
+                try ansi.writeStyled(writer, enable_ansi, base_style.merge(.{ .fg = palette.link, .underline = true }), seg.content);
             },
             .image_alt => {
                 const img_style: ansi.TextStyle = .{ .fg = palette.muted, .italic = true };
@@ -682,8 +687,8 @@ fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segments:
                 if (tryParseAutolink(text, index)) |al| {
                     if (plain_start < index)
                         try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
-                    // For autolinks, URL is the visible text — no separate URL display needed
-                    try segments.append(allocator, .{ .kind = .link_text, .content = al.url });
+                    // Autolink: render URL literally (no entity/emphasis processing)
+                    try segments.append(allocator, .{ .kind = .autolink, .content = al.url });
                     index = al.end;
                     plain_start = index;
                     continue;
@@ -941,11 +946,16 @@ fn tryParseAutolink(text: []const u8, start: usize) ?AutolinkResult {
 
     // Find closing '>'
     var pos = start + 1;
-    var has_scheme = false;
+    var scheme_end: usize = 0; // position after "://"
     while (pos < text.len) {
         switch (text[pos]) {
             '>' => {
-                if (!has_scheme) return null;
+                // Validate: must have scheme (alpha chars before "://")
+                if (scheme_end == 0) return null;
+                // Scheme must start with a letter and contain only [a-zA-Z0-9+.-]
+                const scheme = text[start + 1 .. scheme_end - 3]; // before "://"
+                if (scheme.len == 0) return null;
+                if (!std.ascii.isAlphabetic(scheme[0])) return null;
                 return .{
                     .url = text[start + 1 .. pos],
                     .end = pos + 1,
@@ -953,9 +963,9 @@ fn tryParseAutolink(text: []const u8, start: usize) ?AutolinkResult {
             },
             ' ', '\t', '\n', '<' => return null,
             ':' => {
-                // Check for :// pattern
-                if (pos + 2 < text.len and text[pos + 1] == '/' and text[pos + 2] == '/') {
-                    has_scheme = true;
+                // Check for :// pattern (only accept first occurrence)
+                if (scheme_end == 0 and pos + 2 < text.len and text[pos + 1] == '/' and text[pos + 2] == '/') {
+                    scheme_end = pos + 3;
                 }
                 pos += 1;
             },
