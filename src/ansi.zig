@@ -37,10 +37,6 @@ pub fn applyStyle(writer: *std.io.Writer, style: TextStyle) !void {
     }
 }
 
-pub fn reset(writer: *std.io.Writer, enabled: bool) !void {
-    if (enabled) try writer.writeAll("\x1b[0m");
-}
-
 pub fn writeStyled(
     writer: *std.io.Writer,
     enabled: bool,
@@ -55,7 +51,7 @@ pub fn writeStyled(
 
     try applyStyle(writer, style);
     try writeSanitized(writer, text);
-    try reset(writer, true);
+    try writer.writeAll("\x1b[0m");
 }
 
 /// Write text with C0 control characters and ESC stripped to prevent
@@ -63,10 +59,7 @@ pub fn writeStyled(
 fn writeSanitized(writer: *std.io.Writer, text: []const u8) !void {
     var start: usize = 0;
     for (text, 0..) |byte, i| {
-        if (byte < 0x20 and byte != '\t' and byte != '\n') {
-            if (start < i) try writer.writeAll(text[start..i]);
-            start = i + 1;
-        } else if (byte == 0x7f) {
+        if ((byte < 0x20 and byte != '\t' and byte != '\n') or byte == 0x7f) {
             if (start < i) try writer.writeAll(text[start..i]);
             start = i + 1;
         }
