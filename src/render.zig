@@ -65,11 +65,7 @@ pub fn renderMarkdown(writer: *std.io.Writer, input: []const u8, opts: RenderOpt
                 .dim = true,
             });
         } else if (parseHeading(line)) |heading| {
-            _ = heading.level;
-            try renderInline(writer, heading.content, opts.enable_ansi, .{
-                .fg = palette.heading,
-                .bold = true,
-            }, palette);
+            try renderInline(writer, heading.content, opts.enable_ansi, headingStyle(heading.level), palette);
         } else if (parseBlockQuote(line)) |quote| {
             try writeIndent(writer, quote.indent);
             try renderBlockQuoteContent(writer, quote.content, opts.enable_ansi, palette);
@@ -338,6 +334,18 @@ fn countRepeatedByte(text: []const u8, byte: u8) usize {
     return count;
 }
 
+fn headingStyle(level: u8) ansi.TextStyle {
+    return switch (level) {
+        1 => .{ .fg = .{ .r = 0xb5, .g = 0x89, .b = 0x00 }, .bold = true, .underline = true },
+        2 => .{ .fg = .{ .r = 0xcb, .g = 0x4b, .b = 0x16 }, .bold = true, .underline = true },
+        3 => .{ .fg = .{ .r = 0x26, .g = 0x8b, .b = 0xd2 }, .bold = true },
+        4 => .{ .fg = .{ .r = 0x2a, .g = 0xa1, .b = 0x98 }, .bold = true },
+        5 => .{ .fg = .{ .r = 0x6c, .g = 0x71, .b = 0xc4 } },
+        6 => .{ .fg = .{ .r = 0x6c, .g = 0x71, .b = 0xc4 }, .dim = true },
+        else => .{ .fg = .{ .r = 0x6c, .g = 0x71, .b = 0xc4 }, .dim = true },
+    };
+}
+
 fn renderToOwnedSlice(
     allocator: std.mem.Allocator,
     input: []const u8,
@@ -396,7 +404,7 @@ test "renderMarkdown emits Solarized Dark ANSI styling for headings and links" {
     defer allocator.free(rendered);
 
     try std.testing.expectEqualStrings(
-        "\x1b[1m\x1b[38;2;38;139;210mTitle\x1b[0m\n" ++
+        "\x1b[1m\x1b[4m\x1b[38;2;181;137;0mTitle\x1b[0m\n" ++
             "\x1b[4m\x1b[38;2;108;113;196m[link](https://example.com)\x1b[0m",
         rendered,
     );
@@ -420,6 +428,29 @@ test "nested blockquotes render with multiple pipe markers" {
     defer allocator.free(rendered);
 
     try std.testing.expectEqualStrings("| | nested\n", rendered);
+}
+
+test "heading levels produce different ANSI styles" {
+    const allocator = std.testing.allocator;
+    const source = "# H1\n## H2\n### H3\n#### H4\n##### H5\n###### H6\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{
+        .enable_ansi = true,
+    });
+    defer allocator.free(rendered);
+
+    // h1: bold + underline + yellow
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[1m\x1b[4m\x1b[38;2;181;137;0m"));
+    // h2: bold + underline + orange
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[1m\x1b[4m\x1b[38;2;203;75;22m"));
+    // h3: bold + blue (no underline)
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[1m\x1b[38;2;38;139;210m"));
+    // h4: bold + cyan
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[1m\x1b[38;2;42;161;152m"));
+    // h5: violet (no bold, no dim)
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[38;2;108;113;196mH5\x1b[0m"));
+    // h6: dim + violet
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[2m\x1b[38;2;108;113;196mH6\x1b[0m"));
 }
 
 test "tab-indented headings and blockquotes are recognized" {
