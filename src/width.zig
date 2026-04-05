@@ -452,7 +452,6 @@ test "wrapText preserves ANSI codes" {
     const allocator = std.testing.allocator;
     const result = try wrapText(allocator, "\x1b[1mHello World\x1b[0m", 8);
     defer allocator.free(result);
-    // ANSI codes should pass through, wrap happens at word boundary
     try std.testing.expectEqualStrings("\x1b[1mHello\nWorld\x1b[0m", result);
 }
 
@@ -483,7 +482,6 @@ test "sliceToWidthAlloc appends reset when truncating styled text" {
     const text = "\x1b[1mbold text\x1b[0m";
     const result = try sliceToWidthAlloc(allocator, text, 4);
     defer allocator.free(result);
-    // Should include the style start + truncated text + reset
     try std.testing.expectEqualStrings("\x1b[1mbold\x1b[0m", result);
 }
 

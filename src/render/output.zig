@@ -1,0 +1,173 @@
+const std = @import("std");
+const ansi = @import("../ansi.zig");
+const entity = @import("../entity.zig");
+const theme = @import("../theme.zig");
+const width_mod = @import("../width.zig");
+const block = @import("block.zig");
+const inline_parse = @import("inline.zig");
+const link_mod = @import("link.zig");
+
+const LinkDefMap = link_mod.LinkDefMap;
+const InlineSegment = inline_parse.InlineSegment;
+
+pub fn renderInline(
+    allocator: std.mem.Allocator,
+    writer: *std.io.Writer,
+    text: []const u8,
+    enable_ansi: bool,
+    base_style: ansi.TextStyle,
+    palette: theme.Palette,
+    link_defs: *const LinkDefMap,
+) !void {
+    var segments: std.ArrayListUnmanaged(InlineSegment) = .{};
+    defer segments.deinit(allocator);
+
+    try inline_parse.parseInlineSegments(allocator, text, &segments, link_defs);
+
+    for (segments.items) |seg| {
+        switch (seg.kind) {
+            .text => try writeTextWithEntities(writer, enable_ansi, base_style, seg.content),
+            .code_span => try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.inline_code }, seg.content),
+            .link_text => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .fg = palette.link, .underline = true }), palette, link_defs),
+            .link_url => {
+                const muted_dim: ansi.TextStyle = .{ .fg = palette.muted, .dim = true };
+                try ansi.writeStyled(writer, enable_ansi, muted_dim, "(");
+                try ansi.writeStyled(writer, enable_ansi, muted_dim, seg.content);
+                try ansi.writeStyled(writer, enable_ansi, muted_dim, ")");
+            },
+            .link_title => {
+                try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true, .italic = true }, " — ");
+                try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true, .italic = true }, seg.content);
+            },
+            .autolink => {
+                try ansi.writeStyled(writer, enable_ansi, base_style.merge(.{ .fg = palette.link, .underline = true }), seg.content);
+            },
+            .image_alt => {
+                const img_style: ansi.TextStyle = .{ .fg = palette.muted, .italic = true };
+                try ansi.writeStyled(writer, enable_ansi, img_style, "[img: ");
+                try renderInline(allocator, writer, seg.content, enable_ansi, img_style, palette, link_defs);
+                try ansi.writeStyled(writer, enable_ansi, img_style, "]");
+            },
+            .image_url => {
+                const muted_dim: ansi.TextStyle = .{ .fg = palette.muted, .dim = true };
+                try ansi.writeStyled(writer, enable_ansi, muted_dim, "(");
+                try ansi.writeStyled(writer, enable_ansi, muted_dim, seg.content);
+                try ansi.writeStyled(writer, enable_ansi, muted_dim, ")");
+            },
+            .emphasis => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .italic = true }), palette, link_defs),
+            .strong => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .bold = true }), palette, link_defs),
+            .bold_italic => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .bold = true, .italic = true }), palette, link_defs),
+            .strikethrough => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .strikethrough = true }), palette, link_defs),
+        }
+    }
+}
+
+pub fn renderCheckbox(
+    writer: *std.io.Writer,
+    checked: ?bool,
+    enable_ansi: bool,
+    palette: theme.Palette,
+) !void {
+    if (checked) |is_checked| {
+        if (is_checked) {
+            try ansi.writeStyled(writer, enable_ansi, .{
+                .fg = palette.list_marker,
+            }, "[x] ");
+        } else {
+            try ansi.writeStyled(writer, enable_ansi, .{
+                .fg = palette.muted,
+                .dim = true,
+            }, "[ ] ");
+        }
+    }
+}
+
+pub fn renderBlockQuoteContent(
+    allocator: std.mem.Allocator,
+    writer: *std.io.Writer,
+    content: []const u8,
+    enable_ansi: bool,
+    palette: theme.Palette,
+    link_defs: *const LinkDefMap,
+) !void {
+    try ansi.writeStyled(writer, enable_ansi, .{
+        .fg = palette.muted,
+        .dim = true,
+    }, "| ");
+
+    if (block.parseBlockQuote(content)) |nested| {
+        try writer.splatByteAll(' ', nested.indent);
+        try renderBlockQuoteContent(allocator, writer, nested.content, enable_ansi, palette, link_defs);
+    } else {
+        try renderInline(allocator, writer, content, enable_ansi, .{
+            .fg = palette.muted,
+        }, palette, link_defs);
+    }
+}
+
+pub fn writeTextWithEntities(
+    writer: *std.io.Writer,
+    enable_ansi: bool,
+    style: ansi.TextStyle,
+    text: []const u8,
+) !void {
+    var pos: usize = 0;
+    var plain_start: usize = 0;
+
+    while (pos < text.len) {
+        if (text[pos] == '&') {
+            if (entity.decode(text, pos)) |result| {
+                if (plain_start < pos)
+                    try ansi.writeStyled(writer, enable_ansi, style, text[plain_start..pos]);
+                try ansi.writeStyled(writer, enable_ansi, style, result.bytes[0..result.len]);
+                pos = result.end;
+                plain_start = pos;
+                continue;
+            }
+        }
+        pos += 1;
+    }
+
+    if (plain_start < text.len)
+        try ansi.writeStyled(writer, enable_ansi, style, text[plain_start..]);
+}
+
+pub fn renderedDisplayWidth(allocator: std.mem.Allocator, text: []const u8, palette: theme.Palette, link_defs: *const LinkDefMap) !usize {
+    var output: std.io.Writer.Allocating = .init(allocator);
+    defer output.deinit();
+
+    try renderInline(allocator, &output.writer, text, false, .{}, palette, link_defs);
+    var list = output.toArrayList();
+    const rendered = list.toOwnedSlice(allocator) catch return width_mod.displayWidth(text);
+    defer allocator.free(rendered);
+    return width_mod.displayWidth(rendered);
+}
+
+pub fn consumeListContinuation(
+    allocator: std.mem.Allocator,
+    writer: *std.io.Writer,
+    input: []const u8,
+    start_pos: usize,
+    content_col: usize,
+    enable_ansi: bool,
+    palette: theme.Palette,
+    link_defs: *const LinkDefMap,
+) !usize {
+    var pos = start_pos;
+    while (pos < input.len) {
+        const end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
+        const has_nl = end < input.len;
+        const raw = std.mem.trimEnd(u8, input[pos..end], "\r");
+
+        if (!block.isListContinuation(raw, content_col)) break;
+
+        const indent = block.countLeadingWhitespace(raw);
+        try writer.splatByteAll(' ', content_col);
+        try renderInline(allocator, writer, block.stripHardBreak(raw[indent..]), enable_ansi, .{
+            .fg = palette.body,
+        }, palette, link_defs);
+        if (has_nl) try writer.writeByte('\n');
+        pos = end + @intFromBool(has_nl);
+    }
+    return pos;
+}
