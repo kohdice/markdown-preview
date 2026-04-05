@@ -6,6 +6,13 @@ const table = @import("table.zig");
 const theme = @import("theme.zig");
 const width = @import("width.zig");
 
+const LinkDef = struct {
+    url: []const u8,
+    title: ?[]const u8 = null,
+};
+
+const LinkDefMap = std.StringHashMapUnmanaged(LinkDef);
+
 pub const RenderOptions = struct {
     enable_ansi: bool = false,
     theme: theme.Theme = .solarized_dark,
@@ -44,6 +51,14 @@ const BlockQuote = struct {
 
 pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, input: []const u8, opts: RenderOptions) !void {
     if (input.len == 0) return;
+
+    // First pass: collect reference link definitions
+    var link_defs = try collectLinkDefinitions(allocator, input);
+    defer {
+        var it = link_defs.keyIterator();
+        while (it.next()) |key| allocator.free(key.*);
+        link_defs.deinit(allocator);
+    }
 
     const palette = theme.palette(opts.theme);
     var active_fence: ?Fence = null;
@@ -87,21 +102,23 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                     line_start = line_end + @intFromBool(has_newline);
                     continue;
                 }
+            } else if (parseLinkDefinition(line) != null) {
+                // Link definition lines are consumed in the first pass; skip in output
             } else if (isThematicBreak(line)) {
                 try writeStyledLine(writer, "--------------------------------", opts.enable_ansi, .{
                     .fg = palette.subtle,
                     .dim = true,
                 });
-            } else if (try tryRenderTable(allocator, writer, input, line, line_end, opts.enable_ansi, palette)) |new_start| {
+            } else if (try tryRenderTable(allocator, writer, input, line, line_end, opts.enable_ansi, palette, &link_defs)) |new_start| {
                 // Table was rendered; advance past all table lines
                 prev_was_blank = false;
                 line_start = new_start;
                 continue;
             } else if (parseHeading(line)) |heading| {
-                try renderInline(allocator, writer, stripHardBreak(heading.content), opts.enable_ansi, headingStyle(heading.level), palette);
+                try renderInline(allocator, writer, stripHardBreak(heading.content), opts.enable_ansi, headingStyle(heading.level), palette, &link_defs);
             } else if (parseBlockQuote(line)) |quote| {
                 try writeIndent(writer, quote.indent);
-                try renderBlockQuoteContent(allocator, writer, quote.content, opts.enable_ansi, palette);
+                try renderBlockQuoteContent(allocator, writer, quote.content, opts.enable_ansi, palette, &link_defs);
             } else if (parseOrderedListItem(line)) |ordered| {
                 try writeIndent(writer, ordered.indent);
                 try ansi.writeStyled(writer, opts.enable_ansi, .{
@@ -116,7 +133,7 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                 try renderCheckbox(writer, ordered.checked, opts.enable_ansi, palette);
                 try renderInline(allocator, writer, stripHardBreak(ordered.content), opts.enable_ansi, .{
                     .fg = palette.body,
-                }, palette);
+                }, palette, &link_defs);
             } else if (parseListItem(line)) |item| {
                 try writeIndent(writer, item.indent);
                 var marker: [2]u8 = .{ item.marker, ' ' };
@@ -127,12 +144,12 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                 try renderCheckbox(writer, item.checked, opts.enable_ansi, palette);
                 try renderInline(allocator, writer, stripHardBreak(item.content), opts.enable_ansi, .{
                     .fg = palette.body,
-                }, palette);
+                }, palette, &link_defs);
             } else {
                 // Plain paragraph text: strip hard break indicators
                 try renderInline(allocator, writer, stripHardBreak(line), opts.enable_ansi, .{
                     .fg = palette.body,
-                }, palette);
+                }, palette, &link_defs);
             }
 
             // Reset blank-line flag for non-blank lines
@@ -154,6 +171,7 @@ fn tryRenderTable(
     header_end: usize,
     enable_ansi: bool,
     palette: theme.Palette,
+    link_defs: *const LinkDefMap,
 ) !?usize {
     // A table header line must contain `|`
     if (std.mem.indexOfScalar(u8, header_line, '|') == null) return null;
@@ -212,10 +230,10 @@ fn tryRenderTable(
 
     for (0..col_count) |c| {
         if (c < header_cells.len)
-            col_widths[c] = @max(col_widths[c], try renderedDisplayWidth(allocator, header_cells[c], palette));
+            col_widths[c] = @max(col_widths[c], try renderedDisplayWidth(allocator, header_cells[c], palette, link_defs));
         for (body_rows.items) |row| {
             if (c < row.len)
-                col_widths[c] = @max(col_widths[c], try renderedDisplayWidth(allocator, row[c], palette));
+                col_widths[c] = @max(col_widths[c], try renderedDisplayWidth(allocator, row[c], palette, link_defs));
         }
         col_widths[c] = @max(col_widths[c], 3);
     }
@@ -224,7 +242,7 @@ fn tryRenderTable(
     try renderTableRow(allocator, writer, header_cells, col_widths, alignments, col_count, enable_ansi, .{
         .fg = palette.body,
         .bold = true,
-    }, palette);
+    }, palette, link_defs);
     try writer.writeByte('\n');
 
     // Render separator
@@ -235,7 +253,7 @@ fn tryRenderTable(
     for (body_rows.items) |row| {
         try renderTableRow(allocator, writer, row, col_widths, alignments, col_count, enable_ansi, .{
             .fg = palette.body,
-        }, palette);
+        }, palette, link_defs);
         try writer.writeByte('\n');
     }
 
@@ -252,11 +270,12 @@ fn renderTableRow(
     enable_ansi: bool,
     style: ansi.TextStyle,
     palette: theme.Palette,
+    link_defs: *const LinkDefMap,
 ) !void {
     try ansi.writeStyled(writer, enable_ansi, .{ .dim = true }, "| ");
     for (0..col_count) |c| {
         const cell_text = if (c < cells.len) cells[c] else "";
-        const cell_width = try renderedDisplayWidth(allocator, cell_text, palette);
+        const cell_width = try renderedDisplayWidth(allocator, cell_text, palette, link_defs);
         const col_w = col_widths[c];
         const padding = if (col_w > cell_width) col_w - cell_width else 0;
         const col_align = if (c < alignments.len) alignments[c] else .left;
@@ -269,7 +288,7 @@ fn renderTableRow(
         const right_pad = padding - left_pad;
 
         for (0..left_pad) |_| try writer.writeByte(' ');
-        try renderInline(allocator, writer, cell_text, enable_ansi, style, palette);
+        try renderInline(allocator, writer, cell_text, enable_ansi, style, palette, link_defs);
         for (0..right_pad) |_| try writer.writeByte(' ');
 
         if (c + 1 < col_count) {
@@ -456,6 +475,7 @@ fn renderBlockQuoteContent(
     content: []const u8,
     enable_ansi: bool,
     palette: theme.Palette,
+    link_defs: *const LinkDefMap,
 ) !void {
     try ansi.writeStyled(writer, enable_ansi, .{
         .fg = palette.muted,
@@ -464,11 +484,11 @@ fn renderBlockQuoteContent(
 
     if (parseBlockQuote(content)) |nested| {
         try writeIndent(writer, nested.indent);
-        try renderBlockQuoteContent(allocator, writer, nested.content, enable_ansi, palette);
+        try renderBlockQuoteContent(allocator, writer, nested.content, enable_ansi, palette, link_defs);
     } else {
         try renderInline(allocator, writer, content, enable_ansi, .{
             .fg = palette.muted,
-        }, palette);
+        }, palette, link_defs);
     }
 }
 
@@ -554,17 +574,18 @@ fn renderInline(
     enable_ansi: bool,
     base_style: ansi.TextStyle,
     palette: theme.Palette,
+    link_defs: *const LinkDefMap,
 ) !void {
     var segments: std.ArrayListUnmanaged(InlineSegment) = .{};
     defer segments.deinit(allocator);
 
-    try parseInlineSegments(allocator, text, &segments);
+    try parseInlineSegments(allocator, text, &segments, link_defs);
 
     for (segments.items) |seg| {
         switch (seg.kind) {
             .text => try writeTextWithEntities(writer, enable_ansi, base_style, seg.content),
             .code_span => try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.inline_code }, seg.content),
-            .link_text => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .fg = palette.link, .underline = true }), palette),
+            .link_text => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .fg = palette.link, .underline = true }), palette, link_defs),
             .link_url => {
                 const muted_dim: ansi.TextStyle = .{ .fg = palette.muted, .dim = true };
                 try ansi.writeStyled(writer, enable_ansi, muted_dim, "(");
@@ -582,7 +603,7 @@ fn renderInline(
             .image_alt => {
                 const img_style: ansi.TextStyle = .{ .fg = palette.muted, .italic = true };
                 try ansi.writeStyled(writer, enable_ansi, img_style, "[img: ");
-                try renderInline(allocator, writer, seg.content, enable_ansi, img_style, palette);
+                try renderInline(allocator, writer, seg.content, enable_ansi, img_style, palette, link_defs);
                 try ansi.writeStyled(writer, enable_ansi, img_style, "]");
             },
             .image_url => {
@@ -591,15 +612,15 @@ fn renderInline(
                 try ansi.writeStyled(writer, enable_ansi, muted_dim, seg.content);
                 try ansi.writeStyled(writer, enable_ansi, muted_dim, ")");
             },
-            .emphasis => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .italic = true }), palette),
-            .strong => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .bold = true }), palette),
-            .bold_italic => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .bold = true, .italic = true }), palette),
-            .strikethrough => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .strikethrough = true }), palette),
+            .emphasis => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .italic = true }), palette, link_defs),
+            .strong => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .bold = true }), palette, link_defs),
+            .bold_italic => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .bold = true, .italic = true }), palette, link_defs),
+            .strikethrough => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .strikethrough = true }), palette, link_defs),
         }
     }
 }
 
-fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segments: *std.ArrayListUnmanaged(InlineSegment)) !void {
+fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segments: *std.ArrayListUnmanaged(InlineSegment), link_defs: *const LinkDefMap) !void {
     var index: usize = 0;
     var plain_start: usize = 0;
 
@@ -656,6 +677,18 @@ fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segments:
                     if (link.title) |title|
                         try segments.append(allocator, .{ .kind = .link_title, .content = title });
                     index = link.full_end;
+                    plain_start = index;
+                    continue;
+                }
+                // Try reference-style link: [text][ref] or [text][]
+                if (tryParseRefLink(text, index, link_defs)) |ref| {
+                    if (plain_start < index)
+                        try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
+                    try segments.append(allocator, .{ .kind = .link_text, .content = ref.link_text });
+                    try segments.append(allocator, .{ .kind = .link_url, .content = ref.url });
+                    if (ref.title) |title|
+                        try segments.append(allocator, .{ .kind = .link_title, .content = title });
+                    index = ref.end;
                     plain_start = index;
                     continue;
                 }
@@ -1076,6 +1109,201 @@ fn tryParseBareUrl(text: []const u8, start: usize) ?BareUrlResult {
     return .{ .end = pos };
 }
 
+/// Collect reference link definitions from the entire input in a single pre-pass.
+/// Definitions have the form: [label]: url "optional title"
+/// Only the first definition for a given label (case-insensitive) is kept.
+fn collectLinkDefinitions(allocator: std.mem.Allocator, input: []const u8) !LinkDefMap {
+    var defs: LinkDefMap = .{};
+    var line_start: usize = 0;
+    var active_prepass_fence: ?Fence = null;
+
+    while (line_start < input.len) {
+        const line_end = std.mem.indexOfScalarPos(u8, input, line_start, '\n') orelse input.len;
+        const has_newline = line_end < input.len;
+        const line = document.trimCarriageReturn(input[line_start..line_end]);
+
+        // Track code fences to avoid false positives (must match open/close correctly)
+        if (active_prepass_fence) |fence| {
+            if (isClosingFence(line, fence)) {
+                active_prepass_fence = null;
+            }
+        } else if (parseFence(line)) |fence| {
+            active_prepass_fence = fence;
+        } else {
+            if (parseLinkDefinition(line)) |def| {
+                // Normalize label to lowercase for case-insensitive lookup
+                const lower = toLowerAscii(allocator, def.label) catch null;
+                if (lower) |key| {
+                    const result = defs.getOrPut(allocator, key) catch {
+                        allocator.free(key);
+                        line_start = line_end + @intFromBool(has_newline);
+                        continue;
+                    };
+                    if (result.found_existing) {
+                        // First definition wins; free the duplicate key
+                        allocator.free(key);
+                    } else {
+                        result.value_ptr.* = .{ .url = def.url, .title = def.title };
+                    }
+                }
+            }
+        }
+
+        line_start = line_end + @intFromBool(has_newline);
+    }
+    return defs;
+}
+
+fn toLowerAscii(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
+    const buf = try allocator.alloc(u8, text.len);
+    for (text, 0..) |c, i| {
+        buf[i] = std.ascii.toLower(c);
+    }
+    return buf;
+}
+
+const LinkDefinition = struct {
+    label: []const u8,
+    url: []const u8,
+    title: ?[]const u8,
+};
+
+/// Parse a link definition line: [label]: url "title"
+fn parseLinkDefinition(line: []const u8) ?LinkDefinition {
+    const indent = countIndentUpTo(line, 3);
+    if (indent >= line.len or line[indent] != '[') return null;
+
+    // Find closing ]
+    const close = std.mem.indexOfScalarPos(u8, line, indent + 1, ']') orelse return null;
+    if (close + 1 >= line.len or line[close + 1] != ':') return null;
+
+    const label = line[indent + 1 .. close];
+    if (label.len == 0) return null;
+
+    // Skip ": " after the label
+    var pos = close + 2;
+    while (pos < line.len and (line[pos] == ' ' or line[pos] == '\t')) : (pos += 1) {}
+
+    if (pos >= line.len) return null;
+
+    // Parse URL (may be in angle brackets)
+    var url_start = pos;
+    var url_end = pos;
+    if (line[pos] == '<') {
+        url_start = pos + 1;
+        url_end = std.mem.indexOfScalarPos(u8, line, url_start, '>') orelse return null;
+        pos = url_end + 1;
+    } else {
+        while (url_end < line.len and line[url_end] != ' ' and line[url_end] != '\t') : (url_end += 1) {}
+        pos = url_end;
+    }
+
+    const url = line[url_start..url_end];
+    if (url.len == 0) return null;
+
+    // Optional title
+    while (pos < line.len and (line[pos] == ' ' or line[pos] == '\t')) : (pos += 1) {}
+
+    var title: ?[]const u8 = null;
+    if (pos < line.len) {
+        const quote = line[pos];
+        if (quote == '"' or quote == '\'') {
+            const title_start = pos + 1;
+            const title_end = std.mem.indexOfScalarPos(u8, line, title_start, quote) orelse return null;
+            title = line[title_start..title_end];
+            pos = title_end + 1;
+        } else {
+            // Non-whitespace after URL that isn't a title opener — not a valid definition
+            return null;
+        }
+    }
+
+    // No further non-whitespace characters allowed after URL/title
+    const remaining = std.mem.trim(u8, line[pos..], " \t");
+    if (remaining.len > 0) return null;
+
+    return .{ .label = label, .url = url, .title = title };
+}
+
+const RefLinkResult = struct {
+    link_text: []const u8,
+    url: []const u8,
+    title: ?[]const u8,
+    end: usize,
+};
+
+/// Try to parse a reference-style link: [text][ref] or [text][] (shortcut uses text as ref)
+fn tryParseRefLink(text: []const u8, start: usize, link_defs: *const LinkDefMap) ?RefLinkResult {
+    if (start >= text.len or text[start] != '[') return null;
+
+    // Find first closing bracket for text
+    var bracket_depth: usize = 1;
+    var bpos = start + 1;
+    while (bpos < text.len) : (bpos += 1) {
+        switch (text[bpos]) {
+            '[' => bracket_depth += 1,
+            ']' => {
+                bracket_depth -= 1;
+                if (bracket_depth == 0) break;
+            },
+            '\\' => {
+                if (bpos + 1 < text.len) bpos += 1;
+            },
+            else => {},
+        }
+    }
+    if (bracket_depth != 0) return null;
+
+    const text_end = bpos; // position of first ]
+    const link_text = text[start + 1 .. text_end];
+
+    // Check for [ref] part
+    if (text_end + 1 < text.len and text[text_end + 1] == '[') {
+        // Full form: [text][ref]
+        const ref_start = text_end + 2;
+        const ref_end = std.mem.indexOfScalarPos(u8, text, ref_start, ']') orelse return null;
+        const ref_label = if (ref_end > ref_start) text[ref_start..ref_end] else link_text;
+
+        // Lowercase lookup
+        var lower_buf: [256]u8 = undefined;
+        if (ref_label.len > lower_buf.len) return null;
+        for (ref_label, 0..) |c, i| {
+            lower_buf[i] = std.ascii.toLower(c);
+        }
+
+        if (link_defs.get(lower_buf[0..ref_label.len])) |def| {
+            return .{
+                .link_text = link_text,
+                .url = def.url,
+                .title = def.title,
+                .end = ref_end + 1,
+            };
+        }
+    }
+
+    // Shortcut form: [text] alone (text is the ref label)
+    // Only if not followed by ( or [
+    if (text_end + 1 < text.len and (text[text_end + 1] == '(' or text[text_end + 1] == '['))
+        return null;
+
+    var lower_buf: [256]u8 = undefined;
+    if (link_text.len > lower_buf.len) return null;
+    for (link_text, 0..) |c, i| {
+        lower_buf[i] = std.ascii.toLower(c);
+    }
+
+    if (link_defs.get(lower_buf[0..link_text.len])) |def| {
+        return .{
+            .link_text = link_text,
+            .url = def.url,
+            .title = def.title,
+            .end = text_end + 1,
+        };
+    }
+
+    return null;
+}
+
 /// CommonMark 2.4: ASCII punctuation characters can be backslash-escaped.
 fn isEscapable(c: u8) bool {
     return switch (c) {
@@ -1121,11 +1349,11 @@ fn writeTextWithEntities(
 /// Compute the display width of inline text after rendering (entity decoding,
 /// emphasis delimiter removal, link/image syntax transformation).
 /// Renders to a temporary buffer with ANSI disabled, then measures the result.
-fn renderedDisplayWidth(allocator: std.mem.Allocator, text: []const u8, palette: theme.Palette) !usize {
+fn renderedDisplayWidth(allocator: std.mem.Allocator, text: []const u8, palette: theme.Palette, link_defs: *const LinkDefMap) !usize {
     var output: std.io.Writer.Allocating = .init(allocator);
     defer output.deinit();
 
-    try renderInline(allocator, &output.writer, text, false, .{}, palette);
+    try renderInline(allocator, &output.writer, text, false, .{}, palette, link_defs);
     var list = output.toArrayList();
     const rendered = list.toOwnedSlice(allocator) catch return width.displayWidth(text);
     defer allocator.free(rendered);
@@ -2214,4 +2442,72 @@ test "same-delimiter nesting with ANSI" {
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "italic"));
     // No delimiters
     try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, "***"));
+}
+
+test "reference-style link resolves to definition" {
+    const allocator = std.testing.allocator;
+    const source = "[GitHub][1]\n\n[1]: https://github.com\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "GitHub"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "https://github.com"));
+    // Definition line should not appear in output
+    try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, "[1]:"));
+}
+
+test "reference link with empty ref uses text as label" {
+    const allocator = std.testing.allocator;
+    const source = "[example][]\n\n[example]: https://example.com\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "example"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "https://example.com"));
+}
+
+test "shortcut reference link" {
+    const allocator = std.testing.allocator;
+    const source = "[example]\n\n[example]: https://example.com\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "example"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "https://example.com"));
+}
+
+test "reference link is case-insensitive" {
+    const allocator = std.testing.allocator;
+    const source = "[Text][FOO]\n\n[foo]: https://example.com\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "Text"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "https://example.com"));
+}
+
+test "undefined reference link is rendered as plain text" {
+    const allocator = std.testing.allocator;
+    const source = "[text][missing]";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("[text][missing]", rendered);
+}
+
+test "link definition with title" {
+    const allocator = std.testing.allocator;
+    const source = "[link][ref]\n\n[ref]: https://example.com \"My Title\"\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "link"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "https://example.com"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "My Title"));
 }
