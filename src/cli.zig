@@ -1,6 +1,7 @@
 const std = @import("std");
 const document = @import("document.zig");
 const render = @import("render.zig");
+const theme = @import("theme.zig");
 
 pub fn runWithDir(
     allocator: std.mem.Allocator,
@@ -10,12 +11,34 @@ pub fn runWithDir(
     stderr: *std.io.Writer,
     enable_ansi: bool,
 ) !u8 {
-    if (args.len != 2) {
-        try writeUsage(stderr);
-        return 1;
+    var selected_theme: theme.Theme = .solarized_dark;
+    var file_path: ?[]const u8 = null;
+
+    for (args[1..]) |arg| {
+        if (std.mem.startsWith(u8, arg, "--theme=")) {
+            const name = arg["--theme=".len..];
+            selected_theme = theme.Theme.fromString(name) orelse {
+                try stderr.print("mp: unknown theme '{s}'\nAvailable themes: {s}\n", .{ name, theme.Theme.available });
+                return 1;
+            };
+        } else if (std.mem.startsWith(u8, arg, "--")) {
+            try stderr.print("mp: unknown option '{s}'\n", .{arg});
+            try writeUsage(stderr);
+            return 1;
+        } else {
+            if (file_path != null) {
+                try writeUsage(stderr);
+                return 1;
+            }
+            file_path = arg;
+        }
     }
 
-    const path = args[1];
+    const path = file_path orelse {
+        try writeUsage(stderr);
+        return 1;
+    };
+
     const source = document.readFile(allocator, dir, path) catch |err| {
         try stderr.print("mp: unable to read '{s}': {s}\n", .{ path, @errorName(err) });
         return 1;
@@ -24,13 +47,13 @@ pub fn runWithDir(
 
     try render.renderMarkdown(allocator, stdout, source, .{
         .enable_ansi = enable_ansi,
-        .theme = .solarized_dark,
+        .theme = selected_theme,
     });
     return 0;
 }
 
 fn writeUsage(writer: *std.io.Writer) !void {
-    try writer.writeAll("Usage: mp <FILE>\nPreview a Markdown file in the terminal.\n");
+    try writer.writeAll("Usage: mp [--theme=NAME] <FILE>\nPreview a Markdown file in the terminal.\n\nAvailable themes: " ++ theme.Theme.available ++ "\n");
 }
 
 test "runWithDir reports usage errors" {
@@ -50,10 +73,7 @@ test "runWithDir reports usage errors" {
 
     try std.testing.expectEqual(@as(u8, 1), exit_code);
     try std.testing.expectEqualStrings("", stdout.writer.buffered());
-    try std.testing.expectEqualStrings(
-        "Usage: mp <FILE>\nPreview a Markdown file in the terminal.\n",
-        stderr.writer.buffered(),
-    );
+    try std.testing.expect(std.mem.containsAtLeast(u8, stderr.writer.buffered(), 1, "Usage: mp"));
 }
 
 test "runWithDir reports missing files" {

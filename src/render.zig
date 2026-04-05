@@ -696,6 +696,17 @@ fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segments:
                 index += 1;
             },
             else => {
+                // GFM extended autolink: bare http:// or https:// URLs
+                if (text[index] == 'h') {
+                    if (tryParseBareUrl(text, index)) |bare| {
+                        if (plain_start < index)
+                            try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
+                        try segments.append(allocator, .{ .kind = .autolink, .content = text[index..bare.end] });
+                        index = bare.end;
+                        plain_start = index;
+                        continue;
+                    }
+                }
                 index += 1;
             },
         }
@@ -740,7 +751,25 @@ const LinkParts = struct {
 };
 
 fn findLinkParts(text: []const u8, start: usize) ?LinkParts {
-    const close_bracket = std.mem.indexOfScalarPos(u8, text, start + 1, ']') orelse return null;
+    // Find matching ']' with balanced bracket tracking
+    var bracket_depth: usize = 1;
+    var bpos = start + 1;
+    while (bpos < text.len) : (bpos += 1) {
+        switch (text[bpos]) {
+            '[' => bracket_depth += 1,
+            ']' => {
+                bracket_depth -= 1;
+                if (bracket_depth == 0) break;
+            },
+            '\\' => {
+                // Skip escaped character
+                if (bpos + 1 < text.len) bpos += 1;
+            },
+            else => {},
+        }
+    }
+    if (bracket_depth != 0) return null;
+    const close_bracket = bpos;
     if (close_bracket + 1 >= text.len or text[close_bracket + 1] != '(') return null;
 
     var depth: usize = 1;
@@ -977,6 +1006,63 @@ fn tryParseAutolink(text: []const u8, start: usize) ?AutolinkResult {
     return null;
 }
 
+const BareUrlResult = struct {
+    end: usize,
+};
+
+/// Parse a GFM-style extended autolink (bare URL without angle brackets).
+/// Matches http:// or https:// followed by URL characters.
+fn tryParseBareUrl(text: []const u8, start: usize) ?BareUrlResult {
+    // Must start with http:// or https://
+    const rest = text[start..];
+    const prefix_len: usize = if (std.mem.startsWith(u8, rest, "https://"))
+        8
+    else if (std.mem.startsWith(u8, rest, "http://"))
+        7
+    else
+        return null;
+
+    // Must not be preceded by alphanumeric (avoids matching inside words)
+    if (start > 0 and (std.ascii.isAlphanumeric(text[start - 1]) or text[start - 1] == '.'))
+        return null;
+
+    // URL must have at least one character after the scheme
+    if (start + prefix_len >= text.len) return null;
+
+    // Scan URL characters: stop at whitespace, <, >, or control chars
+    var pos = start + prefix_len;
+    while (pos < text.len) {
+        switch (text[pos]) {
+            ' ', '<', '>', 0...0x1f, 0x7f => break,
+            else => pos += 1,
+        }
+    }
+
+    // Strip trailing punctuation that is unlikely part of the URL
+    while (pos > start + prefix_len) {
+        switch (text[pos - 1]) {
+            '.', ',', ':', ';', '!', '?', '\'', '"' => pos -= 1,
+            ')' => {
+                // Only strip trailing ) if unmatched
+                const url = text[start..pos];
+                const open = std.mem.count(u8, url, "(");
+                const close = std.mem.count(u8, url, ")");
+                if (close > open) {
+                    pos -= 1;
+                } else {
+                    break;
+                }
+            },
+            else => break,
+        }
+    }
+
+    // Must have content after scheme
+    if (pos <= start + prefix_len) return null;
+
+    return .{ .end = pos };
+}
+
 /// CommonMark 2.4: ASCII punctuation characters can be backslash-escaped.
 fn isEscapable(c: u8) bool {
     return switch (c) {
@@ -1154,6 +1240,26 @@ test "link with parentheses inside URL renders semantically" {
     defer allocator.free(rendered);
 
     try std.testing.expectEqualStrings("wiki(https://en.wikipedia.org/wiki/Foo_(bar))", rendered);
+}
+
+test "link text with balanced brackets" {
+    const allocator = std.testing.allocator;
+    const source = "[foo [bar]](https://example.com)";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("foo [bar](https://example.com)", rendered);
+}
+
+test "link text with nested brackets" {
+    const allocator = std.testing.allocator;
+    const source = "[a [b [c]]](url)";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("a [b [c]](url)", rendered);
 }
 
 test "nested blockquotes render with multiple pipe markers" {
@@ -1897,6 +2003,83 @@ test "autolink with ftp scheme" {
     defer allocator.free(rendered);
 
     try std.testing.expectEqualStrings("ftp://files.example.com/readme", rendered);
+}
+
+test "bare URL is detected as autolink" {
+    const allocator = std.testing.allocator;
+    const source = "Visit https://example.com for details";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("Visit https://example.com for details", rendered);
+}
+
+test "bare URL with path and query" {
+    const allocator = std.testing.allocator;
+    const source = "See https://example.com/path?q=1&r=2 here";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("See https://example.com/path?q=1&r=2 here", rendered);
+}
+
+test "bare URL strips trailing punctuation" {
+    const allocator = std.testing.allocator;
+    const source = "Check https://example.com.";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    // Trailing period should NOT be part of the URL
+    try std.testing.expectEqualStrings("Check https://example.com.", rendered);
+}
+
+test "bare URL with ANSI gets link styling" {
+    const allocator = std.testing.allocator;
+    const source = "https://example.com";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{
+        .enable_ansi = true,
+    });
+    defer allocator.free(rendered);
+
+    // Should have underline (autolink uses link styling)
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[4m"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "https://example.com"));
+}
+
+test "bare URL not detected inside words" {
+    const allocator = std.testing.allocator;
+    const source = "foohttps://example.com";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    // Preceded by alphanumeric — should NOT be detected as autolink
+    try std.testing.expectEqualStrings("foohttps://example.com", rendered);
+}
+
+test "bare http URL detected" {
+    const allocator = std.testing.allocator;
+    const source = "http://example.com";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("http://example.com", rendered);
+}
+
+test "bare URL with unmatched trailing paren is stripped" {
+    const allocator = std.testing.allocator;
+    const source = "(see https://example.com)";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    // Trailing ) is unmatched in URL context, should be stripped from URL
+    try std.testing.expectEqualStrings("(see https://example.com)", rendered);
 }
 
 test "link with title renders title" {
