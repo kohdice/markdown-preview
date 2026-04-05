@@ -1,5 +1,10 @@
 const std = @import("std");
 
+// HTML5 spec: named entities are at most 31 characters long
+const max_entity_len = 32;
+const max_hex_digits = 6; // per CommonMark spec
+const max_decimal_digits = 7; // per CommonMark spec
+
 pub const DecodeResult = struct {
     bytes: [4]u8,
     len: u3,
@@ -13,19 +18,16 @@ pub const DecodeResult = struct {
 pub fn decode(text: []const u8, start: usize) ?DecodeResult {
     if (start >= text.len or text[start] != '&') return null;
 
-    // Find the closing semicolon (entities are at most 31 chars per HTML5 spec, limit search)
-    const max_end = @min(start + 32, text.len);
+    const max_end = @min(start + max_entity_len, text.len);
     const semi_pos = std.mem.indexOfScalarPos(u8, text[0..max_end], start + 1, ';') orelse return null;
 
-    const entity_body = text[start + 1 .. semi_pos]; // content between & and ;
+    const entity_body = text[start + 1 .. semi_pos];
     if (entity_body.len == 0) return null;
 
     if (entity_body[0] == '#') {
-        // Numeric entity: &#123; or &#x1F;
         return decodeNumeric(entity_body[1..], semi_pos + 1);
     }
 
-    // Named entity lookup
     if (named_entities.get(entity_body)) |codepoint| {
         var buf: [4]u8 = undefined;
         const len = std.unicode.utf8Encode(codepoint, &buf) catch return null;
@@ -42,9 +44,8 @@ fn decodeNumeric(body: []const u8, end: usize) ?DecodeResult {
     var codepoint: u32 = 0;
 
     if (body[0] == 'x' or body[0] == 'X') {
-        // Hexadecimal: &#xHH; (1-6 hex digits per CommonMark spec)
         const hex_digits = body[1..];
-        if (hex_digits.len == 0 or hex_digits.len > 6) return null;
+        if (hex_digits.len == 0 or hex_digits.len > max_hex_digits) return null;
         for (hex_digits) |c| {
             const digit: u32 = switch (c) {
                 '0'...'9' => c - '0',
@@ -55,18 +56,15 @@ fn decodeNumeric(body: []const u8, end: usize) ?DecodeResult {
             codepoint = codepoint * 16 + digit;
         }
     } else {
-        // Decimal: &#DDD; (1-7 decimal digits per CommonMark spec)
-        if (body.len > 7) return null;
+        if (body.len > max_decimal_digits) return null;
         for (body) |c| {
             if (c < '0' or c > '9') return null;
             codepoint = codepoint * 10 + (@as(u32, c) - '0');
         }
     }
 
-    // Validate Unicode codepoint range
     if (codepoint == 0 or codepoint > 0x10FFFF) return null;
-    // Reject surrogates
-    if (codepoint >= 0xD800 and codepoint <= 0xDFFF) return null;
+    if (codepoint >= 0xD800 and codepoint <= 0xDFFF) return null; // surrogates
 
     var buf: [4]u8 = undefined;
     const len = std.unicode.utf8Encode(@intCast(codepoint), &buf) catch return null;
