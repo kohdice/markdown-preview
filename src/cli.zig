@@ -9,6 +9,7 @@ pub fn runWithDir(
     stdout: *std.io.Writer,
     stderr: *std.io.Writer,
     enable_ansi: bool,
+    wrap_width: ?usize,
 ) !u8 {
     if (args.len != 2) {
         try writeUsage(stderr);
@@ -25,6 +26,7 @@ pub fn runWithDir(
     try render.renderMarkdown(allocator, stdout, source, .{
         .enable_ansi = enable_ansi,
         .theme = .solarized_dark,
+        .wrap_width = wrap_width,
     });
     return 0;
 }
@@ -46,6 +48,7 @@ test "runWithDir reports usage errors" {
         &stdout.writer,
         &stderr.writer,
         false,
+        null,
     );
 
     try std.testing.expectEqual(@as(u8, 1), exit_code);
@@ -72,6 +75,7 @@ test "runWithDir reports missing files" {
         &stdout.writer,
         &stderr.writer,
         false,
+        null,
     );
 
     try std.testing.expectEqual(@as(u8, 1), exit_code);
@@ -104,6 +108,7 @@ test "runWithDir renders markdown files" {
         &stdout.writer,
         &stderr.writer,
         false,
+        null,
     );
 
     try std.testing.expectEqual(@as(u8, 0), exit_code);

@@ -16,6 +16,7 @@ const LinkDefMap = std.StringHashMapUnmanaged(LinkDef);
 pub const RenderOptions = struct {
     enable_ansi: bool = false,
     theme: theme.Theme = .solarized_dark,
+    wrap_width: ?usize = null,
 };
 
 const Fence = struct {
@@ -117,6 +118,14 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
             } else if (parseHeading(line)) |heading| {
                 try renderInline(allocator, writer, stripHardBreak(heading.content), opts.enable_ansi, headingStyle(heading.level), palette, &link_defs);
             } else if (parseBlockQuote(line)) |quote| {
+                // Try to detect a table spanning consecutive blockquote lines
+                if (std.mem.indexOfScalar(u8, quote.content, '|') != null) {
+                    if (try tryRenderBlockQuoteTable(allocator, writer, input, line_start, opts.enable_ansi, palette, &link_defs)) |new_start| {
+                        prev_was_blank = false;
+                        line_start = new_start;
+                        continue;
+                    }
+                }
                 try writeIndent(writer, quote.indent);
                 try renderBlockQuoteContent(allocator, writer, quote.content, opts.enable_ansi, palette, &link_defs);
             } else if (parseOrderedListItem(line)) |ordered| {
@@ -134,6 +143,11 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                 try renderInline(allocator, writer, stripHardBreak(ordered.content), opts.enable_ansi, .{
                     .fg = palette.body,
                 }, palette, &link_defs);
+                if (has_newline) try writer.writeByte('\n');
+                const content_col = ordered.indent + ordered.number.len + 2;
+                line_start = try consumeListContinuation(allocator, writer, input, line_end + @intFromBool(has_newline), content_col, opts.enable_ansi, palette, &link_defs);
+                prev_was_blank = false;
+                continue;
             } else if (parseListItem(line)) |item| {
                 try writeIndent(writer, item.indent);
                 var marker: [2]u8 = .{ item.marker, ' ' };
@@ -145,11 +159,32 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                 try renderInline(allocator, writer, stripHardBreak(item.content), opts.enable_ansi, .{
                     .fg = palette.body,
                 }, palette, &link_defs);
+                if (has_newline) try writer.writeByte('\n');
+                const content_col = item.indent + 2;
+                line_start = try consumeListContinuation(allocator, writer, input, line_end + @intFromBool(has_newline), content_col, opts.enable_ansi, palette, &link_defs);
+                prev_was_blank = false;
+                continue;
             } else {
                 // Plain paragraph text: strip hard break indicators
-                try renderInline(allocator, writer, stripHardBreak(line), opts.enable_ansi, .{
-                    .fg = palette.body,
-                }, palette, &link_defs);
+                if (opts.wrap_width) |wrap_w| {
+                    // Render to buffer, then wrap to terminal width
+                    var buf: std.io.Writer.Allocating = .init(allocator);
+                    defer buf.deinit();
+                    try renderInline(allocator, &buf.writer, stripHardBreak(line), opts.enable_ansi, .{
+                        .fg = palette.body,
+                    }, palette, &link_defs);
+                    var list = buf.toArrayList();
+                    defer list.deinit(allocator);
+                    const rendered = try list.toOwnedSlice(allocator);
+                    defer allocator.free(rendered);
+                    const wrapped = try width.wrapText(allocator, rendered, wrap_w);
+                    defer allocator.free(wrapped);
+                    try writer.writeAll(wrapped);
+                } else {
+                    try renderInline(allocator, writer, stripHardBreak(line), opts.enable_ansi, .{
+                        .fg = palette.body,
+                    }, palette, &link_defs);
+                }
             }
 
             // Reset blank-line flag for non-blank lines
@@ -253,6 +288,109 @@ fn tryRenderTable(
     for (body_rows.items) |row| {
         try renderTableRow(allocator, writer, row, col_widths, alignments, col_count, enable_ansi, .{
             .fg = palette.body,
+        }, palette, link_defs);
+        try writer.writeByte('\n');
+    }
+
+    return pos;
+}
+
+/// Try to detect and render a table inside consecutive blockquote lines.
+/// Returns the new line_start position if a table was rendered, or null if not a table.
+fn tryRenderBlockQuoteTable(
+    allocator: std.mem.Allocator,
+    writer: *std.io.Writer,
+    input: []const u8,
+    start_pos: usize,
+    enable_ansi: bool,
+    palette: theme.Palette,
+    link_defs: *const LinkDefMap,
+) !?usize {
+    // Parse first blockquote line (header candidate)
+    var pos = start_pos;
+    if (pos >= input.len) return null;
+    var end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
+    var has_nl = end < input.len;
+    var raw = document.trimCarriageReturn(input[pos..end]);
+    const first_bq = parseBlockQuote(raw) orelse return null;
+    if (std.mem.indexOfScalar(u8, first_bq.content, '|') == null) return null;
+    const bq_indent = first_bq.indent;
+    pos = end + @intFromBool(has_nl);
+
+    // Parse second blockquote line (delimiter candidate)
+    if (pos >= input.len) return null;
+    end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
+    has_nl = end < input.len;
+    raw = document.trimCarriageReturn(input[pos..end]);
+    const second_bq = parseBlockQuote(raw) orelse return null;
+    if (!table.isDelimiterRow(second_bq.content)) return null;
+    pos = end + @intFromBool(has_nl);
+
+    // Validate column count
+    const header_cells = try table.parseCells(allocator, first_bq.content);
+    defer allocator.free(header_cells);
+    const alignments = try table.parseAlignments(allocator, second_bq.content);
+    defer allocator.free(alignments);
+    if (header_cells.len != alignments.len) return null;
+
+    // Collect body rows from subsequent blockquote lines
+    var body_rows: std.ArrayListUnmanaged([][]const u8) = .{};
+    defer {
+        for (body_rows.items) |row| allocator.free(row);
+        body_rows.deinit(allocator);
+    }
+
+    while (pos < input.len) {
+        end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
+        has_nl = end < input.len;
+        raw = document.trimCarriageReturn(input[pos..end]);
+
+        const bq = parseBlockQuote(raw) orelse break;
+        if (isBlankLine(bq.content) or std.mem.indexOfScalar(u8, bq.content, '|') == null) break;
+        if (isBlockLevelStart(bq.content)) break;
+
+        try body_rows.append(allocator, try table.parseCells(allocator, bq.content));
+        pos = end + @intFromBool(has_nl);
+    }
+
+    const col_count = alignments.len;
+
+    // Compute column widths
+    var col_widths = try allocator.alloc(usize, col_count);
+    defer allocator.free(col_widths);
+    for (col_widths) |*w| w.* = 0;
+
+    for (0..col_count) |c| {
+        if (c < header_cells.len)
+            col_widths[c] = @max(col_widths[c], try renderedDisplayWidth(allocator, header_cells[c], palette, link_defs));
+        for (body_rows.items) |row| {
+            if (c < row.len)
+                col_widths[c] = @max(col_widths[c], try renderedDisplayWidth(allocator, row[c], palette, link_defs));
+        }
+        col_widths[c] = @max(col_widths[c], 3);
+    }
+
+    // Render header row with blockquote prefix
+    try writeIndent(writer, bq_indent);
+    try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true }, "| ");
+    try renderTableRow(allocator, writer, header_cells, col_widths, alignments, col_count, enable_ansi, .{
+        .fg = palette.muted,
+        .bold = true,
+    }, palette, link_defs);
+    try writer.writeByte('\n');
+
+    // Render separator with blockquote prefix
+    try writeIndent(writer, bq_indent);
+    try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true }, "| ");
+    try renderTableSeparator(writer, col_widths, col_count, enable_ansi, palette);
+    try writer.writeByte('\n');
+
+    // Render body rows with blockquote prefix
+    for (body_rows.items) |row| {
+        try writeIndent(writer, bq_indent);
+        try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true }, "| ");
+        try renderTableRow(allocator, writer, row, col_widths, alignments, col_count, enable_ansi, .{
+            .fg = palette.muted,
         }, palette, link_defs);
         try writer.writeByte('\n');
     }
@@ -447,6 +585,53 @@ fn parseOrderedListItem(line: []const u8) ?OrderedListItem {
         .content = checkbox.rest,
         .checked = checkbox.checked,
     };
+}
+
+/// Check if a line is a continuation of a list item.
+/// A continuation line must be non-blank, indented at least to content_col,
+/// and must not start a new block-level element.
+fn isListContinuation(line: []const u8, content_col: usize) bool {
+    if (isBlankLine(line)) return false;
+    const indent = countLeadingWhitespace(line);
+    if (indent < content_col) return false;
+    if (parseListItem(line) != null) return false;
+    if (parseOrderedListItem(line) != null) return false;
+    if (parseHeading(line) != null) return false;
+    if (parseBlockQuote(line) != null) return false;
+    if (parseFence(line) != null) return false;
+    if (isThematicBreak(line)) return false;
+    return true;
+}
+
+/// Consume and render list item continuation lines starting from start_pos.
+/// Returns the position in input after the last consumed continuation line.
+fn consumeListContinuation(
+    allocator: std.mem.Allocator,
+    writer: *std.io.Writer,
+    input: []const u8,
+    start_pos: usize,
+    content_col: usize,
+    enable_ansi: bool,
+    palette: theme.Palette,
+    link_defs: *const LinkDefMap,
+) !usize {
+    var pos = start_pos;
+    while (pos < input.len) {
+        const end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
+        const has_nl = end < input.len;
+        const raw = document.trimCarriageReturn(input[pos..end]);
+
+        if (!isListContinuation(raw, content_col)) break;
+
+        const indent = countLeadingWhitespace(raw);
+        try writeIndent(writer, content_col);
+        try renderInline(allocator, writer, stripHardBreak(raw[indent..]), enable_ansi, .{
+            .fg = palette.body,
+        }, palette, link_defs);
+        if (has_nl) try writer.writeByte('\n');
+        pos = end + @intFromBool(has_nl);
+    }
+    return pos;
 }
 
 fn renderCheckbox(
@@ -871,6 +1056,92 @@ fn extractTitle(inner: []const u8) TitleInfo {
     return .{ .url_len = inner.len, .title = null };
 }
 
+const CharClass = enum { whitespace, punctuation, other };
+
+/// Decode the codepoint immediately before byte position pos.
+/// Returns null at start of text or for malformed UTF-8.
+fn prevCodepoint(text: []const u8, pos: usize) ?u21 {
+    if (pos == 0) return null;
+    var start = pos - 1;
+    while (start > 0 and text[start] & 0xC0 == 0x80) : (start -= 1) {}
+    if (text[start] & 0xC0 == 0x80) return null;
+    const len = std.unicode.utf8ByteSequenceLength(text[start]) catch return null;
+    if (start + len != pos) return null;
+    return std.unicode.utf8Decode(text[start..][0..len]) catch null;
+}
+
+/// Decode the codepoint at byte position pos.
+/// Returns null at end of text or for malformed UTF-8.
+fn nextCodepoint(text: []const u8, pos: usize) ?u21 {
+    if (pos >= text.len) return null;
+    const len = std.unicode.utf8ByteSequenceLength(text[pos]) catch return null;
+    if (pos + len > text.len) return null;
+    return std.unicode.utf8Decode(text[pos..][0..len]) catch null;
+}
+
+/// Classify a codepoint as whitespace, punctuation, or other.
+/// null (start/end of text) is treated as whitespace per CommonMark spec.
+fn cpClass(cp: ?u21) CharClass {
+    const c = cp orelse return .whitespace;
+    // ASCII whitespace
+    if (c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == 0x0C) return .whitespace;
+    // Unicode whitespace
+    if (c == 0x00A0) return .whitespace;
+    if (c >= 0x2000 and c <= 0x200A) return .whitespace;
+    if (c == 0x202F or c == 0x205F or c == 0x3000) return .whitespace;
+    // ASCII punctuation (U+0021-002F, U+003A-0040, U+005B-0060, U+007B-007E)
+    if (c >= 0x21 and c <= 0x2F) return .punctuation;
+    if (c >= 0x3A and c <= 0x40) return .punctuation;
+    if (c >= 0x5B and c <= 0x60) return .punctuation;
+    if (c >= 0x7B and c <= 0x7E) return .punctuation;
+    // Latin-1 Supplement punctuation and symbols
+    if (c >= 0x00A1 and c <= 0x00BF) return .punctuation; // ¡ ¢ £ ¤ ¥ ... ¿
+    if (c == 0x00D7 or c == 0x00F7) return .punctuation; // × ÷
+    // General Punctuation (U+2000-206F)
+    if (c >= 0x2010 and c <= 0x2027) return .punctuation;
+    if (c >= 0x2030 and c <= 0x205E) return .punctuation;
+    // Currency Symbols
+    if (c >= 0x20A0 and c <= 0x20CF) return .punctuation;
+    // Letterlike Symbols (selected)
+    if (c >= 0x2100 and c <= 0x214F) return .punctuation;
+    // Arrows
+    if (c >= 0x2190 and c <= 0x21FF) return .punctuation;
+    // Mathematical Operators
+    if (c >= 0x2200 and c <= 0x22FF) return .punctuation;
+    // Misc Technical
+    if (c >= 0x2300 and c <= 0x23FF) return .punctuation;
+    // Box Drawing, Block Elements, Geometric Shapes
+    if (c >= 0x2500 and c <= 0x25FF) return .punctuation;
+    // Misc Symbols
+    if (c >= 0x2600 and c <= 0x26FF) return .punctuation;
+    // Supplemental Punctuation
+    if (c >= 0x2E00 and c <= 0x2E4F) return .punctuation;
+    // CJK Symbols and Punctuation
+    if (c >= 0x3001 and c <= 0x303F) return .punctuation;
+    // Fullwidth punctuation
+    if (c >= 0xFF01 and c <= 0xFF0F) return .punctuation;
+    if (c >= 0xFF1A and c <= 0xFF20) return .punctuation;
+    if (c >= 0xFF3B and c <= 0xFF3F) return .punctuation;
+    if (c >= 0xFF5B and c <= 0xFF65) return .punctuation;
+    return .other;
+}
+
+/// Check flanking status per CommonMark 6.2.
+/// Returns whether a delimiter run at the given boundaries is left-flanking and/or right-flanking.
+fn checkFlanking(before: CharClass, after: CharClass) struct { left: bool, right: bool } {
+    // Left-flanking: NOT followed by whitespace AND
+    // (NOT followed by punctuation OR preceded by whitespace or punctuation)
+    const left = after != .whitespace and
+        (after != .punctuation or before == .whitespace or before == .punctuation);
+
+    // Right-flanking: NOT preceded by whitespace AND
+    // (NOT preceded by punctuation OR followed by whitespace or punctuation)
+    const right = before != .whitespace and
+        (before != .punctuation or after == .whitespace or after == .punctuation);
+
+    return .{ .left = left, .right = right };
+}
+
 const EmphasisResult = struct {
     kind: InlineKind,
     content: []const u8,
@@ -884,14 +1155,19 @@ fn tryParseEmphasis(text: []const u8, start: usize) ?EmphasisResult {
 
     if (delim_len == 0 or delim_len > 3) return null;
 
-    // Check left-flanking: must be followed by non-whitespace
     const after_delim = start + delim_len;
     if (after_delim >= text.len) return null;
-    if (text[after_delim] == ' ' or text[after_delim] == '\t' or text[after_delim] == '\n') return null;
 
-    // For underscore: must not be preceded by alphanumeric AND followed by alphanumeric
-    // (prevents foo_bar_baz from being parsed as emphasis)
-    if (delim_char == '_' and start > 0 and std.ascii.isAlphanumeric(text[start - 1])) return null;
+    // CommonMark 6.2 flanking rules for the opening delimiter
+    const open_before = cpClass(prevCodepoint(text, start));
+    const open_after = cpClass(nextCodepoint(text, after_delim));
+    const open_flank = checkFlanking(open_before, open_after);
+
+    if (!open_flank.left) return null;
+
+    // For underscore: left-flanking opener only if NOT also right-flanking,
+    // OR preceded by punctuation
+    if (delim_char == '_' and open_flank.right and open_before != .punctuation) return null;
 
     // Find matching closing delimiter
     var pos = after_delim;
@@ -913,10 +1189,24 @@ fn tryParseEmphasis(text: []const u8, start: usize) ?EmphasisResult {
             while (pos + close_len < text.len and text[pos + close_len] == delim_char) : (close_len += 1) {}
 
             if (close_len >= delim_len) {
-                // Check right-flanking: must be preceded by non-whitespace
-                if (pos > 0 and text[pos - 1] != ' ' and text[pos - 1] != '\t' and text[pos - 1] != '\n') {
-                    // For underscore: must not be followed by alphanumeric
-                    if (delim_char == '_' and pos + close_len < text.len and std.ascii.isAlphanumeric(text[pos + close_len])) {
+                // CommonMark 6.2 flanking rules for the closing delimiter
+                const close_after_pos = pos + close_len;
+                const close_before = cpClass(prevCodepoint(text, pos));
+                const close_after = cpClass(if (close_after_pos < text.len) nextCodepoint(text, close_after_pos) else null);
+                const close_flank = checkFlanking(close_before, close_after);
+
+                if (close_flank.right) {
+                    // For underscore: right-flanking closer only if NOT also left-flanking,
+                    // OR followed by punctuation
+                    if (delim_char == '_' and close_flank.left and close_after != .punctuation) {
+                        pos += close_len;
+                        continue;
+                    }
+
+                    // Multiple-of-3 rule: if sum of run lengths is a multiple of 3,
+                    // both must individually be multiples of 3
+                    const sum = delim_len + close_len;
+                    if (sum % 3 == 0 and (delim_len % 3 != 0 or close_len % 3 != 0)) {
                         pos += close_len;
                         continue;
                     }
@@ -2510,4 +2800,241 @@ test "link definition with title" {
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "link"));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "https://example.com"));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "My Title"));
+}
+
+test "unordered list continuation line" {
+    const allocator = std.testing.allocator;
+    const source = "- first line\n  continued here\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("- first line\n  continued here\n", rendered);
+}
+
+test "unordered list multiple continuation lines" {
+    const allocator = std.testing.allocator;
+    const source = "- first\n  second\n  third\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("- first\n  second\n  third\n", rendered);
+}
+
+test "ordered list continuation line" {
+    const allocator = std.testing.allocator;
+    const source = "1. first line\n   continued here\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("1. first line\n   continued here\n", rendered);
+}
+
+test "continuation stops at unindented line" {
+    const allocator = std.testing.allocator;
+    const source = "- first\n  continued\nnot continued\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("- first\n  continued\nnot continued\n", rendered);
+}
+
+test "continuation stops at blank line" {
+    const allocator = std.testing.allocator;
+    const source = "- first\n\n  not continued\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("- first\n\n  not continued\n", rendered);
+}
+
+test "continuation stops at nested list item" {
+    const allocator = std.testing.allocator;
+    const source = "- parent\n  - child\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("- parent\n  - child\n", rendered);
+}
+
+test "ordered list multi-digit continuation" {
+    const allocator = std.testing.allocator;
+    const source = "10. first line\n    continued\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("10. first line\n    continued\n", rendered);
+}
+
+test "continuation with emphasis in continued line" {
+    const allocator = std.testing.allocator;
+    const source = "- start\n  **bold** continued\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("- start\n  bold continued\n", rendered);
+}
+
+test "table inside blockquote" {
+    const allocator = std.testing.allocator;
+    const source = "> | A | B |\n> | --- | --- |\n> | 1 | 2 |\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    // Should render as a table with blockquote prefix on each line
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "| "));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "A"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "B"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "1"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "2"));
+    // Each line should start with blockquote "| " prefix
+    var line_iter = std.mem.splitScalar(u8, std.mem.trimRight(u8, rendered, "\n"), '\n');
+    while (line_iter.next()) |line| {
+        try std.testing.expect(std.mem.startsWith(u8, line, "| "));
+    }
+}
+
+test "blockquote without table falls through to normal rendering" {
+    const allocator = std.testing.allocator;
+    const source = "> just a quote\n> another line\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("| just a quote\n| another line\n", rendered);
+}
+
+test "blockquote with pipe but no delimiter is not a table" {
+    const allocator = std.testing.allocator;
+    const source = "> a | b\n> c | d\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("| a | b\n| c | d\n", rendered);
+}
+
+test "blockquote table followed by normal blockquote" {
+    const allocator = std.testing.allocator;
+    const source = "> | A |\n> | --- |\n> | 1 |\n> normal text\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    // Table should be rendered, then normal blockquote text follows
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "A"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "1"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "normal text"));
+}
+
+test "paragraph wraps at wrap_width" {
+    const allocator = std.testing.allocator;
+    const source = "Hello World";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{ .wrap_width = 8 });
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("Hello\nWorld", rendered);
+}
+
+test "paragraph no wrap when wrap_width is null" {
+    const allocator = std.testing.allocator;
+    const source = "This is a long paragraph that should not be wrapped";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("This is a long paragraph that should not be wrapped", rendered);
+}
+
+test "heading is not wrapped" {
+    const allocator = std.testing.allocator;
+    const source = "# This is a heading that is long";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{ .wrap_width = 10 });
+    defer allocator.free(rendered);
+
+    // Heading should not be wrapped
+    try std.testing.expectEqualStrings("This is a heading that is long", rendered);
+}
+
+test "code fence content is not wrapped" {
+    const allocator = std.testing.allocator;
+    const source = "```\nThis is long code that should not wrap\n```\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{ .wrap_width = 10 });
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "This is long code that should not wrap"));
+}
+
+test "emphasis after punctuation" {
+    const allocator = std.testing.allocator;
+    // CommonMark: *foo* inside quotes should parse as emphasis
+    const source = "\"*foo*\"";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("\"foo\"", rendered);
+}
+
+test "emphasis wrapping punctuation" {
+    const allocator = std.testing.allocator;
+    const source = "*\"foo\"*";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("\"foo\"", rendered);
+}
+
+test "multiple-of-3 rule rejects *foo**" {
+    const allocator = std.testing.allocator;
+    // opener=1, closer=2: sum=3, 3%3==0, neither individually %3==0 → reject
+    const source = "*foo**";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("*foo**", rendered);
+}
+
+test "multiple-of-3 rule allows ***foo***" {
+    const allocator = std.testing.allocator;
+    // opener=3, closer=3: sum=6, 6%3==0, both%3==0 → valid
+    const source = "***foo***";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("foo", rendered);
+}
+
+test "underscore emphasis inside quotes" {
+    const allocator = std.testing.allocator;
+    const source = "\"_foo_\"";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("\"foo\"", rendered);
+}
+
+test "space before closing delimiter prevents emphasis" {
+    const allocator = std.testing.allocator;
+    const source = "*foo *";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("*foo *", rendered);
 }

@@ -3,12 +3,14 @@ const std = @import("std");
 /// Calculate the display width of a UTF-8 string in terminal columns.
 /// ASCII printable characters are width 1, CJK characters are width 2,
 /// ANSI escape sequences are width 0, control characters are width 0.
-///
-/// Known non-goals: combining characters, variation selectors, and ZWJ
-/// emoji sequences are not handled. Each codepoint is measured independently.
+/// Combining characters and variation selectors are width 0.
+/// ZWJ emoji sequences (e.g., family emoji) are counted as a single
+/// width-2 unit instead of summing each component.
 pub fn displayWidth(text: []const u8) usize {
-    var width: usize = 0;
+    var w: usize = 0;
     var i: usize = 0;
+    var suppress_next_emoji = false;
+
     while (i < text.len) {
         // Skip ANSI escape sequences (CSI: ESC [ ... final_byte)
         if (text[i] == 0x1b and i + 1 < text.len and text[i + 1] == '[') {
@@ -31,9 +33,20 @@ pub fn displayWidth(text: []const u8) usize {
         };
         i += len;
 
-        width += codepointWidth(cp);
+        // ZWJ emoji sequence: suppress width of the emoji after ZWJ
+        if (suppress_next_emoji) {
+            suppress_next_emoji = false;
+            if (isEmoji(cp)) continue;
+        }
+
+        if (cp == 0x200D) {
+            suppress_next_emoji = true;
+            continue;
+        }
+
+        w += codepointWidth(cp);
     }
-    return width;
+    return w;
 }
 
 /// Slice a string to fit within max_width display columns.
@@ -69,10 +82,234 @@ pub fn sliceToWidth(text: []const u8, max_width: usize) []const u8 {
     return text[0..i];
 }
 
+/// Like sliceToWidth but returns an allocated slice that appends an ANSI reset
+/// sequence (\x1b[0m) if the text was truncated inside an active ANSI style.
+/// This prevents style leakage into subsequent terminal output.
+pub fn sliceToWidthAlloc(allocator: std.mem.Allocator, text: []const u8, max_width: usize) ![]u8 {
+    var w: usize = 0;
+    var i: usize = 0;
+    var ansi_active = false;
+    var suppress_next_emoji = false;
+
+    while (i < text.len) {
+        if (text[i] == 0x1b and i + 1 < text.len and text[i + 1] == '[') {
+            const seq_start = i;
+            i += 2;
+            while (i < text.len and text[i] >= 0x20 and text[i] <= 0x3f) : (i += 1) {}
+            if (i < text.len) i += 1;
+            // Detect reset: \x1b[0m
+            const seq = text[seq_start..i];
+            if (seq.len == 4 and seq[2] == '0' and seq[3] == 'm') {
+                ansi_active = false;
+            } else {
+                ansi_active = true;
+            }
+            continue;
+        }
+
+        const len = std.unicode.utf8ByteSequenceLength(text[i]) catch {
+            i += 1;
+            w += 1;
+            continue;
+        };
+        if (i + len > text.len) break;
+
+        const cp = std.unicode.utf8Decode(text[i..][0..len]) catch {
+            i += 1;
+            w += 1;
+            continue;
+        };
+
+        // ZWJ emoji sequence: suppress width of the emoji after ZWJ
+        if (suppress_next_emoji) {
+            suppress_next_emoji = false;
+            if (isEmoji(cp)) {
+                i += len;
+                continue;
+            }
+        }
+
+        if (cp == 0x200D) {
+            suppress_next_emoji = true;
+            i += len;
+            continue;
+        }
+
+        const cw = codepointWidth(cp);
+        if (w + cw > max_width) break;
+        w += cw;
+        i += len;
+    }
+
+    const truncated = i < text.len;
+    if (truncated and ansi_active) {
+        const reset = "\x1b[0m";
+        var result = try allocator.alloc(u8, i + reset.len);
+        @memcpy(result[0..i], text[0..i]);
+        @memcpy(result[i..][0..reset.len], reset);
+        return result;
+    }
+    return try allocator.dupe(u8, text[0..i]);
+}
+
+/// Wrap text to fit within max_width display columns.
+/// Preserves ANSI escape sequences. Breaks at word boundaries (spaces) when possible.
+/// Falls back to hard-breaking at the column limit if no space is found.
+pub fn wrapText(allocator: std.mem.Allocator, text: []const u8, max_width: usize) ![]u8 {
+    if (max_width == 0) return try allocator.dupe(u8, text);
+
+    var result: std.ArrayListUnmanaged(u8) = .{};
+    errdefer result.deinit(allocator);
+
+    var col: usize = 0;
+    // Track the last space position in result buffer for word-wrap backtracking
+    var last_space_result: ?usize = null;
+    // Track the column width at the position just after the last space
+    var col_after_last_space: usize = 0;
+    var i: usize = 0;
+    var suppress_next_emoji = false;
+
+    while (i < text.len) {
+        // Pass through ANSI escape sequences (zero display width)
+        if (text[i] == 0x1b and i + 1 < text.len and text[i + 1] == '[') {
+            const start = i;
+            i += 2;
+            while (i < text.len and text[i] >= 0x20 and text[i] <= 0x3f) : (i += 1) {}
+            if (i < text.len) i += 1; // skip final byte
+            try result.appendSlice(allocator, text[start..i]);
+            continue;
+        }
+
+        // Existing newlines reset column tracking
+        if (text[i] == '\n') {
+            try result.append(allocator, '\n');
+            col = 0;
+            last_space_result = null;
+            suppress_next_emoji = false;
+            i += 1;
+            continue;
+        }
+
+        // Decode UTF-8 codepoint
+        const len = std.unicode.utf8ByteSequenceLength(text[i]) catch {
+            try result.append(allocator, text[i]);
+            i += 1;
+            col += 1;
+            continue;
+        };
+        if (i + len > text.len) break;
+
+        const cp = std.unicode.utf8Decode(text[i..][0..len]) catch {
+            try result.append(allocator, text[i]);
+            i += 1;
+            col += 1;
+            continue;
+        };
+
+        // ZWJ emoji sequence: pass through without counting width
+        if (suppress_next_emoji) {
+            suppress_next_emoji = false;
+            if (isEmoji(cp)) {
+                try result.appendSlice(allocator, text[i..][0..len]);
+                i += len;
+                continue;
+            }
+        }
+
+        if (cp == 0x200D) {
+            suppress_next_emoji = true;
+            try result.appendSlice(allocator, text[i..][0..len]);
+            i += len;
+            continue;
+        }
+
+        const cw = codepointWidth(cp);
+
+        // Check if adding this character would exceed the width limit
+        if (col + cw > max_width) {
+            if (text[i] == ' ') {
+                // Space at overflow boundary — use it as break point directly
+                try result.append(allocator, '\n');
+                col = 0;
+                last_space_result = null;
+                i += len;
+                continue;
+            }
+            if (last_space_result) |space_pos| {
+                // Backtrack: replace last space with newline for word-wrap
+                result.items[space_pos] = '\n';
+                col -= col_after_last_space;
+                last_space_result = null;
+            } else {
+                // No word boundary found — hard break at current position
+                try result.append(allocator, '\n');
+                col = 0;
+            }
+        }
+
+        // Track spaces as potential word-break points
+        if (text[i] == ' ') {
+            last_space_result = result.items.len;
+            try result.appendSlice(allocator, text[i..][0..len]);
+            col += cw;
+            col_after_last_space = col;
+            i += len;
+            continue;
+        }
+
+        try result.appendSlice(allocator, text[i..][0..len]);
+        col += cw;
+        i += len;
+    }
+
+    return try result.toOwnedSlice(allocator);
+}
+
+fn isEmoji(cp: u21) bool {
+    if (cp >= 0x1F300 and cp <= 0x1F9FF) return true;
+    if (cp >= 0x1FA00 and cp <= 0x1FAFF) return true;
+    if (cp >= 0x2600 and cp <= 0x26FF) return true; // Misc Symbols
+    if (cp >= 0x2700 and cp <= 0x27BF) return true; // Dingbats
+    return false;
+}
+
 fn codepointWidth(cp: u21) usize {
     // Control characters and zero-width
     if (cp < 0x20) return 0;
     if (cp == 0x7f) return 0;
+
+    // Zero-width characters
+    if (cp == 0x200B) return 0; // Zero Width Space
+    if (cp == 0x200C) return 0; // Zero Width Non-Joiner
+    if (cp == 0x200D) return 0; // Zero Width Joiner
+    if (cp == 0x2060) return 0; // Word Joiner
+    if (cp == 0xFEFF) return 0; // BOM / Zero Width No-Break Space
+    if (cp == 0x00AD) return 0; // Soft Hyphen
+
+    // Variation Selectors
+    if (cp >= 0xFE00 and cp <= 0xFE0F) return 0; // VS1-VS16
+    if (cp >= 0xE0100 and cp <= 0xE01EF) return 0; // VS17-VS256
+
+    // Combining Diacritical Marks
+    if (cp >= 0x0300 and cp <= 0x036F) return 0;
+    // Combining Diacritical Marks Extended
+    if (cp >= 0x1AB0 and cp <= 0x1AFF) return 0;
+    // Combining Diacritical Marks Supplement
+    if (cp >= 0x1DC0 and cp <= 0x1DFF) return 0;
+    // Combining Diacritical Marks for Symbols
+    if (cp >= 0x20D0 and cp <= 0x20FF) return 0;
+    // Combining Half Marks
+    if (cp >= 0xFE20 and cp <= 0xFE2F) return 0;
+    // Thai combining marks
+    if (cp >= 0x0E31 and cp <= 0x0E3A) return 0;
+    if (cp >= 0x0E47 and cp <= 0x0E4E) return 0;
+
+    // Skin tone modifiers (Fitzpatrick) — modify preceding emoji
+    if (cp >= 0x1F3FB and cp <= 0x1F3FF) return 0;
+
+    // Enclosing marks
+    if (cp >= 0x20DD and cp <= 0x20E0) return 0;
+    if (cp >= 0x20E2 and cp <= 0x20E4) return 0;
 
     // CJK Unified Ideographs
     if (cp >= 0x4E00 and cp <= 0x9FFF) return 2;
@@ -153,4 +390,131 @@ test "sliceToWidth preserves ANSI" {
 test "mixed content width" {
     // "Hello日本" = 5 + 4 = 9
     try std.testing.expectEqual(@as(usize, 9), displayWidth("Hello日本"));
+}
+
+test "combining characters are width 0" {
+    // e + combining acute accent (U+0301) → é, display width 1
+    try std.testing.expectEqual(@as(usize, 1), displayWidth("e\xCC\x81"));
+    // a + combining tilde (U+0303) → ã, display width 1
+    try std.testing.expectEqual(@as(usize, 1), displayWidth("a\xCC\x83"));
+}
+
+test "variation selectors are width 0" {
+    // ❤ (U+2764) + VS16 (U+FE0F) → ❤️
+    try std.testing.expectEqual(@as(usize, 1), displayWidth("\xE2\x9D\xA4\xEF\xB8\x8F"));
+}
+
+test "ZWJ emoji sequence counts as single emoji width" {
+    // 👨 (U+1F468) + ZWJ (U+200D) + 👩 (U+1F469) = family pair
+    // Should be width 2 (one emoji), not 4 (two emojis)
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("👨\xE2\x80\x8D👩"));
+}
+
+test "skin tone modifier is width 0" {
+    // 👋 (U+1F44B) + skin tone (U+1F3FD) → 👋🏽
+    // Should be width 2 (base emoji only)
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("👋🏽"));
+}
+
+test "zero width joiner alone is width 0" {
+    try std.testing.expectEqual(@as(usize, 0), displayWidth("\xE2\x80\x8D"));
+}
+
+test "ZWSP and BOM are width 0" {
+    // Zero Width Space (U+200B)
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("a\xE2\x80\x8Bb"));
+    // BOM (U+FEFF)
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("\xEF\xBB\xBFab"));
+}
+
+test "wrapText basic word wrap" {
+    const allocator = std.testing.allocator;
+    const result = try wrapText(allocator, "Hello World", 8);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("Hello\nWorld", result);
+}
+
+test "wrapText exact fit no wrap" {
+    const allocator = std.testing.allocator;
+    const result = try wrapText(allocator, "Hello", 5);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("Hello", result);
+}
+
+test "wrapText multiple words" {
+    const allocator = std.testing.allocator;
+    const result = try wrapText(allocator, "A B C D E F", 5);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("A B C\nD E F", result);
+}
+
+test "wrapText hard break on long word" {
+    const allocator = std.testing.allocator;
+    const result = try wrapText(allocator, "ABCDEFGHIJ", 5);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("ABCDE\nFGHIJ", result);
+}
+
+test "wrapText preserves ANSI codes" {
+    const allocator = std.testing.allocator;
+    const result = try wrapText(allocator, "\x1b[1mHello World\x1b[0m", 8);
+    defer allocator.free(result);
+    // ANSI codes should pass through, wrap happens at word boundary
+    try std.testing.expectEqualStrings("\x1b[1mHello\nWorld\x1b[0m", result);
+}
+
+test "wrapText preserves existing newlines" {
+    const allocator = std.testing.allocator;
+    const result = try wrapText(allocator, "Line one\nLine two", 20);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("Line one\nLine two", result);
+}
+
+test "wrapText CJK characters" {
+    const allocator = std.testing.allocator;
+    // "日本語" = 6 display columns, max_width=5 means hard break after 2 chars (4 cols)
+    const result = try wrapText(allocator, "日本語", 5);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("日本\n語", result);
+}
+
+test "wrapText zero width returns copy" {
+    const allocator = std.testing.allocator;
+    const result = try wrapText(allocator, "Hello", 0);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("Hello", result);
+}
+
+test "sliceToWidthAlloc appends reset when truncating styled text" {
+    const allocator = std.testing.allocator;
+    const text = "\x1b[1mbold text\x1b[0m";
+    const result = try sliceToWidthAlloc(allocator, text, 4);
+    defer allocator.free(result);
+    // Should include the style start + truncated text + reset
+    try std.testing.expectEqualStrings("\x1b[1mbold\x1b[0m", result);
+}
+
+test "sliceToWidthAlloc no reset when not truncated" {
+    const allocator = std.testing.allocator;
+    const text = "\x1b[1mhi\x1b[0m";
+    const result = try sliceToWidthAlloc(allocator, text, 10);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("\x1b[1mhi\x1b[0m", result);
+}
+
+test "sliceToWidthAlloc no reset for plain text" {
+    const allocator = std.testing.allocator;
+    const result = try sliceToWidthAlloc(allocator, "hello world", 5);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("hello", result);
+}
+
+test "sliceToWidthAlloc with multiple styles" {
+    const allocator = std.testing.allocator;
+    const text = "\x1b[1mbold\x1b[0m \x1b[3mitalic\x1b[0m";
+    // Truncate inside "italic" region
+    const result = try sliceToWidthAlloc(allocator, text, 7);
+    defer allocator.free(result);
+    // "bold" (4) + " " (1) + "it" (2) = 7; italic style is open
+    try std.testing.expectEqualStrings("\x1b[1mbold\x1b[0m \x1b[3mit\x1b[0m", result);
 }

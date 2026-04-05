@@ -6,6 +6,16 @@ pub const renderMarkdown = @import("render.zig").renderMarkdown;
 
 const cli = @import("cli.zig");
 
+/// Detect terminal column width via ioctl. Returns null on failure.
+fn getTerminalWidth(handle: std.posix.fd_t) ?usize {
+    var winsize: std.posix.winsize = .{ .row = 0, .col = 0, .xpixel = 0, .ypixel = 0 };
+    const err = std.posix.system.ioctl(handle, std.posix.T.IOCGWINSZ, @intFromPtr(&winsize));
+    if (std.posix.errno(err) == .SUCCESS and winsize.col > 0) {
+        return @intCast(winsize.col);
+    }
+    return null;
+}
+
 pub fn run(allocator: std.mem.Allocator, args: []const []const u8) !u8 {
     const stdout_file = std.fs.File.stdout();
     const stderr_file = std.fs.File.stderr();
@@ -20,6 +30,8 @@ pub fn run(allocator: std.mem.Allocator, args: []const []const u8) !u8 {
         .no_color => false,
     };
 
+    const wrap_width = if (enable_ansi) getTerminalWidth(stdout_file.handle) else null;
+
     const exit_code = cli.runWithDir(
         allocator,
         std.fs.cwd(),
@@ -27,6 +39,7 @@ pub fn run(allocator: std.mem.Allocator, args: []const []const u8) !u8 {
         &stdout_stream.interface,
         &stderr_stream.interface,
         enable_ansi,
+        wrap_width,
     ) catch |err| return unwrapWriteError(err, &stdout_stream, &stderr_stream);
 
     stdout_stream.interface.flush() catch |err| return unwrapWriteError(err, &stdout_stream, &stderr_stream);
