@@ -26,7 +26,7 @@ pub fn decode(text: []const u8, start: usize) ?DecodeResult {
     }
 
     // Named entity lookup
-    if (lookupNamed(entity_body)) |codepoint| {
+    if (named_entities.get(entity_body)) |codepoint| {
         var buf: [4]u8 = undefined;
         const len = std.unicode.utf8Encode(codepoint, &buf) catch return null;
         return .{ .bytes = buf, .len = len, .end = semi_pos + 1 };
@@ -73,80 +73,71 @@ fn decodeNumeric(body: []const u8, end: usize) ?DecodeResult {
     return .{ .bytes = buf, .len = len, .end = end };
 }
 
-/// Lookup table for common named HTML entities.
-/// Covers the most frequently used entities in Markdown documentation.
-fn lookupNamed(name: []const u8) ?u21 {
-    const entries = .{
-        // XML predefined entities
-        .{ "amp", '&' },
-        .{ "lt", '<' },
-        .{ "gt", '>' },
-        .{ "quot", '"' },
-        .{ "apos", '\'' },
-        // Non-breaking space
-        .{ "nbsp", 0xA0 },
-        // Typographic symbols
-        .{ "copy", 0xA9 },
-        .{ "reg", 0xAE },
-        .{ "trade", 0x2122 },
-        .{ "mdash", 0x2014 },
-        .{ "ndash", 0x2013 },
-        .{ "lsquo", 0x2018 },
-        .{ "rsquo", 0x2019 },
-        .{ "ldquo", 0x201C },
-        .{ "rdquo", 0x201D },
-        .{ "bull", 0x2022 },
-        .{ "hellip", 0x2026 },
-        .{ "prime", 0x2032 },
-        .{ "Prime", 0x2033 },
-        .{ "laquo", 0xAB },
-        .{ "raquo", 0xBB },
-        // Mathematical symbols
-        .{ "times", 0xD7 },
-        .{ "divide", 0xF7 },
-        .{ "plusmn", 0xB1 },
-        .{ "minus", 0x2212 },
-        .{ "le", 0x2264 },
-        .{ "ge", 0x2265 },
-        .{ "ne", 0x2260 },
-        .{ "asymp", 0x2248 },
-        .{ "infin", 0x221E },
-        .{ "sum", 0x2211 },
-        .{ "prod", 0x220F },
-        .{ "radic", 0x221A },
-        // Greek letters (commonly used in docs)
-        .{ "alpha", 0x03B1 },
-        .{ "beta", 0x03B2 },
-        .{ "gamma", 0x03B3 },
-        .{ "delta", 0x03B4 },
-        .{ "epsilon", 0x03B5 },
-        .{ "lambda", 0x03BB },
-        .{ "mu", 0x03BC },
-        .{ "pi", 0x03C0 },
-        .{ "sigma", 0x03C3 },
-        .{ "omega", 0x03C9 },
-        // Arrows
-        .{ "larr", 0x2190 },
-        .{ "uarr", 0x2191 },
-        .{ "rarr", 0x2192 },
-        .{ "darr", 0x2193 },
-        // Miscellaneous
-        .{ "deg", 0xB0 },
-        .{ "cent", 0xA2 },
-        .{ "pound", 0xA3 },
-        .{ "euro", 0x20AC },
-        .{ "yen", 0xA5 },
-        .{ "sect", 0xA7 },
-        .{ "para", 0xB6 },
-        .{ "dagger", 0x2020 },
-        .{ "Dagger", 0x2021 },
-    };
-
-    inline for (entries) |entry| {
-        if (std.mem.eql(u8, name, entry[0])) return entry[1];
-    }
-    return null;
-}
+const named_entities = std.StaticStringMap(u21).initComptime(.{
+    // XML predefined entities
+    .{ "amp", '&' },
+    .{ "lt", '<' },
+    .{ "gt", '>' },
+    .{ "quot", '"' },
+    .{ "apos", '\'' },
+    // Non-breaking space
+    .{ "nbsp", 0xA0 },
+    // Typographic symbols
+    .{ "copy", 0xA9 },
+    .{ "reg", 0xAE },
+    .{ "trade", 0x2122 },
+    .{ "mdash", 0x2014 },
+    .{ "ndash", 0x2013 },
+    .{ "lsquo", 0x2018 },
+    .{ "rsquo", 0x2019 },
+    .{ "ldquo", 0x201C },
+    .{ "rdquo", 0x201D },
+    .{ "bull", 0x2022 },
+    .{ "hellip", 0x2026 },
+    .{ "prime", 0x2032 },
+    .{ "Prime", 0x2033 },
+    .{ "laquo", 0xAB },
+    .{ "raquo", 0xBB },
+    // Mathematical symbols
+    .{ "times", 0xD7 },
+    .{ "divide", 0xF7 },
+    .{ "plusmn", 0xB1 },
+    .{ "minus", 0x2212 },
+    .{ "le", 0x2264 },
+    .{ "ge", 0x2265 },
+    .{ "ne", 0x2260 },
+    .{ "asymp", 0x2248 },
+    .{ "infin", 0x221E },
+    .{ "sum", 0x2211 },
+    .{ "prod", 0x220F },
+    .{ "radic", 0x221A },
+    // Greek letters (commonly used in docs)
+    .{ "alpha", 0x03B1 },
+    .{ "beta", 0x03B2 },
+    .{ "gamma", 0x03B3 },
+    .{ "delta", 0x03B4 },
+    .{ "epsilon", 0x03B5 },
+    .{ "lambda", 0x03BB },
+    .{ "mu", 0x03BC },
+    .{ "pi", 0x03C0 },
+    .{ "sigma", 0x03C3 },
+    .{ "omega", 0x03C9 },
+    // Arrows
+    .{ "larr", 0x2190 },
+    .{ "uarr", 0x2191 },
+    .{ "rarr", 0x2192 },
+    .{ "darr", 0x2193 },
+    // Miscellaneous
+    .{ "deg", 0xB0 },
+    .{ "cent", 0xA2 },
+    .{ "pound", 0xA3 },
+    .{ "euro", 0x20AC },
+    .{ "yen", 0xA5 },
+    .{ "sect", 0xA7 },
+    .{ "para", 0xB6 },
+    .{ "dagger", 0x2020 },
+    .{ "Dagger", 0x2021 },
+});
 
 test "decode named entity &amp;" {
     const result = decode("&amp;", 0).?;
