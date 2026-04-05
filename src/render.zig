@@ -11,6 +11,7 @@ pub const RenderOptions = struct {
 const Fence = struct {
     fence_char: u8,
     fence_len: usize,
+    language: []const u8,
 };
 
 const Heading = struct {
@@ -22,6 +23,15 @@ const ListItem = struct {
     indent: usize,
     marker: u8,
     content: []const u8,
+    checked: ?bool = null,
+};
+
+const OrderedListItem = struct {
+    indent: usize,
+    number: []const u8,
+    marker: u8,
+    content: []const u8,
+    checked: ?bool = null,
 };
 
 const BlockQuote = struct {
@@ -29,7 +39,7 @@ const BlockQuote = struct {
     content: []const u8,
 };
 
-pub fn renderMarkdown(writer: *std.io.Writer, input: []const u8, opts: RenderOptions) !void {
+pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, input: []const u8, opts: RenderOptions) !void {
     if (input.len == 0) return;
 
     const palette = theme.palette(opts.theme);
@@ -65,10 +75,25 @@ pub fn renderMarkdown(writer: *std.io.Writer, input: []const u8, opts: RenderOpt
                 .dim = true,
             });
         } else if (parseHeading(line)) |heading| {
-            try renderInline(writer, heading.content, opts.enable_ansi, headingStyle(heading.level), palette);
+            try renderInline(allocator, writer, heading.content, opts.enable_ansi, headingStyle(heading.level), palette);
         } else if (parseBlockQuote(line)) |quote| {
             try writeIndent(writer, quote.indent);
-            try renderBlockQuoteContent(writer, quote.content, opts.enable_ansi, palette);
+            try renderBlockQuoteContent(allocator, writer, quote.content, opts.enable_ansi, palette);
+        } else if (parseOrderedListItem(line)) |ordered| {
+            try writeIndent(writer, ordered.indent);
+            try ansi.writeStyled(writer, opts.enable_ansi, .{
+                .fg = palette.list_marker,
+                .bold = true,
+            }, ordered.number);
+            const marker_buf: [2]u8 = .{ ordered.marker, ' ' };
+            try ansi.writeStyled(writer, opts.enable_ansi, .{
+                .fg = palette.list_marker,
+                .bold = true,
+            }, &marker_buf);
+            try renderCheckbox(writer, ordered.checked, opts.enable_ansi, palette);
+            try renderInline(allocator, writer, ordered.content, opts.enable_ansi, .{
+                .fg = palette.body,
+            }, palette);
         } else if (parseListItem(line)) |item| {
             try writeIndent(writer, item.indent);
             var marker: [2]u8 = .{ item.marker, ' ' };
@@ -76,11 +101,12 @@ pub fn renderMarkdown(writer: *std.io.Writer, input: []const u8, opts: RenderOpt
                 .fg = palette.list_marker,
                 .bold = true,
             }, &marker);
-            try renderInline(writer, item.content, opts.enable_ansi, .{
+            try renderCheckbox(writer, item.checked, opts.enable_ansi, palette);
+            try renderInline(allocator, writer, item.content, opts.enable_ansi, .{
                 .fg = palette.body,
             }, palette);
         } else {
-            try renderInline(writer, line, opts.enable_ansi, .{
+            try renderInline(allocator, writer, line, opts.enable_ansi, .{
                 .fg = palette.body,
             }, palette);
         }
@@ -138,14 +164,81 @@ fn parseListItem(line: []const u8) ?ListItem {
     var content_index = indent + 1;
     while (content_index < line.len and (line[content_index] == ' ' or line[content_index] == '\t')) : (content_index += 1) {}
 
+    const checkbox = parseCheckbox(line[content_index..]);
     return .{
         .indent = indent,
         .marker = marker,
-        .content = line[content_index..],
+        .content = checkbox.rest,
+        .checked = checkbox.checked,
     };
 }
 
+fn parseCheckbox(content: []const u8) struct { checked: ?bool, rest: []const u8 } {
+    if (content.len >= 4 and content[0] == '[' and content[2] == ']' and
+        (content[3] == ' ' or content[3] == '\t'))
+    {
+        if (content[1] == 'x' or content[1] == 'X') {
+            return .{ .checked = true, .rest = content[4..] };
+        } else if (content[1] == ' ' or content[1] == '\t') {
+            return .{ .checked = false, .rest = content[4..] };
+        }
+    }
+    return .{ .checked = null, .rest = content };
+}
+
+fn parseOrderedListItem(line: []const u8) ?OrderedListItem {
+    const indent = countLeadingWhitespace(line);
+    if (indent >= line.len) return null;
+
+    const digit_start = indent;
+    var digit_end = digit_start;
+    while (digit_end < line.len and line[digit_end] >= '0' and line[digit_end] <= '9') : (digit_end += 1) {}
+
+    const digit_count = digit_end - digit_start;
+    if (digit_count == 0 or digit_count > 9) return null;
+
+    if (digit_end >= line.len) return null;
+    const marker = line[digit_end];
+    if (marker != '.' and marker != ')') return null;
+
+    // Allow empty ordered items (e.g., "2." at end of line)
+    if (digit_end + 1 < line.len and line[digit_end + 1] != ' ' and line[digit_end + 1] != '\t') return null;
+
+    var content_index = digit_end + 1;
+    while (content_index < line.len and (line[content_index] == ' ' or line[content_index] == '\t')) : (content_index += 1) {}
+
+    const checkbox = parseCheckbox(line[content_index..]);
+    return .{
+        .indent = indent,
+        .number = line[digit_start..digit_end],
+        .marker = marker,
+        .content = checkbox.rest,
+        .checked = checkbox.checked,
+    };
+}
+
+fn renderCheckbox(
+    writer: *std.io.Writer,
+    checked: ?bool,
+    enable_ansi: bool,
+    palette: theme.Palette,
+) !void {
+    if (checked) |is_checked| {
+        if (is_checked) {
+            try ansi.writeStyled(writer, enable_ansi, .{
+                .fg = palette.list_marker,
+            }, "[x] ");
+        } else {
+            try ansi.writeStyled(writer, enable_ansi, .{
+                .fg = palette.muted,
+                .dim = true,
+            }, "[ ] ");
+        }
+    }
+}
+
 fn renderBlockQuoteContent(
+    allocator: std.mem.Allocator,
     writer: *std.io.Writer,
     content: []const u8,
     enable_ansi: bool,
@@ -158,9 +251,9 @@ fn renderBlockQuoteContent(
 
     if (parseBlockQuote(content)) |nested| {
         try writeIndent(writer, nested.indent);
-        try renderBlockQuoteContent(writer, nested.content, enable_ansi, palette);
+        try renderBlockQuoteContent(allocator, writer, nested.content, enable_ansi, palette);
     } else {
-        try renderInline(writer, content, enable_ansi, .{
+        try renderInline(allocator, writer, content, enable_ansi, .{
             .fg = palette.muted,
         }, palette);
     }
@@ -189,9 +282,16 @@ fn parseFence(line: []const u8) ?Fence {
     const fence_len = countRepeatedByte(line[index..], fence_char);
     if (fence_len < 3) return null;
 
+    // Extract language info string: first token after fence chars, trimmed
+    const info_start = index + fence_len;
+    const info = std.mem.trim(u8, line[info_start..], " \t");
+    // Language is the first word (up to first space)
+    const lang_end = std.mem.indexOfAny(u8, info, " \t") orelse info.len;
+
     return .{
         .fence_char = fence_char,
         .fence_len = fence_len,
+        .language = info[0..lang_end],
     };
 }
 
@@ -227,49 +327,149 @@ fn isThematicBreak(line: []const u8) bool {
     return marker_count >= 3;
 }
 
+const InlineKind = enum { text, code_span, link_text, link_url, emphasis, strong, bold_italic, strikethrough };
+
+const InlineSegment = struct {
+    kind: InlineKind,
+    content: []const u8,
+};
+
 fn renderInline(
+    allocator: std.mem.Allocator,
     writer: *std.io.Writer,
     text: []const u8,
     enable_ansi: bool,
     base_style: ansi.TextStyle,
     palette: theme.Palette,
 ) !void {
-    var index: usize = 0;
-    while (index < text.len) {
-        if (text[index] == '`') {
-            if (std.mem.indexOfScalarPos(u8, text, index + 1, '`')) |end| {
-                try ansi.writeStyled(writer, enable_ansi, .{
-                    .fg = palette.inline_code,
-                }, text[index .. end + 1]);
-                index = end + 1;
-                continue;
-            }
-            try ansi.writeStyled(writer, enable_ansi, base_style, text[index .. index + 1]);
-            index += 1;
-            continue;
-        }
+    var segments: std.ArrayListUnmanaged(InlineSegment) = .{};
+    defer segments.deinit(allocator);
 
-        if (text[index] == '[') {
-            if (findSimpleLinkEnd(text, index)) |end| {
-                try ansi.writeStyled(writer, enable_ansi, .{
-                    .fg = palette.link,
-                    .underline = true,
-                }, text[index..end]);
-                index = end;
-                continue;
-            }
-            try ansi.writeStyled(writer, enable_ansi, base_style, text[index .. index + 1]);
-            index += 1;
-            continue;
-        }
+    try parseInlineSegments(allocator, text, &segments);
 
-        const next_special = findNextSpecial(text, index + 1) orelse text.len;
-        try ansi.writeStyled(writer, enable_ansi, base_style, text[index..next_special]);
-        index = next_special;
+    for (segments.items) |seg| {
+        switch (seg.kind) {
+            .text => try ansi.writeStyled(writer, enable_ansi, base_style, seg.content),
+            .code_span => try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.inline_code }, seg.content),
+            .link_text => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .fg = palette.link, .underline = true }), palette),
+            .link_url => try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true }, seg.content),
+            .emphasis => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .italic = true }), palette),
+            .strong => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .bold = true }), palette),
+            .bold_italic => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .bold = true, .italic = true }), palette),
+            .strikethrough => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .strikethrough = true }), palette),
+        }
     }
 }
 
-fn findSimpleLinkEnd(text: []const u8, start: usize) ?usize {
+fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segments: *std.ArrayListUnmanaged(InlineSegment)) !void {
+    var index: usize = 0;
+    var plain_start: usize = 0;
+
+    while (index < text.len) {
+        switch (text[index]) {
+            '\\' => {
+                // Backslash escape: consume the backslash, keep the next char as literal
+                if (index + 1 < text.len and isEscapable(text[index + 1])) {
+                    // Flush text before the backslash
+                    if (plain_start < index)
+                        try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
+                    // Emit the escaped character as plain text (skip the backslash)
+                    try segments.append(allocator, .{ .kind = .text, .content = text[index + 1 .. index + 2] });
+                    index += 2;
+                    plain_start = index;
+                    continue;
+                }
+                index += 1;
+            },
+            '`' => {
+                if (findCodeSpanEnd(text, index)) |end| {
+                    if (plain_start < index)
+                        try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
+                    try segments.append(allocator, .{ .kind = .code_span, .content = text[index .. end + 1] });
+                    index = end + 1;
+                    plain_start = index;
+                    continue;
+                }
+                index += 1;
+            },
+            '[' => {
+                if (findLinkParts(text, index)) |link| {
+                    if (plain_start < index)
+                        try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
+                    try segments.append(allocator, .{ .kind = .link_text, .content = text[link.text_start..link.text_end] });
+                    try segments.append(allocator, .{ .kind = .link_url, .content = text[link.url_start..link.url_end] });
+                    index = link.full_end;
+                    plain_start = index;
+                    continue;
+                }
+                index += 1;
+            },
+            '*', '_' => {
+                if (tryParseEmphasis(text, index)) |em| {
+                    if (plain_start < index)
+                        try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
+                    try segments.append(allocator, .{ .kind = em.kind, .content = em.content });
+                    index = em.end;
+                    plain_start = index;
+                    continue;
+                }
+                index += 1;
+            },
+            '~' => {
+                if (tryParseStrikethrough(text, index)) |st| {
+                    if (plain_start < index)
+                        try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
+                    try segments.append(allocator, .{ .kind = .strikethrough, .content = st.content });
+                    index = st.end;
+                    plain_start = index;
+                    continue;
+                }
+                index += 1;
+            },
+            else => {
+                index += 1;
+            },
+        }
+    }
+
+    if (plain_start < text.len)
+        try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..] });
+}
+
+/// Find end of a code span. Matches opening backtick run length per CommonMark.
+/// Returns the index of the last backtick in the closing run.
+fn findCodeSpanEnd(text: []const u8, start: usize) ?usize {
+    // Count opening backtick run
+    var open_len: usize = 0;
+    while (start + open_len < text.len and text[start + open_len] == '`') : (open_len += 1) {}
+    if (open_len == 0) return null;
+
+    // Find matching closing run of same length
+    var pos = start + open_len;
+    while (pos < text.len) {
+        if (text[pos] == '`') {
+            var close_len: usize = 0;
+            while (pos + close_len < text.len and text[pos + close_len] == '`') : (close_len += 1) {}
+            if (close_len == open_len) {
+                return pos + close_len - 1;
+            }
+            pos += close_len;
+        } else {
+            pos += 1;
+        }
+    }
+    return null;
+}
+
+const LinkParts = struct {
+    text_start: usize,
+    text_end: usize,
+    url_start: usize,
+    url_end: usize,
+    full_end: usize,
+};
+
+fn findLinkParts(text: []const u8, start: usize) ?LinkParts {
     const close_bracket = std.mem.indexOfScalarPos(u8, text, start + 1, ']') orelse return null;
     if (close_bracket + 1 >= text.len or text[close_bracket + 1] != '(') return null;
 
@@ -280,7 +480,15 @@ fn findSimpleLinkEnd(text: []const u8, start: usize) ?usize {
             '(' => depth += 1,
             ')' => {
                 depth -= 1;
-                if (depth == 0) return pos + 1;
+                if (depth == 0) {
+                    return .{
+                        .text_start = start + 1,
+                        .text_end = close_bracket,
+                        .url_start = close_bracket + 1,
+                        .url_end = pos + 1,
+                        .full_end = pos + 1,
+                    };
+                }
             },
             else => {},
         }
@@ -288,16 +496,135 @@ fn findSimpleLinkEnd(text: []const u8, start: usize) ?usize {
     return null;
 }
 
-fn findNextSpecial(text: []const u8, start: usize) ?usize {
-    const backtick = std.mem.indexOfScalarPos(u8, text, start, '`');
-    const bracket = std.mem.indexOfScalarPos(u8, text, start, '[');
+const EmphasisResult = struct {
+    kind: InlineKind,
+    content: []const u8,
+    end: usize,
+};
 
-    return switch (backtick != null) {
-        true => switch (bracket != null) {
-            true => @min(backtick.?, bracket.?),
-            false => backtick,
-        },
-        false => bracket,
+fn tryParseEmphasis(text: []const u8, start: usize) ?EmphasisResult {
+    const delim_char = text[start];
+    var delim_len: usize = 0;
+    while (start + delim_len < text.len and text[start + delim_len] == delim_char) : (delim_len += 1) {}
+
+    if (delim_len == 0 or delim_len > 3) return null;
+
+    // Check left-flanking: must be followed by non-whitespace
+    const after_delim = start + delim_len;
+    if (after_delim >= text.len) return null;
+    if (text[after_delim] == ' ' or text[after_delim] == '\t' or text[after_delim] == '\n') return null;
+
+    // For underscore: must not be preceded by alphanumeric AND followed by alphanumeric
+    // (prevents foo_bar_baz from being parsed as emphasis)
+    if (delim_char == '_' and start > 0 and std.ascii.isAlphanumeric(text[start - 1])) return null;
+
+    // Find matching closing delimiter
+    var pos = after_delim;
+    while (pos < text.len) {
+        // Skip backslash-escaped characters
+        if (text[pos] == '\\' and pos + 1 < text.len and isEscapable(text[pos + 1])) {
+            pos += 2;
+            continue;
+        }
+        // Skip code spans inside emphasis
+        if (text[pos] == '`') {
+            if (findCodeSpanEnd(text, pos)) |code_end| {
+                pos = code_end + 1;
+                continue;
+            }
+        }
+        if (text[pos] == delim_char) {
+            var close_len: usize = 0;
+            while (pos + close_len < text.len and text[pos + close_len] == delim_char) : (close_len += 1) {}
+
+            if (close_len >= delim_len) {
+                // Check right-flanking: must be preceded by non-whitespace
+                if (pos > 0 and text[pos - 1] != ' ' and text[pos - 1] != '\t' and text[pos - 1] != '\n') {
+                    // For underscore: must not be followed by alphanumeric
+                    if (delim_char == '_' and pos + close_len < text.len and std.ascii.isAlphanumeric(text[pos + close_len])) {
+                        pos += close_len;
+                        continue;
+                    }
+
+                    const content = text[after_delim..pos];
+                    if (content.len == 0) {
+                        pos += close_len;
+                        continue;
+                    }
+
+                    const kind: InlineKind = if (delim_len >= 3)
+                        .bold_italic
+                    else if (delim_len == 2)
+                        .strong
+                    else
+                        .emphasis;
+
+                    return .{
+                        .kind = kind,
+                        .content = content,
+                        .end = pos + delim_len,
+                    };
+                }
+            }
+            pos += close_len;
+        } else {
+            pos += 1;
+        }
+    }
+    return null;
+}
+
+const StrikethroughResult = struct {
+    content: []const u8,
+    end: usize,
+};
+
+fn tryParseStrikethrough(text: []const u8, start: usize) ?StrikethroughResult {
+    var delim_len: usize = 0;
+    while (start + delim_len < text.len and text[start + delim_len] == '~') : (delim_len += 1) {}
+
+    if (delim_len < 1 or delim_len > 2) return null;
+
+    const after_delim = start + delim_len;
+    if (after_delim >= text.len) return null;
+    if (text[after_delim] == ' ' or text[after_delim] == '\t') return null;
+
+    // Find matching closing tildes
+    var pos = after_delim;
+    while (pos < text.len) {
+        // Skip backslash-escaped characters
+        if (text[pos] == '\\' and pos + 1 < text.len and isEscapable(text[pos + 1])) {
+            pos += 2;
+            continue;
+        }
+        if (text[pos] == '~') {
+            var close_len: usize = 0;
+            while (pos + close_len < text.len and text[pos + close_len] == '~') : (close_len += 1) {}
+
+            if (close_len >= delim_len and pos > after_delim) {
+                if (text[pos - 1] != ' ' and text[pos - 1] != '\t') {
+                    return .{
+                        .content = text[after_delim..pos],
+                        .end = pos + delim_len,
+                    };
+                }
+            }
+            pos += close_len;
+        } else {
+            pos += 1;
+        }
+    }
+    return null;
+}
+
+/// CommonMark 2.4: ASCII punctuation characters can be backslash-escaped.
+fn isEscapable(c: u8) bool {
+    return switch (c) {
+        '!', '"', '#', '$', '%', '&', '\'', '(', ')', '*', '+', ',', '-', '.', '/' => true,
+        ':', ';', '<', '=', '>', '?', '@' => true,
+        '[', '\\', ']', '^', '_', '`' => true,
+        '{', '|', '}', '~' => true,
+        else => false,
     };
 }
 
@@ -354,7 +681,7 @@ fn renderToOwnedSlice(
     var output: std.io.Writer.Allocating = .init(allocator);
     defer output.deinit();
 
-    try renderMarkdown(&output.writer, input, opts);
+    try renderMarkdown(allocator, &output.writer, input, opts);
     var list = output.toArrayList();
     return list.toOwnedSlice(allocator);
 }
@@ -381,7 +708,7 @@ test "renderMarkdown strips heading markers and preserves structure" {
         \\
         \\- item
         \\| quoted
-        \\[link](https://example.com)
+        \\link(https://example.com)
         \\```zig
         \\const value = 1;
         \\```
@@ -403,21 +730,23 @@ test "renderMarkdown emits Solarized Dark ANSI styling for headings and links" {
     });
     defer allocator.free(rendered);
 
+    // link text: underline + link color; URL: dim + muted color
     try std.testing.expectEqualStrings(
         "\x1b[1m\x1b[4m\x1b[38;2;181;137;0mTitle\x1b[0m\n" ++
-            "\x1b[4m\x1b[38;2;108;113;196m[link](https://example.com)\x1b[0m",
+            "\x1b[4m\x1b[38;2;108;113;196mlink\x1b[0m" ++
+            "\x1b[2m\x1b[38;2;88;110;117m(https://example.com)\x1b[0m",
         rendered,
     );
 }
 
-test "findSimpleLinkEnd handles parentheses inside URLs" {
+test "link with parentheses inside URL renders semantically" {
     const allocator = std.testing.allocator;
     const source = "[wiki](https://en.wikipedia.org/wiki/Foo_(bar))";
 
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings(source, rendered);
+    try std.testing.expectEqualStrings("wiki(https://en.wikipedia.org/wiki/Foo_(bar))", rendered);
 }
 
 test "nested blockquotes render with multiple pipe markers" {
@@ -453,6 +782,173 @@ test "heading levels produce different ANSI styles" {
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[2m\x1b[38;2;108;113;196mH6\x1b[0m"));
 }
 
+test "ordered list items are rendered with number markers" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\1. First item
+        \\2. Second item
+        \\3. Third item
+        \\
+    ;
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        \\1. First item
+        \\2. Second item
+        \\3. Third item
+        \\
+    ,
+        rendered,
+    );
+}
+
+test "ordered list with closing paren marker" {
+    const allocator = std.testing.allocator;
+    const source = "1) Item one\n2) Item two\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("1) Item one\n2) Item two\n", rendered);
+}
+
+test "ordered list with indentation" {
+    const allocator = std.testing.allocator;
+    const source = "  1. Indented ordered item\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("  1. Indented ordered item\n", rendered);
+}
+
+test "ordered list with multi-digit numbers" {
+    const allocator = std.testing.allocator;
+    const source = "10. Tenth item\n999999999. Max digits\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("10. Tenth item\n999999999. Max digits\n", rendered);
+}
+
+test "ordered list rejects more than 9 digits" {
+    const allocator = std.testing.allocator;
+    const source = "1234567890. Too many digits\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    // Should be rendered as plain text, not as an ordered list
+    try std.testing.expectEqualStrings("1234567890. Too many digits\n", rendered);
+}
+
+test "ordered list items get ANSI styling" {
+    const allocator = std.testing.allocator;
+    const source = "1. Styled item\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{
+        .enable_ansi = true,
+    });
+    defer allocator.free(rendered);
+
+    // Number marker should have list_marker color (teal: 42, 161, 152) + bold
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[1m\x1b[38;2;42;161;152m1"));
+    // Content should have body color
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "Styled item"));
+}
+
+test "task list items render checkbox indicators" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\- [x] Completed task
+        \\- [ ] Incomplete task
+        \\- Regular item
+        \\
+    ;
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        \\- [x] Completed task
+        \\- [ ] Incomplete task
+        \\- Regular item
+        \\
+    ,
+        rendered,
+    );
+}
+
+test "task list with uppercase X" {
+    const allocator = std.testing.allocator;
+    const source = "- [X] Done\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("- [x] Done\n", rendered);
+}
+
+test "ordered task list items" {
+    const allocator = std.testing.allocator;
+    const source = "1. [x] First done\n2. [ ] Second pending\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("1. [x] First done\n2. [ ] Second pending\n", rendered);
+}
+
+test "task list items get ANSI styling" {
+    const allocator = std.testing.allocator;
+    const source = "- [x] Done\n- [ ] Todo\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{
+        .enable_ansi = true,
+    });
+    defer allocator.free(rendered);
+
+    // Checked: [x] should have list_marker color (teal: 42, 161, 152)
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[38;2;42;161;152m[x] "));
+    // Unchecked: [ ] should have muted + dim
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[2m\x1b[38;2;88;110;117m[ ] "));
+}
+
+test "task list with tab separator" {
+    const allocator = std.testing.allocator;
+    const source = "- [x]\tTab-separated task\n- [\t] Tab in checkbox\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "[x] "));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "[ ] "));
+}
+
+test "empty ordered list item" {
+    const allocator = std.testing.allocator;
+    const source = "1. First\n2.\n3. Third\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    // "2." renders as "2. " because the marker includes trailing space
+    try std.testing.expectEqualStrings("1. First\n2. \n3. Third\n", rendered);
+}
+
+test "nested task list items" {
+    const allocator = std.testing.allocator;
+    const source = "- [x] Parent\n  - [ ] Child\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("- [x] Parent\n  - [ ] Child\n", rendered);
+}
+
 test "tab-indented headings and blockquotes are recognized" {
     const allocator = std.testing.allocator;
     const source = "\t# Tab Heading\n\t> Tab Quote\n";
@@ -462,4 +958,242 @@ test "tab-indented headings and blockquotes are recognized" {
 
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "Tab Heading"));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "Tab Quote"));
+}
+
+test "bold text renders without delimiters" {
+    const allocator = std.testing.allocator;
+    const source = "This is **bold** text";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("This is bold text", rendered);
+}
+
+test "italic text renders without delimiters" {
+    const allocator = std.testing.allocator;
+    const source = "This is *italic* text";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("This is italic text", rendered);
+}
+
+test "underscore italic renders without delimiters" {
+    const allocator = std.testing.allocator;
+    const source = "This is _italic_ text";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("This is italic text", rendered);
+}
+
+test "strikethrough renders without delimiters" {
+    const allocator = std.testing.allocator;
+    const source = "This is ~~deleted~~ text";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("This is deleted text", rendered);
+}
+
+test "single tilde strikethrough" {
+    const allocator = std.testing.allocator;
+    const source = "This is ~deleted~ text";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("This is deleted text", rendered);
+}
+
+test "foo_bar_baz is not emphasis" {
+    const allocator = std.testing.allocator;
+    const source = "foo_bar_baz";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("foo_bar_baz", rendered);
+}
+
+test "unmatched delimiters render as literal text" {
+    const allocator = std.testing.allocator;
+    const source = "This has *unmatched delimiter";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("This has *unmatched delimiter", rendered);
+}
+
+test "bold ANSI styling applies bold attribute" {
+    const allocator = std.testing.allocator;
+    const source = "**bold**";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{
+        .enable_ansi = true,
+    });
+    defer allocator.free(rendered);
+
+    // bold text should have bold + body color
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[1m"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "bold"));
+    // delimiters should not appear
+    try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, "**"));
+}
+
+test "italic ANSI styling applies italic attribute" {
+    const allocator = std.testing.allocator;
+    const source = "*italic*";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{
+        .enable_ansi = true,
+    });
+    defer allocator.free(rendered);
+
+    // italic text should have italic escape code
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[3m"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "italic"));
+}
+
+test "strikethrough ANSI styling applies strikethrough attribute" {
+    const allocator = std.testing.allocator;
+    const source = "~~struck~~";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{
+        .enable_ansi = true,
+    });
+    defer allocator.free(rendered);
+
+    // strikethrough should have strikethrough escape code
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[9m"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "struck"));
+}
+
+test "code span takes precedence over emphasis" {
+    const allocator = std.testing.allocator;
+    const source = "*italic with `code` inside*";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    // The code span should prevent emphasis from matching across it
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "`code`"));
+}
+
+test "triple asterisk renders as bold italic" {
+    const allocator = std.testing.allocator;
+    const source = "***bold italic***";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{
+        .enable_ansi = true,
+    });
+    defer allocator.free(rendered);
+
+    // Should have both bold and italic
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[1m"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[3m"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "bold italic"));
+}
+
+test "nested bold with inner italic" {
+    const allocator = std.testing.allocator;
+    const source = "**bold _and italic_**";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    // Delimiters should be removed, content preserved
+    try std.testing.expectEqualStrings("bold and italic", rendered);
+}
+
+test "link text with emphasis renders recursively" {
+    const allocator = std.testing.allocator;
+    const source = "[**bold link**](https://example.com)";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    // Link text should have emphasis delimiters removed
+    try std.testing.expectEqualStrings("bold link(https://example.com)", rendered);
+}
+
+test "link text with emphasis gets ANSI styling" {
+    const allocator = std.testing.allocator;
+    const source = "[**bold**](url)";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{
+        .enable_ansi = true,
+    });
+    defer allocator.free(rendered);
+
+    // bold should appear (bold from emphasis + underline from link)
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[1m"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "bold"));
+    try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, "**"));
+}
+
+test "double backtick code span" {
+    const allocator = std.testing.allocator;
+    const source = "``code with ` backtick``";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("``code with ` backtick``", rendered);
+}
+
+test "backslash escaped asterisk is not emphasis" {
+    const allocator = std.testing.allocator;
+    const source = "\\*not emphasis\\*";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("*not emphasis*", rendered);
+}
+
+test "code fence with language preserves original format" {
+    const allocator = std.testing.allocator;
+    const source = "```python\nprint('hello')\n```\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("```python\nprint('hello')\n```\n", rendered);
+}
+
+test "code fence without language preserves format" {
+    const allocator = std.testing.allocator;
+    const source = "```\nplain code\n```\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("```\nplain code\n```\n", rendered);
+}
+
+test "code fence language is captured in Fence struct" {
+    const allocator = std.testing.allocator;
+    const source = "```javascript mocha\nconsole.log();\n```\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    // Fence line preserved as-is; language extraction is internal (for future syntax highlighting)
+    try std.testing.expectEqualStrings("```javascript mocha\nconsole.log();\n```\n", rendered);
+}
+
+test "backslash escaped underscore is literal" {
+    const allocator = std.testing.allocator;
+    const source = "\\_literal\\_";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("_literal_", rendered);
 }

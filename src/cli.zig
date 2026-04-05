@@ -22,7 +22,7 @@ pub fn runWithDir(
     };
     defer allocator.free(source);
 
-    try render.renderMarkdown(stdout, source, .{
+    try render.renderMarkdown(allocator, stdout, source, .{
         .enable_ansi = enable_ansi,
         .theme = .solarized_dark,
     });

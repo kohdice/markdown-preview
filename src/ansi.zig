@@ -5,17 +5,33 @@ pub const TextStyle = struct {
     fg: ?theme.Rgb = null,
     bold: bool = false,
     dim: bool = false,
+    italic: bool = false,
     underline: bool = false,
+    strikethrough: bool = false,
 
     pub fn isPlain(self: TextStyle) bool {
-        return self.fg == null and !self.bold and !self.dim and !self.underline;
+        return self.fg == null and !self.bold and !self.dim and !self.italic and
+            !self.underline and !self.strikethrough;
+    }
+
+    pub fn merge(self: TextStyle, other: TextStyle) TextStyle {
+        return .{
+            .fg = other.fg orelse self.fg,
+            .bold = self.bold or other.bold,
+            .dim = self.dim or other.dim,
+            .italic = self.italic or other.italic,
+            .underline = self.underline or other.underline,
+            .strikethrough = self.strikethrough or other.strikethrough,
+        };
     }
 };
 
 pub fn applyStyle(writer: *std.io.Writer, style: TextStyle) !void {
     if (style.bold) try writer.writeAll("\x1b[1m");
     if (style.dim) try writer.writeAll("\x1b[2m");
+    if (style.italic) try writer.writeAll("\x1b[3m");
     if (style.underline) try writer.writeAll("\x1b[4m");
+    if (style.strikethrough) try writer.writeAll("\x1b[9m");
     if (style.fg) |fg| {
         try writer.print("\x1b[38;2;{};{};{}m", .{ fg.r, fg.g, fg.b });
     }
