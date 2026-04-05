@@ -1022,9 +1022,12 @@ fn tryParseBareUrl(text: []const u8, start: usize) ?BareUrlResult {
     else
         return null;
 
-    // Must not be preceded by alphanumeric (avoids matching inside words)
-    if (start > 0 and (std.ascii.isAlphanumeric(text[start - 1]) or text[start - 1] == '.'))
-        return null;
+    // Boundary check: must be at start of text, or preceded by whitespace/punctuation
+    if (start > 0) {
+        const prev = text[start - 1];
+        if (std.ascii.isAlphanumeric(prev) or prev == '.' or prev == '/' or prev == ':')
+            return null;
+    }
 
     // URL must have at least one character after the scheme
     if (start + prefix_len >= text.len) return null;
@@ -1038,16 +1041,19 @@ fn tryParseBareUrl(text: []const u8, start: usize) ?BareUrlResult {
         }
     }
 
-    // Strip trailing punctuation that is unlikely part of the URL
+    // Strip trailing punctuation per GFM §6.9
     while (pos > start + prefix_len) {
         switch (text[pos - 1]) {
-            '.', ',', ':', ';', '!', '?', '\'', '"' => pos -= 1,
+            '.', ',', ':', '!', '?', '*', '_', '~', '\'', '"' => pos -= 1,
             ')' => {
-                // Only strip trailing ) if unmatched
-                const url = text[start..pos];
-                const open = std.mem.count(u8, url, "(");
-                const close = std.mem.count(u8, url, ")");
-                if (close > open) {
+                // Only strip trailing ) if unmatched in URL
+                var open_count: usize = 0;
+                var close_count: usize = 0;
+                for (text[start..pos]) |c| {
+                    if (c == '(') open_count += 1;
+                    if (c == ')') close_count += 1;
+                }
+                if (close_count > open_count) {
                     pos -= 1;
                 } else {
                     break;
@@ -1059,6 +1065,13 @@ fn tryParseBareUrl(text: []const u8, start: usize) ?BareUrlResult {
 
     // Must have content after scheme
     if (pos <= start + prefix_len) return null;
+
+    // Valid domain check: the domain part (between scheme and first / or end)
+    // must contain at least one dot
+    const domain_start = start + prefix_len;
+    const path_start = std.mem.indexOfScalarPos(u8, text[0..pos], domain_start, '/') orelse pos;
+    const domain = text[domain_start..path_start];
+    if (std.mem.indexOfScalar(u8, domain, '.') == null) return null;
 
     return .{ .end = pos };
 }
@@ -2080,6 +2093,39 @@ test "bare URL with unmatched trailing paren is stripped" {
 
     // Trailing ) is unmatched in URL context, should be stripped from URL
     try std.testing.expectEqualStrings("(see https://example.com)", rendered);
+}
+
+test "bare URL rejects localhost (no dot in domain)" {
+    const allocator = std.testing.allocator;
+    const source = "http://localhost/path";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("http://localhost/path", rendered);
+}
+
+test "bare URL strips trailing underscore and tilde" {
+    const allocator = std.testing.allocator;
+    const source = "https://example.com_";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("https://example.com_", rendered);
+}
+
+test "bare URL not detected after bracket" {
+    const allocator = std.testing.allocator;
+    const source = "foo[https://example.com";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{
+        .enable_ansi = true,
+    });
+    defer allocator.free(rendered);
+
+    // Should detect — [ is valid preceding char
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[4m"));
 }
 
 test "link with title renders title" {
