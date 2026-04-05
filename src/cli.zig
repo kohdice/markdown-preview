@@ -1,6 +1,7 @@
 const std = @import("std");
-const document = @import("document.zig");
 const render = @import("render.zig");
+
+const max_file_bytes = 10 * 1024 * 1024;
 
 pub fn runWithDir(
     allocator: std.mem.Allocator,
@@ -12,12 +13,12 @@ pub fn runWithDir(
     wrap_width: ?usize,
 ) !u8 {
     if (args.len != 2) {
-        try writeUsage(stderr);
+        try stderr.writeAll("Usage: mp <FILE>\nPreview a Markdown file in the terminal.\n");
         return 1;
     }
 
     const path = args[1];
-    const source = document.readFile(allocator, dir, path) catch |err| {
+    const source = dir.readFileAlloc(allocator, path, max_file_bytes) catch |err| {
         try stderr.print("mp: unable to read '{s}': {s}\n", .{ path, @errorName(err) });
         return 1;
     };
@@ -29,10 +30,6 @@ pub fn runWithDir(
         .wrap_width = wrap_width,
     });
     return 0;
-}
-
-fn writeUsage(writer: *std.io.Writer) !void {
-    try writer.writeAll("Usage: mp <FILE>\nPreview a Markdown file in the terminal.\n");
 }
 
 test "runWithDir reports usage errors" {

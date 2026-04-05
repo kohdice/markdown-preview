@@ -62,7 +62,6 @@ fn unwrapWriteError(
 test {
     _ = @import("ansi.zig");
     _ = @import("cli.zig");
-    _ = @import("document.zig");
     _ = @import("entity.zig");
     _ = @import("render.zig");
     _ = @import("theme.zig");

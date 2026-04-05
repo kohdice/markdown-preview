@@ -1,6 +1,5 @@
 const std = @import("std");
 const ansi = @import("ansi.zig");
-const document = @import("document.zig");
 const entity = @import("entity.zig");
 const table = @import("table.zig");
 const theme = @import("theme.zig");
@@ -69,20 +68,20 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
     while (line_start < input.len) {
         const line_end = std.mem.indexOfScalarPos(u8, input, line_start, '\n') orelse input.len;
         const has_newline = line_end < input.len;
-        const raw_line = document.trimCarriageReturn(input[line_start..line_end]);
+        const raw_line = std.mem.trimEnd(u8, input[line_start..line_end], "\r");
 
         if (active_fence) |fence| {
             // Inside code fence: preserve content as-is (no hard break stripping)
             if (isClosingFence(raw_line, fence)) {
-                try writeStyledLine(writer, raw_line, opts.enable_ansi, .{
+                try ansi.writeStyled(writer, opts.enable_ansi, .{
                     .fg = palette.code_fence,
                     .dim = true,
-                });
+                }, raw_line);
                 active_fence = null;
             } else {
-                try writeStyledLine(writer, raw_line, opts.enable_ansi, .{
+                try ansi.writeStyled(writer, opts.enable_ansi, .{
                     .fg = palette.inline_code,
-                });
+                }, raw_line);
             }
         } else {
             // Outside code fence: use raw_line for block-level detection,
@@ -91,11 +90,11 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
 
             if (parseFence(line)) |fence| {
                 active_fence = fence;
-                try writeStyledLine(writer, line, opts.enable_ansi, .{
+                try ansi.writeStyled(writer, opts.enable_ansi, .{
                     .fg = palette.code_fence,
                     .dim = true,
-                });
-            } else if (isBlankLine(line)) {
+                }, line);
+            } else if (std.mem.trim(u8, line, " \t").len == 0) {
                 if (!prev_was_blank) {
                     prev_was_blank = true;
                 } else {
@@ -106,17 +105,17 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
             } else if (parseLinkDefinition(line) != null) {
                 // Link definition lines are consumed in the first pass; skip in output
             } else if (isThematicBreak(line)) {
-                try writeStyledLine(writer, "--------------------------------", opts.enable_ansi, .{
+                try ansi.writeStyled(writer, opts.enable_ansi, .{
                     .fg = palette.subtle,
                     .dim = true,
-                });
+                }, "--------------------------------");
             } else if (try tryRenderTable(allocator, writer, input, line, line_end, opts.enable_ansi, palette, &link_defs)) |new_start| {
                 // Table was rendered; advance past all table lines
                 prev_was_blank = false;
                 line_start = new_start;
                 continue;
             } else if (parseHeading(line)) |heading| {
-                try renderInline(allocator, writer, stripHardBreak(heading.content), opts.enable_ansi, headingStyle(heading.level), palette, &link_defs);
+                try renderInline(allocator, writer, stripHardBreak(heading.content), opts.enable_ansi, heading_styles[heading.level - 1], palette, &link_defs);
             } else if (parseBlockQuote(line)) |quote| {
                 // Try to detect a table spanning consecutive blockquote lines
                 if (std.mem.indexOfScalar(u8, quote.content, '|') != null) {
@@ -126,10 +125,10 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                         continue;
                     }
                 }
-                try writeIndent(writer, quote.indent);
+                try writer.splatByteAll(' ', quote.indent);
                 try renderBlockQuoteContent(allocator, writer, quote.content, opts.enable_ansi, palette, &link_defs);
             } else if (parseOrderedListItem(line)) |ordered| {
-                try writeIndent(writer, ordered.indent);
+                try writer.splatByteAll(' ', ordered.indent);
                 try ansi.writeStyled(writer, opts.enable_ansi, .{
                     .fg = palette.list_marker,
                     .bold = true,
@@ -149,7 +148,7 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                 prev_was_blank = false;
                 continue;
             } else if (parseListItem(line)) |item| {
-                try writeIndent(writer, item.indent);
+                try writer.splatByteAll(' ', item.indent);
                 var marker: [2]u8 = .{ item.marker, ' ' };
                 try ansi.writeStyled(writer, opts.enable_ansi, .{
                     .fg = palette.list_marker,
@@ -188,7 +187,7 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
             }
 
             // Reset blank-line flag for non-blank lines
-            if (!isBlankLine(line)) prev_was_blank = false;
+            if (std.mem.trim(u8, line, " \t").len != 0) prev_was_blank = false;
         }
 
         if (has_newline) try writer.writeByte('\n');
@@ -216,7 +215,7 @@ fn tryRenderTable(
     if (after_header >= input.len) return null;
 
     const delim_end = std.mem.indexOfScalarPos(u8, input, after_header, '\n') orelse input.len;
-    const delim_line = document.trimCarriageReturn(input[after_header..delim_end]);
+    const delim_line = std.mem.trimEnd(u8, input[after_header..delim_end], "\r");
 
     if (!table.isDelimiterRow(delim_line)) return null;
 
@@ -234,10 +233,10 @@ fn tryRenderTable(
     var pos = delim_end + 1;
     while (pos < input.len) {
         const row_end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
-        const row_line = document.trimCarriageReturn(input[pos..row_end]);
+        const row_line = std.mem.trimEnd(u8, input[pos..row_end], "\r");
 
         // Stop at blank lines or lines without `|`
-        if (isBlankLine(row_line) or std.mem.indexOfScalar(u8, row_line, '|') == null) break;
+        if (std.mem.trim(u8, row_line, " \t").len == 0 or std.mem.indexOfScalar(u8, row_line, '|') == null) break;
         // Stop at block-level structures (headings, lists, blockquotes, fences, thematic breaks)
         if (isBlockLevelStart(row_line)) break;
 
@@ -311,7 +310,7 @@ fn tryRenderBlockQuoteTable(
     if (pos >= input.len) return null;
     var end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
     var has_nl = end < input.len;
-    var raw = document.trimCarriageReturn(input[pos..end]);
+    var raw = std.mem.trimEnd(u8, input[pos..end], "\r");
     const first_bq = parseBlockQuote(raw) orelse return null;
     if (std.mem.indexOfScalar(u8, first_bq.content, '|') == null) return null;
     const bq_indent = first_bq.indent;
@@ -321,7 +320,7 @@ fn tryRenderBlockQuoteTable(
     if (pos >= input.len) return null;
     end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
     has_nl = end < input.len;
-    raw = document.trimCarriageReturn(input[pos..end]);
+    raw = std.mem.trimEnd(u8, input[pos..end], "\r");
     const second_bq = parseBlockQuote(raw) orelse return null;
     if (!table.isDelimiterRow(second_bq.content)) return null;
     pos = end + @intFromBool(has_nl);
@@ -343,10 +342,10 @@ fn tryRenderBlockQuoteTable(
     while (pos < input.len) {
         end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
         has_nl = end < input.len;
-        raw = document.trimCarriageReturn(input[pos..end]);
+        raw = std.mem.trimEnd(u8, input[pos..end], "\r");
 
         const bq = parseBlockQuote(raw) orelse break;
-        if (isBlankLine(bq.content) or std.mem.indexOfScalar(u8, bq.content, '|') == null) break;
+        if (std.mem.trim(u8, bq.content, " \t").len == 0 or std.mem.indexOfScalar(u8, bq.content, '|') == null) break;
         if (isBlockLevelStart(bq.content)) break;
 
         try body_rows.append(allocator, try table.parseCells(allocator, bq.content));
@@ -371,7 +370,7 @@ fn tryRenderBlockQuoteTable(
     }
 
     // Render header row with blockquote prefix
-    try writeIndent(writer, bq_indent);
+    try writer.splatByteAll(' ', bq_indent);
     try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true }, "| ");
     try renderTableRow(allocator, writer, header_cells, col_widths, alignments, col_count, enable_ansi, .{
         .fg = palette.muted,
@@ -380,14 +379,14 @@ fn tryRenderBlockQuoteTable(
     try writer.writeByte('\n');
 
     // Render separator with blockquote prefix
-    try writeIndent(writer, bq_indent);
+    try writer.splatByteAll(' ', bq_indent);
     try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true }, "| ");
     try renderTableSeparator(writer, col_widths, col_count, enable_ansi, palette);
     try writer.writeByte('\n');
 
     // Render body rows with blockquote prefix
     for (body_rows.items) |row| {
-        try writeIndent(writer, bq_indent);
+        try writer.splatByteAll(' ', bq_indent);
         try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true }, "| ");
         try renderTableRow(allocator, writer, row, col_widths, alignments, col_count, enable_ansi, .{
             .fg = palette.muted,
@@ -425,9 +424,9 @@ fn renderTableRow(
         };
         const right_pad = padding - left_pad;
 
-        for (0..left_pad) |_| try writer.writeByte(' ');
+        try writer.splatByteAll(' ', left_pad);
         try renderInline(allocator, writer, cell_text, enable_ansi, style, palette, link_defs);
-        for (0..right_pad) |_| try writer.writeByte(' ');
+        try writer.splatByteAll(' ', right_pad);
 
         if (c + 1 < col_count) {
             try ansi.writeStyled(writer, enable_ansi, .{ .dim = true }, " | ");
@@ -486,10 +485,6 @@ fn stripHardBreak(line: []const u8) []const u8 {
     return line;
 }
 
-fn isBlankLine(line: []const u8) bool {
-    return std.mem.trim(u8, line, " \t").len == 0;
-}
-
 fn parseHeading(line: []const u8) ?Heading {
     var index = countIndentUpTo(line, 3);
     if (index >= line.len or line[index] != '#') return null;
@@ -511,13 +506,13 @@ fn parseHeading(line: []const u8) ?Heading {
 }
 
 fn trimClosingHashes(text: []const u8) []const u8 {
-    const trimmed = std.mem.trimRight(u8, text, " \t");
+    const trimmed = std.mem.trimEnd(u8, text, " \t");
     var end = trimmed.len;
 
     while (end > 0 and trimmed[end - 1] == '#') : (end -= 1) {}
     if (end == trimmed.len) return trimmed;
     if (end > 0 and (trimmed[end - 1] == ' ' or trimmed[end - 1] == '\t')) {
-        return std.mem.trimRight(u8, trimmed[0 .. end - 1], " \t");
+        return std.mem.trimEnd(u8, trimmed[0 .. end - 1], " \t");
     }
     return trimmed;
 }
@@ -591,7 +586,7 @@ fn parseOrderedListItem(line: []const u8) ?OrderedListItem {
 /// A continuation line must be non-blank, indented at least to content_col,
 /// and must not start a new block-level element.
 fn isListContinuation(line: []const u8, content_col: usize) bool {
-    if (isBlankLine(line)) return false;
+    if (std.mem.trim(u8, line, " \t").len == 0) return false;
     const indent = countLeadingWhitespace(line);
     if (indent < content_col) return false;
     if (parseListItem(line) != null) return false;
@@ -619,12 +614,12 @@ fn consumeListContinuation(
     while (pos < input.len) {
         const end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
         const has_nl = end < input.len;
-        const raw = document.trimCarriageReturn(input[pos..end]);
+        const raw = std.mem.trimEnd(u8, input[pos..end], "\r");
 
         if (!isListContinuation(raw, content_col)) break;
 
         const indent = countLeadingWhitespace(raw);
-        try writeIndent(writer, content_col);
+        try writer.splatByteAll(' ', content_col);
         try renderInline(allocator, writer, stripHardBreak(raw[indent..]), enable_ansi, .{
             .fg = palette.body,
         }, palette, link_defs);
@@ -668,7 +663,7 @@ fn renderBlockQuoteContent(
     }, "| ");
 
     if (parseBlockQuote(content)) |nested| {
-        try writeIndent(writer, nested.indent);
+        try writer.splatByteAll(' ', nested.indent);
         try renderBlockQuoteContent(allocator, writer, nested.content, enable_ansi, palette, link_defs);
     } else {
         try renderInline(allocator, writer, content, enable_ansi, .{
@@ -1026,7 +1021,7 @@ const TitleInfo = struct {
 /// Extract optional title from the inner content of a link destination.
 /// Input is the content between '(' and ')' (e.g., `url "title"` or `url`).
 fn extractTitle(inner: []const u8) TitleInfo {
-    const trimmed = std.mem.trimRight(u8, inner, " \t");
+    const trimmed = std.mem.trimEnd(u8, inner, " \t");
     // Need at least: URL + space + quote + quote (minimum 4 chars, e.g., `u ""`)
     if (trimmed.len < 4) return .{ .url_len = inner.len, .title = null };
 
@@ -1043,7 +1038,7 @@ fn extractTitle(inner: []const u8) TitleInfo {
         if (trimmed[i] == open_quote) {
             // Check that quote is preceded by whitespace (separating URL from title)
             if (i > 0 and (trimmed[i - 1] == ' ' or trimmed[i - 1] == '\t')) {
-                const url_part = std.mem.trimRight(u8, trimmed[0 .. i - 1], " \t");
+                const url_part = std.mem.trimEnd(u8, trimmed[0 .. i - 1], " \t");
                 if (url_part.len == 0) return .{ .url_len = inner.len, .title = null };
                 return .{
                     .url_len = url_part.len,
@@ -1410,7 +1405,7 @@ fn collectLinkDefinitions(allocator: std.mem.Allocator, input: []const u8) !Link
     while (line_start < input.len) {
         const line_end = std.mem.indexOfScalarPos(u8, input, line_start, '\n') orelse input.len;
         const has_newline = line_end < input.len;
-        const line = document.trimCarriageReturn(input[line_start..line_end]);
+        const line = std.mem.trimEnd(u8, input[line_start..line_end], "\r");
 
         // Track code fences to avoid false positives (must match open/close correctly)
         if (active_prepass_fence) |fence| {
@@ -1422,7 +1417,7 @@ fn collectLinkDefinitions(allocator: std.mem.Allocator, input: []const u8) !Link
         } else {
             if (parseLinkDefinition(line)) |def| {
                 // Normalize label to lowercase for case-insensitive lookup
-                const lower = toLowerAscii(allocator, def.label) catch null;
+                const lower = std.ascii.allocLowerString(allocator, def.label) catch null;
                 if (lower) |key| {
                     const result = defs.getOrPut(allocator, key) catch {
                         allocator.free(key);
@@ -1442,14 +1437,6 @@ fn collectLinkDefinitions(allocator: std.mem.Allocator, input: []const u8) !Link
         line_start = line_end + @intFromBool(has_newline);
     }
     return defs;
-}
-
-fn toLowerAscii(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
-    const buf = try allocator.alloc(u8, text.len);
-    for (text, 0..) |c, i| {
-        buf[i] = std.ascii.toLower(c);
-    }
-    return buf;
 }
 
 const LinkDefinition = struct {
@@ -1557,11 +1544,9 @@ fn tryParseRefLink(text: []const u8, start: usize, link_defs: *const LinkDefMap)
         // Lowercase lookup
         var lower_buf: [256]u8 = undefined;
         if (ref_label.len > lower_buf.len) return null;
-        for (ref_label, 0..) |c, i| {
-            lower_buf[i] = std.ascii.toLower(c);
-        }
+        const lower_key = std.ascii.lowerString(lower_buf[0..ref_label.len], ref_label);
 
-        if (link_defs.get(lower_buf[0..ref_label.len])) |def| {
+        if (link_defs.get(lower_key)) |def| {
             return .{
                 .link_text = link_text,
                 .url = def.url,
@@ -1578,11 +1563,9 @@ fn tryParseRefLink(text: []const u8, start: usize, link_defs: *const LinkDefMap)
 
     var lower_buf: [256]u8 = undefined;
     if (link_text.len > lower_buf.len) return null;
-    for (link_text, 0..) |c, i| {
-        lower_buf[i] = std.ascii.toLower(c);
-    }
+    const lower_key = std.ascii.lowerString(lower_buf[0..link_text.len], link_text);
 
-    if (link_defs.get(lower_buf[0..link_text.len])) |def| {
+    if (link_defs.get(lower_key)) |def| {
         return .{
             .link_text = link_text,
             .url = def.url,
@@ -1650,21 +1633,6 @@ fn renderedDisplayWidth(allocator: std.mem.Allocator, text: []const u8, palette:
     return width.displayWidth(rendered);
 }
 
-fn writeStyledLine(
-    writer: *std.io.Writer,
-    text: []const u8,
-    enable_ansi: bool,
-    style: ansi.TextStyle,
-) !void {
-    try ansi.writeStyled(writer, enable_ansi, style, text);
-}
-
-fn writeIndent(writer: *std.io.Writer, count: usize) !void {
-    for (0..count) |_| {
-        try writer.writeByte(' ');
-    }
-}
-
 fn countIndentUpTo(line: []const u8, max_spaces: usize) usize {
     var count: usize = 0;
     while (count < line.len and count < max_spaces and (line[count] == ' ' or line[count] == '\t')) : (count += 1) {}
@@ -1683,17 +1651,14 @@ fn countRepeatedByte(text: []const u8, byte: u8) usize {
     return count;
 }
 
-fn headingStyle(level: u8) ansi.TextStyle {
-    return switch (level) {
-        1 => .{ .fg = .{ .r = 0xb5, .g = 0x89, .b = 0x00 }, .bold = true, .underline = true },
-        2 => .{ .fg = .{ .r = 0xcb, .g = 0x4b, .b = 0x16 }, .bold = true, .underline = true },
-        3 => .{ .fg = .{ .r = 0x26, .g = 0x8b, .b = 0xd2 }, .bold = true },
-        4 => .{ .fg = .{ .r = 0x2a, .g = 0xa1, .b = 0x98 }, .bold = true },
-        5 => .{ .fg = .{ .r = 0x6c, .g = 0x71, .b = 0xc4 } },
-        6 => .{ .fg = .{ .r = 0x6c, .g = 0x71, .b = 0xc4 }, .dim = true },
-        else => .{ .fg = .{ .r = 0x6c, .g = 0x71, .b = 0xc4 }, .dim = true },
-    };
-}
+const heading_styles = [6]ansi.TextStyle{
+    .{ .fg = .{ .r = 0xb5, .g = 0x89, .b = 0x00 }, .bold = true, .underline = true },
+    .{ .fg = .{ .r = 0xcb, .g = 0x4b, .b = 0x16 }, .bold = true, .underline = true },
+    .{ .fg = .{ .r = 0x26, .g = 0x8b, .b = 0xd2 }, .bold = true },
+    .{ .fg = .{ .r = 0x2a, .g = 0xa1, .b = 0x98 }, .bold = true },
+    .{ .fg = .{ .r = 0x6c, .g = 0x71, .b = 0xc4 } },
+    .{ .fg = .{ .r = 0x6c, .g = 0x71, .b = 0xc4 }, .dim = true },
+};
 
 fn renderToOwnedSlice(
     allocator: std.mem.Allocator,
@@ -2896,7 +2861,7 @@ test "table inside blockquote" {
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "1"));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "2"));
     // Each line should start with blockquote "| " prefix
-    var line_iter = std.mem.splitScalar(u8, std.mem.trimRight(u8, rendered, "\n"), '\n');
+    var line_iter = std.mem.splitScalar(u8, std.mem.trimEnd(u8, rendered, "\n"), '\n');
     while (line_iter.next()) |line| {
         try std.testing.expect(std.mem.startsWith(u8, line, "| "));
     }
