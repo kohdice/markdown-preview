@@ -1,6 +1,7 @@
 const std = @import("std");
 const ansi = @import("ansi.zig");
 const document = @import("document.zig");
+const entity = @import("entity.zig");
 const table = @import("table.zig");
 const theme = @import("theme.zig");
 const width = @import("width.zig");
@@ -47,6 +48,7 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
     const palette = theme.palette(opts.theme);
     var active_fence: ?Fence = null;
     var line_start: usize = 0;
+    var prev_was_blank: bool = false;
 
     while (line_start < input.len) {
         const line_end = std.mem.indexOfScalarPos(u8, input, line_start, '\n') orelse input.len;
@@ -71,13 +73,22 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                 .fg = palette.code_fence,
                 .dim = true,
             });
-        } else if (isBlankLine(line)) {} else if (isThematicBreak(line)) {
+        } else if (isBlankLine(line)) {
+            if (!prev_was_blank) {
+                prev_was_blank = true;
+            } else {
+                // Skip consecutive blank lines
+                line_start = line_end + @intFromBool(has_newline);
+                continue;
+            }
+        } else if (isThematicBreak(line)) {
             try writeStyledLine(writer, "--------------------------------", opts.enable_ansi, .{
                 .fg = palette.subtle,
                 .dim = true,
             });
         } else if (try tryRenderTable(allocator, writer, input, line, line_end, opts.enable_ansi, palette)) |new_start| {
             // Table was rendered; advance past all table lines
+            prev_was_blank = false;
             line_start = new_start;
             continue;
         } else if (parseHeading(line)) |heading| {
@@ -116,6 +127,9 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                 .fg = palette.body,
             }, palette);
         }
+
+        // Reset blank-line flag for non-blank lines
+        if (!isBlankLine(line)) prev_was_blank = false;
 
         if (has_newline) try writer.writeByte('\n');
         line_start = line_end + @intFromBool(has_newline);
@@ -182,17 +196,18 @@ fn tryRenderTable(
 
     const col_count = alignments.len;
 
-    // Compute column widths using display width of raw cell text
+    // Compute column widths using rendered display width (accounts for entity
+    // decoding, emphasis delimiter removal, and link syntax transformation)
     var col_widths = try allocator.alloc(usize, col_count);
     defer allocator.free(col_widths);
     for (col_widths) |*w| w.* = 0;
 
     for (0..col_count) |c| {
         if (c < header_cells.len)
-            col_widths[c] = @max(col_widths[c], width.displayWidth(header_cells[c]));
+            col_widths[c] = @max(col_widths[c], try renderedDisplayWidth(allocator, header_cells[c], palette));
         for (body_rows.items) |row| {
             if (c < row.len)
-                col_widths[c] = @max(col_widths[c], width.displayWidth(row[c]));
+                col_widths[c] = @max(col_widths[c], try renderedDisplayWidth(allocator, row[c], palette));
         }
         col_widths[c] = @max(col_widths[c], 3);
     }
@@ -233,7 +248,7 @@ fn renderTableRow(
     try ansi.writeStyled(writer, enable_ansi, .{ .dim = true }, "| ");
     for (0..col_count) |c| {
         const cell_text = if (c < cells.len) cells[c] else "";
-        const cell_width = width.displayWidth(cell_text);
+        const cell_width = try renderedDisplayWidth(allocator, cell_text, palette);
         const col_w = col_widths[c];
         const padding = if (col_w > cell_width) col_w - cell_width else 0;
         const col_align = if (c < alignments.len) alignments[c] else .left;
@@ -497,7 +512,7 @@ fn isThematicBreak(line: []const u8) bool {
     return marker_count >= 3;
 }
 
-const InlineKind = enum { text, code_span, link_text, link_url, emphasis, strong, bold_italic, strikethrough };
+const InlineKind = enum { text, code_span, link_text, link_url, image_alt, image_url, emphasis, strong, bold_italic, strikethrough };
 
 const InlineSegment = struct {
     kind: InlineKind,
@@ -519,10 +534,17 @@ fn renderInline(
 
     for (segments.items) |seg| {
         switch (seg.kind) {
-            .text => try ansi.writeStyled(writer, enable_ansi, base_style, seg.content),
+            .text => try writeTextWithEntities(writer, enable_ansi, base_style, seg.content),
             .code_span => try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.inline_code }, seg.content),
             .link_text => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .fg = palette.link, .underline = true }), palette),
             .link_url => try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true }, seg.content),
+            .image_alt => {
+                const img_style: ansi.TextStyle = .{ .fg = palette.muted, .italic = true };
+                try ansi.writeStyled(writer, enable_ansi, img_style, "[img: ");
+                try renderInline(allocator, writer, seg.content, enable_ansi, img_style, palette);
+                try ansi.writeStyled(writer, enable_ansi, img_style, "]");
+            },
+            .image_url => try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true }, seg.content),
             .emphasis => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .italic = true }), palette),
             .strong => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .bold = true }), palette),
             .bold_italic => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .bold = true, .italic = true }), palette),
@@ -562,6 +584,21 @@ fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segments:
                 }
                 index += 1;
             },
+            '!' => {
+                // Image syntax: ![alt](url)
+                if (index + 1 < text.len and text[index + 1] == '[') {
+                    if (findLinkParts(text, index + 1)) |link| {
+                        if (plain_start < index)
+                            try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
+                        try segments.append(allocator, .{ .kind = .image_alt, .content = text[link.text_start..link.text_end] });
+                        try segments.append(allocator, .{ .kind = .image_url, .content = text[link.url_start..link.url_end] });
+                        index = link.full_end;
+                        plain_start = index;
+                        continue;
+                    }
+                }
+                index += 1;
+            },
             '[' => {
                 if (findLinkParts(text, index)) |link| {
                     if (plain_start < index)
@@ -591,6 +628,18 @@ fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segments:
                         try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
                     try segments.append(allocator, .{ .kind = .strikethrough, .content = st.content });
                     index = st.end;
+                    plain_start = index;
+                    continue;
+                }
+                index += 1;
+            },
+            '<' => {
+                if (tryParseAutolink(text, index)) |al| {
+                    if (plain_start < index)
+                        try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
+                    // For autolinks, URL is the visible text — no separate URL display needed
+                    try segments.append(allocator, .{ .kind = .link_text, .content = al.url });
+                    index = al.end;
                     plain_start = index;
                     continue;
                 }
@@ -787,6 +836,44 @@ fn tryParseStrikethrough(text: []const u8, start: usize) ?StrikethroughResult {
     return null;
 }
 
+const AutolinkResult = struct {
+    url: []const u8,
+    end: usize,
+};
+
+/// Parse a CommonMark autolink: <scheme://...> where the content between
+/// angle brackets contains "://" and no whitespace or additional '<'.
+fn tryParseAutolink(text: []const u8, start: usize) ?AutolinkResult {
+    if (start >= text.len or text[start] != '<') return null;
+
+    // Find closing '>'
+    var pos = start + 1;
+    var has_scheme = false;
+    while (pos < text.len) {
+        switch (text[pos]) {
+            '>' => {
+                if (!has_scheme) return null;
+                return .{
+                    .url = text[start + 1 .. pos],
+                    .end = pos + 1,
+                };
+            },
+            ' ', '\t', '\n', '<' => return null,
+            ':' => {
+                // Check for :// pattern
+                if (pos + 2 < text.len and text[pos + 1] == '/' and text[pos + 2] == '/') {
+                    has_scheme = true;
+                }
+                pos += 1;
+            },
+            else => {
+                pos += 1;
+            },
+        }
+    }
+    return null;
+}
+
 /// CommonMark 2.4: ASCII punctuation characters can be backslash-escaped.
 fn isEscapable(c: u8) bool {
     return switch (c) {
@@ -796,6 +883,51 @@ fn isEscapable(c: u8) bool {
         '{', '|', '}', '~' => true,
         else => false,
     };
+}
+
+/// Write text with HTML entity decoding. Scans for '&' and decodes
+/// recognized named/numeric entities inline during rendering.
+fn writeTextWithEntities(
+    writer: *std.io.Writer,
+    enable_ansi: bool,
+    style: ansi.TextStyle,
+    text: []const u8,
+) !void {
+    var pos: usize = 0;
+    var plain_start: usize = 0;
+
+    while (pos < text.len) {
+        if (text[pos] == '&') {
+            if (entity.decode(text, pos)) |result| {
+                // Flush text before the entity
+                if (plain_start < pos)
+                    try ansi.writeStyled(writer, enable_ansi, style, text[plain_start..pos]);
+                // Write decoded entity bytes
+                try ansi.writeStyled(writer, enable_ansi, style, result.bytes[0..result.len]);
+                pos = result.end;
+                plain_start = pos;
+                continue;
+            }
+        }
+        pos += 1;
+    }
+
+    if (plain_start < text.len)
+        try ansi.writeStyled(writer, enable_ansi, style, text[plain_start..]);
+}
+
+/// Compute the display width of inline text after rendering (entity decoding,
+/// emphasis delimiter removal, link/image syntax transformation).
+/// Renders to a temporary buffer with ANSI disabled, then measures the result.
+fn renderedDisplayWidth(allocator: std.mem.Allocator, text: []const u8, palette: theme.Palette) !usize {
+    var output: std.io.Writer.Allocating = .init(allocator);
+    defer output.deinit();
+
+    try renderInline(allocator, &output.writer, text, false, .{}, palette);
+    var list = output.toArrayList();
+    const rendered = list.toOwnedSlice(allocator) catch return width.displayWidth(text);
+    defer allocator.free(rendered);
+    return width.displayWidth(rendered);
 }
 
 fn writeStyledLine(
@@ -1394,6 +1526,92 @@ test "line with pipe but no delimiter row is not a table" {
     try std.testing.expectEqualStrings("a | b\nnot a table\n", rendered);
 }
 
+test "consecutive blank lines are collapsed to one" {
+    const allocator = std.testing.allocator;
+    const source = "First\n\n\n\nSecond\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("First\n\nSecond\n", rendered);
+}
+
+test "single blank line between paragraphs is preserved" {
+    const allocator = std.testing.allocator;
+    const source = "First\n\nSecond\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("First\n\nSecond\n", rendered);
+}
+
+test "blank lines between different block elements are normalized" {
+    const allocator = std.testing.allocator;
+    const source = "# Heading\n\n\n\nParagraph\n\n\n- list\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("Heading\n\nParagraph\n\n- list\n", rendered);
+}
+
+test "blank line after table is preserved" {
+    const allocator = std.testing.allocator;
+    const source = "| A |\n| --- |\n| 1 |\n\nParagraph after table\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    // The blank line between the table and the paragraph should be preserved
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\n\nParagraph after table"));
+}
+
+test "image syntax renders as alt text placeholder" {
+    const allocator = std.testing.allocator;
+    const source = "![logo](https://example.com/logo.png)";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("[img: logo](https://example.com/logo.png)", rendered);
+}
+
+test "image syntax with ANSI styling" {
+    const allocator = std.testing.allocator;
+    const source = "![alt](url)";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{
+        .enable_ansi = true,
+    });
+    defer allocator.free(rendered);
+
+    // alt text should have italic + muted color
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[3m"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "[img: "));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "alt"));
+}
+
+test "image inside text" {
+    const allocator = std.testing.allocator;
+    const source = "See ![diagram](img.png) for details";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("See [img: diagram](img.png) for details", rendered);
+}
+
+test "exclamation mark without bracket is plain text" {
+    const allocator = std.testing.allocator;
+    const source = "This is great! Really!";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("This is great! Really!", rendered);
+}
+
 test "backslash escaped underscore is literal" {
     const allocator = std.testing.allocator;
     const source = "\\_literal\\_";
@@ -1402,4 +1620,132 @@ test "backslash escaped underscore is literal" {
     defer allocator.free(rendered);
 
     try std.testing.expectEqualStrings("_literal_", rendered);
+}
+
+test "HTML entities are decoded in text" {
+    const allocator = std.testing.allocator;
+    const source = "A &amp; B &lt; C &gt; D";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("A & B < C > D", rendered);
+}
+
+test "HTML numeric entity decimal" {
+    const allocator = std.testing.allocator;
+    const source = "&#65; &#66; &#67;";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("A B C", rendered);
+}
+
+test "HTML numeric entity hex" {
+    const allocator = std.testing.allocator;
+    const source = "&#x41; &#x42;";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("A B", rendered);
+}
+
+test "unknown HTML entity is preserved as-is" {
+    const allocator = std.testing.allocator;
+    const source = "&foobar; stays";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("&foobar; stays", rendered);
+}
+
+test "HTML entity in heading" {
+    const allocator = std.testing.allocator;
+    const source = "# Title &amp; Subtitle";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("Title & Subtitle", rendered);
+}
+
+test "HTML entity in bold text" {
+    const allocator = std.testing.allocator;
+    const source = "**bold &amp; strong**";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("bold & strong", rendered);
+}
+
+test "ampersand without semicolon is preserved" {
+    const allocator = std.testing.allocator;
+    const source = "AT&T";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("AT&T", rendered);
+}
+
+test "autolink renders URL with link styling" {
+    const allocator = std.testing.allocator;
+    const source = "Visit <https://example.com> for details";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("Visit https://example.com for details", rendered);
+}
+
+test "autolink with ANSI gets link styling" {
+    const allocator = std.testing.allocator;
+    const source = "<https://example.com>";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{
+        .enable_ansi = true,
+    });
+    defer allocator.free(rendered);
+
+    // Should have underline + link color (violet: 108, 113, 196)
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[4m"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "https://example.com"));
+    // Angle brackets should be removed
+    try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, "<https"));
+}
+
+test "autolink requires scheme://" {
+    const allocator = std.testing.allocator;
+    const source = "<not-a-link>";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    // Without ://, this is not an autolink — preserved as-is
+    try std.testing.expectEqualStrings("<not-a-link>", rendered);
+}
+
+test "autolink with spaces is not parsed" {
+    const allocator = std.testing.allocator;
+    const source = "<https://example.com/path with spaces>";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    // Spaces inside angle brackets prevent autolink detection
+    try std.testing.expectEqualStrings("<https://example.com/path with spaces>", rendered);
+}
+
+test "autolink with ftp scheme" {
+    const allocator = std.testing.allocator;
+    const source = "<ftp://files.example.com/readme>";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("ftp://files.example.com/readme", rendered);
 }
