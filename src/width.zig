@@ -171,7 +171,6 @@ pub fn wrapText(allocator: std.mem.Allocator, text: []const u8, max_width: usize
     errdefer result.deinit(allocator);
 
     var col: usize = 0;
-    // Track the last space position in result buffer for word-wrap backtracking
     var last_space_result: ?usize = null;
     var col_after_last_space: usize = 0;
     var i: usize = 0;

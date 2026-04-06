@@ -292,7 +292,7 @@ fn nextCodepoint(text: []const u8, pos: usize) ?u21 {
 
 fn cpClass(cp: ?u21) CharClass {
     const c = cp orelse return .whitespace;
-    if (c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == 0x0C) return .whitespace;
+    if (c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '\x0c') return .whitespace;
     if (c == 0x00A0) return .whitespace;
     if (c >= 0x2000 and c <= 0x200A) return .whitespace;
     if (c == 0x202F or c == 0x205F or c == 0x3000) return .whitespace;

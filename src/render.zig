@@ -648,7 +648,6 @@ test "code span takes precedence over emphasis" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    // The code span should prevent emphasis from matching across it
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "`code`"));
 }
 
@@ -695,7 +694,6 @@ test "link text with emphasis gets ANSI styling" {
     });
     defer allocator.free(rendered);
 
-    // bold should appear (bold from emphasis + underline from link)
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[1m"));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "bold"));
     try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, "**"));
