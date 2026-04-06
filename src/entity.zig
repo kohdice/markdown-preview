@@ -5,6 +5,12 @@ const max_entity_len = 32;
 const max_hex_digits = 6; // per CommonMark spec
 const max_decimal_digits = 7; // per CommonMark spec
 
+/// Unicode Scalar Value upper bound (Unicode §3.9 D76).
+const max_unicode_codepoint: u32 = 0x10FFFF;
+/// UTF-16 surrogate range: U+D800..U+DFFF. Invalid as standalone scalar values.
+const surrogate_min: u32 = 0xD800;
+const surrogate_max: u32 = 0xDFFF;
+
 pub const DecodeResult = struct {
     bytes: [4]u8,
     len: u3,
@@ -63,8 +69,8 @@ fn decodeNumeric(body: []const u8, end: usize) ?DecodeResult {
         }
     }
 
-    if (codepoint == 0 or codepoint > 0x10FFFF) return null;
-    if (codepoint >= 0xD800 and codepoint <= 0xDFFF) return null; // surrogates
+    if (codepoint == 0 or codepoint > max_unicode_codepoint) return null;
+    if (codepoint >= surrogate_min and codepoint <= surrogate_max) return null;
 
     var buf: [4]u8 = undefined;
     const len = std.unicode.utf8Encode(@intCast(codepoint), &buf) catch return null;
@@ -72,15 +78,12 @@ fn decodeNumeric(body: []const u8, end: usize) ?DecodeResult {
 }
 
 const named_entities = std.StaticStringMap(u21).initComptime(.{
-    // XML predefined entities
     .{ "amp", '&' },
     .{ "lt", '<' },
     .{ "gt", '>' },
     .{ "quot", '"' },
     .{ "apos", '\'' },
-    // Non-breaking space
     .{ "nbsp", 0xA0 },
-    // Typographic symbols
     .{ "copy", 0xA9 },
     .{ "reg", 0xAE },
     .{ "trade", 0x2122 },
@@ -96,7 +99,6 @@ const named_entities = std.StaticStringMap(u21).initComptime(.{
     .{ "Prime", 0x2033 },
     .{ "laquo", 0xAB },
     .{ "raquo", 0xBB },
-    // Mathematical symbols
     .{ "times", 0xD7 },
     .{ "divide", 0xF7 },
     .{ "plusmn", 0xB1 },
@@ -109,7 +111,6 @@ const named_entities = std.StaticStringMap(u21).initComptime(.{
     .{ "sum", 0x2211 },
     .{ "prod", 0x220F },
     .{ "radic", 0x221A },
-    // Greek letters (commonly used in docs)
     .{ "alpha", 0x03B1 },
     .{ "beta", 0x03B2 },
     .{ "gamma", 0x03B3 },
@@ -120,12 +121,10 @@ const named_entities = std.StaticStringMap(u21).initComptime(.{
     .{ "pi", 0x03C0 },
     .{ "sigma", 0x03C3 },
     .{ "omega", 0x03C9 },
-    // Arrows
     .{ "larr", 0x2190 },
     .{ "uarr", 0x2191 },
     .{ "rarr", 0x2192 },
     .{ "darr", 0x2193 },
-    // Miscellaneous
     .{ "deg", 0xB0 },
     .{ "cent", 0xA2 },
     .{ "pound", 0xA3 },

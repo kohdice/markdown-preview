@@ -10,6 +10,16 @@ const LinkDefMap = link_mod.LinkDefMap;
 
 const min_table_col_width = 3;
 
+const border = struct {
+    const row_start = "| ";
+    const cell_separator = " | ";
+    const row_end = " |";
+    const divider_start = "|-";
+    const divider_fill = "-";
+    const divider_separator = "-+-";
+    const divider_end = "-|";
+};
+
 pub fn tryRenderTable(
     allocator: std.mem.Allocator,
     writer: *std.io.Writer,
@@ -164,7 +174,7 @@ pub fn tryRenderBlockQuoteTable(
     }
 
     try writer.splatByteAll(' ', bq_indent);
-    try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true }, "| ");
+    try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true }, border.row_start);
     try renderTableRow(allocator, writer, header_cells, col_widths, alignments, col_count, enable_ansi, .{
         .fg = palette.muted,
         .bold = true,
@@ -172,13 +182,13 @@ pub fn tryRenderBlockQuoteTable(
     try writer.writeByte('\n');
 
     try writer.splatByteAll(' ', bq_indent);
-    try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true }, "| ");
+    try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true }, border.row_start);
     try renderTableSeparator(writer, col_widths, col_count, enable_ansi, palette);
     try writer.writeByte('\n');
 
     for (body_rows.items) |row| {
         try writer.splatByteAll(' ', bq_indent);
-        try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true }, "| ");
+        try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true }, border.row_start);
         try renderTableRow(allocator, writer, row, col_widths, alignments, col_count, enable_ansi, .{
             .fg = palette.muted,
         }, palette, link_defs);
@@ -200,7 +210,7 @@ fn renderTableRow(
     palette: theme.Palette,
     link_defs: *const LinkDefMap,
 ) !void {
-    try ansi.writeStyled(writer, enable_ansi, .{ .dim = true }, "| ");
+    try ansi.writeStyled(writer, enable_ansi, .{ .dim = true }, border.row_start);
     for (0..col_count) |c| {
         const cell_text = if (c < cells.len) cells[c] else "";
         const cell_width = try output_mod.renderedDisplayWidth(allocator, cell_text, palette, link_defs);
@@ -220,10 +230,10 @@ fn renderTableRow(
         try writer.splatByteAll(' ', right_pad);
 
         if (c + 1 < col_count) {
-            try ansi.writeStyled(writer, enable_ansi, .{ .dim = true }, " | ");
+            try ansi.writeStyled(writer, enable_ansi, .{ .dim = true }, border.cell_separator);
         }
     }
-    try ansi.writeStyled(writer, enable_ansi, .{ .dim = true }, " |");
+    try ansi.writeStyled(writer, enable_ansi, .{ .dim = true }, border.row_end);
 }
 
 fn renderTableSeparator(
@@ -234,14 +244,14 @@ fn renderTableSeparator(
     palette: theme.Palette,
 ) !void {
     const style: ansi.TextStyle = .{ .fg = palette.subtle, .dim = true };
-    try ansi.writeStyled(writer, enable_ansi, style, "|-");
+    try ansi.writeStyled(writer, enable_ansi, style, border.divider_start);
     for (0..col_count) |c| {
         for (0..col_widths[c]) |_| {
-            try ansi.writeStyled(writer, enable_ansi, style, "-");
+            try ansi.writeStyled(writer, enable_ansi, style, border.divider_fill);
         }
         if (c + 1 < col_count) {
-            try ansi.writeStyled(writer, enable_ansi, style, "-+-");
+            try ansi.writeStyled(writer, enable_ansi, style, border.divider_separator);
         }
     }
-    try ansi.writeStyled(writer, enable_ansi, style, "-|");
+    try ansi.writeStyled(writer, enable_ansi, style, border.divider_end);
 }

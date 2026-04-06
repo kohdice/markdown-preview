@@ -5,6 +5,21 @@ pub const max_heading_level = 6;
 pub const min_fence_len = 3;
 pub const min_thematic_break_markers = 3;
 pub const max_ordered_digits = 9;
+/// CommonMark §6.7: a hard line break is signaled by a backslash or by
+/// at least two trailing spaces at the end of a line.
+pub const min_hard_break_spaces = 2;
+/// One marker character (`-`, `*`, `+`, `.`, or `)`) plus the mandatory
+/// trailing space.
+pub const marker_suffix_width: usize = 2;
+
+/// CommonMark §5.2: unordered list bullet markers.
+pub const unordered_list_markers = "-*+";
+/// CommonMark §5.2: ordered list number-delimiter characters.
+pub const ordered_list_markers = ".)";
+/// CommonMark §4.1: thematic break markers.
+pub const thematic_break_markers = "-_*";
+/// CommonMark §4.5: fenced code block delimiter characters.
+pub const fence_chars = "`~";
 
 pub const Heading = struct {
     level: u8,
@@ -74,7 +89,7 @@ pub fn parseListItem(line: []const u8) ?ListItem {
     if (indent >= line.len) return null;
 
     const marker = line[indent];
-    if (marker != '-' and marker != '*' and marker != '+') return null;
+    if (std.mem.indexOfScalar(u8, unordered_list_markers, marker) == null) return null;
     if (indent + 1 >= line.len) return null;
     if (line[indent + 1] != ' ' and line[indent + 1] != '\t') return null;
 
@@ -116,7 +131,7 @@ pub fn parseOrderedListItem(line: []const u8) ?OrderedListItem {
 
     if (digit_end >= line.len) return null;
     const marker = line[digit_end];
-    if (marker != '.' and marker != ')') return null;
+    if (std.mem.indexOfScalar(u8, ordered_list_markers, marker) == null) return null;
 
     if (digit_end + 1 < line.len and line[digit_end + 1] != ' ' and line[digit_end + 1] != '\t') return null;
 
@@ -164,7 +179,7 @@ pub fn parseFence(line: []const u8) ?Fence {
     if (index >= line.len) return null;
 
     const fence_char = line[index];
-    if (fence_char != '`' and fence_char != '~') return null;
+    if (std.mem.indexOfScalar(u8, fence_chars, fence_char) == null) return null;
 
     const fence_len = countRepeatedByte(line[index..], fence_char);
     if (fence_len < min_fence_len) return null;
@@ -196,7 +211,7 @@ pub fn isThematicBreak(line: []const u8) bool {
     if (trimmed.len < min_thematic_break_markers) return false;
 
     const marker = trimmed[0];
-    if (marker != '-' and marker != '_' and marker != '*') return false;
+    if (std.mem.indexOfScalar(u8, thematic_break_markers, marker) == null) return false;
 
     var marker_count: usize = 0;
     for (trimmed) |char| {
@@ -231,7 +246,7 @@ pub fn stripHardBreak(line: []const u8) []const u8 {
 
     var end = line.len;
     while (end > 0 and line[end - 1] == ' ') : (end -= 1) {}
-    if (line.len - end >= 2) {
+    if (line.len - end >= min_hard_break_spaces) {
         return line[0..end];
     }
     return line;

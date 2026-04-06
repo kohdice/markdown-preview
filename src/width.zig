@@ -1,7 +1,14 @@
 const std = @import("std");
 
 const ESC = 0x1b;
-const ZWJ = 0x200D; // Zero Width Joiner
+
+// Unicode formatting characters with zero display width.
+const SOFT_HYPHEN = 0x00AD;
+const ZWSP = 0x200B;
+const ZWNJ = 0x200C;
+const ZWJ = 0x200D;
+const WORD_JOINER = 0x2060;
+const BOM = 0xFEFF;
 
 /// ANSI CSI parameter byte range (0x20–0x3f per ECMA-48 §5.4)
 fn isCsiParamByte(byte: u8) bool {
@@ -273,12 +280,10 @@ fn codepointWidth(cp: u21) usize {
     if (cp < 0x20) return 0;
     if (cp == 0x7f) return 0;
 
-    if (cp == 0x200B) return 0; // Zero Width Space
-    if (cp == 0x200C) return 0; // Zero Width Non-Joiner
-    if (cp == ZWJ) return 0;
-    if (cp == 0x2060) return 0; // Word Joiner
-    if (cp == 0xFEFF) return 0; // BOM / Zero Width No-Break Space
-    if (cp == 0x00AD) return 0; // Soft Hyphen
+    switch (cp) {
+        ZWSP, ZWNJ, ZWJ, WORD_JOINER, BOM, SOFT_HYPHEN => return 0,
+        else => {},
+    }
 
     // Variation Selectors
     if (cp >= 0xFE00 and cp <= 0xFE0F) return 0; // VS1-VS16

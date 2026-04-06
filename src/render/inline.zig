@@ -5,6 +5,21 @@ const LinkDefMap = link_mod.LinkDefMap;
 
 const max_ref_label_len = 256;
 
+/// CommonMark §6.2: delimiter runs of length 1/2/3 map to emphasis, strong,
+/// and strong+emphasis; the same value drives the multiple-of-three
+/// rejection rule in the closer search.
+const max_emphasis_delim_run: usize = 3;
+
+/// Accept both `~text~` and `~~text~~`; longer runs fall through as literal
+/// tildes.
+const max_strikethrough_delim_run: usize = 2;
+
+/// RFC 3629 §3: a UTF-8 continuation byte has the bit pattern `10xxxxxx`.
+const utf8_continuation_mask: u8 = 0xC0;
+const utf8_continuation_tag: u8 = 0x80;
+
+const scheme_separator: []const u8 = "://";
+
 pub const InlineKind = enum { text, code_span, link_text, link_url, link_title, autolink, image_alt, image_url, emphasis, strong, bold_italic, strikethrough };
 
 pub const InlineSegment = struct {
@@ -260,8 +275,8 @@ const CharClass = enum { whitespace, punctuation, other };
 fn prevCodepoint(text: []const u8, pos: usize) ?u21 {
     if (pos == 0) return null;
     var start = pos - 1;
-    while (start > 0 and text[start] & 0xC0 == 0x80) : (start -= 1) {}
-    if (text[start] & 0xC0 == 0x80) return null;
+    while (start > 0 and text[start] & utf8_continuation_mask == utf8_continuation_tag) : (start -= 1) {}
+    if (text[start] & utf8_continuation_mask == utf8_continuation_tag) return null;
     const len = std.unicode.utf8ByteSequenceLength(text[start]) catch return null;
     if (start + len != pos) return null;
     return std.unicode.utf8Decode(text[start..][0..len]) catch null;
@@ -325,7 +340,7 @@ fn tryParseEmphasis(text: []const u8, start: usize) ?EmphasisResult {
     var delim_len: usize = 0;
     while (start + delim_len < text.len and text[start + delim_len] == delim_char) : (delim_len += 1) {}
 
-    if (delim_len == 0 or delim_len > 3) return null;
+    if (delim_len == 0 or delim_len > max_emphasis_delim_run) return null;
 
     const after_delim = start + delim_len;
     if (after_delim >= text.len) return null;
@@ -367,7 +382,10 @@ fn tryParseEmphasis(text: []const u8, start: usize) ?EmphasisResult {
                     }
 
                     const sum = delim_len + close_len;
-                    if (sum % 3 == 0 and (delim_len % 3 != 0 or close_len % 3 != 0)) {
+                    if (sum % max_emphasis_delim_run == 0 and
+                        (delim_len % max_emphasis_delim_run != 0 or
+                            close_len % max_emphasis_delim_run != 0))
+                    {
                         pos += close_len;
                         continue;
                     }
@@ -379,7 +397,7 @@ fn tryParseEmphasis(text: []const u8, start: usize) ?EmphasisResult {
                         continue;
                     }
 
-                    const kind: InlineKind = if (delim_len >= 3)
+                    const kind: InlineKind = if (delim_len >= max_emphasis_delim_run)
                         .bold_italic
                     else if (delim_len == 2)
                         .strong
@@ -410,7 +428,7 @@ fn tryParseStrikethrough(text: []const u8, start: usize) ?StrikethroughResult {
     var delim_len: usize = 0;
     while (start + delim_len < text.len and text[start + delim_len] == '~') : (delim_len += 1) {}
 
-    if (delim_len < 1 or delim_len > 2) return null;
+    if (delim_len < 1 or delim_len > max_strikethrough_delim_run) return null;
 
     const after_delim = start + delim_len;
     if (after_delim >= text.len) return null;
@@ -456,7 +474,7 @@ fn tryParseAutolink(text: []const u8, start: usize) ?AutolinkResult {
         switch (text[pos]) {
             '>' => {
                 if (scheme_end == 0) return null;
-                const scheme = text[start + 1 .. scheme_end - 3];
+                const scheme = text[start + 1 .. scheme_end - scheme_separator.len];
                 if (scheme.len == 0) return null;
                 if (!std.ascii.isAlphabetic(scheme[0])) return null;
                 return .{
@@ -466,8 +484,8 @@ fn tryParseAutolink(text: []const u8, start: usize) ?AutolinkResult {
             },
             ' ', '\t', '\n', '<' => return null,
             ':' => {
-                if (scheme_end == 0 and pos + 2 < text.len and text[pos + 1] == '/' and text[pos + 2] == '/') {
-                    scheme_end = pos + 3;
+                if (scheme_end == 0 and std.mem.startsWith(u8, text[pos..], scheme_separator)) {
+                    scheme_end = pos + scheme_separator.len;
                 }
                 pos += 1;
             },

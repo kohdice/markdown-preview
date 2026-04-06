@@ -40,7 +40,6 @@ fn isDelimiterCell(cell: []const u8) bool {
     return i == cell.len;
 }
 
-/// Parse alignments from a delimiter row.
 pub fn parseAlignments(allocator: std.mem.Allocator, line: []const u8) ![]Alignment {
     const trimmed = std.mem.trim(u8, line, " \t");
     var aligns: std.ArrayListUnmanaged(Alignment) = .{};
@@ -118,7 +117,6 @@ const CellIterator = struct {
             self.pos += 1;
         }
 
-        // Last cell (no trailing pipe)
         self.done = true;
         const cell = self.text[start..self.pos];
         if (std.mem.trim(u8, cell, " \t").len == 0) return null;

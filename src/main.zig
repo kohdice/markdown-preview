@@ -1,6 +1,9 @@
 const std = @import("std");
 const cli = @import("cli.zig");
 
+const stdout_buffer_size = 4096;
+const stderr_buffer_size = 1024;
+
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
     const raw_args = try std.process.argsAlloc(allocator);
@@ -16,8 +19,8 @@ pub fn main() !void {
     const stdout_file = std.fs.File.stdout();
     const stderr_file = std.fs.File.stderr();
 
-    var stdout_buffer: [4096]u8 = undefined;
-    var stderr_buffer: [1024]u8 = undefined;
+    var stdout_buffer: [stdout_buffer_size]u8 = undefined;
+    var stderr_buffer: [stderr_buffer_size]u8 = undefined;
     var stdout_stream = stdout_file.writer(&stdout_buffer);
     var stderr_stream = stderr_file.writer(&stderr_buffer);
 

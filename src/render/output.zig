@@ -10,6 +10,15 @@ const link_mod = @import("link.zig");
 const LinkDefMap = link_mod.LinkDefMap;
 const InlineSegment = inline_parse.InlineSegment;
 
+const link_url_open = "(";
+const link_url_close = ")";
+const link_title_separator = " — ";
+const image_alt_prefix = "[img: ";
+const image_alt_suffix = "]";
+const blockquote_marker = "| ";
+const checkbox_checked = "[x] ";
+const checkbox_unchecked = "[ ] ";
+
 pub fn renderInline(
     allocator: std.mem.Allocator,
     writer: *std.io.Writer,
@@ -31,28 +40,29 @@ pub fn renderInline(
             .link_text => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .fg = palette.link, .underline = true }), palette, link_defs),
             .link_url => {
                 const muted_dim: ansi.TextStyle = .{ .fg = palette.muted, .dim = true };
-                try ansi.writeStyled(writer, enable_ansi, muted_dim, "(");
+                try ansi.writeStyled(writer, enable_ansi, muted_dim, link_url_open);
                 try ansi.writeStyled(writer, enable_ansi, muted_dim, seg.content);
-                try ansi.writeStyled(writer, enable_ansi, muted_dim, ")");
+                try ansi.writeStyled(writer, enable_ansi, muted_dim, link_url_close);
             },
             .link_title => {
-                try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true, .italic = true }, " — ");
-                try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.muted, .dim = true, .italic = true }, seg.content);
+                const title_style: ansi.TextStyle = .{ .fg = palette.muted, .dim = true, .italic = true };
+                try ansi.writeStyled(writer, enable_ansi, title_style, link_title_separator);
+                try ansi.writeStyled(writer, enable_ansi, title_style, seg.content);
             },
             .autolink => {
                 try ansi.writeStyled(writer, enable_ansi, base_style.merge(.{ .fg = palette.link, .underline = true }), seg.content);
             },
             .image_alt => {
                 const img_style: ansi.TextStyle = .{ .fg = palette.muted, .italic = true };
-                try ansi.writeStyled(writer, enable_ansi, img_style, "[img: ");
+                try ansi.writeStyled(writer, enable_ansi, img_style, image_alt_prefix);
                 try renderInline(allocator, writer, seg.content, enable_ansi, img_style, palette, link_defs);
-                try ansi.writeStyled(writer, enable_ansi, img_style, "]");
+                try ansi.writeStyled(writer, enable_ansi, img_style, image_alt_suffix);
             },
             .image_url => {
                 const muted_dim: ansi.TextStyle = .{ .fg = palette.muted, .dim = true };
-                try ansi.writeStyled(writer, enable_ansi, muted_dim, "(");
+                try ansi.writeStyled(writer, enable_ansi, muted_dim, link_url_open);
                 try ansi.writeStyled(writer, enable_ansi, muted_dim, seg.content);
-                try ansi.writeStyled(writer, enable_ansi, muted_dim, ")");
+                try ansi.writeStyled(writer, enable_ansi, muted_dim, link_url_close);
             },
             .emphasis => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .italic = true }), palette, link_defs),
             .strong => try renderInline(allocator, writer, seg.content, enable_ansi, base_style.merge(.{ .bold = true }), palette, link_defs),
@@ -72,12 +82,12 @@ pub fn renderCheckbox(
         if (is_checked) {
             try ansi.writeStyled(writer, enable_ansi, .{
                 .fg = palette.list_marker,
-            }, "[x] ");
+            }, checkbox_checked);
         } else {
             try ansi.writeStyled(writer, enable_ansi, .{
                 .fg = palette.muted,
                 .dim = true,
-            }, "[ ] ");
+            }, checkbox_unchecked);
         }
     }
 }
@@ -93,7 +103,7 @@ pub fn renderBlockQuoteContent(
     try ansi.writeStyled(writer, enable_ansi, .{
         .fg = palette.muted,
         .dim = true,
-    }, "| ");
+    }, blockquote_marker);
 
     if (block.parseBlockQuote(content)) |nested| {
         try writer.splatByteAll(' ', nested.indent);
