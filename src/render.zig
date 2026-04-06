@@ -7,7 +7,10 @@ const link_mod = @import("render/link.zig");
 const output_mod = @import("render/output.zig");
 const render_table = @import("render/table.zig");
 
-const thematic_break_display = "--------------------------------";
+/// Visible column width of a rendered thematic break. Short enough to fit
+/// narrow terminals while still reading as a visual separator.
+const thematic_break_width = 32;
+const thematic_break_display = "-" ** thematic_break_width;
 
 pub const RenderOptions = struct {
     enable_ansi: bool = false,
@@ -75,7 +78,7 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                 line_start = new_start;
                 continue;
             } else if (block.parseHeading(line)) |heading| {
-                try output_mod.renderInline(allocator, writer, block.stripHardBreak(heading.content), opts.enable_ansi, heading_styles[heading.level - 1], palette, &link_defs);
+                try output_mod.renderInline(allocator, writer, block.stripHardBreak(heading.content), opts.enable_ansi, headingStyle(heading.level, palette), palette, &link_defs);
             } else if (block.parseBlockQuote(line)) |quote| {
                 if (std.mem.indexOfScalar(u8, quote.content, '|') != null) {
                     if (try render_table.tryRenderBlockQuoteTable(allocator, writer, input, line_start, opts.enable_ansi, palette, &link_defs)) |new_start| {
@@ -102,7 +105,7 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                     .fg = palette.body,
                 }, palette, &link_defs);
                 if (has_newline) try writer.writeByte('\n');
-                const content_col = ordered.indent + ordered.number.len + 2;
+                const content_col = ordered.indent + ordered.number.len + block.marker_suffix_width;
                 line_start = try output_mod.consumeListContinuation(allocator, writer, input, line_end + @intFromBool(has_newline), content_col, opts.enable_ansi, palette, &link_defs);
                 prev_was_blank = false;
                 continue;
@@ -118,7 +121,7 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                     .fg = palette.body,
                 }, palette, &link_defs);
                 if (has_newline) try writer.writeByte('\n');
-                const content_col = item.indent + 2;
+                const content_col = item.indent + block.marker_suffix_width;
                 line_start = try output_mod.consumeListContinuation(allocator, writer, input, line_end + @intFromBool(has_newline), content_col, opts.enable_ansi, palette, &link_defs);
                 prev_was_blank = false;
                 continue;
@@ -151,14 +154,16 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
     }
 }
 
-const heading_styles = [6]ansi.TextStyle{
-    .{ .fg = .{ .r = 0xb5, .g = 0x89, .b = 0x00 }, .bold = true, .underline = true },
-    .{ .fg = .{ .r = 0xcb, .g = 0x4b, .b = 0x16 }, .bold = true, .underline = true },
-    .{ .fg = .{ .r = 0x26, .g = 0x8b, .b = 0xd2 }, .bold = true },
-    .{ .fg = .{ .r = 0x2a, .g = 0xa1, .b = 0x98 }, .bold = true },
-    .{ .fg = .{ .r = 0x6c, .g = 0x71, .b = 0xc4 } },
-    .{ .fg = .{ .r = 0x6c, .g = 0x71, .b = 0xc4 }, .dim = true },
-};
+fn headingStyle(level: u8, p: theme.Palette) ansi.TextStyle {
+    const color = p.heading_colors[level - 1];
+    return switch (level) {
+        1, 2 => .{ .fg = color, .bold = true, .underline = true },
+        3, 4 => .{ .fg = color, .bold = true },
+        5 => .{ .fg = color },
+        6 => .{ .fg = color, .dim = true },
+        else => unreachable,
+    };
+}
 
 fn renderToOwnedSlice(
     allocator: std.mem.Allocator,
