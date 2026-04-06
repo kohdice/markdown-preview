@@ -1,4 +1,5 @@
 const std = @import("std");
+const block = @import("block.zig");
 const link_mod = @import("link.zig");
 
 const LinkDefMap = link_mod.LinkDefMap;
@@ -243,7 +244,7 @@ const TitleInfo = struct {
 };
 
 fn extractTitle(inner: []const u8) TitleInfo {
-    const trimmed = std.mem.trimEnd(u8, inner, " \t");
+    const trimmed = std.mem.trimEnd(u8, inner, block.horizontal_whitespace);
     if (trimmed.len < 4) return .{ .url_len = inner.len, .title = null };
 
     const last = trimmed[trimmed.len - 1];
@@ -257,7 +258,7 @@ fn extractTitle(inner: []const u8) TitleInfo {
     while (i > 0) : (i -= 1) {
         if (trimmed[i] == open_quote) {
             if (i > 0 and (trimmed[i - 1] == ' ' or trimmed[i - 1] == '\t')) {
-                const url_part = std.mem.trimEnd(u8, trimmed[0 .. i - 1], " \t");
+                const url_part = std.mem.trimEnd(u8, trimmed[0 .. i - 1], block.horizontal_whitespace);
                 if (url_part.len == 0) return .{ .url_len = inner.len, .title = null };
                 return .{
                     .url_len = url_part.len,

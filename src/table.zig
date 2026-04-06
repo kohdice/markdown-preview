@@ -1,4 +1,5 @@
 const std = @import("std");
+const block = @import("render/block.zig");
 
 pub const Alignment = enum { left, center, right };
 
@@ -12,13 +13,13 @@ pub const Table = struct {
 /// Check if a line is a valid table delimiter row.
 /// Pattern: optional leading `|`, then cells of `:?-+:?` separated by `|`.
 pub fn isDelimiterRow(line: []const u8) bool {
-    const trimmed = std.mem.trim(u8, line, " \t");
+    const trimmed = std.mem.trim(u8, line, block.horizontal_whitespace);
     if (trimmed.len == 0) return false;
 
     var col_count: usize = 0;
     var iter = CellIterator.init(trimmed);
     while (iter.next()) |cell| {
-        const c = std.mem.trim(u8, cell, " \t");
+        const c = std.mem.trim(u8, cell, block.horizontal_whitespace);
         if (!isDelimiterCell(c)) return false;
         col_count += 1;
     }
@@ -41,13 +42,13 @@ fn isDelimiterCell(cell: []const u8) bool {
 }
 
 pub fn parseAlignments(allocator: std.mem.Allocator, line: []const u8) ![]Alignment {
-    const trimmed = std.mem.trim(u8, line, " \t");
+    const trimmed = std.mem.trim(u8, line, block.horizontal_whitespace);
     var aligns: std.ArrayListUnmanaged(Alignment) = .{};
     defer aligns.deinit(allocator);
 
     var iter = CellIterator.init(trimmed);
     while (iter.next()) |cell| {
-        const c = std.mem.trim(u8, cell, " \t");
+        const c = std.mem.trim(u8, cell, block.horizontal_whitespace);
         const starts_colon = c.len > 0 and c[0] == ':';
         const ends_colon = c.len > 0 and c[c.len - 1] == ':';
 
@@ -65,13 +66,13 @@ pub fn parseAlignments(allocator: std.mem.Allocator, line: []const u8) ![]Alignm
 
 /// Parse a row into cells (split on unescaped `|`).
 pub fn parseCells(allocator: std.mem.Allocator, line: []const u8) ![][]const u8 {
-    const trimmed = std.mem.trim(u8, line, " \t");
+    const trimmed = std.mem.trim(u8, line, block.horizontal_whitespace);
     var cells: std.ArrayListUnmanaged([]const u8) = .{};
     defer cells.deinit(allocator);
 
     var iter = CellIterator.init(trimmed);
     while (iter.next()) |cell| {
-        try cells.append(allocator, std.mem.trim(u8, cell, " \t"));
+        try cells.append(allocator, std.mem.trim(u8, cell, block.horizontal_whitespace));
     }
 
     return try cells.toOwnedSlice(allocator);
@@ -108,7 +109,7 @@ const CellIterator = struct {
 
                 // If this pipe is the trailing one and nothing follows, don't emit empty cell
                 if (self.pos >= self.text.len or
-                    std.mem.trim(u8, self.text[self.pos..], " \t").len == 0)
+                    std.mem.trim(u8, self.text[self.pos..], block.horizontal_whitespace).len == 0)
                 {
                     self.done = true;
                 }
@@ -119,7 +120,7 @@ const CellIterator = struct {
 
         self.done = true;
         const cell = self.text[start..self.pos];
-        if (std.mem.trim(u8, cell, " \t").len == 0) return null;
+        if (std.mem.trim(u8, cell, block.horizontal_whitespace).len == 0) return null;
         return cell;
     }
 };

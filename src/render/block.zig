@@ -20,6 +20,9 @@ pub const ordered_list_markers = ".)";
 pub const thematic_break_markers = "-_*";
 /// CommonMark §4.5: fenced code block delimiter characters.
 pub const fence_chars = "`~";
+/// CommonMark §2.1: horizontal tab (U+0009) and space (U+0020).
+/// Excludes line terminators because block-level parsers work line-by-line.
+pub const horizontal_whitespace = " \t";
 
 pub const Heading = struct {
     level: u8,
@@ -73,13 +76,13 @@ pub fn parseHeading(line: []const u8) ?Heading {
 }
 
 pub fn trimClosingHashes(text: []const u8) []const u8 {
-    const trimmed = std.mem.trimEnd(u8, text, " \t");
+    const trimmed = std.mem.trimEnd(u8, text, horizontal_whitespace);
     var end = trimmed.len;
 
     while (end > 0 and trimmed[end - 1] == '#') : (end -= 1) {}
     if (end == trimmed.len) return trimmed;
     if (end > 0 and (trimmed[end - 1] == ' ' or trimmed[end - 1] == '\t')) {
-        return std.mem.trimEnd(u8, trimmed[0 .. end - 1], " \t");
+        return std.mem.trimEnd(u8, trimmed[0 .. end - 1], horizontal_whitespace);
     }
     return trimmed;
 }
@@ -149,7 +152,7 @@ pub fn parseOrderedListItem(line: []const u8) ?OrderedListItem {
 }
 
 pub fn isListContinuation(line: []const u8, content_col: usize) bool {
-    if (std.mem.trim(u8, line, " \t").len == 0) return false;
+    if (std.mem.trim(u8, line, horizontal_whitespace).len == 0) return false;
     const indent = countLeadingWhitespace(line);
     if (indent < content_col) return false;
     if (parseListItem(line) != null) return false;
@@ -185,8 +188,8 @@ pub fn parseFence(line: []const u8) ?Fence {
     if (fence_len < min_fence_len) return null;
 
     const info_start = index + fence_len;
-    const info = std.mem.trim(u8, line[info_start..], " \t");
-    const lang_end = std.mem.indexOfAny(u8, info, " \t") orelse info.len;
+    const info = std.mem.trim(u8, line[info_start..], horizontal_whitespace);
+    const lang_end = std.mem.indexOfAny(u8, info, horizontal_whitespace) orelse info.len;
 
     return .{
         .fence_char = fence_char,
@@ -203,11 +206,11 @@ pub fn isClosingFence(line: []const u8, fence: Fence) bool {
     const fence_len = countRepeatedByte(line[index..], fence.fence_char);
     if (fence_len < fence.fence_len) return false;
 
-    return std.mem.trim(u8, line[index + fence_len ..], " \t").len == 0;
+    return std.mem.trim(u8, line[index + fence_len ..], horizontal_whitespace).len == 0;
 }
 
 pub fn isThematicBreak(line: []const u8) bool {
-    const trimmed = std.mem.trim(u8, line, " \t");
+    const trimmed = std.mem.trim(u8, line, horizontal_whitespace);
     if (trimmed.len < min_thematic_break_markers) return false;
 
     const marker = trimmed[0];

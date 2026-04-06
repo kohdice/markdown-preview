@@ -70,7 +70,7 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                     .fg = palette.code_fence,
                     .dim = true,
                 }, line);
-            } else if (std.mem.trim(u8, line, " \t").len == 0) {
+            } else if (std.mem.trim(u8, line, block.horizontal_whitespace).len == 0) {
                 if (!prev_was_blank) {
                     prev_was_blank = true;
                 } else {
@@ -157,7 +157,7 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                 }
             }
 
-            if (std.mem.trim(u8, line, " \t").len != 0) prev_was_blank = false;
+            if (std.mem.trim(u8, line, block.horizontal_whitespace).len != 0) prev_was_blank = false;
         }
 
         if (has_newline) try writer.writeByte('\n');

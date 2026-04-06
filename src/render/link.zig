@@ -97,7 +97,7 @@ pub fn parseLinkDefinition(line: []const u8) ?LinkDefinition {
         }
     }
 
-    const remaining = std.mem.trim(u8, line[pos..], " \t");
+    const remaining = std.mem.trim(u8, line[pos..], block.horizontal_whitespace);
     if (remaining.len > 0) return null;
 
     return .{ .label = label, .url = url, .title = title };

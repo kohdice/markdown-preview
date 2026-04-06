@@ -54,7 +54,7 @@ pub fn tryRenderTable(
         const row_end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
         const row_line = std.mem.trimEnd(u8, input[pos..row_end], "\r");
 
-        if (std.mem.trim(u8, row_line, " \t").len == 0 or std.mem.indexOfScalar(u8, row_line, '|') == null) break;
+        if (std.mem.trim(u8, row_line, block.horizontal_whitespace).len == 0 or std.mem.indexOfScalar(u8, row_line, '|') == null) break;
         if (block.isBlockLevelStart(row_line)) break;
 
         try body_lines.append(allocator, row_line);
@@ -150,7 +150,7 @@ pub fn tryRenderBlockQuoteTable(
         raw = std.mem.trimEnd(u8, input[pos..end], "\r");
 
         const bq = block.parseBlockQuote(raw) orelse break;
-        if (std.mem.trim(u8, bq.content, " \t").len == 0 or std.mem.indexOfScalar(u8, bq.content, '|') == null) break;
+        if (std.mem.trim(u8, bq.content, block.horizontal_whitespace).len == 0 or std.mem.indexOfScalar(u8, bq.content, '|') == null) break;
         if (block.isBlockLevelStart(bq.content)) break;
 
         try body_rows.append(allocator, try table_parse.parseCells(allocator, bq.content));
