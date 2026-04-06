@@ -1,10 +1,14 @@
 const std = @import("std");
 const theme = @import("theme.zig");
 
+/// ANSI SGR reset sequence (ECMA-48 §8.3.117, SGR parameter 0).
+/// Clears all active style attributes. Exported so modules that emit or
+/// detect ANSI style boundaries share a single source of truth.
+pub const reset_sequence = "\x1b[0m";
+
 /// ANSI Select Graphic Rendition (SGR) escape sequences (ECMA-48 §8.3.117).
 /// The `38;2;r;g;b` form is the 24-bit "true color" foreground extension.
 const sgr = struct {
-    const reset = "\x1b[0m";
     const bold = "\x1b[1m";
     const dim = "\x1b[2m";
     const italic = "\x1b[3m";
@@ -63,7 +67,7 @@ pub fn writeStyled(
 
     try applyStyle(writer, style);
     try writeSanitized(writer, text);
-    try writer.writeAll(sgr.reset);
+    try writer.writeAll(reset_sequence);
 }
 
 /// Write text with C0 control characters and DEL stripped to prevent

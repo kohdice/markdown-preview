@@ -1,4 +1,5 @@
 const std = @import("std");
+const ansi = @import("ansi.zig");
 
 const ESC = 0x1b;
 
@@ -112,11 +113,7 @@ pub fn sliceToWidthAlloc(allocator: std.mem.Allocator, text: []const u8, max_wid
     while (i < text.len) {
         if (skipAnsiCsi(text, i)) |after| {
             const seq = text[i..after];
-            if (seq.len == 4 and seq[2] == '0' and seq[3] == 'm') {
-                ansi_active = false;
-            } else {
-                ansi_active = true;
-            }
+            ansi_active = !std.mem.eql(u8, seq, ansi.reset_sequence);
             i = after;
             continue;
         }
@@ -156,10 +153,9 @@ pub fn sliceToWidthAlloc(allocator: std.mem.Allocator, text: []const u8, max_wid
 
     const truncated = i < text.len;
     if (truncated and ansi_active) {
-        const reset = "\x1b[0m";
-        var result = try allocator.alloc(u8, i + reset.len);
+        var result = try allocator.alloc(u8, i + ansi.reset_sequence.len);
         @memcpy(result[0..i], text[0..i]);
-        @memcpy(result[i..][0..reset.len], reset);
+        @memcpy(result[i..][0..ansi.reset_sequence.len], ansi.reset_sequence);
         return result;
     }
     return try allocator.dupe(u8, text[0..i]);
