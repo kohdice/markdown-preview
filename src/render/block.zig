@@ -24,6 +24,11 @@ pub const fence_chars = "`~";
 /// Excludes line terminators because block-level parsers work line-by-line.
 pub const horizontal_whitespace = " \t";
 
+/// CRLF line-ending normalization trim set. After splitting input on `\n`,
+/// strip a trailing `\r` so Windows (CRLF) and Unix (LF) inputs produce
+/// identical line slices for downstream block parsing.
+pub const carriage_return = "\r";
+
 /// Byte-level predicate counterpart to `horizontal_whitespace`. Use this in
 /// manual loops over `[]const u8` indexes where the trim-set form does not
 /// apply (e.g. while-loops advancing a cursor character by character).

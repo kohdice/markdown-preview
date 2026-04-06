@@ -167,7 +167,7 @@ pub fn consumeListContinuation(
     while (pos < input.len) {
         const end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
         const has_nl = end < input.len;
-        const raw = std.mem.trimEnd(u8, input[pos..end], "\r");
+        const raw = std.mem.trimEnd(u8, input[pos..end], block.carriage_return);
 
         if (!block.isListContinuation(raw, content_col)) break;
 

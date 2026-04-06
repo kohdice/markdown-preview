@@ -43,7 +43,7 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
     while (line_start < input.len) {
         const line_end = std.mem.indexOfScalarPos(u8, input, line_start, '\n') orelse input.len;
         const has_newline = line_end < input.len;
-        const raw_line = std.mem.trimEnd(u8, input[line_start..line_end], "\r");
+        const raw_line = std.mem.trimEnd(u8, input[line_start..line_end], block.carriage_return);
 
         if (active_fence) |fence| {
             if (block.isClosingFence(raw_line, fence)) {
