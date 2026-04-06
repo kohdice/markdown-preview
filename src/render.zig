@@ -2,11 +2,11 @@ const std = @import("std");
 const ansi = @import("ansi.zig");
 const theme = @import("theme.zig");
 const width = @import("width.zig");
-const block = @import("render/block.zig");
-const link_mod = @import("render/link.zig");
-const output_mod = @import("render/output.zig");
-const render_table = @import("render/table.zig");
-const highlight = @import("render/highlight.zig");
+const block = @import("block.zig");
+const link_mod = @import("link.zig");
+const text = @import("text.zig");
+const tabular = @import("tabular.zig");
+const highlight = @import("highlight.zig");
 
 /// Visible column width of a rendered thematic break. Short enough to fit
 /// narrow terminals while still reading as a visual separator.
@@ -84,22 +84,22 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                     .fg = palette.subtle,
                     .dim = true,
                 }, thematic_break_display);
-            } else if (try render_table.tryRenderTable(allocator, writer, input, line, line_end, opts.enable_ansi, palette, &link_defs)) |new_start| {
+            } else if (try tabular.tryRenderTable(allocator, writer, input, line, line_end, opts.enable_ansi, palette, &link_defs)) |new_start| {
                 prev_was_blank = false;
                 line_start = new_start;
                 continue;
             } else if (block.parseHeading(line)) |heading| {
-                try output_mod.renderInline(allocator, writer, block.stripHardBreak(heading.content), opts.enable_ansi, headingStyle(heading.level, palette), palette, &link_defs);
+                try text.renderInline(allocator, writer, block.stripHardBreak(heading.content), opts.enable_ansi, headingStyle(heading.level, palette), palette, &link_defs);
             } else if (block.parseBlockQuote(line)) |quote| {
                 if (std.mem.indexOfScalar(u8, quote.content, '|') != null) {
-                    if (try render_table.tryRenderBlockQuoteTable(allocator, writer, input, line_start, opts.enable_ansi, palette, &link_defs)) |new_start| {
+                    if (try tabular.tryRenderBlockQuoteTable(allocator, writer, input, line_start, opts.enable_ansi, palette, &link_defs)) |new_start| {
                         prev_was_blank = false;
                         line_start = new_start;
                         continue;
                     }
                 }
                 try writer.splatByteAll(' ', quote.indent);
-                try output_mod.renderBlockQuoteContent(allocator, writer, quote.content, opts.enable_ansi, palette, &link_defs);
+                try text.renderBlockQuoteContent(allocator, writer, quote.content, opts.enable_ansi, palette, &link_defs);
             } else if (block.parseOrderedListItem(line)) |ordered| {
                 try writer.splatByteAll(' ', ordered.indent);
                 try ansi.writeStyled(writer, opts.enable_ansi, .{
@@ -111,13 +111,13 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                     .fg = palette.list_marker,
                     .bold = true,
                 }, &marker_buf);
-                try output_mod.renderCheckbox(writer, ordered.checked, opts.enable_ansi, palette);
-                try output_mod.renderInline(allocator, writer, block.stripHardBreak(ordered.content), opts.enable_ansi, .{
+                try text.renderCheckbox(writer, ordered.checked, opts.enable_ansi, palette);
+                try text.renderInline(allocator, writer, block.stripHardBreak(ordered.content), opts.enable_ansi, .{
                     .fg = palette.body,
                 }, palette, &link_defs);
                 if (has_newline) try writer.writeByte('\n');
                 const content_col = ordered.indent + ordered.number.len + block.marker_suffix_width;
-                line_start = try output_mod.consumeListContinuation(allocator, writer, input, line_end + @intFromBool(has_newline), content_col, opts.enable_ansi, palette, &link_defs);
+                line_start = try text.consumeListContinuation(allocator, writer, input, line_end + @intFromBool(has_newline), content_col, opts.enable_ansi, palette, &link_defs);
                 prev_was_blank = false;
                 continue;
             } else if (block.parseListItem(line)) |item| {
@@ -127,20 +127,20 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                     .fg = palette.list_marker,
                     .bold = true,
                 }, &marker);
-                try output_mod.renderCheckbox(writer, item.checked, opts.enable_ansi, palette);
-                try output_mod.renderInline(allocator, writer, block.stripHardBreak(item.content), opts.enable_ansi, .{
+                try text.renderCheckbox(writer, item.checked, opts.enable_ansi, palette);
+                try text.renderInline(allocator, writer, block.stripHardBreak(item.content), opts.enable_ansi, .{
                     .fg = palette.body,
                 }, palette, &link_defs);
                 if (has_newline) try writer.writeByte('\n');
                 const content_col = item.indent + block.marker_suffix_width;
-                line_start = try output_mod.consumeListContinuation(allocator, writer, input, line_end + @intFromBool(has_newline), content_col, opts.enable_ansi, palette, &link_defs);
+                line_start = try text.consumeListContinuation(allocator, writer, input, line_end + @intFromBool(has_newline), content_col, opts.enable_ansi, palette, &link_defs);
                 prev_was_blank = false;
                 continue;
             } else {
                 if (opts.wrap_width) |wrap_w| {
                     var buf: std.io.Writer.Allocating = .init(allocator);
                     defer buf.deinit();
-                    try output_mod.renderInline(allocator, &buf.writer, block.stripHardBreak(line), opts.enable_ansi, .{
+                    try text.renderInline(allocator, &buf.writer, block.stripHardBreak(line), opts.enable_ansi, .{
                         .fg = palette.body,
                     }, palette, &link_defs);
                     var list = buf.toArrayList();
@@ -151,7 +151,7 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                     defer allocator.free(wrapped);
                     try writer.writeAll(wrapped);
                 } else {
-                    try output_mod.renderInline(allocator, writer, block.stripHardBreak(line), opts.enable_ansi, .{
+                    try text.renderInline(allocator, writer, block.stripHardBreak(line), opts.enable_ansi, .{
                         .fg = palette.body,
                     }, palette, &link_defs);
                 }

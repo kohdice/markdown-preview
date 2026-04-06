@@ -1,9 +1,9 @@
 const std = @import("std");
-const ansi = @import("../ansi.zig");
-const table_parse = @import("../table.zig");
-const theme = @import("../theme.zig");
+const ansi = @import("ansi.zig");
+const table_parse = @import("table.zig");
+const theme = @import("theme.zig");
 const block = @import("block.zig");
-const output_mod = @import("output.zig");
+const text = @import("text.zig");
 const link_mod = @import("link.zig");
 
 const LinkDefMap = link_mod.LinkDefMap;
@@ -78,10 +78,10 @@ pub fn tryRenderTable(
 
     for (0..col_count) |c| {
         if (c < header_cells.len)
-            col_widths[c] = @max(col_widths[c], try output_mod.renderedDisplayWidth(allocator, header_cells[c], palette, link_defs));
+            col_widths[c] = @max(col_widths[c], try text.renderedDisplayWidth(allocator, header_cells[c], palette, link_defs));
         for (body_rows.items) |row| {
             if (c < row.len)
-                col_widths[c] = @max(col_widths[c], try output_mod.renderedDisplayWidth(allocator, row[c], palette, link_defs));
+                col_widths[c] = @max(col_widths[c], try text.renderedDisplayWidth(allocator, row[c], palette, link_defs));
         }
         col_widths[c] = @max(col_widths[c], min_table_col_width);
     }
@@ -165,10 +165,10 @@ pub fn tryRenderBlockQuoteTable(
 
     for (0..col_count) |c| {
         if (c < header_cells.len)
-            col_widths[c] = @max(col_widths[c], try output_mod.renderedDisplayWidth(allocator, header_cells[c], palette, link_defs));
+            col_widths[c] = @max(col_widths[c], try text.renderedDisplayWidth(allocator, header_cells[c], palette, link_defs));
         for (body_rows.items) |row| {
             if (c < row.len)
-                col_widths[c] = @max(col_widths[c], try output_mod.renderedDisplayWidth(allocator, row[c], palette, link_defs));
+                col_widths[c] = @max(col_widths[c], try text.renderedDisplayWidth(allocator, row[c], palette, link_defs));
         }
         col_widths[c] = @max(col_widths[c], min_table_col_width);
     }
@@ -213,7 +213,7 @@ fn renderTableRow(
     try ansi.writeStyled(writer, enable_ansi, .{ .dim = true }, border.row_start);
     for (0..col_count) |c| {
         const cell_text = if (c < cells.len) cells[c] else "";
-        const cell_width = try output_mod.renderedDisplayWidth(allocator, cell_text, palette, link_defs);
+        const cell_width = try text.renderedDisplayWidth(allocator, cell_text, palette, link_defs);
         const col_w = col_widths[c];
         const padding = if (col_w > cell_width) col_w - cell_width else 0;
         const col_align = if (c < alignments.len) alignments[c] else .left;
@@ -226,7 +226,7 @@ fn renderTableRow(
         const right_pad = padding - left_pad;
 
         try writer.splatByteAll(' ', left_pad);
-        try output_mod.renderInline(allocator, writer, cell_text, enable_ansi, style, palette, link_defs);
+        try text.renderInline(allocator, writer, cell_text, enable_ansi, style, palette, link_defs);
         try writer.splatByteAll(' ', right_pad);
 
         if (c + 1 < col_count) {

@@ -1,5 +1,5 @@
 const std = @import("std");
-const block = @import("render/block.zig");
+const block = @import("block.zig");
 
 pub const Alignment = enum { left, center, right };
 

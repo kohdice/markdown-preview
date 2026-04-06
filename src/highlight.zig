@@ -1,7 +1,7 @@
 const std = @import("std");
 const ts = @import("tree_sitter");
-const ansi = @import("../ansi.zig");
-const theme = @import("../theme.zig");
+const ansi = @import("ansi.zig");
+const theme = @import("theme.zig");
 const tree_sitter_zig = @import("tree-sitter-zig");
 const ts_queries = @import("ts_queries");
 
