@@ -4,4 +4,5 @@ pub const renderMarkdown = @import("render.zig").renderMarkdown;
 
 test {
     _ = @import("render.zig");
+    _ = @import("render/highlight.zig");
 }

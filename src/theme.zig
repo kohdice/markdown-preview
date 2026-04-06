@@ -24,6 +24,17 @@ pub const Palette = struct {
     heading_colors: [heading_level_count]Rgb,
 };
 
+pub const SyntaxPalette = struct {
+    keyword: Rgb,
+    type_name: Rgb,
+    string: Rgb,
+    comment: Rgb,
+    number: Rgb,
+    func: Rgb,
+    operator: Rgb,
+    plain: Rgb,
+};
+
 /// Ethan Schoonover's Solarized palette.
 const solarized = struct {
     const base02: Rgb = .{ .r = 0x07, .g = 0x36, .b = 0x42 };
@@ -58,6 +69,21 @@ pub fn palette(theme: Theme) Palette {
                 solarized.violet,
                 solarized.violet, // H6 — dim attribute applied at render time
             },
+        },
+    };
+}
+
+pub fn syntaxPalette(theme: Theme) SyntaxPalette {
+    return switch (theme) {
+        .solarized_dark => .{
+            .keyword = solarized.green,
+            .type_name = solarized.yellow,
+            .string = solarized.cyan,
+            .comment = solarized.base01,
+            .number = solarized.magenta,
+            .func = solarized.blue,
+            .operator = solarized.base0,
+            .plain = solarized.base0,
         },
     };
 }

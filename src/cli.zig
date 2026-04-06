@@ -1,7 +1,12 @@
 const std = @import("std");
-const root = @import("root.zig");
+const root = @import("markdown_preview");
 
 const max_file_bytes = 10 * 1024 * 1024;
+const expected_arg_count = 2;
+/// POSIX exit codes. Zig's std does not expose platform-neutral names, so
+/// we define them locally to avoid naked numeric returns.
+const exit_success: u8 = 0;
+const exit_failure: u8 = 1;
 
 pub fn getTerminalWidth(handle: std.posix.fd_t) ?usize {
     var winsize: std.posix.winsize = .{ .row = 0, .col = 0, .xpixel = 0, .ypixel = 0 };
@@ -21,15 +26,15 @@ pub fn run(
     enable_ansi: bool,
     wrap_width: ?usize,
 ) !u8 {
-    if (args.len != 2) {
+    if (args.len != expected_arg_count) {
         try stderr.writeAll("Usage: mp <FILE>\nPreview a Markdown file in the terminal.\n");
-        return 1;
+        return exit_failure;
     }
 
     const path = args[1];
     const source = dir.readFileAlloc(allocator, path, max_file_bytes) catch |err| {
         try stderr.print("mp: unable to read '{s}': {s}\n", .{ path, @errorName(err) });
-        return 1;
+        return exit_failure;
     };
     defer allocator.free(source);
 
@@ -38,7 +43,7 @@ pub fn run(
         .theme = .solarized_dark,
         .wrap_width = wrap_width,
     });
-    return 0;
+    return exit_success;
 }
 
 test "run reports usage errors" {
@@ -57,7 +62,7 @@ test "run reports usage errors" {
         null,
     );
 
-    try std.testing.expectEqual(@as(u8, 1), exit_code);
+    try std.testing.expectEqual(exit_failure, exit_code);
     try std.testing.expectEqualStrings("", stdout.writer.buffered());
     try std.testing.expectEqualStrings(
         "Usage: mp <FILE>\nPreview a Markdown file in the terminal.\n",
@@ -84,7 +89,7 @@ test "run reports missing files" {
         null,
     );
 
-    try std.testing.expectEqual(@as(u8, 1), exit_code);
+    try std.testing.expectEqual(exit_failure, exit_code);
     try std.testing.expectEqualStrings("", stdout.writer.buffered());
     try std.testing.expect(std.mem.containsAtLeast(u8, stderr.writer.buffered(), 1, "missing.md"));
 }
@@ -117,7 +122,7 @@ test "run renders markdown files" {
         null,
     );
 
-    try std.testing.expectEqual(@as(u8, 0), exit_code);
+    try std.testing.expectEqual(exit_success, exit_code);
     try std.testing.expectEqualStrings(
         \\Hello
         \\- item

@@ -6,6 +6,7 @@ const block = @import("render/block.zig");
 const link_mod = @import("render/link.zig");
 const output_mod = @import("render/output.zig");
 const render_table = @import("render/table.zig");
+const highlight = @import("render/highlight.zig");
 
 /// Visible column width of a rendered thematic break. Short enough to fit
 /// narrow terminals while still reading as a visual separator.
@@ -29,7 +30,13 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
     }
 
     const palette = theme.palette(opts.theme);
+    const syn_palette = theme.syntaxPalette(opts.theme);
     var active_fence: ?block.Fence = null;
+    var active_language: ?highlight.Language = null;
+    var fence_buffer: std.ArrayListUnmanaged(u8) = .empty;
+    defer fence_buffer.deinit(allocator);
+    var highlighter = highlight.Highlighter.init();
+    defer highlighter.deinit();
     var line_start: usize = 0;
     var prev_was_blank: bool = false;
 
@@ -40,21 +47,25 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
 
         if (active_fence) |fence| {
             if (block.isClosingFence(raw_line, fence)) {
+                try flushFenceBuffer(allocator, writer, &fence_buffer, active_language, &highlighter, opts, palette, syn_palette);
                 try ansi.writeStyled(writer, opts.enable_ansi, .{
                     .fg = palette.code_fence,
                     .dim = true,
                 }, raw_line);
                 active_fence = null;
+                active_language = null;
             } else {
-                try ansi.writeStyled(writer, opts.enable_ansi, .{
-                    .fg = palette.inline_code,
-                }, raw_line);
+                try fence_buffer.appendSlice(allocator, raw_line);
+                if (has_newline) try fence_buffer.append(allocator, '\n');
+                line_start = line_end + @intFromBool(has_newline);
+                continue;
             }
         } else {
             const line = raw_line;
 
             if (block.parseFence(line)) |fence| {
                 active_fence = fence;
+                active_language = highlight.Language.fromString(fence.language);
                 try ansi.writeStyled(writer, opts.enable_ansi, .{
                     .fg = palette.code_fence,
                     .dim = true,
@@ -152,6 +163,54 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
         if (has_newline) try writer.writeByte('\n');
         line_start = line_end + @intFromBool(has_newline);
     }
+
+    // EOF flush: if the input ended without a closing fence, emit whatever
+    // has been buffered so the content is not silently dropped.
+    if (active_fence != null and fence_buffer.items.len > 0) {
+        try flushFenceBuffer(allocator, writer, &fence_buffer, active_language, &highlighter, opts, palette, syn_palette);
+    }
+}
+
+/// Emit buffered code fence content.
+///
+/// Dispatch order:
+/// 1. Recognized language + ANSI enabled → Tree-sitter highlighter.
+///    On `error.QueryUnavailable`, fall back to uniform inline_code color.
+/// 2. Recognized language + ANSI disabled → plain text (Tree-sitter bypassed).
+/// 3. Unrecognized language → uniform inline_code color.
+///
+/// All paths go through `ansi.writeStyled` → `writeSanitized`, preserving
+/// the sanitization invariant for code fence content.
+fn flushFenceBuffer(
+    allocator: std.mem.Allocator,
+    writer: *std.io.Writer,
+    fence_buffer: *std.ArrayListUnmanaged(u8),
+    active_language: ?highlight.Language,
+    highlighter: *highlight.Highlighter,
+    opts: RenderOptions,
+    palette: theme.Palette,
+    syn_palette: theme.SyntaxPalette,
+) !void {
+    const content = fence_buffer.items;
+    if (content.len == 0) return;
+
+    if (active_language) |lang| {
+        if (opts.enable_ansi) {
+            highlighter.writeHighlightedBlock(allocator, writer, content, lang, syn_palette) catch |err| switch (err) {
+                error.QueryUnavailable => {
+                    try ansi.writeStyled(writer, true, .{ .fg = palette.inline_code }, content);
+                },
+                else => return err,
+            };
+        } else {
+            try ansi.writeStyled(writer, false, .{}, content);
+        }
+    } else {
+        try ansi.writeStyled(writer, opts.enable_ansi, .{
+            .fg = palette.inline_code,
+        }, content);
+    }
+    fence_buffer.clearRetainingCapacity();
 }
 
 fn headingStyle(level: u8, p: theme.Palette) ansi.TextStyle {
@@ -355,7 +414,6 @@ test "ordered list rejects more than 9 digits" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    // Should be rendered as plain text, not as an ordered list
     try std.testing.expectEqualStrings("1234567890. Too many digits\n", rendered);
 }
 
@@ -693,6 +751,173 @@ test "code fence language is captured in Fence struct" {
     try std.testing.expectEqualStrings("```javascript mocha\nconsole.log();\n```\n", rendered);
 }
 
+test "zig code fence gets syntax highlighting under ANSI" {
+    const allocator = std.testing.allocator;
+    const source = "```zig\nconst x: u32 = 42;\n```\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{
+        .enable_ansi = true,
+    });
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 2, "```"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "const"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "42"));
+    // Solarized green keyword color #859900 = 133,153,0.
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[38;2;133;153;0m"));
+}
+
+test "zig code fence is plain text when ANSI disabled" {
+    const allocator = std.testing.allocator;
+    const source = "```zig\nconst x: u32 = 42;\n```\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("```zig\nconst x: u32 = 42;\n```\n", rendered);
+}
+
+test "unrecognized language falls back to uniform inline_code color" {
+    const allocator = std.testing.allocator;
+    const source = "```klingon\nQapla'!\n```\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{
+        .enable_ansi = true,
+    });
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "Qapla'!"));
+    // inline_code color (teal #2aa198 = 42,161,152) is applied to the buffered body.
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[38;2;42;161;152m"));
+}
+
+test "unclosed zig code fence at EOF is flushed" {
+    const allocator = std.testing.allocator;
+    const source = "```zig\nconst x = 1;\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "const x = 1;"));
+}
+
+test "empty code fence renders just the fences" {
+    const allocator = std.testing.allocator;
+    const source = "```zig\n```\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("```zig\n```\n", rendered);
+}
+
+test "code fence with syntax errors still renders (Tree-sitter error recovery)" {
+    const allocator = std.testing.allocator;
+    const source = "```zig\nconst x = @@@broken syntax;\n```\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{
+        .enable_ansi = true,
+    });
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "const"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "broken"));
+}
+
+test "python code fence highlights with ANSI" {
+    const allocator = std.testing.allocator;
+    const source = "```python\ndef greet():\n    return 1\n```\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{
+        .enable_ansi = true,
+    });
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "def"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "greet"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[38;2;"));
+}
+
+test "bash code fence uses sh alias" {
+    const allocator = std.testing.allocator;
+    const source = "```sh\necho hello\n```\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{
+        .enable_ansi = true,
+    });
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "echo"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[38;2;"));
+}
+
+test "multiline zig raw string does not leak ANSI state across lines" {
+    const allocator = std.testing.allocator;
+    // Multi-line raw string literal spans three lines inside a code fence.
+    // Every styled run must be followed by an `\x1b[0m` reset so color does
+    // not bleed from one line into the next.
+    const source = "```zig\n" ++
+        "const msg =\n" ++
+        "    \\\\hello\n" ++
+        "    \\\\world\n" ++
+        ";\n" ++
+        "```\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{
+        .enable_ansi = true,
+    });
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "hello"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "world"));
+
+    // Every opening escape (style set) must be paired with a reset. Count
+    // resets to confirm they appear and the styled runs close cleanly.
+    var reset_count: usize = 0;
+    var scan: usize = 0;
+    while (std.mem.indexOfPos(u8, rendered, scan, "\x1b[0m")) |found| {
+        reset_count += 1;
+        scan = found + 4;
+    }
+    try std.testing.expect(reset_count > 0);
+}
+
+test "C0 control bytes inside a code fence are stripped by writeSanitized" {
+    const allocator = std.testing.allocator;
+    // Injection attempt: raw ESC + CSI "red" sequence hidden inside a string.
+    // writeSanitized must strip the ESC but leave visible characters intact.
+    const source = "```zig\nconst x = \"\x1b[31mevil\\x07\";\n```\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{
+        .enable_ansi = true,
+    });
+    defer allocator.free(rendered);
+
+    try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, "\x1b[31m"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "evil"));
+    try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, "\x07"));
+}
+
+test "python code fence is plain text when ANSI disabled" {
+    const allocator = std.testing.allocator;
+    const source = "```python\ndef greet():\n    return 1\n```\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(source, rendered);
+}
+
+test "bash code fence is plain text when ANSI disabled" {
+    const allocator = std.testing.allocator;
+    const source = "```bash\necho hello\n```\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(source, rendered);
+}
+
 test "simple table renders with aligned columns" {
     const allocator = std.testing.allocator;
     const source = "| A | B |\n| --- | --- |\n| 1 | 2 |\n";
@@ -755,7 +980,6 @@ test "hard break trailing spaces are stripped" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    // Trailing 2 spaces should be stripped; lines remain separate
     try std.testing.expectEqualStrings("Line one\nLine two\n", rendered);
 }
 
@@ -766,7 +990,6 @@ test "hard break with backslash at end of line" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    // Trailing backslash should be stripped
     try std.testing.expectEqualStrings("Line one\nLine two\n", rendered);
 }
 
@@ -788,7 +1011,6 @@ test "hard break inside code fence is not stripped" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    // Inside code fence, trailing spaces should be preserved
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "code with trailing spaces  "));
 }
 
@@ -809,7 +1031,6 @@ test "blank line after table is preserved" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    // The blank line between the table and the paragraph should be preserved
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\n\nParagraph after table"));
 }
 
@@ -970,7 +1191,6 @@ test "autolink requires scheme://" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    // Without ://, this is not an autolink — preserved as-is
     try std.testing.expectEqualStrings("<not-a-link>", rendered);
 }
 
@@ -981,7 +1201,6 @@ test "autolink with spaces is not parsed" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    // Spaces inside angle brackets prevent autolink detection
     try std.testing.expectEqualStrings("<https://example.com/path with spaces>", rendered);
 }
 
@@ -1022,7 +1241,6 @@ test "bare URL strips trailing punctuation" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    // Trailing period should NOT be part of the URL
     try std.testing.expectEqualStrings("Check https://example.com.", rendered);
 }
 
@@ -1035,7 +1253,6 @@ test "bare URL with ANSI gets link styling" {
     });
     defer allocator.free(rendered);
 
-    // Should have underline (autolink uses link styling)
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[4m"));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "https://example.com"));
 }
@@ -1047,7 +1264,6 @@ test "bare URL not detected inside words" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    // Preceded by alphanumeric — should NOT be detected as autolink
     try std.testing.expectEqualStrings("foohttps://example.com", rendered);
 }
 
@@ -1068,7 +1284,6 @@ test "bare URL with unmatched trailing paren is stripped" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    // Trailing ) is unmatched in URL context, should be stripped from URL
     try std.testing.expectEqualStrings("(see https://example.com)", rendered);
 }
 
@@ -1198,7 +1413,6 @@ test "reference-style link resolves to definition" {
 
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "GitHub"));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "https://github.com"));
-    // Definition line should not appear in output
     try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, "[1]:"));
 }
 
@@ -1382,7 +1596,6 @@ test "blockquote table followed by normal blockquote" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    // Table should be rendered, then normal blockquote text follows
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "A"));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "1"));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "normal text"));
@@ -1415,7 +1628,6 @@ test "heading is not wrapped" {
     const rendered = try renderToOwnedSlice(allocator, source, .{ .wrap_width = 10 });
     defer allocator.free(rendered);
 
-    // Heading should not be wrapped
     try std.testing.expectEqualStrings("This is a heading that is long", rendered);
 }
 
