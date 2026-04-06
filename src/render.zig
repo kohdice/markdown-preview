@@ -1703,3 +1703,67 @@ test "space before closing delimiter prevents emphasis" {
 
     try std.testing.expectEqualStrings("*foo *", rendered);
 }
+
+test "CRLF input renders ATX heading without trailing carriage return" {
+    const allocator = std.testing.allocator;
+    const source = "# Title\r\nbody\r\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("Title\nbody\n", rendered);
+}
+
+test "CRLF input resolves reference link definition" {
+    const allocator = std.testing.allocator;
+    const source = "[text][ref]\r\n\r\n[ref]: https://example.com\r\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "text"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "https://example.com"));
+    try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, "\r"));
+}
+
+test "CRLF input renders pipe table" {
+    const allocator = std.testing.allocator;
+    const source = "| A | B |\r\n| --- | --- |\r\n| 1 | 2 |\r\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "A"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "B"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "1"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "2"));
+    try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, "\r"));
+}
+
+test "CRLF input renders blockquote table" {
+    const allocator = std.testing.allocator;
+    const source = "> | A | B |\r\n> | --- | --- |\r\n> | 1 | 2 |\r\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "A"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "B"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "1"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "2"));
+    try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, "\r"));
+    var line_iter = std.mem.splitScalar(u8, std.mem.trimEnd(u8, rendered, "\n"), '\n');
+    while (line_iter.next()) |line| {
+        try std.testing.expect(std.mem.startsWith(u8, line, "| "));
+    }
+}
+
+test "CRLF input preserves list continuation" {
+    const allocator = std.testing.allocator;
+    const source = "- first line\r\n  continued here\r\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("- first line\n  continued here\n", rendered);
+}
