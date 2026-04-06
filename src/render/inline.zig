@@ -257,7 +257,7 @@ fn extractTitle(inner: []const u8) TitleInfo {
     var i = trimmed.len - 2;
     while (i > 0) : (i -= 1) {
         if (trimmed[i] == open_quote) {
-            if (i > 0 and (trimmed[i - 1] == ' ' or trimmed[i - 1] == '\t')) {
+            if (i > 0 and block.isHorizontalWhitespace(trimmed[i - 1])) {
                 const url_part = std.mem.trimEnd(u8, trimmed[0 .. i - 1], block.horizontal_whitespace);
                 if (url_part.len == 0) return .{ .url_len = inner.len, .title = null };
                 return .{
@@ -433,7 +433,7 @@ fn tryParseStrikethrough(text: []const u8, start: usize) ?StrikethroughResult {
 
     const after_delim = start + delim_len;
     if (after_delim >= text.len) return null;
-    if (text[after_delim] == ' ' or text[after_delim] == '\t') return null;
+    if (block.isHorizontalWhitespace(text[after_delim])) return null;
 
     var pos = after_delim;
     while (pos < text.len) {
@@ -446,7 +446,7 @@ fn tryParseStrikethrough(text: []const u8, start: usize) ?StrikethroughResult {
             while (pos + close_len < text.len and text[pos + close_len] == '~') : (close_len += 1) {}
 
             if (close_len >= delim_len and pos > after_delim) {
-                if (text[pos - 1] != ' ' and text[pos - 1] != '\t') {
+                if (!block.isHorizontalWhitespace(text[pos - 1])) {
                     return .{
                         .content = text[after_delim..pos],
                         .end = pos + delim_len,

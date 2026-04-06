@@ -64,7 +64,7 @@ pub fn parseLinkDefinition(line: []const u8) ?LinkDefinition {
     if (label.len == 0) return null;
 
     var pos = close + 2;
-    while (pos < line.len and (line[pos] == ' ' or line[pos] == '\t')) : (pos += 1) {}
+    while (pos < line.len and block.isHorizontalWhitespace(line[pos])) : (pos += 1) {}
 
     if (pos >= line.len) return null;
 
@@ -75,14 +75,14 @@ pub fn parseLinkDefinition(line: []const u8) ?LinkDefinition {
         url_end = std.mem.indexOfScalarPos(u8, line, url_start, '>') orelse return null;
         pos = url_end + 1;
     } else {
-        while (url_end < line.len and line[url_end] != ' ' and line[url_end] != '\t') : (url_end += 1) {}
+        while (url_end < line.len and !block.isHorizontalWhitespace(line[url_end])) : (url_end += 1) {}
         pos = url_end;
     }
 
     const url = line[url_start..url_end];
     if (url.len == 0) return null;
 
-    while (pos < line.len and (line[pos] == ' ' or line[pos] == '\t')) : (pos += 1) {}
+    while (pos < line.len and block.isHorizontalWhitespace(line[pos])) : (pos += 1) {}
 
     var title: ?[]const u8 = null;
     if (pos < line.len) {

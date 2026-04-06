@@ -24,6 +24,13 @@ pub const fence_chars = "`~";
 /// Excludes line terminators because block-level parsers work line-by-line.
 pub const horizontal_whitespace = " \t";
 
+/// Byte-level predicate counterpart to `horizontal_whitespace`. Use this in
+/// manual loops over `[]const u8` indexes where the trim-set form does not
+/// apply (e.g. while-loops advancing a cursor character by character).
+pub fn isHorizontalWhitespace(c: u8) bool {
+    return c == ' ' or c == '\t';
+}
+
 pub const Heading = struct {
     level: u8,
     content: []const u8,
@@ -65,9 +72,9 @@ pub fn parseHeading(line: []const u8) ?Heading {
     }
 
     if (level == 0) return null;
-    if (index < line.len and line[index] != ' ' and line[index] != '\t') return null;
+    if (index < line.len and !isHorizontalWhitespace(line[index])) return null;
 
-    while (index < line.len and (line[index] == ' ' or line[index] == '\t')) : (index += 1) {}
+    while (index < line.len and isHorizontalWhitespace(line[index])) : (index += 1) {}
 
     return .{
         .level = level,
@@ -81,7 +88,7 @@ pub fn trimClosingHashes(text: []const u8) []const u8 {
 
     while (end > 0 and trimmed[end - 1] == '#') : (end -= 1) {}
     if (end == trimmed.len) return trimmed;
-    if (end > 0 and (trimmed[end - 1] == ' ' or trimmed[end - 1] == '\t')) {
+    if (end > 0 and isHorizontalWhitespace(trimmed[end - 1])) {
         return std.mem.trimEnd(u8, trimmed[0 .. end - 1], horizontal_whitespace);
     }
     return trimmed;
@@ -94,10 +101,10 @@ pub fn parseListItem(line: []const u8) ?ListItem {
     const marker = line[indent];
     if (std.mem.indexOfScalar(u8, unordered_list_markers, marker) == null) return null;
     if (indent + 1 >= line.len) return null;
-    if (line[indent + 1] != ' ' and line[indent + 1] != '\t') return null;
+    if (!isHorizontalWhitespace(line[indent + 1])) return null;
 
     var content_index = indent + 1;
-    while (content_index < line.len and (line[content_index] == ' ' or line[content_index] == '\t')) : (content_index += 1) {}
+    while (content_index < line.len and isHorizontalWhitespace(line[content_index])) : (content_index += 1) {}
 
     const checkbox = parseCheckbox(line[content_index..]);
     return .{
@@ -110,11 +117,11 @@ pub fn parseListItem(line: []const u8) ?ListItem {
 
 pub fn parseCheckbox(content: []const u8) struct { checked: ?bool, rest: []const u8 } {
     if (content.len >= 4 and content[0] == '[' and content[2] == ']' and
-        (content[3] == ' ' or content[3] == '\t'))
+        isHorizontalWhitespace(content[3]))
     {
         if (content[1] == 'x' or content[1] == 'X') {
             return .{ .checked = true, .rest = content[4..] };
-        } else if (content[1] == ' ' or content[1] == '\t') {
+        } else if (isHorizontalWhitespace(content[1])) {
             return .{ .checked = false, .rest = content[4..] };
         }
     }
@@ -136,10 +143,10 @@ pub fn parseOrderedListItem(line: []const u8) ?OrderedListItem {
     const marker = line[digit_end];
     if (std.mem.indexOfScalar(u8, ordered_list_markers, marker) == null) return null;
 
-    if (digit_end + 1 < line.len and line[digit_end + 1] != ' ' and line[digit_end + 1] != '\t') return null;
+    if (digit_end + 1 < line.len and !isHorizontalWhitespace(line[digit_end + 1])) return null;
 
     var content_index = digit_end + 1;
-    while (content_index < line.len and (line[content_index] == ' ' or line[content_index] == '\t')) : (content_index += 1) {}
+    while (content_index < line.len and isHorizontalWhitespace(line[content_index])) : (content_index += 1) {}
 
     const checkbox = parseCheckbox(line[content_index..]);
     return .{
@@ -169,7 +176,7 @@ pub fn parseBlockQuote(line: []const u8) ?BlockQuote {
     if (indent >= line.len or line[indent] != '>') return null;
 
     var content_index = indent + 1;
-    while (content_index < line.len and (line[content_index] == ' ' or line[content_index] == '\t')) : (content_index += 1) {}
+    while (content_index < line.len and isHorizontalWhitespace(line[content_index])) : (content_index += 1) {}
 
     return .{
         .indent = indent,
@@ -257,13 +264,13 @@ pub fn stripHardBreak(line: []const u8) []const u8 {
 
 pub fn countIndentUpTo(line: []const u8, max_spaces: usize) usize {
     var count: usize = 0;
-    while (count < line.len and count < max_spaces and (line[count] == ' ' or line[count] == '\t')) : (count += 1) {}
+    while (count < line.len and count < max_spaces and isHorizontalWhitespace(line[count])) : (count += 1) {}
     return count;
 }
 
 pub fn countLeadingWhitespace(line: []const u8) usize {
     var count: usize = 0;
-    while (count < line.len and (line[count] == ' ' or line[count] == '\t')) : (count += 1) {}
+    while (count < line.len and isHorizontalWhitespace(line[count])) : (count += 1) {}
     return count;
 }
 
