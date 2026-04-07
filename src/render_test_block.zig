@@ -30,7 +30,7 @@ test "renderMarkdown strips heading markers and preserves structure" {
         \\Title
         \\
         \\- item
-        \\| quoted
+        \\│ quoted
         \\link(https://example.com)
         \\```zig
         \\const value = 1;
@@ -64,14 +64,14 @@ test "renderMarkdown emits Solarized Dark ANSI styling for headings and links" {
     );
 }
 
-test "nested blockquotes render with multiple pipe markers" {
+test "nested blockquotes render with multiple vertical bar markers" {
     const allocator = std.testing.allocator;
     const source = "> > nested\n";
 
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("| | nested\n", rendered);
+    try std.testing.expectEqualStrings("│ │ nested\n", rendered);
 }
 
 test "heading levels produce different ANSI styles" {

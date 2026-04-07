@@ -15,7 +15,7 @@ const link_url_close = ")";
 const link_title_separator = " — ";
 const image_alt_prefix = "[img: ";
 const image_alt_suffix = "]";
-const blockquote_marker = "| ";
+pub const blockquote_marker = "│ ";
 const checkbox_checked = "[x] ";
 const checkbox_unchecked = "[ ] ";
 

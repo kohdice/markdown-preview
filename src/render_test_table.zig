@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const renderToOwnedSlice = @import("render_test_helpers.zig").renderToOwnedSlice;
+const width = @import("width.zig");
 
 test "simple table renders with aligned columns" {
     const allocator = std.testing.allocator;
@@ -19,7 +20,10 @@ test "simple table renders with aligned columns" {
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "B"));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "1"));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "2"));
-    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "|"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "│"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "┌"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "├"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "└"));
 }
 
 test "table inside code fence is not detected" {
@@ -60,14 +64,14 @@ test "table inside blockquote" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "| "));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "│ "));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "A"));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "B"));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "1"));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "2"));
     var line_iter = std.mem.splitScalar(u8, std.mem.trimEnd(u8, rendered, "\n"), '\n');
     while (line_iter.next()) |line| {
-        try std.testing.expect(std.mem.startsWith(u8, line, "| "));
+        try std.testing.expect(std.mem.startsWith(u8, line, "│ "));
     }
 }
 
@@ -78,7 +82,7 @@ test "blockquote without table falls through to normal rendering" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("| just a quote\n| another line\n", rendered);
+    try std.testing.expectEqualStrings("│ just a quote\n│ another line\n", rendered);
 }
 
 test "blockquote with pipe but no delimiter is not a table" {
@@ -88,7 +92,7 @@ test "blockquote with pipe but no delimiter is not a table" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("| a | b\n| c | d\n", rendered);
+    try std.testing.expectEqualStrings("│ a | b\n│ c | d\n", rendered);
 }
 
 test "blockquote table followed by normal blockquote" {
@@ -131,6 +135,139 @@ test "CRLF input renders blockquote table" {
     try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, "\r"));
     var line_iter = std.mem.splitScalar(u8, std.mem.trimEnd(u8, rendered, "\n"), '\n');
     while (line_iter.next()) |line| {
-        try std.testing.expect(std.mem.startsWith(u8, line, "| "));
+        try std.testing.expect(std.mem.startsWith(u8, line, "│ "));
     }
+}
+
+test "table renders with unicode top, middle, and bottom borders" {
+    const allocator = std.testing.allocator;
+    const source = "| A | B |\n| --- | --- |\n| 1 | 2 |\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "┌"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "┬"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "┐"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "├"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "┼"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "┤"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "└"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "┴"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "┘"));
+}
+
+test "table inserts inter-row borders between multiple body rows" {
+    const allocator = std.testing.allocator;
+    const source = "| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n| 5 | 6 |\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 3, "┼"));
+}
+
+test "table with single body row has exactly one middle join" {
+    const allocator = std.testing.allocator;
+    const source = "| A | B |\n| --- | --- |\n| 1 | 2 |\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "┼"));
+    try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 2, "┼"));
+}
+
+test "table with CJK content has uniform display width across all rows" {
+    const allocator = std.testing.allocator;
+    const source = "| 項目 | 値 |\n| --- | --- |\n| 日本語 | テスト |\n| ASCII | mixed 日本 |\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    var line_iter = std.mem.splitScalar(u8, std.mem.trimEnd(u8, rendered, "\n"), '\n');
+    var expected_width: ?usize = null;
+    while (line_iter.next()) |line| {
+        const w = width.displayWidth(line);
+        if (expected_width) |ew| {
+            try std.testing.expectEqual(ew, w);
+        } else {
+            expected_width = w;
+        }
+    }
+}
+
+test "simple table golden output without ANSI" {
+    const allocator = std.testing.allocator;
+    const source = "| A | B |\n| --- | --- |\n| 1 | 2 |\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        \\┌─────┬─────┐
+        \\│ A   │ B   │
+        \\├─────┼─────┤
+        \\│ 1   │ 2   │
+        \\└─────┴─────┘
+        \\
+    ,
+        rendered,
+    );
+}
+
+test "header-only table golden output" {
+    const allocator = std.testing.allocator;
+    const source = "| A | B |\n| --- | --- |\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        \\┌─────┬─────┐
+        \\│ A   │ B   │
+        \\├─────┼─────┤
+        \\└─────┴─────┘
+        \\
+    ,
+        rendered,
+    );
+}
+
+test "blockquote table golden output" {
+    const allocator = std.testing.allocator;
+    const source = "> | A | B |\n> | --- | --- |\n> | 1 | 2 |\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        \\│ ┌─────┬─────┐
+        \\│ │ A   │ B   │
+        \\│ ├─────┼─────┤
+        \\│ │ 1   │ 2   │
+        \\│ └─────┴─────┘
+        \\
+    ,
+        rendered,
+    );
+}
+
+test "blockquote table with leading whitespace preserves indent" {
+    const allocator = std.testing.allocator;
+    const source = "  > | A | B |\n  > | --- | --- |\n  > | 1 | 2 |\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        \\  │ ┌─────┬─────┐
+        \\  │ │ A   │ B   │
+        \\  │ ├─────┼─────┤
+        \\  │ │ 1   │ 2   │
+        \\  │ └─────┴─────┘
+        \\
+    ,
+        rendered,
+    );
 }
