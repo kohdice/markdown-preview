@@ -1,5 +1,5 @@
 const std = @import("std");
-const block = @import("block.zig");
+const parse_block = @import("parse_block.zig");
 
 pub const LinkDef = struct {
     url: []const u8,
@@ -17,18 +17,18 @@ pub const LinkDefinition = struct {
 pub fn collectLinkDefinitions(allocator: std.mem.Allocator, input: []const u8) !LinkDefMap {
     var defs: LinkDefMap = .{};
     var line_start: usize = 0;
-    var active_prepass_fence: ?block.Fence = null;
+    var active_prepass_fence: ?parse_block.Fence = null;
 
     while (line_start < input.len) {
         const line_end = std.mem.indexOfScalarPos(u8, input, line_start, '\n') orelse input.len;
         const has_newline = line_end < input.len;
-        const line = std.mem.trimEnd(u8, input[line_start..line_end], block.carriage_return);
+        const line = std.mem.trimEnd(u8, input[line_start..line_end], parse_block.carriage_return);
 
         if (active_prepass_fence) |fence| {
-            if (block.isClosingFence(line, fence)) {
+            if (parse_block.isClosingFence(line, fence)) {
                 active_prepass_fence = null;
             }
-        } else if (block.parseFence(line)) |fence| {
+        } else if (parse_block.parseFence(line)) |fence| {
             active_prepass_fence = fence;
         } else {
             if (parseLinkDefinition(line)) |def| {
@@ -54,7 +54,7 @@ pub fn collectLinkDefinitions(allocator: std.mem.Allocator, input: []const u8) !
 }
 
 pub fn parseLinkDefinition(line: []const u8) ?LinkDefinition {
-    const indent = block.countIndentUpTo(line, block.max_block_indent);
+    const indent = parse_block.countIndentUpTo(line, parse_block.max_block_indent);
     if (indent >= line.len or line[indent] != '[') return null;
 
     const close = std.mem.indexOfScalarPos(u8, line, indent + 1, ']') orelse return null;
@@ -64,7 +64,7 @@ pub fn parseLinkDefinition(line: []const u8) ?LinkDefinition {
     if (label.len == 0) return null;
 
     var pos = close + 2;
-    while (pos < line.len and block.isHorizontalWhitespace(line[pos])) : (pos += 1) {}
+    while (pos < line.len and parse_block.isHorizontalWhitespace(line[pos])) : (pos += 1) {}
 
     if (pos >= line.len) return null;
 
@@ -75,14 +75,14 @@ pub fn parseLinkDefinition(line: []const u8) ?LinkDefinition {
         url_end = std.mem.indexOfScalarPos(u8, line, url_start, '>') orelse return null;
         pos = url_end + 1;
     } else {
-        while (url_end < line.len and !block.isHorizontalWhitespace(line[url_end])) : (url_end += 1) {}
+        while (url_end < line.len and !parse_block.isHorizontalWhitespace(line[url_end])) : (url_end += 1) {}
         pos = url_end;
     }
 
     const url = line[url_start..url_end];
     if (url.len == 0) return null;
 
-    while (pos < line.len and block.isHorizontalWhitespace(line[pos])) : (pos += 1) {}
+    while (pos < line.len and parse_block.isHorizontalWhitespace(line[pos])) : (pos += 1) {}
 
     var title: ?[]const u8 = null;
     if (pos < line.len) {
@@ -97,7 +97,7 @@ pub fn parseLinkDefinition(line: []const u8) ?LinkDefinition {
         }
     }
 
-    const remaining = std.mem.trim(u8, line[pos..], block.horizontal_whitespace);
+    const remaining = std.mem.trim(u8, line[pos..], parse_block.horizontal_whitespace);
     if (remaining.len > 0) return null;
 
     return .{ .label = label, .url = url, .title = title };

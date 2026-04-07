@@ -1,8 +1,8 @@
 const std = @import("std");
-const block = @import("block.zig");
-const link_mod = @import("link.zig");
+const parse_block = @import("parse_block.zig");
+const parse_link = @import("parse_link.zig");
 
-const LinkDefMap = link_mod.LinkDefMap;
+const LinkDefMap = parse_link.LinkDefMap;
 
 const max_ref_label_len = 256;
 
@@ -244,7 +244,7 @@ const TitleInfo = struct {
 };
 
 fn extractTitle(inner: []const u8) TitleInfo {
-    const trimmed = std.mem.trimEnd(u8, inner, block.horizontal_whitespace);
+    const trimmed = std.mem.trimEnd(u8, inner, parse_block.horizontal_whitespace);
     if (trimmed.len < 4) return .{ .url_len = inner.len, .title = null };
 
     const last = trimmed[trimmed.len - 1];
@@ -257,8 +257,8 @@ fn extractTitle(inner: []const u8) TitleInfo {
     var i = trimmed.len - 2;
     while (i > 0) : (i -= 1) {
         if (trimmed[i] == open_quote) {
-            if (i > 0 and block.isHorizontalWhitespace(trimmed[i - 1])) {
-                const url_part = std.mem.trimEnd(u8, trimmed[0 .. i - 1], block.horizontal_whitespace);
+            if (i > 0 and parse_block.isHorizontalWhitespace(trimmed[i - 1])) {
+                const url_part = std.mem.trimEnd(u8, trimmed[0 .. i - 1], parse_block.horizontal_whitespace);
                 if (url_part.len == 0) return .{ .url_len = inner.len, .title = null };
                 return .{
                     .url_len = url_part.len,
@@ -433,7 +433,7 @@ fn tryParseStrikethrough(text: []const u8, start: usize) ?StrikethroughResult {
 
     const after_delim = start + delim_len;
     if (after_delim >= text.len) return null;
-    if (block.isHorizontalWhitespace(text[after_delim])) return null;
+    if (parse_block.isHorizontalWhitespace(text[after_delim])) return null;
 
     var pos = after_delim;
     while (pos < text.len) {
@@ -446,7 +446,7 @@ fn tryParseStrikethrough(text: []const u8, start: usize) ?StrikethroughResult {
             while (pos + close_len < text.len and text[pos + close_len] == '~') : (close_len += 1) {}
 
             if (close_len >= delim_len and pos > after_delim) {
-                if (!block.isHorizontalWhitespace(text[pos - 1])) {
+                if (!parse_block.isHorizontalWhitespace(text[pos - 1])) {
                     return .{
                         .content = text[after_delim..pos],
                         .end = pos + delim_len,

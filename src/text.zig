@@ -3,12 +3,12 @@ const ansi = @import("ansi.zig");
 const entity = @import("entity.zig");
 const theme = @import("theme.zig");
 const width_mod = @import("width.zig");
-const block = @import("block.zig");
-const inline_parse = @import("inline.zig");
-const link_mod = @import("link.zig");
+const parse_block = @import("parse_block.zig");
+const parse_inline = @import("parse_inline.zig");
+const parse_link = @import("parse_link.zig");
 
-const LinkDefMap = link_mod.LinkDefMap;
-const InlineSegment = inline_parse.InlineSegment;
+const LinkDefMap = parse_link.LinkDefMap;
+const InlineSegment = parse_inline.InlineSegment;
 
 const link_url_open = "(";
 const link_url_close = ")";
@@ -31,7 +31,7 @@ pub fn renderInline(
     var segments: std.ArrayListUnmanaged(InlineSegment) = .{};
     defer segments.deinit(allocator);
 
-    try inline_parse.parseInlineSegments(allocator, text, &segments, link_defs);
+    try parse_inline.parseInlineSegments(allocator, text, &segments, link_defs);
 
     for (segments.items) |seg| {
         switch (seg.kind) {
@@ -105,7 +105,7 @@ pub fn renderBlockQuoteContent(
         .dim = true,
     }, blockquote_marker);
 
-    if (block.parseBlockQuote(content)) |nested| {
+    if (parse_block.parseBlockQuote(content)) |nested| {
         try writer.splatByteAll(' ', nested.indent);
         try renderBlockQuoteContent(allocator, writer, nested.content, enable_ansi, palette, link_defs);
     } else {
@@ -167,13 +167,13 @@ pub fn consumeListContinuation(
     while (pos < input.len) {
         const end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
         const has_nl = end < input.len;
-        const raw = std.mem.trimEnd(u8, input[pos..end], block.carriage_return);
+        const raw = std.mem.trimEnd(u8, input[pos..end], parse_block.carriage_return);
 
-        if (!block.isListContinuation(raw, content_col)) break;
+        if (!parse_block.isListContinuation(raw, content_col)) break;
 
-        const indent = block.countLeadingWhitespace(raw);
+        const indent = parse_block.countLeadingWhitespace(raw);
         try writer.splatByteAll(' ', content_col);
-        try renderInline(allocator, writer, block.stripHardBreak(raw[indent..]), enable_ansi, .{
+        try renderInline(allocator, writer, parse_block.stripHardBreak(raw[indent..]), enable_ansi, .{
             .fg = palette.body,
         }, palette, link_defs);
         if (has_nl) try writer.writeByte('\n');

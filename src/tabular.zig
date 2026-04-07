@@ -1,12 +1,12 @@
 const std = @import("std");
 const ansi = @import("ansi.zig");
-const table_parse = @import("table.zig");
+const parse_table = @import("parse_table.zig");
 const theme = @import("theme.zig");
-const block = @import("block.zig");
+const parse_block = @import("parse_block.zig");
 const text = @import("text.zig");
-const link_mod = @import("link.zig");
+const parse_link = @import("parse_link.zig");
 
-const LinkDefMap = link_mod.LinkDefMap;
+const LinkDefMap = parse_link.LinkDefMap;
 
 const min_table_col_width = 3;
 
@@ -36,13 +36,13 @@ pub fn tryRenderTable(
     if (after_header >= input.len) return null;
 
     const delim_end = std.mem.indexOfScalarPos(u8, input, after_header, '\n') orelse input.len;
-    const delim_line = std.mem.trimEnd(u8, input[after_header..delim_end], block.carriage_return);
+    const delim_line = std.mem.trimEnd(u8, input[after_header..delim_end], parse_block.carriage_return);
 
-    if (!table_parse.isDelimiterRow(delim_line)) return null;
+    if (!parse_table.isDelimiterRow(delim_line)) return null;
 
-    const header_cells = try table_parse.parseCells(allocator, header_line);
+    const header_cells = try parse_table.parseCells(allocator, header_line);
     defer allocator.free(header_cells);
-    const alignments = try table_parse.parseAlignments(allocator, delim_line);
+    const alignments = try parse_table.parseAlignments(allocator, delim_line);
     defer allocator.free(alignments);
     if (header_cells.len != alignments.len) return null;
 
@@ -52,10 +52,10 @@ pub fn tryRenderTable(
     var pos = delim_end + 1;
     while (pos < input.len) {
         const row_end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
-        const row_line = std.mem.trimEnd(u8, input[pos..row_end], block.carriage_return);
+        const row_line = std.mem.trimEnd(u8, input[pos..row_end], parse_block.carriage_return);
 
-        if (std.mem.trim(u8, row_line, block.horizontal_whitespace).len == 0 or std.mem.indexOfScalar(u8, row_line, '|') == null) break;
-        if (block.isBlockLevelStart(row_line)) break;
+        if (std.mem.trim(u8, row_line, parse_block.horizontal_whitespace).len == 0 or std.mem.indexOfScalar(u8, row_line, '|') == null) break;
+        if (parse_block.isBlockLevelStart(row_line)) break;
 
         try body_lines.append(allocator, row_line);
         pos = row_end + 1;
@@ -67,7 +67,7 @@ pub fn tryRenderTable(
         body_rows.deinit(allocator);
     }
     for (body_lines.items) |bl| {
-        try body_rows.append(allocator, try table_parse.parseCells(allocator, bl));
+        try body_rows.append(allocator, try parse_table.parseCells(allocator, bl));
     }
 
     const col_count = alignments.len;
@@ -118,8 +118,8 @@ pub fn tryRenderBlockQuoteTable(
     if (pos >= input.len) return null;
     var end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
     var has_nl = end < input.len;
-    var raw = std.mem.trimEnd(u8, input[pos..end], block.carriage_return);
-    const first_bq = block.parseBlockQuote(raw) orelse return null;
+    var raw = std.mem.trimEnd(u8, input[pos..end], parse_block.carriage_return);
+    const first_bq = parse_block.parseBlockQuote(raw) orelse return null;
     if (std.mem.indexOfScalar(u8, first_bq.content, '|') == null) return null;
     const bq_indent = first_bq.indent;
     pos = end + @intFromBool(has_nl);
@@ -127,14 +127,14 @@ pub fn tryRenderBlockQuoteTable(
     if (pos >= input.len) return null;
     end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
     has_nl = end < input.len;
-    raw = std.mem.trimEnd(u8, input[pos..end], block.carriage_return);
-    const second_bq = block.parseBlockQuote(raw) orelse return null;
-    if (!table_parse.isDelimiterRow(second_bq.content)) return null;
+    raw = std.mem.trimEnd(u8, input[pos..end], parse_block.carriage_return);
+    const second_bq = parse_block.parseBlockQuote(raw) orelse return null;
+    if (!parse_table.isDelimiterRow(second_bq.content)) return null;
     pos = end + @intFromBool(has_nl);
 
-    const header_cells = try table_parse.parseCells(allocator, first_bq.content);
+    const header_cells = try parse_table.parseCells(allocator, first_bq.content);
     defer allocator.free(header_cells);
-    const alignments = try table_parse.parseAlignments(allocator, second_bq.content);
+    const alignments = try parse_table.parseAlignments(allocator, second_bq.content);
     defer allocator.free(alignments);
     if (header_cells.len != alignments.len) return null;
 
@@ -147,13 +147,13 @@ pub fn tryRenderBlockQuoteTable(
     while (pos < input.len) {
         end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
         has_nl = end < input.len;
-        raw = std.mem.trimEnd(u8, input[pos..end], block.carriage_return);
+        raw = std.mem.trimEnd(u8, input[pos..end], parse_block.carriage_return);
 
-        const bq = block.parseBlockQuote(raw) orelse break;
-        if (std.mem.trim(u8, bq.content, block.horizontal_whitespace).len == 0 or std.mem.indexOfScalar(u8, bq.content, '|') == null) break;
-        if (block.isBlockLevelStart(bq.content)) break;
+        const bq = parse_block.parseBlockQuote(raw) orelse break;
+        if (std.mem.trim(u8, bq.content, parse_block.horizontal_whitespace).len == 0 or std.mem.indexOfScalar(u8, bq.content, '|') == null) break;
+        if (parse_block.isBlockLevelStart(bq.content)) break;
 
-        try body_rows.append(allocator, try table_parse.parseCells(allocator, bq.content));
+        try body_rows.append(allocator, try parse_table.parseCells(allocator, bq.content));
         pos = end + @intFromBool(has_nl);
     }
 
@@ -203,7 +203,7 @@ fn renderTableRow(
     writer: *std.io.Writer,
     cells: []const []const u8,
     col_widths: []const usize,
-    alignments: []const table_parse.Alignment,
+    alignments: []const parse_table.Alignment,
     col_count: usize,
     enable_ansi: bool,
     style: ansi.TextStyle,
