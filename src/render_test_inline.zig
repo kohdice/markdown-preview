@@ -246,7 +246,6 @@ test "image syntax with ANSI styling" {
     });
     defer allocator.free(rendered);
 
-    // alt text should have italic + muted color
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[3m"));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "[img: "));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "alt"));
@@ -556,7 +555,6 @@ test "link title with ANSI styling" {
     });
     defer allocator.free(rendered);
 
-    // Title should have italic + dim + muted
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[2m\x1b[3m"));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "title"));
 }
