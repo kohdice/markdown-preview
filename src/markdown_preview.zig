@@ -63,4 +63,5 @@ pub const renderMarkdown = @import("render.zig").renderMarkdown;
 test {
     _ = @import("render.zig");
     _ = @import("highlight.zig");
+    _ = @import("parse_document.zig");
 }
