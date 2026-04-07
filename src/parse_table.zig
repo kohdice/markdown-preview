@@ -78,6 +78,14 @@ pub fn parseCells(allocator: std.mem.Allocator, line: []const u8) ![][]const u8 
     return try cells.toOwnedSlice(allocator);
 }
 
+pub fn countCells(line: []const u8) usize {
+    const trimmed = std.mem.trim(u8, line, parse_block.horizontal_whitespace);
+    var count: usize = 0;
+    var iter = CellIterator.init(trimmed);
+    while (iter.next()) |_| count += 1;
+    return count;
+}
+
 /// Iterator that splits a row on `|`, handling optional outer pipes and escaped pipes.
 const CellIterator = struct {
     text: []const u8,
