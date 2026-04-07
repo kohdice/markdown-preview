@@ -1,0 +1,136 @@
+//! Pipe table rendering tests: header and delimiter parsing, column
+//! alignment, blockquote-wrapped tables, and CRLF input handling.
+//!
+//! These are end-to-end tests of `renderMarkdown` extracted from
+//! render.zig to keep that file focused on the orchestrator code.
+//! Every test calls `renderToOwnedSlice` from render_test_helpers.zig.
+
+const std = @import("std");
+const renderToOwnedSlice = @import("render_test_helpers.zig").renderToOwnedSlice;
+
+test "simple table renders with aligned columns" {
+    const allocator = std.testing.allocator;
+    const source = "| A | B |\n| --- | --- |\n| 1 | 2 |\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "A"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "B"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "1"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "2"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "|"));
+}
+
+test "table inside code fence is not detected" {
+    const allocator = std.testing.allocator;
+    const source = "```\n| A | B |\n| --- | --- |\n| 1 | 2 |\n```\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "| A | B |"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "| --- | --- |"));
+}
+
+test "line with pipe but no delimiter row is not a table" {
+    const allocator = std.testing.allocator;
+    const source = "a | b\nnot a table\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("a | b\nnot a table\n", rendered);
+}
+
+test "blank line after table is preserved" {
+    const allocator = std.testing.allocator;
+    const source = "| A |\n| --- |\n| 1 |\n\nParagraph after table\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\n\nParagraph after table"));
+}
+
+test "table inside blockquote" {
+    const allocator = std.testing.allocator;
+    const source = "> | A | B |\n> | --- | --- |\n> | 1 | 2 |\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "| "));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "A"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "B"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "1"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "2"));
+    var line_iter = std.mem.splitScalar(u8, std.mem.trimEnd(u8, rendered, "\n"), '\n');
+    while (line_iter.next()) |line| {
+        try std.testing.expect(std.mem.startsWith(u8, line, "| "));
+    }
+}
+
+test "blockquote without table falls through to normal rendering" {
+    const allocator = std.testing.allocator;
+    const source = "> just a quote\n> another line\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("| just a quote\n| another line\n", rendered);
+}
+
+test "blockquote with pipe but no delimiter is not a table" {
+    const allocator = std.testing.allocator;
+    const source = "> a | b\n> c | d\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("| a | b\n| c | d\n", rendered);
+}
+
+test "blockquote table followed by normal blockquote" {
+    const allocator = std.testing.allocator;
+    const source = "> | A |\n> | --- |\n> | 1 |\n> normal text\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "A"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "1"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "normal text"));
+}
+
+test "CRLF input renders pipe table" {
+    const allocator = std.testing.allocator;
+    const source = "| A | B |\r\n| --- | --- |\r\n| 1 | 2 |\r\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "A"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "B"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "1"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "2"));
+    try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, "\r"));
+}
+
+test "CRLF input renders blockquote table" {
+    const allocator = std.testing.allocator;
+    const source = "> | A | B |\r\n> | --- | --- |\r\n> | 1 | 2 |\r\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "A"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "B"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "1"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "2"));
+    try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, "\r"));
+    var line_iter = std.mem.splitScalar(u8, std.mem.trimEnd(u8, rendered, "\n"), '\n');
+    while (line_iter.next()) |line| {
+        try std.testing.expect(std.mem.startsWith(u8, line, "| "));
+    }
+}
