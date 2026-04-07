@@ -5,6 +5,7 @@ const theme = @import("theme.zig");
 const parse_block = @import("parse_block.zig");
 const render_inline = @import("render_inline.zig");
 const parse_link = @import("parse_link.zig");
+const block_ast = @import("block_ast.zig");
 
 const LinkDefMap = parse_link.LinkDefMap;
 
@@ -30,6 +31,72 @@ const border = struct {
 };
 
 const BorderKind = enum { top, middle, bottom };
+
+pub const TableContext = enum {
+    top_level,
+    in_blockquote,
+
+    fn cellForeground(self: TableContext, palette: theme.Palette) theme.Rgb {
+        return switch (self) {
+            .top_level => palette.body,
+            .in_blockquote => palette.muted,
+        };
+    }
+};
+
+pub fn renderTableNode(
+    writer: *std.io.Writer,
+    table: block_ast.Table,
+    allocator: std.mem.Allocator,
+    enable_ansi: bool,
+    palette: theme.Palette,
+    link_defs: *const LinkDefMap,
+    context: TableContext,
+) !void {
+    const col_count = table.alignments.len;
+
+    var col_widths = try allocator.alloc(usize, col_count);
+    defer allocator.free(col_widths);
+    for (col_widths) |*w| w.* = 0;
+
+    for (0..col_count) |c| {
+        if (c < table.header.len)
+            col_widths[c] = @max(col_widths[c], try render_inline.renderedDisplayWidth(allocator, table.header[c], palette, link_defs));
+        for (table.rows) |row| {
+            if (c < row.len)
+                col_widths[c] = @max(col_widths[c], try render_inline.renderedDisplayWidth(allocator, row[c], palette, link_defs));
+        }
+        col_widths[c] = @max(col_widths[c], min_table_col_width);
+    }
+
+    const cell_fg = context.cellForeground(palette);
+
+    try renderTableBorder(writer, col_widths, col_count, enable_ansi, palette, .top);
+    try writer.writeByte('\n');
+
+    try renderTableRow(allocator, writer, table.header, col_widths, table.alignments, col_count, enable_ansi, .{
+        .fg = cell_fg,
+        .bold = true,
+    }, palette, link_defs);
+    try writer.writeByte('\n');
+
+    try renderTableBorder(writer, col_widths, col_count, enable_ansi, palette, .middle);
+
+    for (table.rows, 0..) |row, i| {
+        try writer.writeByte('\n');
+        try renderTableRow(allocator, writer, row, col_widths, table.alignments, col_count, enable_ansi, .{
+            .fg = cell_fg,
+        }, palette, link_defs);
+
+        if (i + 1 < table.rows.len) {
+            try writer.writeByte('\n');
+            try renderTableBorder(writer, col_widths, col_count, enable_ansi, palette, .middle);
+        }
+    }
+
+    try writer.writeByte('\n');
+    try renderTableBorder(writer, col_widths, col_count, enable_ansi, palette, .bottom);
+}
 
 pub fn tryRenderTable(
     allocator: std.mem.Allocator,
