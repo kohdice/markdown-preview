@@ -5,7 +5,7 @@ const width = @import("width.zig");
 const parse_block = @import("parse_block.zig");
 const parse_link = @import("parse_link.zig");
 const render_inline = @import("render_inline.zig");
-const tabular = @import("tabular.zig");
+const render_table = @import("render_table.zig");
 const highlight = @import("highlight.zig");
 
 /// Visible column width of a rendered thematic break. Short enough to fit
@@ -84,7 +84,7 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                     .fg = palette.subtle,
                     .dim = true,
                 }, thematic_break_display);
-            } else if (try tabular.tryRenderTable(allocator, writer, input, line, line_end, opts.enable_ansi, palette, &link_defs)) |new_start| {
+            } else if (try render_table.tryRenderTable(allocator, writer, input, line, line_end, opts.enable_ansi, palette, &link_defs)) |new_start| {
                 prev_was_blank = false;
                 line_start = new_start;
                 continue;
@@ -92,7 +92,7 @@ pub fn renderMarkdown(allocator: std.mem.Allocator, writer: *std.io.Writer, inpu
                 try render_inline.renderInline(allocator, writer, parse_block.stripHardBreak(heading.content), opts.enable_ansi, headingStyle(heading.level, palette), palette, &link_defs);
             } else if (parse_block.parseBlockQuote(line)) |quote| {
                 if (std.mem.indexOfScalar(u8, quote.content, '|') != null) {
-                    if (try tabular.tryRenderBlockQuoteTable(allocator, writer, input, line_start, opts.enable_ansi, palette, &link_defs)) |new_start| {
+                    if (try render_table.tryRenderBlockQuoteTable(allocator, writer, input, line_start, opts.enable_ansi, palette, &link_defs)) |new_start| {
                         prev_was_blank = false;
                         line_start = new_start;
                         continue;
