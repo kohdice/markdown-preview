@@ -1,5 +1,5 @@
 const std = @import("std");
-const root = @import("markdown_preview");
+const mp = @import("markdown_preview");
 
 const max_file_bytes = 10 * 1024 * 1024;
 const expected_arg_count = 2;
@@ -38,7 +38,7 @@ pub fn run(
     };
     defer allocator.free(source);
 
-    try root.renderMarkdown(allocator, stdout, source, .{
+    try mp.renderMarkdown(allocator, stdout, source, .{
         .enable_ansi = enable_ansi,
         .theme = .solarized_dark,
         .wrap_width = wrap_width,
