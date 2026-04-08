@@ -1,5 +1,6 @@
 const std = @import("std");
-const mp = @import("markdown_preview");
+const render = @import("render.zig");
+const width = @import("width.zig");
 
 const max_file_bytes = 10 * 1024 * 1024;
 const exit_success: u8 = 0;
@@ -10,7 +11,7 @@ const usage_message =
 
 pub const ParsedArgs = struct {
     path: []const u8,
-    ambiguous_width: mp.AmbiguousWidth,
+    ambiguous_width: width.AmbiguousWidth,
 };
 
 pub const ParseError = error{
@@ -22,7 +23,7 @@ pub const ParseError = error{
 
 pub fn parseArgs(args: []const []const u8) ParseError!ParsedArgs {
     var path: ?[]const u8 = null;
-    var ambiguous: mp.AmbiguousWidth = .narrow;
+    var ambiguous: width.AmbiguousWidth = .narrow;
     var positional_only = false;
 
     var i: usize = 1;
@@ -65,6 +66,18 @@ pub fn getTerminalWidth(handle: std.posix.fd_t) ?usize {
     return null;
 }
 
+pub fn unwrapWriteError(
+    err: anyerror,
+    stdout_err: ?anyerror,
+    stderr_err: ?anyerror,
+) anyerror {
+    if (err == error.WriteFailed) {
+        if (stdout_err) |underlying| return underlying;
+        if (stderr_err) |underlying| return underlying;
+    }
+    return err;
+}
+
 pub fn run(
     allocator: std.mem.Allocator,
     dir: std.fs.Dir,
@@ -85,7 +98,7 @@ pub fn run(
     };
     defer allocator.free(source);
 
-    try mp.renderMarkdown(allocator, stdout, source, .{
+    try render.renderMarkdown(allocator, stdout, source, .{
         .enable_ansi = enable_ansi,
         .theme = .solarized_dark,
         .wrap_width = wrap_width,
@@ -98,27 +111,27 @@ test "parseArgs accepts plain positional path" {
     const args = [_][]const u8{ "mp", "foo.md" };
     const parsed = try parseArgs(&args);
     try std.testing.expectEqualStrings("foo.md", parsed.path);
-    try std.testing.expectEqual(mp.AmbiguousWidth.narrow, parsed.ambiguous_width);
+    try std.testing.expectEqual(width.AmbiguousWidth.narrow, parsed.ambiguous_width);
 }
 
 test "parseArgs accepts --ambiguous-width=wide before path" {
     const args = [_][]const u8{ "mp", "--ambiguous-width=wide", "foo.md" };
     const parsed = try parseArgs(&args);
     try std.testing.expectEqualStrings("foo.md", parsed.path);
-    try std.testing.expectEqual(mp.AmbiguousWidth.wide, parsed.ambiguous_width);
+    try std.testing.expectEqual(width.AmbiguousWidth.wide, parsed.ambiguous_width);
 }
 
 test "parseArgs accepts --ambiguous-width=wide after path" {
     const args = [_][]const u8{ "mp", "foo.md", "--ambiguous-width=wide" };
     const parsed = try parseArgs(&args);
     try std.testing.expectEqualStrings("foo.md", parsed.path);
-    try std.testing.expectEqual(mp.AmbiguousWidth.wide, parsed.ambiguous_width);
+    try std.testing.expectEqual(width.AmbiguousWidth.wide, parsed.ambiguous_width);
 }
 
 test "parseArgs accepts --ambiguous-width=narrow explicitly" {
     const args = [_][]const u8{ "mp", "--ambiguous-width=narrow", "foo.md" };
     const parsed = try parseArgs(&args);
-    try std.testing.expectEqual(mp.AmbiguousWidth.narrow, parsed.ambiguous_width);
+    try std.testing.expectEqual(width.AmbiguousWidth.narrow, parsed.ambiguous_width);
 }
 
 test "parseArgs rejects invalid ambiguous-width value" {
@@ -145,14 +158,14 @@ test "parseArgs with -- sentinel treats following arg as positional even if it s
     const args = [_][]const u8{ "mp", "--", "--notes.md" };
     const parsed = try parseArgs(&args);
     try std.testing.expectEqualStrings("--notes.md", parsed.path);
-    try std.testing.expectEqual(mp.AmbiguousWidth.narrow, parsed.ambiguous_width);
+    try std.testing.expectEqual(width.AmbiguousWidth.narrow, parsed.ambiguous_width);
 }
 
 test "parseArgs with -- sentinel preserves prior flags" {
     const args = [_][]const u8{ "mp", "--ambiguous-width=wide", "--", "--weird-name.md" };
     const parsed = try parseArgs(&args);
     try std.testing.expectEqualStrings("--weird-name.md", parsed.path);
-    try std.testing.expectEqual(mp.AmbiguousWidth.wide, parsed.ambiguous_width);
+    try std.testing.expectEqual(width.AmbiguousWidth.wide, parsed.ambiguous_width);
 }
 
 test "parseArgs with -- sentinel still rejects duplicate positional" {
@@ -245,4 +258,32 @@ test "run renders markdown files" {
         stdout.writer.buffered(),
     );
     try std.testing.expectEqualStrings("", stderr.writer.buffered());
+}
+
+test "unwrapWriteError passes through errors other than WriteFailed" {
+    try std.testing.expectEqual(
+        @as(anyerror, error.OutOfMemory),
+        unwrapWriteError(error.OutOfMemory, error.AccessDenied, error.AccessDenied),
+    );
+}
+
+test "unwrapWriteError surfaces stdout underlying error and prefers it over stderr" {
+    try std.testing.expectEqual(
+        @as(anyerror, error.NoSpaceLeft),
+        unwrapWriteError(error.WriteFailed, error.NoSpaceLeft, error.AccessDenied),
+    );
+}
+
+test "unwrapWriteError falls back to stderr underlying error when stdout has none" {
+    try std.testing.expectEqual(
+        @as(anyerror, error.AccessDenied),
+        unwrapWriteError(error.WriteFailed, null, error.AccessDenied),
+    );
+}
+
+test "unwrapWriteError returns WriteFailed unchanged when both underlying errors are null" {
+    try std.testing.expectEqual(
+        @as(anyerror, error.WriteFailed),
+        unwrapWriteError(error.WriteFailed, null, null),
+    );
 }

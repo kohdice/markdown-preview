@@ -1,5 +1,5 @@
 const std = @import("std");
-const cli = @import("cli.zig");
+const mp = @import("markdown_preview");
 
 const stdout_buffer_size = 4096;
 const stderr_buffer_size = 1024;
@@ -29,9 +29,9 @@ pub fn main() !void {
         .no_color => false,
     };
 
-    const wrap_width = if (enable_ansi) cli.getTerminalWidth(stdout_file.handle) else null;
+    const wrap_width = if (enable_ansi) mp.getTerminalWidth(stdout_file.handle) else null;
 
-    const exit_code = cli.run(
+    const exit_code = mp.run(
         allocator,
         std.fs.cwd(),
         args,
@@ -39,25 +39,9 @@ pub fn main() !void {
         &stderr_stream.interface,
         enable_ansi,
         wrap_width,
-    ) catch |err| return unwrapWriteError(err, &stdout_stream, &stderr_stream);
+    ) catch |err| return mp.unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
 
-    stdout_stream.interface.flush() catch |err| return unwrapWriteError(err, &stdout_stream, &stderr_stream);
-    stderr_stream.interface.flush() catch |err| return unwrapWriteError(err, &stdout_stream, &stderr_stream);
+    stdout_stream.interface.flush() catch |err| return mp.unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
+    stderr_stream.interface.flush() catch |err| return mp.unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
     if (exit_code != 0) std.process.exit(exit_code);
-}
-
-fn unwrapWriteError(
-    err: anyerror,
-    stdout_stream: *std.fs.File.Writer,
-    stderr_stream: *std.fs.File.Writer,
-) anyerror {
-    if (err == error.WriteFailed) {
-        if (stdout_stream.err) |underlying| return underlying;
-        if (stderr_stream.err) |underlying| return underlying;
-    }
-    return err;
-}
-
-test {
-    _ = @import("cli.zig");
 }

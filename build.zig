@@ -4,7 +4,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const mod = b.addModule("markdown_preview", .{
+    const mp_mod = b.createModule(.{
         .root_source_file = b.path("src/markdown_preview.zig"),
         .target = target,
     });
@@ -28,7 +28,7 @@ pub fn build(b: *std.Build) void {
     const ts_javascript_dep = b.dependency("tree_sitter_javascript", .{});
     const ts_bash_dep = b.dependency("tree_sitter_bash", .{});
 
-    attachTreeSitter(b, mod, .{
+    attachTreeSitter(b, mp_mod, .{
         .target = target,
         .optimize = optimize,
         .ts_dep = ts_dep,
@@ -48,7 +48,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "markdown_preview", .module = mod },
+                .{ .name = "markdown_preview", .module = mp_mod },
             },
         }),
     });
@@ -64,19 +64,13 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    const mod_tests = b.addTest(.{
-        .root_module = mod,
+    const mp_tests = b.addTest(.{
+        .root_module = mp_mod,
     });
-    const run_mod_tests = b.addRunArtifact(mod_tests);
-
-    const exe_tests = b.addTest(.{
-        .root_module = exe.root_module,
-    });
-    const run_exe_tests = b.addRunArtifact(exe_tests);
+    const run_mp_tests = b.addRunArtifact(mp_tests);
 
     const test_step = b.step("test", "Run tests");
-    test_step.dependOn(&run_mod_tests.step);
-    test_step.dependOn(&run_exe_tests.step);
+    test_step.dependOn(&run_mp_tests.step);
 }
 
 /// Options bundle for `attachTreeSitter`. Keeping the argument list as one
@@ -107,12 +101,11 @@ const GrammarSource = struct {
 
 /// Attach tree-sitter runtime and all grammar libraries to a module.
 ///
-/// Propagation: Called once on `mod` (the library module).
-/// - `mod_tests` uses `mod` as its root_module → inherits imports + C link.
-/// - `exe.root_module` imports `mod` via the `markdown_preview` named module
-///   so the exe compile unit never re-includes library files directly;
-///   tree_sitter resolution therefore stays inside `mod`.
-/// - `exe_tests` uses `exe.root_module` → also inherits.
+/// Propagation: Called once on `mp_mod` (the library module).
+/// - `mp_tests` uses `mp_mod` as its root_module → inherits imports + C link.
+/// - `exe.root_module` imports `mp_mod` via the `markdown_preview` named
+///   module so the exe compile unit never re-includes library files directly;
+///   tree_sitter resolution therefore stays inside `mp_mod`.
 fn attachTreeSitter(b: *std.Build, module: *std.Build.Module, a: TreeSitterAttach) void {
     module.addImport("tree_sitter", a.ts_dep.module("tree_sitter"));
     // tree-sitter-zig is still packaged with Zig bindings upstream, so we can
