@@ -29,7 +29,7 @@ test "renderMarkdown strips heading markers and preserves structure" {
     try std.testing.expectEqualStrings(
         \\Title
         \\
-        \\- item
+        \\• item
         \\│ quoted
         \\link(https://example.com)
         \\```zig
@@ -186,9 +186,9 @@ test "task list items render checkbox indicators" {
     defer allocator.free(rendered);
 
     try std.testing.expectEqualStrings(
-        \\- [x] Completed task
-        \\- [ ] Incomplete task
-        \\- Regular item
+        \\• ☑ Completed task
+        \\• ☐ Incomplete task
+        \\• Regular item
         \\
     ,
         rendered,
@@ -202,7 +202,7 @@ test "task list with uppercase X" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("- [x] Done\n", rendered);
+    try std.testing.expectEqualStrings("• ☑ Done\n", rendered);
 }
 
 test "ordered task list items" {
@@ -212,7 +212,7 @@ test "ordered task list items" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("1. [x] First done\n2. [ ] Second pending\n", rendered);
+    try std.testing.expectEqualStrings("1. ☑ First done\n2. ☐ Second pending\n", rendered);
 }
 
 test "task list items get ANSI styling" {
@@ -224,10 +224,10 @@ test "task list items get ANSI styling" {
     });
     defer allocator.free(rendered);
 
-    // Checked: [x] should have list_marker color (teal: 42, 161, 152)
-    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[38;2;42;161;152m[x] "));
-    // Unchecked: [ ] should have muted + dim
-    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[2m\x1b[38;2;88;110;117m[ ] "));
+    // Checked: ☑ should have list_marker color (teal: 42, 161, 152)
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[38;2;42;161;152m☑ "));
+    // Unchecked: ☐ should have muted + dim
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[2m\x1b[38;2;88;110;117m☐ "));
 }
 
 test "task list with tab separator" {
@@ -237,8 +237,8 @@ test "task list with tab separator" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "[x] "));
-    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "[ ] "));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "☑ "));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "☐ "));
 }
 
 test "empty ordered list item" {
@@ -259,7 +259,7 @@ test "nested task list items" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("- [x] Parent\n  - [ ] Child\n", rendered);
+    try std.testing.expectEqualStrings("• ☑ Parent\n  ◦ ☐ Child\n", rendered);
 }
 
 test "tab-indented headings and blockquotes are recognized" {
@@ -331,7 +331,7 @@ test "blank lines between different block elements are normalized" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("Heading\n\nParagraph\n\n- list\n", rendered);
+    try std.testing.expectEqualStrings("Heading\n\nParagraph\n\n• list\n", rendered);
 }
 
 test "unordered list continuation line" {
@@ -341,7 +341,7 @@ test "unordered list continuation line" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("- first line\n  continued here\n", rendered);
+    try std.testing.expectEqualStrings("• first line\n  continued here\n", rendered);
 }
 
 test "unordered list multiple continuation lines" {
@@ -351,7 +351,7 @@ test "unordered list multiple continuation lines" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("- first\n  second\n  third\n", rendered);
+    try std.testing.expectEqualStrings("• first\n  second\n  third\n", rendered);
 }
 
 test "ordered list continuation line" {
@@ -371,7 +371,7 @@ test "continuation stops at unindented line" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("- first\n  continued\nnot continued\n", rendered);
+    try std.testing.expectEqualStrings("• first\n  continued\nnot continued\n", rendered);
 }
 
 test "continuation stops at blank line" {
@@ -381,7 +381,7 @@ test "continuation stops at blank line" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("- first\n\n  not continued\n", rendered);
+    try std.testing.expectEqualStrings("• first\n\n  not continued\n", rendered);
 }
 
 test "continuation stops at nested list item" {
@@ -391,7 +391,7 @@ test "continuation stops at nested list item" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("- parent\n  - child\n", rendered);
+    try std.testing.expectEqualStrings("• parent\n  ◦ child\n", rendered);
 }
 
 test "nested unordered list with multiple children preserves visual layout" {
@@ -402,7 +402,7 @@ test "nested unordered list with multiple children preserves visual layout" {
     defer allocator.free(rendered);
 
     try std.testing.expectEqualStrings(
-        "- parent\n  - child1\n  - child2\n- sibling\n",
+        "• parent\n  ◦ child1\n  ◦ child2\n• sibling\n",
         rendered,
     );
 }
@@ -414,7 +414,7 @@ test "three-level deep unordered nesting renders with increasing indent" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("- a\n  - b\n    - c\n", rendered);
+    try std.testing.expectEqualStrings("• a\n  ◦ b\n    ▪ c\n", rendered);
 }
 
 test "ordered parent containing unordered child renders with column indent" {
@@ -424,7 +424,7 @@ test "ordered parent containing unordered child renders with column indent" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("1. outer\n   - inner\n", rendered);
+    try std.testing.expectEqualStrings("1. outer\n   ◦ inner\n", rendered);
 }
 
 test "list item with continuation line then nested list" {
@@ -435,7 +435,7 @@ test "list item with continuation line then nested list" {
     defer allocator.free(rendered);
 
     try std.testing.expectEqualStrings(
-        "- first\n  continued\n  - nested\n",
+        "• first\n  continued\n  ◦ nested\n",
         rendered,
     );
 }
@@ -447,7 +447,7 @@ test "paragraph after nested list stays inside outer list item" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("- foo\n  - bar\n  baz\n", rendered);
+    try std.testing.expectEqualStrings("• foo\n  ◦ bar\n  baz\n", rendered);
 }
 
 test "multi-space marker preserves byte-for-byte continuation rendering" {
@@ -457,7 +457,7 @@ test "multi-space marker preserves byte-for-byte continuation rendering" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("- first\n  second\n", rendered);
+    try std.testing.expectEqualStrings("• first\n  second\n", rendered);
 }
 
 test "blockquote containing unordered list renders as gutter plus list" {
@@ -467,7 +467,7 @@ test "blockquote containing unordered list renders as gutter plus list" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("│ - item\n", rendered);
+    try std.testing.expectEqualStrings("│ • item\n", rendered);
 }
 
 test "blockquote containing ordered list renders as gutter plus numbered markers" {
@@ -487,7 +487,7 @@ test "loose list with blank-separated paragraphs in same item" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("- foo\n\n  bar\n", rendered);
+    try std.testing.expectEqualStrings("• foo\n\n  bar\n", rendered);
 }
 
 test "list item containing blockquote child renders with indented gutter" {
@@ -497,7 +497,7 @@ test "list item containing blockquote child renders with indented gutter" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("- intro\n  │ quoted child\n", rendered);
+    try std.testing.expectEqualStrings("• intro\n  │ quoted child\n", rendered);
 }
 
 test "list item containing nested blockquote renders without double indent" {
@@ -507,7 +507,7 @@ test "list item containing nested blockquote renders without double indent" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("- foo\n  │ │ quoted\n", rendered);
+    try std.testing.expectEqualStrings("• foo\n  │ │ quoted\n", rendered);
 }
 
 test "list item containing fenced code child renders with content-column indent" {
@@ -517,7 +517,7 @@ test "list item containing fenced code child renders with content-column indent"
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("- outer\n  ```\n  body\n  ```\n", rendered);
+    try std.testing.expectEqualStrings("• outer\n  ```\n  body\n  ```\n", rendered);
 }
 
 test "ordered list multi-digit continuation" {
@@ -537,7 +537,7 @@ test "continuation with emphasis in continued line" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("- start\n  bold continued\n", rendered);
+    try std.testing.expectEqualStrings("• start\n  bold continued\n", rendered);
 }
 
 test "paragraph wraps at wrap_width" {
@@ -587,5 +587,45 @@ test "CRLF input preserves list continuation" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("- first line\n  continued here\n", rendered);
+    try std.testing.expectEqualStrings("• first line\n  continued here\n", rendered);
+}
+
+test "unordered bullet depth cycles through level0 level1 level2 and wraps" {
+    const allocator = std.testing.allocator;
+    const source = "- a\n  - b\n    - c\n      - d\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("• a\n  ◦ b\n    ▪ c\n      • d\n", rendered);
+}
+
+test "three-level list nesting accumulates depth across ordered and unordered" {
+    const allocator = std.testing.allocator;
+    const source = "- outer\n  1. middle\n     - deepest\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("• outer\n  1. middle\n     ▪ deepest\n", rendered);
+}
+
+test "task checkbox inside nested list uses nested bullet glyph" {
+    const allocator = std.testing.allocator;
+    const source = "- top\n  - [x] nested done\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("• top\n  ◦ ☑ nested done\n", rendered);
+}
+
+test "list inside blockquote child of list item inherits outer depth" {
+    const allocator = std.testing.allocator;
+    const source = "- outer\n  > - inner\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("• outer\n  │ ◦ inner\n", rendered);
 }

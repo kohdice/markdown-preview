@@ -14,6 +14,21 @@ const LinkDefMap = parse_link.LinkDefMap;
 const thematic_break_width = 32;
 const thematic_break_display = "-" ** thematic_break_width;
 
+const list_bullet = struct {
+    const level0 = "• ";
+    const level1 = "◦ ";
+    const level2 = "▪ ";
+};
+
+fn bulletForDepth(depth: usize) []const u8 {
+    return switch (depth % 3) {
+        0 => list_bullet.level0,
+        1 => list_bullet.level1,
+        2 => list_bullet.level2,
+        else => unreachable,
+    };
+}
+
 pub const RenderContext = struct {
     allocator: std.mem.Allocator,
     enable_ansi: bool,
@@ -58,7 +73,7 @@ fn renderBlocks(
 ) !void {
     for (blocks, 0..) |block, i| {
         if (i > 0) try writer.writeByte('\n');
-        try renderBlock(writer, block, ctx);
+        try renderBlock(writer, block, ctx, 0);
     }
 }
 
@@ -66,12 +81,13 @@ fn renderBlock(
     writer: *std.io.Writer,
     block: block_ast.BlockNode,
     ctx: RenderContext,
+    depth: usize,
 ) anyerror!void {
     switch (block) {
         .paragraph => |p| try renderParagraph(writer, p, ctx),
         .heading => |h| try renderHeading(writer, h, ctx),
-        .blockquote => |bq| try renderBlockQuote(writer, bq, ctx),
-        .list => |l| try renderList(writer, l, ctx),
+        .blockquote => |bq| try renderBlockQuote(writer, bq, ctx, depth),
+        .list => |l| try renderList(writer, l, ctx, depth),
         .code_fence => |cf| try renderCodeFence(writer, cf, ctx),
         .thematic_break => try renderThematicBreak(writer, ctx),
         .table => |t| try render_table.renderTableNode(
@@ -176,6 +192,7 @@ fn renderBlockQuote(
     writer: *std.io.Writer,
     bq: block_ast.BlockQuote,
     ctx: RenderContext,
+    depth: usize,
 ) anyerror!void {
     var buf: std.io.Writer.Allocating = .init(ctx.allocator);
     defer buf.deinit();
@@ -183,7 +200,7 @@ fn renderBlockQuote(
     var child_ctx = ctx;
     child_ctx.wrap_width = null;
 
-    try renderBlocksInBlockQuote(&buf.writer, bq.blocks, child_ctx);
+    try renderBlocksInBlockQuote(&buf.writer, bq.blocks, child_ctx, depth);
 
     var list = buf.toArrayList();
     defer list.deinit(ctx.allocator);
@@ -207,12 +224,13 @@ fn renderBlocksInBlockQuote(
     writer: *std.io.Writer,
     blocks: []const block_ast.BlockNode,
     ctx: RenderContext,
+    depth: usize,
 ) anyerror!void {
     for (blocks, 0..) |block, i| {
         if (i > 0) try writer.writeByte('\n');
         switch (block) {
             .paragraph => |p| try renderBlockQuoteParagraph(writer, p, ctx),
-            .blockquote => |inner| try renderBlockQuote(writer, inner, ctx),
+            .blockquote => |inner| try renderBlockQuote(writer, inner, ctx, depth),
             .table => |t| try render_table.renderTableNode(
                 writer,
                 t,
@@ -222,7 +240,7 @@ fn renderBlocksInBlockQuote(
                 ctx.link_defs,
                 .in_blockquote,
             ),
-            else => try renderBlock(writer, block, ctx),
+            else => try renderBlock(writer, block, ctx, depth),
         }
     }
 }
@@ -251,10 +269,11 @@ fn renderList(
     writer: *std.io.Writer,
     list: block_ast.List,
     ctx: RenderContext,
-) !void {
+    depth: usize,
+) anyerror!void {
     for (list.items, 0..) |item, i| {
         if (i > 0) try writer.writeByte('\n');
-        try renderListItem(writer, item, ctx);
+        try renderListItem(writer, item, ctx, depth);
     }
 }
 
@@ -262,28 +281,25 @@ fn renderListItem(
     writer: *std.io.Writer,
     item: block_ast.ListItem,
     ctx: RenderContext,
-) !void {
+    depth: usize,
+) anyerror!void {
     try writer.splatByteAll(' ', item.indent);
+
+    const marker_style: ansi.TextStyle = .{
+        .fg = ctx.palette.list_marker,
+        .bold = true,
+    };
 
     const content_col = blk: {
         if (item.number) |number| {
-            try ansi.writeStyled(writer, ctx.enable_ansi, .{
-                .fg = ctx.palette.list_marker,
-                .bold = true,
-            }, number);
+            try ansi.writeStyled(writer, ctx.enable_ansi, marker_style, number);
             const marker_buf: [2]u8 = .{ item.marker, ' ' };
-            try ansi.writeStyled(writer, ctx.enable_ansi, .{
-                .fg = ctx.palette.list_marker,
-                .bold = true,
-            }, &marker_buf);
-            break :blk item.indent + number.len + parse_block.marker_suffix_width;
+            try ansi.writeStyled(writer, ctx.enable_ansi, marker_style, &marker_buf);
+            break :blk item.indent + width.displayWidth(number) + width.displayWidth(&marker_buf);
         } else {
-            const marker_buf: [2]u8 = .{ item.marker, ' ' };
-            try ansi.writeStyled(writer, ctx.enable_ansi, .{
-                .fg = ctx.palette.list_marker,
-                .bold = true,
-            }, &marker_buf);
-            break :blk item.indent + parse_block.marker_suffix_width;
+            const marker_text = bulletForDepth(depth);
+            try ansi.writeStyled(writer, ctx.enable_ansi, marker_style, marker_text);
+            break :blk item.indent + width.displayWidth(marker_text);
         }
     };
 
@@ -296,12 +312,14 @@ fn renderListItem(
                 if (ci > 0) try writer.splatByteAll(' ', content_col);
                 try renderListItemParagraph(writer, p, ctx, content_col);
             },
-            .list, .blockquote, .blank_line => try renderBlock(writer, child, ctx),
+            .list => |nested| try renderList(writer, nested, ctx, depth + 1),
+            .blockquote => |bq| try renderBlockQuote(writer, bq, ctx, depth + 1),
+            .blank_line => try renderBlock(writer, child, ctx, depth),
             else => {
                 if (ci > 0) {
-                    try renderListChildIndented(writer, child, ctx, content_col);
+                    try renderListChildIndented(writer, child, ctx, content_col, depth);
                 } else {
-                    try renderBlock(writer, child, ctx);
+                    try renderBlock(writer, child, ctx, depth);
                 }
             },
         }
@@ -313,13 +331,14 @@ fn renderListChildIndented(
     child: block_ast.BlockNode,
     ctx: RenderContext,
     indent: usize,
+    depth: usize,
 ) anyerror!void {
-    if (indent == 0) return renderBlock(writer, child, ctx);
+    if (indent == 0) return renderBlock(writer, child, ctx, depth);
 
     var buf: std.io.Writer.Allocating = .init(ctx.allocator);
     defer buf.deinit();
 
-    try renderBlock(&buf.writer, child, ctx);
+    try renderBlock(&buf.writer, child, ctx, depth);
 
     var list = buf.toArrayList();
     defer list.deinit(ctx.allocator);

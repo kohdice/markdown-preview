@@ -16,8 +16,8 @@ const link_title_separator = " — ";
 const image_alt_prefix = "[img: ";
 const image_alt_suffix = "]";
 pub const blockquote_marker = "│ ";
-const checkbox_checked = "[x] ";
-const checkbox_unchecked = "[ ] ";
+const checkbox_checked = "☑ ";
+const checkbox_unchecked = "☐ ";
 
 pub fn renderInline(
     allocator: std.mem.Allocator,

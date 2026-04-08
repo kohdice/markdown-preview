@@ -125,7 +125,7 @@ test "run renders markdown files" {
     try std.testing.expectEqual(exit_success, exit_code);
     try std.testing.expectEqualStrings(
         \\Hello
-        \\- item
+        \\• item
         \\
     ,
         stdout.writer.buffered(),
