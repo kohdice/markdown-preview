@@ -45,6 +45,7 @@ pub const ListItem = struct {
     indent: usize,
     marker: u8,
     content: []const u8,
+    content_col: usize,
     checked: ?bool = null,
 };
 
@@ -53,6 +54,7 @@ pub const OrderedListItem = struct {
     number: []const u8,
     marker: u8,
     content: []const u8,
+    content_col: usize,
     checked: ?bool = null,
 };
 
@@ -116,6 +118,7 @@ pub fn parseListItem(line: []const u8) ?ListItem {
         .indent = indent,
         .marker = marker,
         .content = checkbox.rest,
+        .content_col = content_index,
         .checked = checkbox.checked,
     };
 }
@@ -159,6 +162,7 @@ pub fn parseOrderedListItem(line: []const u8) ?OrderedListItem {
         .number = line[digit_start..digit_end],
         .marker = marker,
         .content = checkbox.rest,
+        .content_col = content_index,
         .checked = checkbox.checked,
     };
 }
