@@ -152,32 +152,3 @@ pub fn renderedDisplayWidth(allocator: std.mem.Allocator, text: []const u8, pale
     defer allocator.free(rendered);
     return width_mod.displayWidth(rendered);
 }
-
-pub fn consumeListContinuation(
-    allocator: std.mem.Allocator,
-    writer: *std.io.Writer,
-    input: []const u8,
-    start_pos: usize,
-    content_col: usize,
-    enable_ansi: bool,
-    palette: theme.Palette,
-    link_defs: *const LinkDefMap,
-) !usize {
-    var pos = start_pos;
-    while (pos < input.len) {
-        const end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
-        const has_nl = end < input.len;
-        const raw = std.mem.trimEnd(u8, input[pos..end], parse_block.carriage_return);
-
-        if (!parse_block.isListContinuation(raw, content_col)) break;
-
-        const indent = parse_block.countLeadingWhitespace(raw);
-        try writer.splatByteAll(' ', content_col);
-        try renderInline(allocator, writer, parse_block.stripHardBreak(raw[indent..]), enable_ansi, .{
-            .fg = palette.body,
-        }, palette, link_defs);
-        if (has_nl) try writer.writeByte('\n');
-        pos = end + @intFromBool(has_nl);
-    }
-    return pos;
-}

@@ -167,19 +167,6 @@ pub fn parseOrderedListItem(line: []const u8) ?OrderedListItem {
     };
 }
 
-pub fn isListContinuation(line: []const u8, content_col: usize) bool {
-    if (std.mem.trim(u8, line, horizontal_whitespace).len == 0) return false;
-    const indent = countLeadingWhitespace(line);
-    if (indent < content_col) return false;
-    if (parseListItem(line) != null) return false;
-    if (parseOrderedListItem(line) != null) return false;
-    if (parseHeading(line) != null) return false;
-    if (parseBlockQuote(line) != null) return false;
-    if (parseFence(line) != null) return false;
-    if (isThematicBreak(line)) return false;
-    return true;
-}
-
 pub fn parseBlockQuote(line: []const u8) ?BlockQuote {
     const indent = countIndentUpTo(line, max_block_indent);
     if (indent >= line.len or line[indent] != '>') return null;
