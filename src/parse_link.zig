@@ -14,45 +14,6 @@ pub const LinkDefinition = struct {
     title: ?[]const u8,
 };
 
-pub fn collectLinkDefinitions(allocator: std.mem.Allocator, input: []const u8) !LinkDefMap {
-    var defs: LinkDefMap = .{};
-    var line_start: usize = 0;
-    var active_prepass_fence: ?parse_block.Fence = null;
-
-    while (line_start < input.len) {
-        const line_end = std.mem.indexOfScalarPos(u8, input, line_start, '\n') orelse input.len;
-        const has_newline = line_end < input.len;
-        const line = std.mem.trimEnd(u8, input[line_start..line_end], parse_block.carriage_return);
-
-        if (active_prepass_fence) |fence| {
-            if (parse_block.isClosingFence(line, fence)) {
-                active_prepass_fence = null;
-            }
-        } else if (parse_block.parseFence(line)) |fence| {
-            active_prepass_fence = fence;
-        } else {
-            if (parseLinkDefinition(line)) |def| {
-                const lower = std.ascii.allocLowerString(allocator, def.label) catch null;
-                if (lower) |key| {
-                    const result = defs.getOrPut(allocator, key) catch {
-                        allocator.free(key);
-                        line_start = line_end + @intFromBool(has_newline);
-                        continue;
-                    };
-                    if (result.found_existing) {
-                        allocator.free(key);
-                    } else {
-                        result.value_ptr.* = .{ .url = def.url, .title = def.title };
-                    }
-                }
-            }
-        }
-
-        line_start = line_end + @intFromBool(has_newline);
-    }
-    return defs;
-}
-
 pub fn parseLinkDefinition(line: []const u8) ?LinkDefinition {
     const indent = parse_block.countIndentUpTo(line, parse_block.max_block_indent);
     if (indent >= line.len or line[indent] != '[') return null;
