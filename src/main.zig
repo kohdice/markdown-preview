@@ -57,3 +57,7 @@ fn unwrapWriteError(
     }
     return err;
 }
+
+test {
+    _ = @import("cli.zig");
+}
