@@ -1,10 +1,3 @@
-//! Test-only helpers. Not part of the public API.
-//!
-//! The `pub` qualifier on `renderToOwnedSlice` exists only so the
-//! sibling render_test_*.zig files can import it. Consumers of
-//! the `markdown_preview` module must not rely on anything
-//! exported from this file.
-
 const std = @import("std");
 const render = @import("render.zig");
 

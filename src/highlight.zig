@@ -591,7 +591,6 @@ test "Highlighter: later @function pattern overrides generic @variable on fn dec
     const rendered = try list.toOwnedSlice(allocator);
     defer allocator.free(rendered);
 
-    // The func ANSI escape must be the style emitted right before `greet`.
     const combined = func_ansi ++ "greet";
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, combined));
 }
@@ -664,8 +663,6 @@ test "Highlighter: @spell meta capture does not override @comment italic" {
     const rendered = try list.toOwnedSlice(allocator);
     defer allocator.free(rendered);
 
-    // The italic SGR (\x1b[3m) must be emitted, and the comment palette color
-    // (muted #586e75 = 88,110,117) must precede the comment text.
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[3m"));
     const comment_color = "\x1b[38;2;88;110;117m";
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, comment_color));

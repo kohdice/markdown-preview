@@ -1,11 +1,3 @@
-//! Code fence rendering tests: fenced code block detection, language
-//! recognition, tree-sitter syntax highlighting, ANSI state safety,
-//! and C0 control byte sanitization.
-//!
-//! These are end-to-end tests of `renderMarkdown` extracted from
-//! render.zig to keep that file focused on the orchestrator code.
-//! Every test calls `renderToOwnedSlice` from render_test_helpers.zig.
-
 const std = @import("std");
 const renderToOwnedSlice = @import("render_test_helpers.zig").renderToOwnedSlice;
 
@@ -51,7 +43,6 @@ test "zig code fence gets syntax highlighting under ANSI" {
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 2, "```"));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "const"));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "42"));
-    // Solarized green keyword color #859900 = 133,153,0.
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[38;2;133;153;0m"));
 }
 
@@ -75,7 +66,6 @@ test "unrecognized language falls back to uniform inline_code color" {
     defer allocator.free(rendered);
 
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "Qapla'!"));
-    // inline_code color (teal #2aa198 = 42,161,152) is applied to the buffered body.
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[38;2;42;161;152m"));
 }
 

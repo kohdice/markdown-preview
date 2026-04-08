@@ -1,11 +1,3 @@
-//! Inline-level rendering tests: emphasis (bold, italic, strikethrough),
-//! code spans, images, HTML entity decoding, autolinks, bare URLs,
-//! link titles, and reference-style links.
-//!
-//! These are end-to-end tests of `renderMarkdown` extracted from
-//! render.zig to keep that file focused on the orchestrator code.
-//! Every test calls `renderToOwnedSlice` from render_test_helpers.zig.
-
 const std = @import("std");
 const renderToOwnedSlice = @import("render_test_helpers.zig").renderToOwnedSlice;
 
@@ -370,7 +362,6 @@ test "autolink with ANSI gets link styling" {
     });
     defer allocator.free(rendered);
 
-    // Should have underline + link color (violet: 108, 113, 196)
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[4m"));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "https://example.com"));
     try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, "<https"));
