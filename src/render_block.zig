@@ -292,9 +292,47 @@ fn renderListItem(
     for (item.blocks, 0..) |child, ci| {
         if (ci > 0) try writer.writeByte('\n');
         switch (child) {
-            .paragraph => |p| try renderListItemParagraph(writer, p, ctx, content_col),
-            else => try renderBlock(writer, child, ctx),
+            .paragraph => |p| {
+                if (ci > 0) try writer.splatByteAll(' ', content_col);
+                try renderListItemParagraph(writer, p, ctx, content_col);
+            },
+            .list, .blockquote, .blank_line => try renderBlock(writer, child, ctx),
+            else => {
+                if (ci > 0) {
+                    try renderListChildIndented(writer, child, ctx, content_col);
+                } else {
+                    try renderBlock(writer, child, ctx);
+                }
+            },
         }
+    }
+}
+
+fn renderListChildIndented(
+    writer: *std.io.Writer,
+    child: block_ast.BlockNode,
+    ctx: RenderContext,
+    indent: usize,
+) anyerror!void {
+    if (indent == 0) return renderBlock(writer, child, ctx);
+
+    var buf: std.io.Writer.Allocating = .init(ctx.allocator);
+    defer buf.deinit();
+
+    try renderBlock(&buf.writer, child, ctx);
+
+    var list = buf.toArrayList();
+    defer list.deinit(ctx.allocator);
+    const rendered = try list.toOwnedSlice(ctx.allocator);
+    defer ctx.allocator.free(rendered);
+
+    var it = std.mem.splitScalar(u8, rendered, '\n');
+    var first = true;
+    while (it.next()) |line| {
+        if (!first) try writer.writeByte('\n');
+        first = false;
+        try writer.splatByteAll(' ', indent);
+        try writer.writeAll(line);
     }
 }
 

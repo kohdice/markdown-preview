@@ -394,6 +394,132 @@ test "continuation stops at nested list item" {
     try std.testing.expectEqualStrings("- parent\n  - child\n", rendered);
 }
 
+test "nested unordered list with multiple children preserves visual layout" {
+    const allocator = std.testing.allocator;
+    const source = "- parent\n  - child1\n  - child2\n- sibling\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        "- parent\n  - child1\n  - child2\n- sibling\n",
+        rendered,
+    );
+}
+
+test "three-level deep unordered nesting renders with increasing indent" {
+    const allocator = std.testing.allocator;
+    const source = "- a\n  - b\n    - c\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("- a\n  - b\n    - c\n", rendered);
+}
+
+test "ordered parent containing unordered child renders with column indent" {
+    const allocator = std.testing.allocator;
+    const source = "1. outer\n   - inner\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("1. outer\n   - inner\n", rendered);
+}
+
+test "list item with continuation line then nested list" {
+    const allocator = std.testing.allocator;
+    const source = "- first\n  continued\n  - nested\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        "- first\n  continued\n  - nested\n",
+        rendered,
+    );
+}
+
+test "paragraph after nested list stays inside outer list item" {
+    const allocator = std.testing.allocator;
+    const source = "- foo\n  - bar\n  baz\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("- foo\n  - bar\n  baz\n", rendered);
+}
+
+test "multi-space marker preserves byte-for-byte continuation rendering" {
+    const allocator = std.testing.allocator;
+    const source = "-   first\n    second\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("- first\n  second\n", rendered);
+}
+
+test "blockquote containing unordered list renders as gutter plus list" {
+    const allocator = std.testing.allocator;
+    const source = "> - item\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("│ - item\n", rendered);
+}
+
+test "blockquote containing ordered list renders as gutter plus numbered markers" {
+    const allocator = std.testing.allocator;
+    const source = "> 1. foo\n> 2. bar\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("│ 1. foo\n│ 2. bar\n", rendered);
+}
+
+test "loose list with blank-separated paragraphs in same item" {
+    const allocator = std.testing.allocator;
+    const source = "- foo\n\n  bar\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("- foo\n\n  bar\n", rendered);
+}
+
+test "list item containing blockquote child renders with indented gutter" {
+    const allocator = std.testing.allocator;
+    const source = "- intro\n  > quoted child\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("- intro\n  │ quoted child\n", rendered);
+}
+
+test "list item containing nested blockquote renders without double indent" {
+    const allocator = std.testing.allocator;
+    const source = "- foo\n  > > quoted\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("- foo\n  │ │ quoted\n", rendered);
+}
+
+test "list item containing fenced code child renders with content-column indent" {
+    const allocator = std.testing.allocator;
+    const source = "- outer\n  ```\n  body\n  ```\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("- outer\n  ```\n  body\n  ```\n", rendered);
+}
+
 test "ordered list multi-digit continuation" {
     const allocator = std.testing.allocator;
     const source = "10. first line\n    continued\n";

@@ -291,21 +291,22 @@ test "parseDocument wraps blockquote table in BlockQuote with Table child" {
     try std.testing.expectEqualStrings("4", tbl.rows[1][1]);
 }
 
-test "parseDocument splits blockquote table followed by normal blockquote into two nodes" {
+test "parseDocument groups blockquote table and paragraph into one BlockQuote" {
     const allocator = std.testing.allocator;
     const input = "> | A |\n> | --- |\n> | 1 |\n> normal text\n";
 
     var doc = try parse_document.parseDocument(allocator, input);
     defer doc.deinit(allocator);
 
-    try std.testing.expectEqual(@as(usize, 2), doc.blocks.len);
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
     try std.testing.expect(doc.blocks[0] == .blockquote);
-    try std.testing.expect(doc.blocks[0].blockquote.blocks[0] == .table);
-    try std.testing.expect(doc.blocks[1] == .blockquote);
-    try std.testing.expect(doc.blocks[1].blockquote.blocks[0] == .paragraph);
+    const bq = doc.blocks[0].blockquote;
+    try std.testing.expectEqual(@as(usize, 2), bq.blocks.len);
+    try std.testing.expect(bq.blocks[0] == .table);
+    try std.testing.expect(bq.blocks[1] == .paragraph);
     try std.testing.expectEqualStrings(
         "normal text",
-        doc.blocks[1].blockquote.blocks[0].paragraph.lines[0],
+        bq.blocks[1].paragraph.lines[0],
     );
 }
 
@@ -338,23 +339,21 @@ test "parseDocument rejects table with mismatched header and delimiter column co
     }
 }
 
-test "parseDocument promotes blockquote table after a normal blockquote line" {
+test "parseDocument groups blockquote paragraph and table into one BlockQuote" {
     const allocator = std.testing.allocator;
     const input = "> intro\n> | A |\n> | --- |\n> | 1 |\n";
 
     var doc = try parse_document.parseDocument(allocator, input);
     defer doc.deinit(allocator);
 
-    try std.testing.expectEqual(@as(usize, 2), doc.blocks.len);
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
     try std.testing.expect(doc.blocks[0] == .blockquote);
-    try std.testing.expect(doc.blocks[0].blockquote.blocks[0] == .paragraph);
-    try std.testing.expectEqualStrings(
-        "intro",
-        doc.blocks[0].blockquote.blocks[0].paragraph.lines[0],
-    );
-    try std.testing.expect(doc.blocks[1] == .blockquote);
-    try std.testing.expect(doc.blocks[1].blockquote.blocks[0] == .table);
-    const tbl = doc.blocks[1].blockquote.blocks[0].table;
+    const bq = doc.blocks[0].blockquote;
+    try std.testing.expectEqual(@as(usize, 2), bq.blocks.len);
+    try std.testing.expect(bq.blocks[0] == .paragraph);
+    try std.testing.expectEqualStrings("intro", bq.blocks[0].paragraph.lines[0]);
+    try std.testing.expect(bq.blocks[1] == .table);
+    const tbl = bq.blocks[1].table;
     try std.testing.expectEqualStrings("A", tbl.header[0]);
     try std.testing.expectEqualStrings("1", tbl.rows[0][0]);
 }
@@ -453,4 +452,368 @@ test "parseDocument groups plain and nested blockquote lines as siblings" {
     const inner = outer.blocks[1].blockquote;
     try std.testing.expect(inner.blocks[0] == .paragraph);
     try std.testing.expectEqualStrings("b", inner.blocks[0].paragraph.lines[0]);
+}
+
+test "parseDocument represents nested unordered list as ListItem.blocks child" {
+    const allocator = std.testing.allocator;
+    const input = "- parent\n  - child\n";
+
+    var doc = try parse_document.parseDocument(allocator, input);
+    defer doc.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .list);
+
+    const outer_list = doc.blocks[0].list;
+    try std.testing.expectEqual(@as(usize, 1), outer_list.items.len);
+
+    const parent = outer_list.items[0];
+    try std.testing.expectEqual(@as(usize, 0), parent.indent);
+    try std.testing.expectEqual(@as(usize, 2), parent.blocks.len);
+
+    try std.testing.expect(parent.blocks[0] == .paragraph);
+    try std.testing.expectEqualStrings("parent", parent.blocks[0].paragraph.lines[0]);
+
+    try std.testing.expect(parent.blocks[1] == .list);
+    const inner_list = parent.blocks[1].list;
+    try std.testing.expectEqual(block_ast.ListKind.unordered, inner_list.kind);
+    try std.testing.expectEqual(@as(usize, 1), inner_list.items.len);
+
+    const child = inner_list.items[0];
+    try std.testing.expectEqual(@as(usize, 2), child.indent);
+    try std.testing.expectEqual(@as(usize, 1), child.blocks.len);
+    try std.testing.expect(child.blocks[0] == .paragraph);
+    try std.testing.expectEqualStrings("child", child.blocks[0].paragraph.lines[0]);
+}
+
+test "parseDocument represents ordered parent containing unordered child" {
+    const allocator = std.testing.allocator;
+    const input = "1. outer\n   - inner\n";
+
+    var doc = try parse_document.parseDocument(allocator, input);
+    defer doc.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .list);
+
+    const outer_list = doc.blocks[0].list;
+    try std.testing.expectEqual(block_ast.ListKind.ordered, outer_list.kind);
+    try std.testing.expectEqual(@as(usize, 1), outer_list.items.len);
+
+    const outer_item = outer_list.items[0];
+    try std.testing.expectEqualStrings("1", outer_item.number.?);
+    try std.testing.expectEqual(@as(usize, 2), outer_item.blocks.len);
+
+    try std.testing.expect(outer_item.blocks[0] == .paragraph);
+    try std.testing.expectEqualStrings("outer", outer_item.blocks[0].paragraph.lines[0]);
+
+    try std.testing.expect(outer_item.blocks[1] == .list);
+    const inner_list = outer_item.blocks[1].list;
+    try std.testing.expectEqual(block_ast.ListKind.unordered, inner_list.kind);
+    try std.testing.expectEqual(@as(usize, 1), inner_list.items.len);
+
+    const inner_item = inner_list.items[0];
+    try std.testing.expectEqual(@as(usize, 3), inner_item.indent);
+    try std.testing.expectEqualStrings("inner", inner_item.blocks[0].paragraph.lines[0]);
+}
+
+test "parseDocument keeps sibling list items flat when indents match" {
+    const allocator = std.testing.allocator;
+    const input = "- a\n- b\n- c\n";
+
+    var doc = try parse_document.parseDocument(allocator, input);
+    defer doc.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .list);
+    const list = doc.blocks[0].list;
+    try std.testing.expectEqual(@as(usize, 3), list.items.len);
+    for (list.items) |item| {
+        try std.testing.expectEqual(@as(usize, 1), item.blocks.len);
+        try std.testing.expect(item.blocks[0] == .paragraph);
+    }
+}
+
+test "parseDocument promotes continuation paragraph then nested list as siblings" {
+    const allocator = std.testing.allocator;
+    const input = "- first\n  continued\n  - nested\n";
+
+    var doc = try parse_document.parseDocument(allocator, input);
+    defer doc.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .list);
+
+    const outer = doc.blocks[0].list.items[0];
+    try std.testing.expectEqual(@as(usize, 2), outer.blocks.len);
+
+    try std.testing.expect(outer.blocks[0] == .paragraph);
+    const lines = outer.blocks[0].paragraph.lines;
+    try std.testing.expectEqual(@as(usize, 2), lines.len);
+    try std.testing.expectEqualStrings("first", lines[0]);
+    try std.testing.expectEqualStrings("continued", lines[1]);
+
+    try std.testing.expect(outer.blocks[1] == .list);
+    const nested = outer.blocks[1].list;
+    try std.testing.expectEqual(@as(usize, 1), nested.items.len);
+    try std.testing.expectEqualStrings(
+        "nested",
+        nested.items[0].blocks[0].paragraph.lines[0],
+    );
+}
+
+test "parseDocument groups slightly indented sibling items into one list" {
+    const allocator = std.testing.allocator;
+    const input = "- a\n - b\n  - c\n";
+
+    var doc = try parse_document.parseDocument(allocator, input);
+    defer doc.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .list);
+
+    const list = doc.blocks[0].list;
+    try std.testing.expectEqual(@as(usize, 3), list.items.len);
+    try std.testing.expectEqual(@as(usize, 0), list.items[0].indent);
+    try std.testing.expectEqual(@as(usize, 1), list.items[1].indent);
+    try std.testing.expectEqual(@as(usize, 2), list.items[2].indent);
+    try std.testing.expectEqualStrings("a", list.items[0].blocks[0].paragraph.lines[0]);
+    try std.testing.expectEqualStrings("b", list.items[1].blocks[0].paragraph.lines[0]);
+    try std.testing.expectEqualStrings("c", list.items[2].blocks[0].paragraph.lines[0]);
+}
+
+test "parseDocument keeps zigzag-indented siblings in one list" {
+    const allocator = std.testing.allocator;
+    const input = "- a\n - b\n  - c\n - d\n- e\n";
+
+    var doc = try parse_document.parseDocument(allocator, input);
+    defer doc.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .list);
+    const list = doc.blocks[0].list;
+    try std.testing.expectEqual(@as(usize, 5), list.items.len);
+    try std.testing.expectEqual(@as(usize, 0), list.items[0].indent);
+    try std.testing.expectEqual(@as(usize, 1), list.items[1].indent);
+    try std.testing.expectEqual(@as(usize, 2), list.items[2].indent);
+    try std.testing.expectEqual(@as(usize, 1), list.items[3].indent);
+    try std.testing.expectEqual(@as(usize, 0), list.items[4].indent);
+}
+
+test "parseDocument promotes child when next indent reaches prev content_col" {
+    const allocator = std.testing.allocator;
+    const input = "- outer\n  - inner\n";
+
+    var doc = try parse_document.parseDocument(allocator, input);
+    defer doc.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .list);
+    const list = doc.blocks[0].list;
+    try std.testing.expectEqual(@as(usize, 1), list.items.len);
+    const outer = list.items[0];
+    try std.testing.expectEqual(@as(usize, 2), outer.blocks.len);
+    try std.testing.expect(outer.blocks[1] == .list);
+}
+
+test "parseDocument preserves paragraph after nested list in same list item" {
+    const allocator = std.testing.allocator;
+    const input = "- foo\n  - bar\n  baz\n";
+
+    var doc = try parse_document.parseDocument(allocator, input);
+    defer doc.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .list);
+    const outer = doc.blocks[0].list.items[0];
+    try std.testing.expectEqual(@as(usize, 3), outer.blocks.len);
+
+    try std.testing.expect(outer.blocks[0] == .paragraph);
+    try std.testing.expectEqualStrings("foo", outer.blocks[0].paragraph.lines[0]);
+
+    try std.testing.expect(outer.blocks[1] == .list);
+    const nested = outer.blocks[1].list;
+    try std.testing.expectEqual(@as(usize, 1), nested.items.len);
+    try std.testing.expectEqualStrings("bar", nested.items[0].blocks[0].paragraph.lines[0]);
+
+    try std.testing.expect(outer.blocks[2] == .paragraph);
+    try std.testing.expectEqualStrings("baz", outer.blocks[2].paragraph.lines[0]);
+}
+
+test "parseDocument uses dynamic content_col from multi-space marker" {
+    const allocator = std.testing.allocator;
+    const input = "-   foo\n    continuation\n";
+
+    var doc = try parse_document.parseDocument(allocator, input);
+    defer doc.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .list);
+    const item = doc.blocks[0].list.items[0];
+    try std.testing.expectEqual(@as(usize, 1), item.blocks.len);
+    try std.testing.expect(item.blocks[0] == .paragraph);
+    const lines = item.blocks[0].paragraph.lines;
+    try std.testing.expectEqual(@as(usize, 2), lines.len);
+    try std.testing.expectEqualStrings("foo", lines[0]);
+    try std.testing.expectEqualStrings("continuation", lines[1]);
+}
+
+test "parseDocument rejects under-indented continuation when marker has extra spaces" {
+    const allocator = std.testing.allocator;
+    const input = "-   foo\n  sub\n";
+
+    var doc = try parse_document.parseDocument(allocator, input);
+    defer doc.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .list);
+    const item = doc.blocks[0].list.items[0];
+    try std.testing.expectEqual(@as(usize, 1), item.blocks.len);
+    try std.testing.expect(item.blocks[0] == .paragraph);
+    try std.testing.expectEqual(@as(usize, 1), item.blocks[0].paragraph.lines.len);
+    try std.testing.expectEqualStrings("foo", item.blocks[0].paragraph.lines[0]);
+
+    try std.testing.expect(doc.blocks[1] == .paragraph);
+}
+
+test "parseDocument represents blockquote containing unordered list" {
+    const allocator = std.testing.allocator;
+    const input = "> - item\n";
+
+    var doc = try parse_document.parseDocument(allocator, input);
+    defer doc.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .blockquote);
+    const bq = doc.blocks[0].blockquote;
+    try std.testing.expectEqual(@as(usize, 1), bq.blocks.len);
+    try std.testing.expect(bq.blocks[0] == .list);
+    const list = bq.blocks[0].list;
+    try std.testing.expectEqual(block_ast.ListKind.unordered, list.kind);
+    try std.testing.expectEqual(@as(usize, 1), list.items.len);
+    try std.testing.expectEqualStrings(
+        "item",
+        list.items[0].blocks[0].paragraph.lines[0],
+    );
+}
+
+test "parseDocument represents blockquote containing ordered list" {
+    const allocator = std.testing.allocator;
+    const input = "> 1. foo\n> 2. bar\n";
+
+    var doc = try parse_document.parseDocument(allocator, input);
+    defer doc.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .blockquote);
+    const list = doc.blocks[0].blockquote.blocks[0].list;
+    try std.testing.expectEqual(block_ast.ListKind.ordered, list.kind);
+    try std.testing.expectEqual(@as(usize, 2), list.items.len);
+    try std.testing.expectEqualStrings("1", list.items[0].number.?);
+    try std.testing.expectEqualStrings("2", list.items[1].number.?);
+    try std.testing.expectEqualStrings("foo", list.items[0].blocks[0].paragraph.lines[0]);
+    try std.testing.expectEqualStrings("bar", list.items[1].blocks[0].paragraph.lines[0]);
+}
+
+test "parseDocument represents loose list with blank-separated paragraphs in one item" {
+    const allocator = std.testing.allocator;
+    const input = "- foo\n\n  bar\n";
+
+    var doc = try parse_document.parseDocument(allocator, input);
+    defer doc.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .list);
+    const item = doc.blocks[0].list.items[0];
+    try std.testing.expectEqual(@as(usize, 3), item.blocks.len);
+    try std.testing.expect(item.blocks[0] == .paragraph);
+    try std.testing.expect(item.blocks[1] == .blank_line);
+    try std.testing.expect(item.blocks[2] == .paragraph);
+    try std.testing.expectEqualStrings("foo", item.blocks[0].paragraph.lines[0]);
+    try std.testing.expectEqualStrings("bar", item.blocks[2].paragraph.lines[0]);
+}
+
+test "parseDocument represents list item containing blockquote child" {
+    const allocator = std.testing.allocator;
+    const input = "- intro\n  > quoted child\n";
+
+    var doc = try parse_document.parseDocument(allocator, input);
+    defer doc.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .list);
+    const item = doc.blocks[0].list.items[0];
+    try std.testing.expectEqual(@as(usize, 2), item.blocks.len);
+    try std.testing.expect(item.blocks[0] == .paragraph);
+    try std.testing.expect(item.blocks[1] == .blockquote);
+    const inner_bq = item.blocks[1].blockquote;
+    try std.testing.expectEqual(@as(usize, 2), inner_bq.indent);
+    try std.testing.expect(inner_bq.blocks[0] == .paragraph);
+    try std.testing.expectEqualStrings(
+        "quoted child",
+        inner_bq.blocks[0].paragraph.lines[0],
+    );
+}
+
+test "parseDocument keeps inner blockquote indent at zero inside list item" {
+    const allocator = std.testing.allocator;
+    const input = "- foo\n  > > quoted\n";
+
+    var doc = try parse_document.parseDocument(allocator, input);
+    defer doc.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .list);
+    const item = doc.blocks[0].list.items[0];
+    try std.testing.expectEqual(@as(usize, 2), item.blocks.len);
+    try std.testing.expect(item.blocks[1] == .blockquote);
+    const outer_bq = item.blocks[1].blockquote;
+    try std.testing.expectEqual(@as(usize, 2), outer_bq.indent);
+    try std.testing.expectEqual(@as(usize, 1), outer_bq.blocks.len);
+    try std.testing.expect(outer_bq.blocks[0] == .blockquote);
+    const inner_bq = outer_bq.blocks[0].blockquote;
+    try std.testing.expectEqual(@as(usize, 0), inner_bq.indent);
+    try std.testing.expectEqualStrings(
+        "quoted",
+        inner_bq.blocks[0].paragraph.lines[0],
+    );
+}
+
+test "parseDocument represents list item containing fenced code child" {
+    const allocator = std.testing.allocator;
+    const input = "- outer\n  ```\n  body\n  ```\n";
+
+    var doc = try parse_document.parseDocument(allocator, input);
+    defer doc.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .list);
+    const item = doc.blocks[0].list.items[0];
+    try std.testing.expectEqual(@as(usize, 2), item.blocks.len);
+    try std.testing.expect(item.blocks[0] == .paragraph);
+    try std.testing.expect(item.blocks[1] == .code_fence);
+    try std.testing.expectEqualStrings("body", item.blocks[1].code_fence.content);
+}
+
+test "parseDocument builds three-level deep unordered nesting" {
+    const allocator = std.testing.allocator;
+    const input = "- a\n  - b\n    - c\n";
+
+    var doc = try parse_document.parseDocument(allocator, input);
+    defer doc.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    const l0 = doc.blocks[0].list;
+    try std.testing.expectEqual(@as(usize, 1), l0.items.len);
+    try std.testing.expectEqualStrings("a", l0.items[0].blocks[0].paragraph.lines[0]);
+
+    try std.testing.expect(l0.items[0].blocks[1] == .list);
+    const l1 = l0.items[0].blocks[1].list;
+    try std.testing.expectEqual(@as(usize, 1), l1.items.len);
+    try std.testing.expectEqualStrings("b", l1.items[0].blocks[0].paragraph.lines[0]);
+
+    try std.testing.expect(l1.items[0].blocks[1] == .list);
+    const l2 = l1.items[0].blocks[1].list;
+    try std.testing.expectEqual(@as(usize, 1), l2.items.len);
+    try std.testing.expectEqualStrings("c", l2.items[0].blocks[0].paragraph.lines[0]);
 }
