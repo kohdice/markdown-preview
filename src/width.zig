@@ -3,7 +3,6 @@ const ansi = @import("ansi.zig");
 
 const ESC = 0x1b;
 
-// Unicode formatting characters with zero display width.
 const SOFT_HYPHEN = 0x00AD;
 const ZWSP = 0x200B;
 const ZWNJ = 0x200C;
@@ -11,13 +10,19 @@ const ZWJ = 0x200D;
 const WORD_JOINER = 0x2060;
 const BOM = 0xFEFF;
 
+/// Interpretation of Unicode East Asian Width "Ambiguous" (UAX #11 category A).
+/// Most modern terminals (Ghostty default, Alacritty, WezTerm, iTerm2) treat
+/// Ambiguous characters as 1 column wide. CJK-legacy terminal configurations
+/// (Vim `set ambiwidth=double`, Apple Terminal east-asian-wide setting, classic
+/// xterm-cjk) treat them as 2 columns. Callers pick the interpretation that
+/// matches their target terminal.
+pub const AmbiguousWidth = enum { narrow, wide };
+
 /// ANSI CSI parameter byte range (0x20–0x3f per ECMA-48 §5.4)
 fn isCsiParamByte(byte: u8) bool {
     return byte >= 0x20 and byte <= 0x3f;
 }
 
-/// Skip an ANSI CSI escape sequence starting at text[i].
-/// Returns the index past the final byte, or null if not a CSI sequence.
 fn skipAnsiCsi(text: []const u8, start: usize) ?usize {
     if (start + 1 >= text.len) return null;
     if (text[start] != ESC or text[start + 1] != '[') return null;
@@ -33,7 +38,9 @@ fn skipAnsiCsi(text: []const u8, start: usize) ?usize {
 /// Combining characters and variation selectors are width 0.
 /// ZWJ emoji sequences (e.g., family emoji) are counted as a single
 /// width-2 unit instead of summing each component.
-pub fn displayWidth(text: []const u8) usize {
+/// The `ambiguous` argument controls how East Asian Width Ambiguous
+/// characters are sized — see `AmbiguousWidth`.
+pub fn displayWidth(text: []const u8, ambiguous: AmbiguousWidth) usize {
     var w: usize = 0;
     var i: usize = 0;
     var suppress_next_emoji = false;
@@ -66,14 +73,14 @@ pub fn displayWidth(text: []const u8) usize {
             continue;
         }
 
-        w += codepointWidth(cp);
+        w += codepointWidth(cp, ambiguous);
     }
     return w;
 }
 
 /// Slice a string to fit within max_width display columns.
 /// Preserves ANSI escape sequences and respects UTF-8 byte boundaries.
-pub fn sliceToWidth(text: []const u8, max_width: usize) []const u8 {
+pub fn sliceToWidth(text: []const u8, max_width: usize, ambiguous: AmbiguousWidth) []const u8 {
     var width: usize = 0;
     var i: usize = 0;
     while (i < text.len) {
@@ -93,7 +100,7 @@ pub fn sliceToWidth(text: []const u8, max_width: usize) []const u8 {
             continue;
         };
 
-        const cw = codepointWidth(cp);
+        const cw = codepointWidth(cp, ambiguous);
         if (width + cw > max_width) break;
         width += cw;
         i += len;
@@ -104,7 +111,12 @@ pub fn sliceToWidth(text: []const u8, max_width: usize) []const u8 {
 /// Like sliceToWidth but returns an allocated slice that appends an ANSI reset
 /// sequence (\x1b[0m) if the text was truncated inside an active ANSI style.
 /// This prevents style leakage into subsequent terminal output.
-pub fn sliceToWidthAlloc(allocator: std.mem.Allocator, text: []const u8, max_width: usize) ![]u8 {
+pub fn sliceToWidthAlloc(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    max_width: usize,
+    ambiguous: AmbiguousWidth,
+) ![]u8 {
     var w: usize = 0;
     var i: usize = 0;
     var ansi_active = false;
@@ -145,7 +157,7 @@ pub fn sliceToWidthAlloc(allocator: std.mem.Allocator, text: []const u8, max_wid
             continue;
         }
 
-        const cw = codepointWidth(cp);
+        const cw = codepointWidth(cp, ambiguous);
         if (w + cw > max_width) break;
         w += cw;
         i += len;
@@ -164,7 +176,12 @@ pub fn sliceToWidthAlloc(allocator: std.mem.Allocator, text: []const u8, max_wid
 /// Wrap text to fit within max_width display columns.
 /// Preserves ANSI escape sequences. Breaks at word boundaries (spaces) when possible.
 /// Falls back to hard-breaking at the column limit if no space is found.
-pub fn wrapText(allocator: std.mem.Allocator, text: []const u8, max_width: usize) ![]u8 {
+pub fn wrapText(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    max_width: usize,
+    ambiguous: AmbiguousWidth,
+) ![]u8 {
     if (max_width == 0) return try allocator.dupe(u8, text);
 
     var result: std.ArrayListUnmanaged(u8) = .{};
@@ -223,11 +240,10 @@ pub fn wrapText(allocator: std.mem.Allocator, text: []const u8, max_width: usize
             continue;
         }
 
-        const cw = codepointWidth(cp);
+        const cw = codepointWidth(cp, ambiguous);
 
         if (col + cw > max_width) {
             if (text[i] == ' ') {
-                // Space at overflow boundary — use it as break point directly
                 try result.append(allocator, '\n');
                 col = 0;
                 last_space_result = null;
@@ -235,12 +251,10 @@ pub fn wrapText(allocator: std.mem.Allocator, text: []const u8, max_width: usize
                 continue;
             }
             if (last_space_result) |space_pos| {
-                // Backtrack: replace last space with newline for word-wrap
                 result.items[space_pos] = '\n';
                 col -= col_after_last_space;
                 last_space_result = null;
             } else {
-                // No word boundary found — hard break at current position
                 try result.append(allocator, '\n');
                 col = 0;
             }
@@ -271,7 +285,284 @@ fn isEmoji(cp: u21) bool {
     return false;
 }
 
-fn codepointWidth(cp: u21) usize {
+/// Returns true for code points that should render as 2 columns when
+/// the caller selects `AmbiguousWidth.wide`.
+///
+/// The primary source is Unicode 15.1 `EastAsianWidth.txt` category
+/// `A` (Ambiguous). That catches the UAX #11 formal set — Greek,
+/// Cyrillic, box drawing, most Misc Symbols, and the Private Use
+/// Area.
+///
+/// On top of the formal set, the function also returns true for a
+/// small group of **project glyphs** that UAX #11 classifies as
+/// Neutral (`N`) but that the renderer intentionally uses in list,
+/// checkbox, and bullet positions. Neutral characters are always
+/// width 1 per the strict standard, but CJK-legacy terminal modes
+/// (Apple Terminal east-asian-wide, Vim `set ambiwidth=double` in
+/// the CJK font families that ship these glyphs as double-wide)
+/// display them as 2 columns. Without the override, opting into
+/// `--ambiguous-width=wide` would fix top-level `•` bullets and
+/// `│` gutters but leave `◦` / `▪` / `☐` / `☑` misaligned, which
+/// defeats the feature's stated user goal.
+///
+/// Project-glyph overrides (formally N, pragmatically widened):
+/// - U+25AA ▪ BLACK SMALL SQUARE (depth-2 list bullet)
+/// - U+25E6 ◦ WHITE BULLET (depth-1 list bullet)
+/// - U+2610 ☐ BALLOT BOX (unchecked task checkbox)
+/// - U+2611 ☑ BALLOT BOX WITH CHECK (checked task checkbox)
+///
+/// Earlier short-circuit rules in `codepointWidth` already handle
+/// combining marks (U+0300..U+036F → 0), variation selectors
+/// (U+FE00..U+FE0F, U+E0100..U+E01EF → 0), and CJK ranges
+/// (U+3200..U+32FF, U+F900..U+FAFF → 2), so those ranges are
+/// deliberately omitted from this check to keep the list focused
+/// on code points that actually need mode-dependent behavior.
+///
+/// When bumping the target Unicode version, diff the new
+/// `EastAsianWidth.txt` against the ranges below and add or remove
+/// entries as needed. Historical evidence shows A-category changes
+/// are rare (typically 0–5 codepoints per Unicode release), so a
+/// full regeneration is not necessary. Keep the project-glyph
+/// override section intact across bumps.
+fn isEastAsianAmbiguous(cp: u21) bool {
+    if (cp < 0x00A1) return false;
+
+    // Latin-1 Supplement
+    if (cp == 0x00A1) return true;
+    if (cp == 0x00A4) return true;
+    if (cp >= 0x00A7 and cp <= 0x00A8) return true;
+    if (cp == 0x00AA) return true;
+    if (cp >= 0x00AD and cp <= 0x00AE) return true;
+    if (cp >= 0x00B0 and cp <= 0x00B4) return true;
+    if (cp >= 0x00B6 and cp <= 0x00BA) return true;
+    if (cp >= 0x00BC and cp <= 0x00BF) return true;
+    if (cp == 0x00C6) return true;
+    if (cp == 0x00D0) return true;
+    if (cp >= 0x00D7 and cp <= 0x00D8) return true;
+    if (cp >= 0x00DE and cp <= 0x00E1) return true;
+    if (cp == 0x00E6) return true;
+    if (cp >= 0x00E8 and cp <= 0x00EA) return true;
+    if (cp >= 0x00EC and cp <= 0x00ED) return true;
+    if (cp == 0x00F0) return true;
+    if (cp >= 0x00F2 and cp <= 0x00F3) return true;
+    if (cp >= 0x00F7 and cp <= 0x00FA) return true;
+    if (cp == 0x00FC) return true;
+    if (cp == 0x00FE) return true;
+
+    // Latin Extended-A
+    if (cp == 0x0101) return true;
+    if (cp == 0x0111) return true;
+    if (cp == 0x0113) return true;
+    if (cp == 0x011B) return true;
+    if (cp >= 0x0126 and cp <= 0x0127) return true;
+    if (cp == 0x012B) return true;
+    if (cp >= 0x0131 and cp <= 0x0133) return true;
+    if (cp == 0x0138) return true;
+    if (cp >= 0x013F and cp <= 0x0142) return true;
+    if (cp == 0x0144) return true;
+    if (cp >= 0x0148 and cp <= 0x014B) return true;
+    if (cp == 0x014D) return true;
+    if (cp >= 0x0152 and cp <= 0x0153) return true;
+    if (cp >= 0x0166 and cp <= 0x0167) return true;
+    if (cp == 0x016B) return true;
+
+    // Latin Extended-B
+    if (cp == 0x01CE) return true;
+    if (cp == 0x01D0) return true;
+    if (cp == 0x01D2) return true;
+    if (cp == 0x01D4) return true;
+    if (cp == 0x01D6) return true;
+    if (cp == 0x01D8) return true;
+    if (cp == 0x01DA) return true;
+    if (cp == 0x01DC) return true;
+
+    // IPA Extensions
+    if (cp == 0x0251) return true;
+    if (cp == 0x0261) return true;
+
+    // Spacing Modifier Letters
+    if (cp == 0x02C4) return true;
+    if (cp == 0x02C7) return true;
+    if (cp >= 0x02C9 and cp <= 0x02CB) return true;
+    if (cp == 0x02CD) return true;
+    if (cp == 0x02D0) return true;
+    if (cp >= 0x02D8 and cp <= 0x02DB) return true;
+    if (cp == 0x02DD) return true;
+    if (cp == 0x02DF) return true;
+
+    // Greek and Coptic
+    if (cp >= 0x0391 and cp <= 0x03A1) return true;
+    if (cp >= 0x03A3 and cp <= 0x03A9) return true;
+    if (cp >= 0x03B1 and cp <= 0x03C1) return true;
+    if (cp >= 0x03C3 and cp <= 0x03C9) return true;
+
+    // Cyrillic
+    if (cp == 0x0401) return true;
+    if (cp >= 0x0410 and cp <= 0x044F) return true;
+    if (cp == 0x0451) return true;
+
+    if (cp < 0x2010) return false;
+
+    // General Punctuation
+    if (cp == 0x2010) return true;
+    if (cp >= 0x2013 and cp <= 0x2016) return true;
+    if (cp >= 0x2018 and cp <= 0x2019) return true;
+    if (cp >= 0x201C and cp <= 0x201D) return true;
+    if (cp >= 0x2020 and cp <= 0x2022) return true;
+    if (cp >= 0x2024 and cp <= 0x2027) return true;
+    if (cp == 0x2030) return true;
+    if (cp >= 0x2032 and cp <= 0x2033) return true;
+    if (cp == 0x2035) return true;
+    if (cp == 0x203B) return true;
+    if (cp == 0x203E) return true;
+
+    // Superscripts and Subscripts
+    if (cp == 0x2074) return true;
+    if (cp == 0x207F) return true;
+    if (cp >= 0x2081 and cp <= 0x2084) return true;
+
+    // Currency Symbols (Euro)
+    if (cp == 0x20AC) return true;
+
+    // Letterlike Symbols
+    if (cp == 0x2103) return true;
+    if (cp == 0x2105) return true;
+    if (cp == 0x2109) return true;
+    if (cp == 0x2113) return true;
+    if (cp == 0x2116) return true;
+    if (cp >= 0x2121 and cp <= 0x2122) return true;
+    if (cp == 0x2126) return true;
+    if (cp == 0x212B) return true;
+
+    // Number Forms
+    if (cp >= 0x2153 and cp <= 0x2154) return true;
+    if (cp >= 0x215B and cp <= 0x215E) return true;
+    if (cp >= 0x2160 and cp <= 0x216B) return true;
+    if (cp >= 0x2170 and cp <= 0x2179) return true;
+    if (cp == 0x2189) return true;
+
+    // Arrows
+    if (cp >= 0x2190 and cp <= 0x2199) return true;
+    if (cp >= 0x21B8 and cp <= 0x21B9) return true;
+    if (cp == 0x21D2) return true;
+    if (cp == 0x21D4) return true;
+    if (cp == 0x21E7) return true;
+
+    // Mathematical Operators
+    if (cp == 0x2200) return true;
+    if (cp >= 0x2202 and cp <= 0x2203) return true;
+    if (cp >= 0x2207 and cp <= 0x2208) return true;
+    if (cp == 0x220B) return true;
+    if (cp == 0x220F) return true;
+    if (cp == 0x2211) return true;
+    if (cp == 0x2215) return true;
+    if (cp == 0x221A) return true;
+    if (cp >= 0x221D and cp <= 0x2220) return true;
+    if (cp == 0x2223) return true;
+    if (cp == 0x2225) return true;
+    if (cp >= 0x2227 and cp <= 0x222C) return true;
+    if (cp == 0x222E) return true;
+    if (cp >= 0x2234 and cp <= 0x2237) return true;
+    if (cp >= 0x223C and cp <= 0x223D) return true;
+    if (cp == 0x2248) return true;
+    if (cp == 0x224C) return true;
+    if (cp == 0x2252) return true;
+    if (cp >= 0x2260 and cp <= 0x2261) return true;
+    if (cp >= 0x2264 and cp <= 0x2267) return true;
+    if (cp >= 0x226A and cp <= 0x226B) return true;
+    if (cp >= 0x226E and cp <= 0x226F) return true;
+    if (cp >= 0x2282 and cp <= 0x2283) return true;
+    if (cp >= 0x2286 and cp <= 0x2287) return true;
+    if (cp == 0x2295) return true;
+    if (cp == 0x2299) return true;
+    if (cp == 0x22A5) return true;
+    if (cp == 0x22BF) return true;
+
+    // Miscellaneous Technical
+    if (cp == 0x2312) return true;
+
+    // Enclosed Alphanumerics
+    if (cp >= 0x2460 and cp <= 0x24E9) return true;
+    if (cp >= 0x24EB and cp <= 0x254B) return true;
+
+    // Box Drawing
+    if (cp >= 0x2550 and cp <= 0x2573) return true;
+
+    // Block Elements
+    if (cp >= 0x2580 and cp <= 0x258F) return true;
+    if (cp >= 0x2592 and cp <= 0x2595) return true;
+
+    // Geometric Shapes
+    if (cp >= 0x25A0 and cp <= 0x25A1) return true;
+    if (cp >= 0x25A3 and cp <= 0x25A9) return true;
+    if (cp == 0x25AA) return true; // project override: depth-2 list bullet
+    if (cp >= 0x25B2 and cp <= 0x25B3) return true;
+    if (cp >= 0x25B6 and cp <= 0x25B7) return true;
+    if (cp >= 0x25BC and cp <= 0x25BD) return true;
+    if (cp >= 0x25C0 and cp <= 0x25C1) return true;
+    if (cp >= 0x25C6 and cp <= 0x25C8) return true;
+    if (cp == 0x25CB) return true;
+    if (cp >= 0x25CE and cp <= 0x25D1) return true;
+    if (cp >= 0x25E2 and cp <= 0x25E5) return true;
+    if (cp == 0x25E6) return true; // project override: depth-1 list bullet
+    if (cp == 0x25EF) return true;
+
+    // Miscellaneous Symbols
+    if (cp >= 0x2605 and cp <= 0x2606) return true;
+    if (cp == 0x2609) return true;
+    if (cp >= 0x260E and cp <= 0x260F) return true;
+    if (cp >= 0x2610 and cp <= 0x2611) return true; // project override: task checkboxes ☐ ☑
+    if (cp == 0x261C) return true;
+    if (cp == 0x261E) return true;
+    if (cp == 0x2640) return true;
+    if (cp == 0x2642) return true;
+    if (cp >= 0x2660 and cp <= 0x2661) return true;
+    if (cp >= 0x2663 and cp <= 0x2665) return true;
+    if (cp >= 0x2667 and cp <= 0x266A) return true;
+    if (cp >= 0x266C and cp <= 0x266D) return true;
+    if (cp == 0x266F) return true;
+    if (cp >= 0x269E and cp <= 0x269F) return true;
+    if (cp == 0x26BF) return true;
+    if (cp >= 0x26C6 and cp <= 0x26CD) return true;
+    if (cp >= 0x26CF and cp <= 0x26D3) return true;
+    if (cp >= 0x26D5 and cp <= 0x26E1) return true;
+    if (cp == 0x26E3) return true;
+    if (cp >= 0x26E8 and cp <= 0x26E9) return true;
+    if (cp >= 0x26EB and cp <= 0x26F1) return true;
+    if (cp == 0x26F4) return true;
+    if (cp >= 0x26F6 and cp <= 0x26F9) return true;
+    if (cp >= 0x26FB and cp <= 0x26FC) return true;
+    if (cp >= 0x26FE and cp <= 0x26FF) return true;
+
+    // Dingbats
+    if (cp == 0x273D) return true;
+    if (cp >= 0x2776 and cp <= 0x277F) return true;
+
+    // Miscellaneous Symbols and Arrows
+    if (cp >= 0x2B56 and cp <= 0x2B59) return true;
+
+    // Private Use Area
+    if (cp >= 0xE000 and cp <= 0xF8FF) return true;
+
+    // Specials
+    if (cp == 0xFFFD) return true;
+
+    // Enclosed Alphanumeric Supplement (subset flagged A)
+    if (cp >= 0x1F100 and cp <= 0x1F10A) return true;
+    if (cp >= 0x1F110 and cp <= 0x1F12D) return true;
+    if (cp >= 0x1F130 and cp <= 0x1F169) return true;
+    if (cp >= 0x1F170 and cp <= 0x1F18D) return true;
+    if (cp >= 0x1F18F and cp <= 0x1F190) return true;
+    if (cp >= 0x1F19B and cp <= 0x1F1AC) return true;
+
+    // Supplementary Private Use Area-A and Area-B
+    if (cp >= 0xF0000 and cp <= 0xFFFFD) return true;
+    if (cp >= 0x100000 and cp <= 0x10FFFD) return true;
+
+    return false;
+}
+
+fn codepointWidth(cp: u21, ambiguous: AmbiguousWidth) usize {
     if (cp < 0x20) return 0;
     if (cp == 0x7f) return 0;
 
@@ -339,140 +630,142 @@ fn codepointWidth(cp: u21) usize {
     if (cp >= 0x1FA00 and cp <= 0x1FA6F) return 2;
     if (cp >= 0x1FA70 and cp <= 0x1FAFF) return 2;
 
+    // East Asian Width Ambiguous — caller-selectable interpretation
+    if (isEastAsianAmbiguous(cp)) {
+        return if (ambiguous == .wide) 2 else 1;
+    }
+
     return 1;
 }
 
 test "ASCII string width" {
-    try std.testing.expectEqual(@as(usize, 5), displayWidth("hello"));
-    try std.testing.expectEqual(@as(usize, 0), displayWidth(""));
+    try std.testing.expectEqual(@as(usize, 5), displayWidth("hello", .narrow));
+    try std.testing.expectEqual(@as(usize, 0), displayWidth("", .narrow));
 }
 
 test "CJK characters are width 2" {
-    try std.testing.expectEqual(@as(usize, 6), displayWidth("日本語"));
-    try std.testing.expectEqual(@as(usize, 6), displayWidth("ab日cd"));
+    try std.testing.expectEqual(@as(usize, 6), displayWidth("日本語", .narrow));
+    try std.testing.expectEqual(@as(usize, 6), displayWidth("ab日cd", .narrow));
 }
 
 test "ANSI escape sequences are width 0" {
-    try std.testing.expectEqual(@as(usize, 4), displayWidth("\x1b[1mbold\x1b[0m"));
-    try std.testing.expectEqual(@as(usize, 3), displayWidth("\x1b[38;2;255;0;0mred\x1b[0m"));
+    try std.testing.expectEqual(@as(usize, 4), displayWidth("\x1b[1mbold\x1b[0m", .narrow));
+    try std.testing.expectEqual(@as(usize, 3), displayWidth("\x1b[38;2;255;0;0mred\x1b[0m", .narrow));
 }
 
 test "control characters are width 0" {
-    try std.testing.expectEqual(@as(usize, 2), displayWidth("a\x00b"));
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("a\x00b", .narrow));
 }
 
 test "emoji is width 2" {
-    try std.testing.expectEqual(@as(usize, 2), displayWidth("🚀"));
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("🚀", .narrow));
 }
 
 test "sliceToWidth basic" {
-    try std.testing.expectEqualStrings("hel", sliceToWidth("hello", 3));
-    try std.testing.expectEqualStrings("hello", sliceToWidth("hello", 10));
+    try std.testing.expectEqualStrings("hel", sliceToWidth("hello", 3, .narrow));
+    try std.testing.expectEqualStrings("hello", sliceToWidth("hello", 10, .narrow));
 }
 
 test "sliceToWidth respects CJK width" {
-    // "日" is width 2, so max_width 3 only fits one CJK char
-    try std.testing.expectEqualStrings("日", sliceToWidth("日本", 3));
+    try std.testing.expectEqualStrings("日", sliceToWidth("日本", 3, .narrow));
 }
 
 test "sliceToWidth preserves ANSI" {
     const text = "\x1b[1mbold\x1b[0m";
-    try std.testing.expectEqualStrings("\x1b[1mbol", sliceToWidth(text, 3));
+    try std.testing.expectEqualStrings("\x1b[1mbol", sliceToWidth(text, 3, .narrow));
 }
 
 test "mixed content width" {
-    // "Hello日本" = 5 + 4 = 9
-    try std.testing.expectEqual(@as(usize, 9), displayWidth("Hello日本"));
+    try std.testing.expectEqual(@as(usize, 9), displayWidth("Hello日本", .narrow));
 }
 
 test "combining characters are width 0" {
     // e + combining acute accent (U+0301) → é, display width 1
-    try std.testing.expectEqual(@as(usize, 1), displayWidth("e\xCC\x81"));
+    try std.testing.expectEqual(@as(usize, 1), displayWidth("e\xCC\x81", .narrow));
     // a + combining tilde (U+0303) → ã, display width 1
-    try std.testing.expectEqual(@as(usize, 1), displayWidth("a\xCC\x83"));
+    try std.testing.expectEqual(@as(usize, 1), displayWidth("a\xCC\x83", .narrow));
 }
 
 test "variation selectors are width 0" {
     // ❤ (U+2764) + VS16 (U+FE0F) → ❤️
-    try std.testing.expectEqual(@as(usize, 1), displayWidth("\xE2\x9D\xA4\xEF\xB8\x8F"));
+    try std.testing.expectEqual(@as(usize, 1), displayWidth("\xE2\x9D\xA4\xEF\xB8\x8F", .narrow));
 }
 
 test "ZWJ emoji sequence counts as single emoji width" {
     // 👨 (U+1F468) + ZWJ (U+200D) + 👩 (U+1F469) = family pair
     // Should be width 2 (one emoji), not 4 (two emojis)
-    try std.testing.expectEqual(@as(usize, 2), displayWidth("👨\xE2\x80\x8D👩"));
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("👨\xE2\x80\x8D👩", .narrow));
 }
 
 test "skin tone modifier is width 0" {
     // 👋 (U+1F44B) + skin tone (U+1F3FD) → 👋🏽
     // Should be width 2 (base emoji only)
-    try std.testing.expectEqual(@as(usize, 2), displayWidth("👋🏽"));
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("👋🏽", .narrow));
 }
 
 test "zero width joiner alone is width 0" {
-    try std.testing.expectEqual(@as(usize, 0), displayWidth("\xE2\x80\x8D"));
+    try std.testing.expectEqual(@as(usize, 0), displayWidth("\xE2\x80\x8D", .narrow));
 }
 
 test "ZWSP and BOM are width 0" {
     // Zero Width Space (U+200B)
-    try std.testing.expectEqual(@as(usize, 2), displayWidth("a\xE2\x80\x8Bb"));
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("a\xE2\x80\x8Bb", .narrow));
     // BOM (U+FEFF)
-    try std.testing.expectEqual(@as(usize, 2), displayWidth("\xEF\xBB\xBFab"));
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("\xEF\xBB\xBFab", .narrow));
 }
 
 test "wrapText basic word wrap" {
     const allocator = std.testing.allocator;
-    const result = try wrapText(allocator, "Hello World", 8);
+    const result = try wrapText(allocator, "Hello World", 8, .narrow);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("Hello\nWorld", result);
 }
 
 test "wrapText exact fit no wrap" {
     const allocator = std.testing.allocator;
-    const result = try wrapText(allocator, "Hello", 5);
+    const result = try wrapText(allocator, "Hello", 5, .narrow);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("Hello", result);
 }
 
 test "wrapText multiple words" {
     const allocator = std.testing.allocator;
-    const result = try wrapText(allocator, "A B C D E F", 5);
+    const result = try wrapText(allocator, "A B C D E F", 5, .narrow);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("A B C\nD E F", result);
 }
 
 test "wrapText hard break on long word" {
     const allocator = std.testing.allocator;
-    const result = try wrapText(allocator, "ABCDEFGHIJ", 5);
+    const result = try wrapText(allocator, "ABCDEFGHIJ", 5, .narrow);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("ABCDE\nFGHIJ", result);
 }
 
 test "wrapText preserves ANSI codes" {
     const allocator = std.testing.allocator;
-    const result = try wrapText(allocator, "\x1b[1mHello World\x1b[0m", 8);
+    const result = try wrapText(allocator, "\x1b[1mHello World\x1b[0m", 8, .narrow);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("\x1b[1mHello\nWorld\x1b[0m", result);
 }
 
 test "wrapText preserves existing newlines" {
     const allocator = std.testing.allocator;
-    const result = try wrapText(allocator, "Line one\nLine two", 20);
+    const result = try wrapText(allocator, "Line one\nLine two", 20, .narrow);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("Line one\nLine two", result);
 }
 
 test "wrapText CJK characters" {
     const allocator = std.testing.allocator;
-    // "日本語" = 6 display columns, max_width=5 means hard break after 2 chars (4 cols)
-    const result = try wrapText(allocator, "日本語", 5);
+    const result = try wrapText(allocator, "日本語", 5, .narrow);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("日本\n語", result);
 }
 
 test "wrapText zero width returns copy" {
     const allocator = std.testing.allocator;
-    const result = try wrapText(allocator, "Hello", 0);
+    const result = try wrapText(allocator, "Hello", 0, .narrow);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("Hello", result);
 }
@@ -480,7 +773,7 @@ test "wrapText zero width returns copy" {
 test "sliceToWidthAlloc appends reset when truncating styled text" {
     const allocator = std.testing.allocator;
     const text = "\x1b[1mbold text\x1b[0m";
-    const result = try sliceToWidthAlloc(allocator, text, 4);
+    const result = try sliceToWidthAlloc(allocator, text, 4, .narrow);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("\x1b[1mbold\x1b[0m", result);
 }
@@ -488,14 +781,14 @@ test "sliceToWidthAlloc appends reset when truncating styled text" {
 test "sliceToWidthAlloc no reset when not truncated" {
     const allocator = std.testing.allocator;
     const text = "\x1b[1mhi\x1b[0m";
-    const result = try sliceToWidthAlloc(allocator, text, 10);
+    const result = try sliceToWidthAlloc(allocator, text, 10, .narrow);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("\x1b[1mhi\x1b[0m", result);
 }
 
 test "sliceToWidthAlloc no reset for plain text" {
     const allocator = std.testing.allocator;
-    const result = try sliceToWidthAlloc(allocator, "hello world", 5);
+    const result = try sliceToWidthAlloc(allocator, "hello world", 5, .narrow);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("hello", result);
 }
@@ -503,9 +796,117 @@ test "sliceToWidthAlloc no reset for plain text" {
 test "sliceToWidthAlloc with multiple styles" {
     const allocator = std.testing.allocator;
     const text = "\x1b[1mbold\x1b[0m \x1b[3mitalic\x1b[0m";
-    // Truncate inside "italic" region
-    const result = try sliceToWidthAlloc(allocator, text, 7);
+    const result = try sliceToWidthAlloc(allocator, text, 7, .narrow);
     defer allocator.free(result);
-    // "bold" (4) + " " (1) + "it" (2) = 7; italic style is open
     try std.testing.expectEqualStrings("\x1b[1mbold\x1b[0m \x1b[3mit\x1b[0m", result);
+}
+
+test "Ambiguous bullet is narrow 1 or wide 2" {
+    try std.testing.expectEqual(@as(usize, 1), displayWidth("•", .narrow));
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("•", .wide));
+}
+
+test "Ambiguous box drawing vertical is narrow 1 or wide 2" {
+    try std.testing.expectEqual(@as(usize, 1), displayWidth("│", .narrow));
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("│", .wide));
+}
+
+test "Ambiguous ballot box with check is narrow 1 or wide 2" {
+    try std.testing.expectEqual(@as(usize, 1), displayWidth("☑", .narrow));
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("☑", .wide));
+}
+
+test "Ambiguous bullet prefix composes in wide mode" {
+    try std.testing.expectEqual(@as(usize, 6), displayWidth("• abc", .wide));
+}
+
+test "CJK Wide is unaffected by Ambiguous mode" {
+    try std.testing.expectEqual(@as(usize, 6), displayWidth("日本語", .narrow));
+    try std.testing.expectEqual(@as(usize, 6), displayWidth("日本語", .wide));
+}
+
+test "ASCII is unaffected by Ambiguous mode" {
+    try std.testing.expectEqual(@as(usize, 5), displayWidth("hello", .narrow));
+    try std.testing.expectEqual(@as(usize, 5), displayWidth("hello", .wide));
+}
+
+test "☂ (U+2602) is Neutral and unaffected by Ambiguous mode" {
+    // U+2602 UMBRELLA is Misc Symbols but classified as Neutral (N) by
+    // Unicode 15.1 EastAsianWidth.txt, not Ambiguous. It is also not
+    // one of the project's glyphs, so it is deliberately not in the
+    // pragmatic override list. Returns width 1 in both modes.
+    try std.testing.expectEqual(@as(usize, 1), displayWidth("☂", .narrow));
+    try std.testing.expectEqual(@as(usize, 1), displayWidth("☂", .wide));
+}
+
+test "🚀 (U+1F680) stays width 2 in both Ambiguous modes" {
+    // U+1F680 ROCKET is in the codepointWidth emoji range U+1F300..U+1F9FF,
+    // so it always returns 2 regardless of the ambiguous mode. This guards
+    // that the new isEastAsianAmbiguous handling does not accidentally
+    // narrow real emoji.
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("🚀", .narrow));
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("🚀", .wide));
+}
+
+test "sliceToWidth truncates at wide Ambiguous width" {
+    try std.testing.expectEqualStrings("••", sliceToWidth("•••", 4, .wide));
+}
+
+test "wrapText respects wide Ambiguous width" {
+    const allocator = std.testing.allocator;
+    const result = try wrapText(allocator, "• a • b", 4, .wide);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("• a\n• b", result);
+}
+
+test "Greek capital letters follow Ambiguous rule" {
+    // Ω (U+03A9 GREEK CAPITAL LETTER OMEGA) is explicitly flagged Ambiguous
+    // by UAX #11 and is one of the reviewer-cited examples of body-text
+    // characters that must respond to the wide mode opt-in.
+    try std.testing.expectEqual(@as(usize, 1), displayWidth("Ω", .narrow));
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("Ω", .wide));
+    try std.testing.expectEqual(@as(usize, 1), displayWidth("α", .narrow));
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("α", .wide));
+}
+
+test "Cyrillic letters follow Ambiguous rule" {
+    try std.testing.expectEqual(@as(usize, 1), displayWidth("Ж", .narrow));
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("Ж", .wide));
+    try std.testing.expectEqual(@as(usize, 1), displayWidth("я", .narrow));
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("я", .wide));
+    try std.testing.expectEqual(@as(usize, 1), displayWidth("ё", .narrow));
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("ё", .wide));
+}
+
+test "ASCII Latin letters are Neutral and unaffected by Ambiguous mode" {
+    // Basic Latin (A-Z, a-z) is EAW=Na (Narrow), not A. Must stay width 1
+    // in both modes — this guards that the new Ambiguous table doesn't
+    // accidentally widen Latin text body content.
+    try std.testing.expectEqual(@as(usize, 5), displayWidth("Hello", .narrow));
+    try std.testing.expectEqual(@as(usize, 5), displayWidth("Hello", .wide));
+}
+
+test "Latin Extended non-Ambiguous codepoints stay Neutral in wide mode" {
+    // U+0100 LATIN CAPITAL LETTER A WITH MACRON — EAW=Na, must stay 1
+    try std.testing.expectEqual(@as(usize, 1), displayWidth("Ā", .narrow));
+    try std.testing.expectEqual(@as(usize, 1), displayWidth("Ā", .wide));
+}
+
+test "Private Use Area is Ambiguous" {
+    // U+E000 is the first code point of the Private Use Area, which
+    // UAX #11 classifies as Ambiguous. Useful as a sentinel for
+    // fonts that place custom glyphs there.
+    try std.testing.expectEqual(@as(usize, 1), displayWidth("\u{E000}", .narrow));
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("\u{E000}", .wide));
+}
+
+test "wrapText with Greek text wraps at wide-mode width" {
+    const allocator = std.testing.allocator;
+    const narrow_result = try wrapText(allocator, "ΑΒΓ", 4, .narrow);
+    defer allocator.free(narrow_result);
+    try std.testing.expectEqualStrings("ΑΒΓ", narrow_result);
+
+    const wide_result = try wrapText(allocator, "ΑΒΓ", 4, .wide);
+    defer allocator.free(wide_result);
+    try std.testing.expectEqualStrings("ΑΒ\nΓ", wide_result);
 }

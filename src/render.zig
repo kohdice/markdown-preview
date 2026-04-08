@@ -1,5 +1,6 @@
 const std = @import("std");
 const theme = @import("theme.zig");
+const width = @import("width.zig");
 const parse_document = @import("parse_document.zig");
 const render_block = @import("render_block.zig");
 
@@ -7,6 +8,7 @@ pub const RenderOptions = struct {
     enable_ansi: bool = false,
     theme: theme.Theme = .solarized_dark,
     wrap_width: ?usize = null,
+    ambiguous_width: width.AmbiguousWidth = .narrow,
 };
 
 pub fn renderMarkdown(
@@ -26,6 +28,7 @@ pub fn renderMarkdown(
         doc,
         opts.enable_ansi,
         opts.wrap_width,
+        opts.ambiguous_width,
         theme.palette(opts.theme),
         theme.syntaxPalette(opts.theme),
     );

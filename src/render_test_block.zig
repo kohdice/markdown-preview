@@ -1,11 +1,3 @@
-//! Block-level rendering tests: headings, lists (ordered, unordered, task),
-//! blockquotes, blank-line handling, hard breaks, list continuation,
-//! and paragraph wrapping.
-//!
-//! These are end-to-end tests of `renderMarkdown` extracted from
-//! render.zig to keep that file focused on the orchestrator code.
-//! Every test calls `renderToOwnedSlice` from render_test_helpers.zig.
-
 const std = @import("std");
 const renderToOwnedSlice = @import("render_test_helpers.zig").renderToOwnedSlice;
 
@@ -53,7 +45,6 @@ test "renderMarkdown emits Solarized Dark ANSI styling for headings and links" {
     });
     defer allocator.free(rendered);
 
-    // link text: underline + link color; URL: dim + muted color (parens rendered separately)
     try std.testing.expectEqualStrings(
         "\x1b[1m\x1b[4m\x1b[38;2;181;137;0mTitle\x1b[0m\n" ++
             "\x1b[4m\x1b[38;2;108;113;196mlink\x1b[0m" ++
@@ -83,17 +74,11 @@ test "heading levels produce different ANSI styles" {
     });
     defer allocator.free(rendered);
 
-    // h1: bold + underline + yellow
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[1m\x1b[4m\x1b[38;2;181;137;0m"));
-    // h2: bold + underline + orange
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[1m\x1b[4m\x1b[38;2;203;75;22m"));
-    // h3: bold + blue (no underline)
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[1m\x1b[38;2;38;139;210m"));
-    // h4: bold + cyan
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[1m\x1b[38;2;42;161;152m"));
-    // h5: violet (no bold, no dim)
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[38;2;108;113;196mH5\x1b[0m"));
-    // h6: dim + violet
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[2m\x1b[38;2;108;113;196mH6\x1b[0m"));
 }
 
@@ -168,7 +153,6 @@ test "ordered list items get ANSI styling" {
     });
     defer allocator.free(rendered);
 
-    // Number marker should have list_marker color (teal: 42, 161, 152) + bold
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[1m\x1b[38;2;42;161;152m1"));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "Styled item"));
 }
@@ -224,9 +208,7 @@ test "task list items get ANSI styling" {
     });
     defer allocator.free(rendered);
 
-    // Checked: ☑ should have list_marker color (teal: 42, 161, 152)
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[38;2;42;161;152m☑ "));
-    // Unchecked: ☐ should have muted + dim
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[2m\x1b[38;2;88;110;117m☐ "));
 }
 
@@ -248,7 +230,6 @@ test "empty ordered list item" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    // "2." renders as "2. " because the marker includes trailing space
     try std.testing.expectEqualStrings("1. First\n2. \n3. Third\n", rendered);
 }
 
@@ -320,7 +301,6 @@ test "single trailing space is preserved" {
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    // Only 1 trailing space — not a hard break, should be preserved
     try std.testing.expectEqualStrings("Line with one trailing space \nNext line\n", rendered);
 }
 
@@ -628,4 +608,70 @@ test "list inside blockquote child of list item inherits outer depth" {
     defer allocator.free(rendered);
 
     try std.testing.expectEqualStrings("• outer\n  │ ◦ inner\n", rendered);
+}
+
+test "task list with continuation aligns under text in narrow mode" {
+    const allocator = std.testing.allocator;
+    const source = "- [x] task\n  cont\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("• ☑ task\n    cont\n", rendered);
+}
+
+test "list continuation widens by one column in wide ambiguous mode" {
+    const allocator = std.testing.allocator;
+    const source = "- first line\n  continued\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{ .ambiguous_width = .wide });
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("• first line\n   continued\n", rendered);
+}
+
+test "nested list continuation widens in wide ambiguous mode" {
+    const allocator = std.testing.allocator;
+    const source = "- a\n  - b\n    cont\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{ .ambiguous_width = .wide });
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("• a\n  ◦ b\n     cont\n", rendered);
+}
+
+test "task checkbox continuation in wide mode accumulates bullet and checkbox width" {
+    const allocator = std.testing.allocator;
+    const source = "- [x] task\n  cont\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{ .ambiguous_width = .wide });
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("• ☑ task\n      cont\n", rendered);
+}
+
+test "list with blockquote child and continuation aligns in wide mode" {
+    const allocator = std.testing.allocator;
+    const source = "- outer\n  cont\n  > quote\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{ .ambiguous_width = .wide });
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("• outer\n   cont\n  │ quote\n", rendered);
+}
+
+test "narrow mode preserves byte-identical output for wide mode regression inputs" {
+    const allocator = std.testing.allocator;
+
+    const plain = try renderToOwnedSlice(allocator, "- first line\n  continued\n", .{});
+    defer allocator.free(plain);
+    try std.testing.expectEqualStrings("• first line\n  continued\n", plain);
+
+    const nested = try renderToOwnedSlice(allocator, "- a\n  - b\n    cont\n", .{});
+    defer allocator.free(nested);
+    try std.testing.expectEqualStrings("• a\n  ◦ b\n    cont\n", nested);
+
+    const quoted = try renderToOwnedSlice(allocator, "- outer\n  cont\n  > quote\n", .{});
+    defer allocator.free(quoted);
+    try std.testing.expectEqualStrings("• outer\n  cont\n  │ quote\n", quoted);
 }

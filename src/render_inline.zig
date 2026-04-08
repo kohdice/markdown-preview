@@ -142,13 +142,25 @@ pub fn writeTextWithEntities(
         try ansi.writeStyled(writer, enable_ansi, style, text[plain_start..]);
 }
 
-pub fn renderedDisplayWidth(allocator: std.mem.Allocator, text: []const u8, palette: theme.Palette, link_defs: *const LinkDefMap) !usize {
+pub fn renderedDisplayWidth(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    palette: theme.Palette,
+    link_defs: *const LinkDefMap,
+    ambiguous: width_mod.AmbiguousWidth,
+) !usize {
     var output: std.io.Writer.Allocating = .init(allocator);
     defer output.deinit();
 
     try renderInline(allocator, &output.writer, text, false, .{}, palette, link_defs);
     var list = output.toArrayList();
-    const rendered = list.toOwnedSlice(allocator) catch return width_mod.displayWidth(text);
+    const rendered = list.toOwnedSlice(allocator) catch return width_mod.displayWidth(text, ambiguous);
     defer allocator.free(rendered);
-    return width_mod.displayWidth(rendered);
+    return width_mod.displayWidth(rendered, ambiguous);
+}
+
+pub fn checkboxWidth(checked: ?bool, ambiguous: width_mod.AmbiguousWidth) usize {
+    if (checked == null) return 0;
+    const glyph = if (checked.?) checkbox_checked else checkbox_unchecked;
+    return width_mod.displayWidth(glyph, ambiguous);
 }

@@ -60,10 +60,10 @@ pub fn renderTableNode(
 
     for (0..col_count) |c| {
         if (c < table.header.len)
-            col_widths[c] = @max(col_widths[c], try render_inline.renderedDisplayWidth(allocator, table.header[c], palette, link_defs));
+            col_widths[c] = @max(col_widths[c], try render_inline.renderedDisplayWidth(allocator, table.header[c], palette, link_defs, .narrow));
         for (table.rows) |row| {
             if (c < row.len)
-                col_widths[c] = @max(col_widths[c], try render_inline.renderedDisplayWidth(allocator, row[c], palette, link_defs));
+                col_widths[c] = @max(col_widths[c], try render_inline.renderedDisplayWidth(allocator, row[c], palette, link_defs, .narrow));
         }
         col_widths[c] = @max(col_widths[c], min_table_col_width);
     }
@@ -115,7 +115,7 @@ fn renderTableRow(
     try ansi.writeStyled(writer, enable_ansi, bar_style, border.cell_pad);
     for (0..col_count) |c| {
         const cell_text = if (c < cells.len) cells[c] else "";
-        const cell_width = try render_inline.renderedDisplayWidth(allocator, cell_text, palette, link_defs);
+        const cell_width = try render_inline.renderedDisplayWidth(allocator, cell_text, palette, link_defs, .narrow);
         const col_w = col_widths[c];
         const padding = if (col_w > cell_width) col_w - cell_width else 0;
         const col_align = if (c < alignments.len) alignments[c] else .left;

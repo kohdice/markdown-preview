@@ -33,6 +33,7 @@ pub const RenderContext = struct {
     allocator: std.mem.Allocator,
     enable_ansi: bool,
     wrap_width: ?usize,
+    ambiguous_width: width.AmbiguousWidth,
     palette: theme.Palette,
     syn_palette: theme.SyntaxPalette,
     highlighter: *highlight.Highlighter,
@@ -45,6 +46,7 @@ pub fn renderDocument(
     doc: block_ast.Document,
     enable_ansi: bool,
     wrap_width: ?usize,
+    ambiguous_width: width.AmbiguousWidth,
     palette: theme.Palette,
     syn_palette: theme.SyntaxPalette,
 ) !void {
@@ -55,6 +57,7 @@ pub fn renderDocument(
         .allocator = allocator,
         .enable_ansi = enable_ansi,
         .wrap_width = wrap_width,
+        .ambiguous_width = ambiguous_width,
         .palette = palette,
         .syn_palette = syn_palette,
         .highlighter = &highlighter,
@@ -137,7 +140,7 @@ fn renderInlineMaybeWrap(
         defer list.deinit(ctx.allocator);
         const rendered = try list.toOwnedSlice(ctx.allocator);
         defer ctx.allocator.free(rendered);
-        const wrapped = try width.wrapText(ctx.allocator, rendered, wrap_w);
+        const wrapped = try width.wrapText(ctx.allocator, rendered, wrap_w, ctx.ambiguous_width);
         defer ctx.allocator.free(wrapped);
         try writer.writeAll(wrapped);
     } else {
@@ -290,18 +293,18 @@ fn renderListItem(
         .bold = true,
     };
 
-    const content_col = blk: {
-        if (item.number) |number| {
-            try ansi.writeStyled(writer, ctx.enable_ansi, marker_style, number);
-            const marker_buf: [2]u8 = .{ item.marker, ' ' };
-            try ansi.writeStyled(writer, ctx.enable_ansi, marker_style, &marker_buf);
-            break :blk item.indent + width.displayWidth(number) + width.displayWidth(&marker_buf);
-        } else {
-            const marker_text = bulletForDepth(depth);
-            try ansi.writeStyled(writer, ctx.enable_ansi, marker_style, marker_text);
-            break :blk item.indent + width.displayWidth(marker_text);
-        }
-    };
+    var content_col: usize = item.indent;
+    if (item.number) |number| {
+        try ansi.writeStyled(writer, ctx.enable_ansi, marker_style, number);
+        const marker_buf: [2]u8 = .{ item.marker, ' ' };
+        try ansi.writeStyled(writer, ctx.enable_ansi, marker_style, &marker_buf);
+        content_col += width.displayWidth(number, ctx.ambiguous_width) + width.displayWidth(&marker_buf, ctx.ambiguous_width);
+    } else {
+        const marker_text = bulletForDepth(depth);
+        try ansi.writeStyled(writer, ctx.enable_ansi, marker_style, marker_text);
+        content_col += width.displayWidth(marker_text, ctx.ambiguous_width);
+    }
+    content_col += render_inline.checkboxWidth(item.checked, ctx.ambiguous_width);
 
     try render_inline.renderCheckbox(writer, item.checked, ctx.enable_ansi, ctx.palette);
 
@@ -447,6 +450,7 @@ test "renderDocument compile-check smoke" {
         doc,
         false,
         null,
+        .narrow,
         theme.palette(.solarized_dark),
         theme.syntaxPalette(.solarized_dark),
     );
