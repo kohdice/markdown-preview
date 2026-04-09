@@ -12,7 +12,7 @@ pub const RenderOptions = struct {
     ambiguous_width: width.AmbiguousWidth = .narrow,
 };
 
-pub fn renderDocument(
+pub fn write(
     allocator: std.mem.Allocator,
     writer: *std.io.Writer,
     doc: block_ast.Document,
@@ -21,7 +21,8 @@ pub fn renderDocument(
     var highlighter = highlight.Highlighter.init();
     defer highlighter.deinit();
 
-    const ctx: render_block.RenderContext = .{
+    var renderer: render_block.Renderer = .{
+        .writer = writer,
         .allocator = allocator,
         .enable_ansi = opts.enable_ansi,
         .wrap_width = opts.wrap_width,
@@ -32,7 +33,7 @@ pub fn renderDocument(
         .link_defs = &doc.link_defs,
     };
 
-    try render_block.writeBlocks(writer, doc.blocks, ctx);
+    try renderer.write(doc.blocks);
 
     if (doc.has_trailing_newline) try writer.writeByte('\n');
 }
