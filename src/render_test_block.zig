@@ -530,6 +530,26 @@ test "paragraph wraps at wrap_width" {
     try std.testing.expectEqualStrings("Hello\nWorld", rendered);
 }
 
+test "blockquote paragraph wraps at wrap_width" {
+    const allocator = std.testing.allocator;
+    const source = "> Alpha Beta Gamma Delta\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{ .wrap_width = 12 });
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("│ Alpha Beta\n│ Gamma\n│ Delta\n", rendered);
+}
+
+test "list paragraph wraps with continuation alignment" {
+    const allocator = std.testing.allocator;
+    const source = "- Alpha Beta Gamma Delta\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{ .wrap_width = 12 });
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("• Alpha Beta\n  Gamma\n  Delta\n", rendered);
+}
+
 test "paragraph no wrap when wrap_width is null" {
     const allocator = std.testing.allocator;
     const source = "This is a long paragraph that should not be wrapped";

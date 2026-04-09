@@ -115,7 +115,7 @@ fn renderParagraph(
     for (paragraph.lines, 0..) |line, i| {
         if (i > 0) try writer.writeByte('\n');
         const stripped = parse_block.stripHardBreak(line);
-        try renderInlineMaybeWrap(writer, stripped, ctx, .{ .fg = ctx.palette.body });
+        try renderInlineMaybeWrap(writer, stripped, ctx, .{ .fg = ctx.palette.body }, 0);
     }
 }
 
@@ -124,6 +124,7 @@ fn renderInlineMaybeWrap(
     text: []const u8,
     ctx: RenderContext,
     base_style: ansi.TextStyle,
+    continuation_indent: usize,
 ) !void {
     if (ctx.wrap_width) |wrap_w| {
         var buf: std.io.Writer.Allocating = .init(ctx.allocator);
@@ -141,9 +142,29 @@ fn renderInlineMaybeWrap(
         defer list.deinit(ctx.allocator);
         const rendered = try list.toOwnedSlice(ctx.allocator);
         defer ctx.allocator.free(rendered);
-        const wrapped = try width.wrapText(ctx.allocator, rendered, wrap_w, ctx.ambiguous_width);
+        const available_width = if (wrap_w > continuation_indent) wrap_w - continuation_indent else 0;
+        if (available_width == 0) {
+            try writer.writeAll(rendered);
+            return;
+        }
+
+        const wrapped = try width.wrapText(ctx.allocator, rendered, available_width, ctx.ambiguous_width);
         defer ctx.allocator.free(wrapped);
-        try writer.writeAll(wrapped);
+        if (continuation_indent == 0) {
+            try writer.writeAll(wrapped);
+            return;
+        }
+
+        var it = std.mem.splitScalar(u8, wrapped, '\n');
+        var first = true;
+        while (it.next()) |line| {
+            if (!first) {
+                try writer.writeByte('\n');
+                try writer.splatByteAll(' ', continuation_indent);
+            }
+            first = false;
+            try writer.writeAll(line);
+        }
     } else {
         try render_inline.renderInline(
             ctx.allocator,
@@ -201,7 +222,10 @@ fn renderBlockQuote(
     defer buf.deinit();
 
     var child_ctx = ctx;
-    child_ctx.wrap_width = null;
+    if (ctx.wrap_width) |wrap_w| {
+        const gutter_width = bq.indent + width.displayWidth(render_inline.blockquote_marker, ctx.ambiguous_width);
+        child_ctx.wrap_width = if (wrap_w > gutter_width) wrap_w - gutter_width else null;
+    }
 
     try renderBlocksInBlockQuote(&buf.writer, bq.blocks, child_ctx, depth);
 
@@ -257,15 +281,7 @@ fn renderBlockQuoteParagraph(
     for (paragraph.lines, 0..) |line, i| {
         if (i > 0) try writer.writeByte('\n');
         const stripped = parse_block.stripHardBreak(line);
-        try render_inline.renderInline(
-            ctx.allocator,
-            writer,
-            stripped,
-            ctx.enable_ansi,
-            .{ .fg = ctx.palette.muted },
-            ctx.palette,
-            ctx.link_defs,
-        );
+        try renderInlineMaybeWrap(writer, stripped, ctx, .{ .fg = ctx.palette.muted }, 0);
     }
 }
 
@@ -342,7 +358,12 @@ fn renderListChildIndented(
     var buf: std.io.Writer.Allocating = .init(ctx.allocator);
     defer buf.deinit();
 
-    try renderBlock(&buf.writer, child, ctx, depth);
+    var child_ctx = ctx;
+    if (ctx.wrap_width) |wrap_w| {
+        child_ctx.wrap_width = if (wrap_w > indent) wrap_w - indent else null;
+    }
+
+    try renderBlock(&buf.writer, child, child_ctx, depth);
 
     var list = buf.toArrayList();
     defer list.deinit(ctx.allocator);
@@ -371,15 +392,7 @@ fn renderListItemParagraph(
             try writer.splatByteAll(' ', content_col);
         }
         const stripped = parse_block.stripHardBreak(line);
-        try render_inline.renderInline(
-            ctx.allocator,
-            writer,
-            stripped,
-            ctx.enable_ansi,
-            .{ .fg = ctx.palette.body },
-            ctx.palette,
-            ctx.link_defs,
-        );
+        try renderInlineMaybeWrap(writer, stripped, ctx, .{ .fg = ctx.palette.body }, content_col);
     }
 }
 
