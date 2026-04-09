@@ -47,9 +47,6 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{
-                .{ .name = "markdown_preview", .module = mp_mod },
-            },
         }),
     });
 
@@ -159,6 +156,7 @@ fn attachTreeSitter(b: *std.Build, module: *std.Build.Module, a: TreeSitterAttac
     _ = queries.addCopyFile(a.ts_go_dep.path("queries/highlights.scm"), "go_highlights.scm");
     _ = queries.addCopyFile(a.ts_python_dep.path("queries/highlights.scm"), "python_highlights.scm");
     _ = queries.addCopyFile(a.ts_javascript_dep.path("queries/highlights.scm"), "javascript_highlights.scm");
+    _ = queries.addCopyFile(a.ts_javascript_dep.path("queries/locals.scm"), "javascript_locals.scm");
     _ = queries.addCopyFile(a.ts_bash_dep.path("queries/highlights.scm"), "bash_highlights.scm");
 
     const wrapper = queries.add("mod.zig",
@@ -168,6 +166,7 @@ fn attachTreeSitter(b: *std.Build, module: *std.Build.Module, a: TreeSitterAttac
         \\pub const go_highlights: []const u8 = @embedFile("go_highlights.scm");
         \\pub const python_highlights: []const u8 = @embedFile("python_highlights.scm");
         \\pub const javascript_highlights: []const u8 = @embedFile("javascript_highlights.scm");
+        \\pub const javascript_locals: []const u8 = @embedFile("javascript_locals.scm");
         \\pub const bash_highlights: []const u8 = @embedFile("bash_highlights.scm");
         \\
     );
