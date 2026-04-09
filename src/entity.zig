@@ -144,7 +144,7 @@ test "decode named entity &amp;" {
 
 test "decode named entity &copy;" {
     const result = decode("&copy;", 0).?;
-    // copyright sign is U+00A9, UTF-8: 0xC2 0xA9
+    try std.testing.expectEqualStrings("©", result.bytes[0..result.len]);
     try std.testing.expectEqual(@as(u3, 2), result.len);
     try std.testing.expectEqual(@as(usize, 6), result.end);
 }
@@ -191,8 +191,8 @@ test "decode entity at offset" {
 }
 
 test "decode multibyte unicode entity" {
-    // U+2192 RIGHTWARDS ARROW → UTF-8: E2 86 92
     const result = decode("&rarr;", 0).?;
+    try std.testing.expectEqualStrings("→", result.bytes[0..result.len]);
     try std.testing.expectEqual(@as(u3, 3), result.len);
 }
 

@@ -426,7 +426,7 @@ pub fn wrapText(
 fn isEmoji(cp: u21) bool {
     if (cp >= 0x1F300 and cp <= 0x1F9FF) return true;
     if (cp >= 0x1FA00 and cp <= 0x1FAFF) return true;
-    if (cp >= 0x2600 and cp <= 0x26FF) return true; // Misc Symbols
+    if (cp >= 0x2600 and cp <= 0x26FF) return true; // Miscellaneous Symbols
     if (cp >= 0x2700 and cp <= 0x27BF) return true; // Dingbats
     return false;
 }
@@ -567,7 +567,7 @@ fn isEastAsianAmbiguous(cp: u21) bool {
     if (cp == 0x207F) return true;
     if (cp >= 0x2081 and cp <= 0x2084) return true;
 
-    // Currency Symbols (Euro)
+    // Currency Symbols
     if (cp == 0x20AC) return true;
 
     // Letterlike Symbols
@@ -718,8 +718,8 @@ fn codepointWidth(cp: u21, ambiguous: AmbiguousWidth) usize {
     }
 
     // Variation Selectors
-    if (cp >= 0xFE00 and cp <= 0xFE0F) return 0; // VS1-VS16
-    if (cp >= 0xE0100 and cp <= 0xE01EF) return 0; // VS17-VS256
+    if (cp >= 0xFE00 and cp <= 0xFE0F) return 0;
+    if (cp >= 0xE0100 and cp <= 0xE01EF) return 0;
 
     // Combining Diacritical Marks
     if (cp >= 0x0300 and cp <= 0x036F) return 0;
@@ -751,7 +751,7 @@ fn codepointWidth(cp: u21, ambiguous: AmbiguousWidth) usize {
     // CJK Unified Ideographs Extension B-F
     if (cp >= 0x20000 and cp <= 0x2FA1F) return 2;
 
-    // CJK Symbols and Punctuation, Hiragana, Katakana, etc.
+    // CJK Symbols and Punctuation, Hiragana, and Katakana
     if (cp >= 0x2E80 and cp <= 0x30FF) return 2;
     // Katakana Phonetic Extensions
     if (cp >= 0x31F0 and cp <= 0x31FF) return 2;
@@ -760,23 +760,23 @@ fn codepointWidth(cp: u21, ambiguous: AmbiguousWidth) usize {
     // CJK Compatibility
     if (cp >= 0x3300 and cp <= 0x33FF) return 2;
 
-    // Fullwidth forms
+    // Fullwidth Forms
     if (cp >= 0xFF01 and cp <= 0xFF60) return 2;
-    // Fullwidth Pound/Yen/Won
+    // Fullwidth currency and punctuation variants
     if (cp >= 0xFFE0 and cp <= 0xFFE6) return 2;
 
     // Hangul Syllables
     if (cp >= 0xAC00 and cp <= 0xD7A3) return 2;
-    // Hangul Jamo Extended
+    // Hangul Jamo
     if (cp >= 0x1100 and cp <= 0x115F) return 2;
     if (cp >= 0x2329 and cp <= 0x232A) return 2;
 
-    // Basic emoji ranges (simplified — width 2)
+    // Emoji ranges treated as double-width
     if (cp >= 0x1F300 and cp <= 0x1F9FF) return 2;
     if (cp >= 0x1FA00 and cp <= 0x1FA6F) return 2;
     if (cp >= 0x1FA70 and cp <= 0x1FAFF) return 2;
 
-    // East Asian Width Ambiguous — caller-selectable interpretation
+    // East Asian Width Ambiguous; interpretation depends on terminal mode.
     if (isEastAsianAmbiguous(cp)) {
         return if (ambiguous == .wide) 2 else 1;
     }
@@ -826,27 +826,20 @@ test "mixed content width" {
 }
 
 test "combining characters are width 0" {
-    // e + combining acute accent (U+0301) → é, display width 1
-    try std.testing.expectEqual(@as(usize, 1), displayWidth("e\xCC\x81", .narrow));
-    // a + combining tilde (U+0303) → ã, display width 1
-    try std.testing.expectEqual(@as(usize, 1), displayWidth("a\xCC\x83", .narrow));
+    try std.testing.expectEqual(@as(usize, 1), displayWidth("e\u{0301}", .narrow));
+    try std.testing.expectEqual(@as(usize, 1), displayWidth("a\u{0303}", .narrow));
 }
 
 test "variation selectors are width 0" {
-    // ❤ (U+2764) + VS16 (U+FE0F) → ❤️
-    try std.testing.expectEqual(@as(usize, 1), displayWidth("\xE2\x9D\xA4\xEF\xB8\x8F", .narrow));
+    try std.testing.expectEqual(@as(usize, 1), displayWidth("\u{2764}\u{FE0F}", .narrow));
 }
 
 test "ZWJ emoji sequence counts as single emoji width" {
-    // 👨 (U+1F468) + ZWJ (U+200D) + 👩 (U+1F469) = family pair
-    // Should be width 2 (one emoji), not 4 (two emojis)
-    try std.testing.expectEqual(@as(usize, 2), displayWidth("👨\xE2\x80\x8D👩", .narrow));
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("\u{1F468}\u{200D}\u{1F469}", .narrow));
 }
 
 test "skin tone modifier is width 0" {
-    // 👋 (U+1F44B) + skin tone (U+1F3FD) → 👋🏽
-    // Should be width 2 (base emoji only)
-    try std.testing.expectEqual(@as(usize, 2), displayWidth("👋🏽", .narrow));
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("\u{1F44B}\u{1F3FD}", .narrow));
 }
 
 test "zero width joiner alone is width 0" {
@@ -854,10 +847,8 @@ test "zero width joiner alone is width 0" {
 }
 
 test "ZWSP and BOM are width 0" {
-    // Zero Width Space (U+200B)
-    try std.testing.expectEqual(@as(usize, 2), displayWidth("a\xE2\x80\x8Bb", .narrow));
-    // BOM (U+FEFF)
-    try std.testing.expectEqual(@as(usize, 2), displayWidth("\xEF\xBB\xBFab", .narrow));
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("a\u{200B}b", .narrow));
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("\u{FEFF}ab", .narrow));
 }
 
 test "wrapText basic word wrap" {
@@ -977,19 +968,11 @@ test "ASCII is unaffected by Ambiguous mode" {
 }
 
 test "☂ (U+2602) is Neutral and unaffected by Ambiguous mode" {
-    // U+2602 UMBRELLA is Misc Symbols but classified as Neutral (N) by
-    // Unicode 15.1 EastAsianWidth.txt, not Ambiguous. It is also not
-    // one of the project's glyphs, so it is deliberately not in the
-    // pragmatic override list. Returns width 1 in both modes.
     try std.testing.expectEqual(@as(usize, 1), displayWidth("☂", .narrow));
     try std.testing.expectEqual(@as(usize, 1), displayWidth("☂", .wide));
 }
 
 test "🚀 (U+1F680) stays width 2 in both Ambiguous modes" {
-    // U+1F680 ROCKET is in the codepointWidth emoji range U+1F300..U+1F9FF,
-    // so it always returns 2 regardless of the ambiguous mode. This guards
-    // that the new isEastAsianAmbiguous handling does not accidentally
-    // narrow real emoji.
     try std.testing.expectEqual(@as(usize, 2), displayWidth("🚀", .narrow));
     try std.testing.expectEqual(@as(usize, 2), displayWidth("🚀", .wide));
 }
@@ -1006,9 +989,6 @@ test "wrapText respects wide Ambiguous width" {
 }
 
 test "Greek capital letters follow Ambiguous rule" {
-    // Ω (U+03A9 GREEK CAPITAL LETTER OMEGA) is explicitly flagged Ambiguous
-    // by UAX #11 and is one of the reviewer-cited examples of body-text
-    // characters that must respond to the wide mode opt-in.
     try std.testing.expectEqual(@as(usize, 1), displayWidth("Ω", .narrow));
     try std.testing.expectEqual(@as(usize, 2), displayWidth("Ω", .wide));
     try std.testing.expectEqual(@as(usize, 1), displayWidth("α", .narrow));
@@ -1025,23 +1005,16 @@ test "Cyrillic letters follow Ambiguous rule" {
 }
 
 test "ASCII Latin letters are Neutral and unaffected by Ambiguous mode" {
-    // Basic Latin (A-Z, a-z) is EAW=Na (Narrow), not A. Must stay width 1
-    // in both modes — this guards that the new Ambiguous table doesn't
-    // accidentally widen Latin text body content.
     try std.testing.expectEqual(@as(usize, 5), displayWidth("Hello", .narrow));
     try std.testing.expectEqual(@as(usize, 5), displayWidth("Hello", .wide));
 }
 
 test "Latin Extended non-Ambiguous codepoints stay Neutral in wide mode" {
-    // U+0100 LATIN CAPITAL LETTER A WITH MACRON — EAW=Na, must stay 1
     try std.testing.expectEqual(@as(usize, 1), displayWidth("Ā", .narrow));
     try std.testing.expectEqual(@as(usize, 1), displayWidth("Ā", .wide));
 }
 
 test "Private Use Area is Ambiguous" {
-    // U+E000 is the first code point of the Private Use Area, which
-    // UAX #11 classifies as Ambiguous. Useful as a sentinel for
-    // fonts that place custom glyphs there.
     try std.testing.expectEqual(@as(usize, 1), displayWidth("\u{E000}", .narrow));
     try std.testing.expectEqual(@as(usize, 2), displayWidth("\u{E000}", .wide));
 }

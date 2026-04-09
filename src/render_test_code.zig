@@ -131,9 +131,6 @@ test "bash code fence uses sh alias" {
 
 test "multiline zig raw string does not leak ANSI state across lines" {
     const allocator = std.testing.allocator;
-    // Multi-line raw string literal spans three lines inside a code fence.
-    // Every styled run must be followed by an `\x1b[0m` reset so color does
-    // not bleed from one line into the next.
     const source = "```zig\n" ++
         "const msg =\n" ++
         "    \\\\hello\n" ++
@@ -149,8 +146,6 @@ test "multiline zig raw string does not leak ANSI state across lines" {
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "hello"));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "world"));
 
-    // Every opening escape (style set) must be paired with a reset. Count
-    // resets to confirm they appear and the styled runs close cleanly.
     var reset_count: usize = 0;
     var scan: usize = 0;
     while (std.mem.indexOfPos(u8, rendered, scan, "\x1b[0m")) |found| {
@@ -162,8 +157,6 @@ test "multiline zig raw string does not leak ANSI state across lines" {
 
 test "C0 control bytes inside a code fence are stripped by writeSanitized" {
     const allocator = std.testing.allocator;
-    // Injection attempt: raw ESC + CSI "red" sequence hidden inside a string.
-    // writeSanitized must strip the ESC but leave visible characters intact.
     const source = "```zig\nconst x = \"\x1b[31mevil\\x07\";\n```\n";
 
     const rendered = try renderToOwnedSlice(allocator, source, .{

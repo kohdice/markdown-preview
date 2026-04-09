@@ -490,7 +490,7 @@ test "bare URL strips trailing underscore and tilde" {
     try std.testing.expectEqualStrings("https://example.com_", rendered);
 }
 
-test "bare URL not detected after bracket" {
+test "bare URL detected after bracket" {
     const allocator = std.testing.allocator;
     const source = "foo[https://example.com";
 
@@ -499,7 +499,6 @@ test "bare URL not detected after bracket" {
     });
     defer allocator.free(rendered);
 
-    // Should detect — [ is valid preceding char
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[4m"));
 }
 
@@ -655,7 +654,6 @@ test "link definition with title" {
 
 test "emphasis after punctuation" {
     const allocator = std.testing.allocator;
-    // CommonMark: *foo* inside quotes should parse as emphasis
     const source = "\"*foo*\"";
 
     const rendered = try renderToOwnedSlice(allocator, source, .{});
@@ -676,7 +674,6 @@ test "emphasis wrapping punctuation" {
 
 test "multiple-of-3 rule rejects *foo**" {
     const allocator = std.testing.allocator;
-    // opener=1, closer=2: sum=3, 3%3==0, neither individually %3==0 → reject
     const source = "*foo**";
 
     const rendered = try renderToOwnedSlice(allocator, source, .{});
@@ -687,7 +684,6 @@ test "multiple-of-3 rule rejects *foo**" {
 
 test "multiple-of-3 rule allows ***foo***" {
     const allocator = std.testing.allocator;
-    // opener=3, closer=3: sum=6, 6%3==0, both%3==0 → valid
     const source = "***foo***";
 
     const rendered = try renderToOwnedSlice(allocator, source, .{});

@@ -566,9 +566,9 @@ test "Highlighter: highlights every supported language end-to-end" {
     }
 }
 
-const func_ansi = "\x1b[38;2;38;139;210m"; // sp.func    — blue  #268bd2
-const plain_ansi = "\x1b[38;2;131;148;150m"; // sp.plain   — base0 #839496
-const keyword_ansi = "\x1b[38;2;133;153;0m"; // sp.keyword — green #859900
+const func_ansi = "\x1b[38;2;38;139;210m";
+const plain_ansi = "\x1b[38;2;131;148;150m";
+const keyword_ansi = "\x1b[38;2;133;153;0m";
 
 test "Highlighter: later @function pattern overrides generic @variable on fn decl name" {
     var hl = Highlighter.init();
@@ -578,11 +578,6 @@ test "Highlighter: later @function pattern overrides generic @variable on fn dec
     var buf: std.io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
 
-    // tree-sitter-zig's highlights.scm starts with `(identifier) @variable`,
-    // then later adds
-    //   (function_declaration name: (identifier) @function)
-    // Without "later pattern wins", `greet` would stay @variable (plain).
-    // With the fix it must flip to @function (blue).
     const source = "fn greet() void {}";
     try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.syntaxPalette(.solarized_dark));
 
@@ -603,8 +598,6 @@ test "Highlighter: uncaptured whitespace renders with plain color" {
     var buf: std.io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
 
-    // Spaces between identifiers/operators are not captured by any pattern
-    // in highlights.scm, so they must flow through the `plain` fallback.
     const source = "const x = 1;";
     try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.syntaxPalette(.solarized_dark));
 
@@ -625,10 +618,6 @@ test "Highlighter: @string captures survive a #set! directive on the pattern" {
     var buf: std.io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
 
-    // tree-sitter-zig's highlights.scm pattern for strings ends with
-    // `(#set! "priority" 95)`. `#set!` is a directive, not a predicate,
-    // so the capture must still fire and the literal must be rendered
-    // with the `.string` palette slot (cyan #2aa198 = 42,161,152).
     const source = "const msg = \"hi\";";
     try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.syntaxPalette(.solarized_dark));
 
@@ -650,11 +639,6 @@ test "Highlighter: @spell meta capture does not override @comment italic" {
     var buf: std.io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
 
-    // tree-sitter-zig's highlights.scm ends with:
-    //   (comment) @comment @spell
-    // Both captures fire for the same node and same pattern index. Without
-    // the meta-capture filter, @spell would race with @comment and could
-    // overwrite the comment style with plain depending on emit order.
     const source = "// hello world";
     try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.syntaxPalette(.solarized_dark));
 
@@ -693,8 +677,6 @@ test "Highlighter: .failed is sticky across repeated calls" {
     var buf: std.io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
 
-    // Repeated calls must keep returning QueryUnavailable — no retry, no
-    // silent recovery — and the state must remain `.failed`.
     for (0..3) |_| {
         try std.testing.expectError(
             error.QueryUnavailable,
@@ -717,8 +699,6 @@ test "Highlighter: forcing .failed on a .ready language frees the old query" {
         else => return error.TestExpectedReadyState,
     }
 
-    // forceLanguageFailedForTesting must destroy the in-flight query so there
-    // are no leaks reported by the testing allocator.
     hl.forceLanguageFailedForTesting(.zig);
     switch (hl.languages[Language.zig.index()]) {
         .failed => {},
