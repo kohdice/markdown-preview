@@ -10,17 +10,17 @@ const exit_failure: u8 = 1;
 const usage_message =
     "Usage: mp [--] <FILE>\nPreview a Markdown file in the terminal.\nUse -- before a file whose name starts with -- to disambiguate.\n";
 
-pub const ParsedArgs = struct {
+const ParsedArgs = struct {
     path: []const u8,
 };
 
-pub const ParseError = error{
+const ParseError = error{
     MissingPath,
     TooManyPositional,
     UnknownFlag,
 };
 
-pub fn parseArgs(args: []const []const u8) ParseError!ParsedArgs {
+fn parseArgs(args: []const []const u8) ParseError!ParsedArgs {
     var path: ?[]const u8 = null;
     var positional_only = false;
 
@@ -77,10 +77,10 @@ pub fn run(
     };
     defer allocator.free(source);
 
-    var doc = try parse.parseDocument(allocator, source);
+    var doc = try parse.parse(allocator, source);
     defer doc.deinit(allocator);
 
-    try render.renderDocument(allocator, stdout, doc, .{
+    try render.write(allocator, stdout, doc, .{
         .enable_ansi = enable_ansi,
         .theme = .solarized_dark,
         .wrap_width = wrap_width,
