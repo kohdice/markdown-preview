@@ -12,7 +12,7 @@ const highlight = @import("highlight.zig");
 const LinkDefMap = parse_link.LinkDefMap;
 
 const thematic_break_width = 32;
-const thematic_break_display = "-" ** thematic_break_width;
+const thematic_break_display = "─" ** thematic_break_width;
 
 const list_bullet = struct {
     const level0 = "• ";
@@ -186,8 +186,7 @@ fn headingStyle(level: u8, p: theme.Palette) ansi.TextStyle {
 
 fn renderThematicBreak(writer: *std.io.Writer, ctx: RenderContext) !void {
     try ansi.writeStyled(writer, ctx.enable_ansi, .{
-        .fg = ctx.palette.subtle,
-        .dim = true,
+        .fg = ctx.palette.muted,
     }, thematic_break_display);
 }
 

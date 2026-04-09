@@ -675,3 +675,25 @@ test "narrow mode preserves byte-identical output for wide mode regression input
     defer allocator.free(quoted);
     try std.testing.expectEqualStrings("• outer\n  cont\n  │ quote\n", quoted);
 }
+
+test "thematic break renders as a solid box-drawing horizontal line" {
+    const allocator = std.testing.allocator;
+    const rendered = try renderToOwnedSlice(allocator, "---\n", .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("─" ** 32 ++ "\n", rendered);
+}
+
+test "thematic break uses muted palette color without dim attribute" {
+    const allocator = std.testing.allocator;
+    const rendered = try renderToOwnedSlice(allocator, "---\n", .{
+        .enable_ansi = true,
+    });
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        "\x1b[38;2;88;110;117m" ++ ("─" ** 32) ++ "\x1b[0m\n",
+        rendered,
+    );
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\x1b[2m") == null);
+}
