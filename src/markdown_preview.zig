@@ -1,9 +1,8 @@
-const cli = @import("cli.zig");
+const render = @import("render.zig");
 const width = @import("width.zig");
 
-pub const run = cli.run;
-pub const getTerminalWidth = cli.getTerminalWidth;
-pub const unwrapWriteError = cli.unwrapWriteError;
+pub const RenderOptions = render.RenderOptions;
+pub const renderMarkdown = render.renderMarkdown;
 pub const detectAmbiguousFromProcess = width.detectAmbiguousFromProcess;
 pub const AmbiguousWidth = width.AmbiguousWidth;
 
