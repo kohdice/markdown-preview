@@ -264,3 +264,96 @@ test "blockquote table with leading whitespace preserves indent" {
         rendered,
     );
 }
+
+test "table in narrow mode renders byte-exact expected output" {
+    const allocator = std.testing.allocator;
+    const source = "| A | B |\n| --- | --- |\n| 1 | 2 |\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        \\┌─────┬─────┐
+        \\│ A   │ B   │
+        \\├─────┼─────┤
+        \\│ 1   │ 2   │
+        \\└─────┴─────┘
+        \\
+    ,
+        rendered,
+    );
+}
+
+test "table in wide mode renders byte-exact expected output" {
+    const allocator = std.testing.allocator;
+    const source = "| A | B |\n| --- | --- |\n| 1 | 2 |\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{ .ambiguous_width = .wide });
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        \\┌───┬───┐
+        \\│ A    │ B    │
+        \\├───┼───┤
+        \\│ 1    │ 2    │
+        \\└───┴───┘
+        \\
+    ,
+        rendered,
+    );
+}
+
+test "table in wide mode with CJK cell renders byte-exact expected output" {
+    const allocator = std.testing.allocator;
+    const source = "| 日本語 | en |\n| --- | --- |\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{ .ambiguous_width = .wide });
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        \\┌────┬───┐
+        \\│ 日本語 │ en   │
+        \\├────┼───┤
+        \\└────┴───┘
+        \\
+    ,
+        rendered,
+    );
+}
+
+test "table in wide mode with odd-width cell bumps correctly" {
+    const allocator = std.testing.allocator;
+    const source = "| abc | d |\n| --- | --- |\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{ .ambiguous_width = .wide });
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        \\┌───┬───┐
+        \\│ abc  │ d    │
+        \\├───┼───┤
+        \\└───┴───┘
+        \\
+    ,
+        rendered,
+    );
+}
+
+test "table inside blockquote in wide mode renders byte-exact expected output" {
+    const allocator = std.testing.allocator;
+    const source = "> | A | B |\n> | --- | --- |\n> | 1 | 2 |\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{ .ambiguous_width = .wide });
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        \\│ ┌───┬───┐
+        \\│ │ A    │ B    │
+        \\│ ├───┼───┤
+        \\│ │ 1    │ 2    │
+        \\│ └───┴───┘
+        \\
+    ,
+        rendered,
+    );
+}

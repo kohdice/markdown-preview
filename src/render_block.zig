@@ -101,6 +101,7 @@ fn renderBlock(
             ctx.palette,
             ctx.link_defs,
             .top_level,
+            ctx.ambiguous_width,
         ),
         .blank_line => {},
     }
@@ -241,6 +242,7 @@ fn renderBlocksInBlockQuote(
                 ctx.palette,
                 ctx.link_defs,
                 .in_blockquote,
+                ctx.ambiguous_width,
             ),
             else => try renderBlock(writer, block, ctx, depth),
         }
