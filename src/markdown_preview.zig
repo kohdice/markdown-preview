@@ -1,12 +1,10 @@
 pub const cli = @import("cli.zig");
 
 const render = @import("render.zig");
-const width = @import("width.zig");
 
 pub const RenderOptions = render.RenderOptions;
 pub const renderMarkdown = render.renderMarkdown;
-pub const detectAmbiguousFromProcess = width.detectAmbiguousFromProcess;
-pub const AmbiguousWidth = width.AmbiguousWidth;
+pub const AmbiguousWidth = @import("width.zig").AmbiguousWidth;
 
 test {
     _ = @import("cli.zig");
@@ -16,4 +14,5 @@ test {
     _ = @import("parse_table.zig");
     _ = @import("entity.zig");
     _ = @import("width.zig");
+    _ = @import("terminal.zig");
 }

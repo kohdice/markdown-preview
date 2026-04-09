@@ -43,15 +43,6 @@ pub fn parseArgs(args: []const []const u8) ParseError!ParsedArgs {
     return error.MissingPath;
 }
 
-pub fn getTerminalWidth(handle: std.posix.fd_t) ?usize {
-    var winsize: std.posix.winsize = .{ .row = 0, .col = 0, .xpixel = 0, .ypixel = 0 };
-    const err = std.posix.system.ioctl(handle, std.posix.T.IOCGWINSZ, @intFromPtr(&winsize));
-    if (std.posix.errno(err) == .SUCCESS and winsize.col > 0) {
-        return @intCast(winsize.col);
-    }
-    return null;
-}
-
 pub fn unwrapWriteError(
     err: anyerror,
     stdout_err: ?anyerror,

@@ -1,5 +1,6 @@
 const std = @import("std");
 const mp = @import("markdown_preview");
+const terminal = @import("terminal.zig");
 
 const stdout_buffer_size = 4096;
 const stderr_buffer_size = 1024;
@@ -29,8 +30,8 @@ pub fn main() !void {
         .no_color => false,
     };
 
-    const wrap_width = if (enable_ansi) mp.cli.getTerminalWidth(stdout_file.handle) else null;
-    const ambiguous_default = mp.detectAmbiguousFromProcess();
+    const wrap_width = if (enable_ansi) terminal.getTerminalWidth(stdout_file.handle) else null;
+    const ambiguous_default = terminal.detectAmbiguousWidthFromProcess();
 
     const exit_code = mp.cli.run(
         allocator,
