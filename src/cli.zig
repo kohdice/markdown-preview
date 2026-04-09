@@ -7,23 +7,20 @@ const exit_success: u8 = 0;
 const exit_failure: u8 = 1;
 
 const usage_message =
-    "Usage: mp [--ambiguous-width=narrow|wide] [--] <FILE>\nPreview a Markdown file in the terminal.\nUse -- before a file whose name starts with -- to disambiguate.\n";
+    "Usage: mp [--] <FILE>\nPreview a Markdown file in the terminal.\nUse -- before a file whose name starts with -- to disambiguate.\n";
 
 pub const ParsedArgs = struct {
     path: []const u8,
-    ambiguous_width: width.AmbiguousWidth,
 };
 
 pub const ParseError = error{
     MissingPath,
     TooManyPositional,
     UnknownFlag,
-    InvalidAmbiguousWidth,
 };
 
 pub fn parseArgs(args: []const []const u8) ParseError!ParsedArgs {
     var path: ?[]const u8 = null;
-    var ambiguous: width.AmbiguousWidth = .narrow;
     var positional_only = false;
 
     var i: usize = 1;
@@ -34,17 +31,6 @@ pub fn parseArgs(args: []const []const u8) ParseError!ParsedArgs {
                 positional_only = true;
                 continue;
             }
-            if (std.mem.startsWith(u8, arg, "--ambiguous-width=")) {
-                const value = arg["--ambiguous-width=".len..];
-                if (std.mem.eql(u8, value, "narrow")) {
-                    ambiguous = .narrow;
-                } else if (std.mem.eql(u8, value, "wide")) {
-                    ambiguous = .wide;
-                } else {
-                    return error.InvalidAmbiguousWidth;
-                }
-                continue;
-            }
             if (std.mem.startsWith(u8, arg, "--")) {
                 return error.UnknownFlag;
             }
@@ -53,7 +39,7 @@ pub fn parseArgs(args: []const []const u8) ParseError!ParsedArgs {
         path = arg;
     }
 
-    if (path) |p| return .{ .path = p, .ambiguous_width = ambiguous };
+    if (path) |p| return .{ .path = p };
     return error.MissingPath;
 }
 
@@ -86,6 +72,7 @@ pub fn run(
     stderr: *std.io.Writer,
     enable_ansi: bool,
     wrap_width: ?usize,
+    ambiguous_width: width.AmbiguousWidth,
 ) !u8 {
     const parsed = parseArgs(args) catch {
         try stderr.writeAll(usage_message);
@@ -102,7 +89,7 @@ pub fn run(
         .enable_ansi = enable_ansi,
         .theme = .solarized_dark,
         .wrap_width = wrap_width,
-        .ambiguous_width = parsed.ambiguous_width,
+        .ambiguous_width = ambiguous_width,
     });
     return exit_success;
 }
@@ -111,32 +98,6 @@ test "parseArgs accepts plain positional path" {
     const args = [_][]const u8{ "mp", "foo.md" };
     const parsed = try parseArgs(&args);
     try std.testing.expectEqualStrings("foo.md", parsed.path);
-    try std.testing.expectEqual(width.AmbiguousWidth.narrow, parsed.ambiguous_width);
-}
-
-test "parseArgs accepts --ambiguous-width=wide before path" {
-    const args = [_][]const u8{ "mp", "--ambiguous-width=wide", "foo.md" };
-    const parsed = try parseArgs(&args);
-    try std.testing.expectEqualStrings("foo.md", parsed.path);
-    try std.testing.expectEqual(width.AmbiguousWidth.wide, parsed.ambiguous_width);
-}
-
-test "parseArgs accepts --ambiguous-width=wide after path" {
-    const args = [_][]const u8{ "mp", "foo.md", "--ambiguous-width=wide" };
-    const parsed = try parseArgs(&args);
-    try std.testing.expectEqualStrings("foo.md", parsed.path);
-    try std.testing.expectEqual(width.AmbiguousWidth.wide, parsed.ambiguous_width);
-}
-
-test "parseArgs accepts --ambiguous-width=narrow explicitly" {
-    const args = [_][]const u8{ "mp", "--ambiguous-width=narrow", "foo.md" };
-    const parsed = try parseArgs(&args);
-    try std.testing.expectEqual(width.AmbiguousWidth.narrow, parsed.ambiguous_width);
-}
-
-test "parseArgs rejects invalid ambiguous-width value" {
-    const args = [_][]const u8{ "mp", "--ambiguous-width=foo", "bar.md" };
-    try std.testing.expectError(error.InvalidAmbiguousWidth, parseArgs(&args));
 }
 
 test "parseArgs rejects unknown flag" {
@@ -158,14 +119,6 @@ test "parseArgs with -- sentinel treats following arg as positional even if it s
     const args = [_][]const u8{ "mp", "--", "--notes.md" };
     const parsed = try parseArgs(&args);
     try std.testing.expectEqualStrings("--notes.md", parsed.path);
-    try std.testing.expectEqual(width.AmbiguousWidth.narrow, parsed.ambiguous_width);
-}
-
-test "parseArgs with -- sentinel preserves prior flags" {
-    const args = [_][]const u8{ "mp", "--ambiguous-width=wide", "--", "--weird-name.md" };
-    const parsed = try parseArgs(&args);
-    try std.testing.expectEqualStrings("--weird-name.md", parsed.path);
-    try std.testing.expectEqual(width.AmbiguousWidth.wide, parsed.ambiguous_width);
 }
 
 test "parseArgs with -- sentinel still rejects duplicate positional" {
@@ -187,12 +140,13 @@ test "run reports usage errors" {
         &stderr.writer,
         false,
         null,
+        .narrow,
     );
 
     try std.testing.expectEqual(exit_failure, exit_code);
     try std.testing.expectEqualStrings("", stdout.writer.buffered());
     try std.testing.expectEqualStrings(
-        "Usage: mp [--ambiguous-width=narrow|wide] [--] <FILE>\nPreview a Markdown file in the terminal.\nUse -- before a file whose name starts with -- to disambiguate.\n",
+        "Usage: mp [--] <FILE>\nPreview a Markdown file in the terminal.\nUse -- before a file whose name starts with -- to disambiguate.\n",
         stderr.writer.buffered(),
     );
 }
@@ -214,6 +168,7 @@ test "run reports missing files" {
         &stderr.writer,
         false,
         null,
+        .narrow,
     );
 
     try std.testing.expectEqual(exit_failure, exit_code);
@@ -247,6 +202,7 @@ test "run renders markdown files" {
         &stderr.writer,
         false,
         null,
+        .narrow,
     );
 
     try std.testing.expectEqual(exit_success, exit_code);
@@ -258,6 +214,38 @@ test "run renders markdown files" {
         stdout.writer.buffered(),
     );
     try std.testing.expectEqualStrings("", stderr.writer.buffered());
+}
+
+test "run threads ambiguous_width through to the renderer" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{
+        .sub_path = "cont.md",
+        .data = "- first line\n  continued\n",
+    });
+
+    var stdout: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer stderr.deinit();
+
+    const exit_code = try run(
+        std.testing.allocator,
+        tmp.dir,
+        &.{ "mp", "cont.md" },
+        &stdout.writer,
+        &stderr.writer,
+        false,
+        null,
+        .wide,
+    );
+
+    try std.testing.expectEqual(exit_success, exit_code);
+    try std.testing.expectEqualStrings(
+        "• first line\n   continued\n",
+        stdout.writer.buffered(),
+    );
 }
 
 test "unwrapWriteError passes through errors other than WriteFailed" {

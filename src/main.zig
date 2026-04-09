@@ -30,6 +30,7 @@ pub fn main() !void {
     };
 
     const wrap_width = if (enable_ansi) mp.getTerminalWidth(stdout_file.handle) else null;
+    const ambiguous_default = mp.detectAmbiguousFromProcess();
 
     const exit_code = mp.run(
         allocator,
@@ -39,6 +40,7 @@ pub fn main() !void {
         &stderr_stream.interface,
         enable_ansi,
         wrap_width,
+        ambiguous_default,
     ) catch |err| return mp.unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
 
     stdout_stream.interface.flush() catch |err| return mp.unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
