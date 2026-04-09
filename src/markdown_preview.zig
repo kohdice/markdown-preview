@@ -1,3 +1,5 @@
+pub const cli = @import("cli.zig");
+
 const render = @import("render.zig");
 const width = @import("width.zig");
 

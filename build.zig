@@ -41,13 +41,16 @@ pub fn build(b: *std.Build) void {
         .ts_bash_dep = ts_bash_dep,
     });
 
+    const exe_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    exe_mod.addImport("markdown_preview", mp_mod);
+
     const exe = b.addExecutable(.{
         .name = "mp",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+        .root_module = exe_mod,
     });
 
     b.installArtifact(exe);
