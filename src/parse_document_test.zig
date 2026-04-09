@@ -339,6 +339,31 @@ test "parseDocument rejects table with mismatched header and delimiter column co
     }
 }
 
+test "parseDocument parses table when code span contains pipe" {
+    const allocator = std.testing.allocator;
+    const input = "| `a|b` | c |\n| --- | --- |\n";
+
+    var doc = try parse_document.parseDocument(allocator, input);
+    defer doc.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .table);
+    try std.testing.expectEqualStrings("`a|b`", doc.blocks[0].table.header[0]);
+    try std.testing.expectEqualStrings("c", doc.blocks[0].table.header[1]);
+}
+
+test "parseDocument rejects table with unclosed code span in header row" {
+    const allocator = std.testing.allocator;
+    const input = "| `a|b | c |\n| --- | --- |\n";
+
+    var doc = try parse_document.parseDocument(allocator, input);
+    defer doc.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .paragraph);
+    try std.testing.expectEqualStrings("| `a|b | c |", doc.blocks[0].paragraph.lines[0]);
+}
+
 test "parseDocument groups blockquote paragraph and table into one BlockQuote" {
     const allocator = std.testing.allocator;
     const input = "> intro\n> | A |\n> | --- |\n> | 1 |\n";

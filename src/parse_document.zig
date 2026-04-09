@@ -396,10 +396,16 @@ const Parser = struct {
         const delim_line = self.lines[self.pos + 1];
         if (!parse_table.isDelimiterRow(delim_line)) return null;
 
-        const header_cells = try parse_table.parseCells(self.allocator, header_line);
+        const header_cells = parse_table.parseCells(self.allocator, header_line) catch |err| switch (err) {
+            error.UnclosedCodeSpan => return null,
+            else => return err,
+        };
         errdefer self.allocator.free(header_cells);
 
-        const alignments = try parse_table.parseAlignments(self.allocator, delim_line);
+        const alignments = parse_table.parseAlignments(self.allocator, delim_line) catch |err| switch (err) {
+            error.UnclosedCodeSpan => return null,
+            else => return err,
+        };
         errdefer self.allocator.free(alignments);
 
         if (header_cells.len != alignments.len) {
@@ -422,7 +428,10 @@ const Parser = struct {
             if (std.mem.indexOfScalar(u8, row_line, '|') == null) break;
             if (parse_block.isBlockLevelStart(row_line)) break;
 
-            const row_cells = try parse_table.parseCells(self.allocator, row_line);
+            const row_cells = parse_table.parseCells(self.allocator, row_line) catch |err| switch (err) {
+                error.UnclosedCodeSpan => break,
+                else => return err,
+            };
             errdefer self.allocator.free(row_cells);
             try rows.append(self.allocator, row_cells);
             self.advanceLine();
