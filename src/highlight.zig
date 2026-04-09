@@ -62,6 +62,105 @@ const LanguageConfig = struct {
     query: *ts.Query,
 };
 
+const QueryState = union(enum) {
+    uninitialized,
+    failed,
+    ready: *ts.Query,
+};
+
+const ScopeRef = struct {
+    node: ts.Node,
+    parent_index: ?u32,
+};
+
+const LocalDefinition = struct {
+    node: ts.Node,
+    scope_index: u32,
+    name: []const u8,
+};
+
+const JavaScriptLocals = struct {
+    scopes: []ScopeRef,
+    definitions: []LocalDefinition,
+
+    fn deinit(self: *JavaScriptLocals, allocator: std.mem.Allocator) void {
+        allocator.free(self.scopes);
+        allocator.free(self.definitions);
+    }
+
+    fn build(
+        allocator: std.mem.Allocator,
+        root: ts.Node,
+        query: *const ts.Query,
+        source: []const u8,
+    ) !JavaScriptLocals {
+        var scopes = std.ArrayListUnmanaged(ScopeRef).empty;
+        defer scopes.deinit(allocator);
+
+        var definitions = std.ArrayListUnmanaged(ts.Node).empty;
+        defer definitions.deinit(allocator);
+
+        const cursor = ts.QueryCursor.create();
+        defer cursor.destroy();
+        cursor.exec(query, root);
+
+        while (cursor.nextCapture()) |entry| {
+            const capture_index_in_match = entry[0];
+            const match = entry[1];
+            if (capture_index_in_match >= match.captures.len) continue;
+
+            const capture = match.captures[capture_index_in_match];
+            const name = query.captureNameForId(capture.index) orelse "";
+            if (std.mem.eql(u8, name, "local.scope")) {
+                try scopes.append(allocator, .{
+                    .node = capture.node,
+                    .parent_index = null,
+                });
+            } else if (std.mem.eql(u8, name, "local.definition")) {
+                try definitions.append(allocator, capture.node);
+            }
+        }
+
+        for (scopes.items, 0..) |scope, index| {
+            scopes.items[index].parent_index = findParentScopeIndex(scope.node, scopes.items);
+        }
+
+        var resolved_definitions = std.ArrayListUnmanaged(LocalDefinition).empty;
+        defer resolved_definitions.deinit(allocator);
+        for (definitions.items) |definition| {
+            const scope_index = findEnclosingScopeIndex(definition, scopes.items) orelse continue;
+            try resolved_definitions.append(allocator, .{
+                .node = definition,
+                .scope_index = scope_index,
+                .name = nodeText(definition, source),
+            });
+        }
+
+        return .{
+            .scopes = try scopes.toOwnedSlice(allocator),
+            .definitions = try resolved_definitions.toOwnedSlice(allocator),
+        };
+    }
+
+    fn isLocal(self: *const JavaScriptLocals, node: ts.Node, source: []const u8) bool {
+        const name = nodeText(node, source);
+        var scope_index = findEnclosingScopeIndex(node, self.scopes) orelse return false;
+        while (true) {
+            for (self.definitions) |definition| {
+                if (definition.scope_index != scope_index) continue;
+                if (std.mem.eql(u8, definition.name, name)) return true;
+            }
+
+            scope_index = self.scopes[scope_index].parent_index orelse return false;
+        }
+    }
+};
+
+const PredicateContext = struct {
+    source: []const u8,
+    javascript_locals: ?*const JavaScriptLocals = null,
+};
+
 /// Sentinel stored in the per-byte style array to mark "no capture covers
 /// this byte". `u32` maps directly onto Tree-sitter's capture index type
 /// returned by `QueryCursor.nextCapture()`.
@@ -84,11 +183,13 @@ const CaptureSpan = struct {
 pub const Highlighter = struct {
     parser: *ts.Parser,
     languages: [language_count]LanguageState,
+    javascript_locals_query: QueryState,
 
     pub fn init() Highlighter {
         return .{
             .parser = ts.Parser.create(),
             .languages = [_]LanguageState{.uninitialized} ** language_count,
+            .javascript_locals_query = .uninitialized,
         };
     }
 
@@ -98,6 +199,10 @@ pub const Highlighter = struct {
                 .ready => |cfg| cfg.query.destroy(),
                 else => {},
             }
+        }
+        switch (self.javascript_locals_query) {
+            .ready => |query| query.destroy(),
+            else => {},
         }
         self.parser.destroy();
     }
@@ -133,6 +238,24 @@ pub const Highlighter = struct {
         const tree = self.parser.parseString(source, null) orelse return error.QueryUnavailable;
         defer tree.destroy();
 
+        var javascript_locals: ?JavaScriptLocals = null;
+        defer if (javascript_locals) |*locals| locals.deinit(allocator);
+        if (lang == .javascript) {
+            if (self.getOrInitJavaScriptLocalsQuery()) |locals_query| {
+                javascript_locals = try JavaScriptLocals.build(
+                    allocator,
+                    tree.rootNode(),
+                    locals_query,
+                    source,
+                );
+            }
+        }
+
+        const predicate_ctx: PredicateContext = .{
+            .source = source,
+            .javascript_locals = if (javascript_locals) |*locals| locals else null,
+        };
+
         const cursor = ts.QueryCursor.create();
         defer cursor.destroy();
         cursor.exec(config.query, tree.rootNode());
@@ -159,7 +282,7 @@ pub const Highlighter = struct {
             const capture_index_in_match = entry[0];
             const match = entry[1];
             if (capture_index_in_match >= match.captures.len) continue;
-            if (!predicatesPass(config.query, match, source)) continue;
+            if (!predicatesPass(config.query, match, predicate_ctx)) continue;
             const capture = match.captures[capture_index_in_match];
             const name = config.query.captureNameForId(capture.index) orelse "";
             if (isMetaCapture(name)) continue;
@@ -244,6 +367,24 @@ pub const Highlighter = struct {
         slot.* = .{ .ready = cfg };
         return cfg;
     }
+
+    fn getOrInitJavaScriptLocalsQuery(self: *Highlighter) ?*ts.Query {
+        switch (self.javascript_locals_query) {
+            .ready => |query| return query,
+            .failed => return null,
+            .uninitialized => {},
+        }
+
+        const js_language: *const ts.Language = @ptrCast(tree_sitter_javascript());
+        var error_offset: u32 = 0;
+        const query = ts.Query.create(js_language, ts_queries.javascript_locals, &error_offset) catch {
+            self.javascript_locals_query = .failed;
+            return null;
+        };
+
+        self.javascript_locals_query = .{ .ready = query };
+        return query;
+    }
 };
 
 const LanguageSpec = struct {
@@ -284,24 +425,169 @@ fn languageSpec(lang: Language) LanguageSpec {
     };
 }
 
+fn nodeText(node: ts.Node, source: []const u8) []const u8 {
+    return source[node.startByte()..node.endByte()];
+}
+
+fn findScopeIndex(scopes: []const ScopeRef, node: ts.Node) ?u32 {
+    for (scopes, 0..) |scope, index| {
+        if (scope.node.eql(node)) return @intCast(index);
+    }
+    return null;
+}
+
+fn findParentScopeIndex(node: ts.Node, scopes: []const ScopeRef) ?u32 {
+    var current = node.parent();
+    while (current) |parent| : (current = parent.parent()) {
+        if (findScopeIndex(scopes, parent)) |index| return index;
+    }
+    return null;
+}
+
+fn findEnclosingScopeIndex(node: ts.Node, scopes: []const ScopeRef) ?u32 {
+    var current: ?ts.Node = node;
+    while (current) |candidate| : (current = candidate.parent()) {
+        if (findScopeIndex(scopes, candidate)) |index| return index;
+    }
+    return null;
+}
+
+const PatternAtom = union(enum) {
+    literal: u8,
+    digit,
+    class: []const u8,
+};
+
+fn matchesPattern(text: []const u8, pattern: []const u8) bool {
+    if (matchLiteralAlternatives(text, pattern)) |matched| return matched;
+    return matchSequentialPattern(text, pattern);
+}
+
+fn matchLiteralAlternatives(text: []const u8, pattern: []const u8) ?bool {
+    if (pattern.len < 4) return null;
+    if (pattern[0] != '^' or pattern[1] != '(') return null;
+    if (pattern[pattern.len - 2] != ')' or pattern[pattern.len - 1] != '$') return null;
+
+    const body = pattern[2 .. pattern.len - 2];
+    if (std.mem.indexOfAny(u8, body, "[]*+\\") != null) return null;
+
+    var start: usize = 0;
+    while (true) {
+        const next = std.mem.indexOfScalarPos(u8, body, start, '|') orelse {
+            return std.mem.eql(u8, text, body[start..]);
+        };
+        if (std.mem.eql(u8, text, body[start..next])) return true;
+        start = next + 1;
+    }
+}
+
+fn matchSequentialPattern(text: []const u8, pattern: []const u8) bool {
+    var p: usize = 0;
+    var t: usize = 0;
+    if (p < pattern.len and pattern[p] == '^') p += 1;
+
+    while (p < pattern.len) {
+        if (pattern[p] == '$' and p + 1 == pattern.len) {
+            return t == text.len;
+        }
+
+        const parsed = parsePatternAtom(pattern, p) orelse return false;
+        p = parsed.next;
+
+        var min_count: usize = 1;
+        if (p < pattern.len) {
+            switch (pattern[p]) {
+                '*' => {
+                    min_count = 0;
+                    p += 1;
+                },
+                '+' => {
+                    p += 1;
+                },
+                else => {},
+            }
+        }
+
+        var match_count: usize = 0;
+        while (t < text.len and atomMatches(parsed.atom, text[t])) : (t += 1) {
+            match_count += 1;
+            if (p > 0 and pattern[p - 1] != '*' and pattern[p - 1] != '+') break;
+        }
+        if (match_count < min_count) return false;
+    }
+
+    return true;
+}
+
+fn parsePatternAtom(pattern: []const u8, start: usize) ?struct { atom: PatternAtom, next: usize } {
+    if (start >= pattern.len) return null;
+    if (pattern[start] == '[') {
+        const end = std.mem.indexOfScalarPos(u8, pattern, start + 1, ']') orelse return null;
+        return .{
+            .atom = .{ .class = pattern[start + 1 .. end] },
+            .next = end + 1,
+        };
+    }
+    if (pattern[start] == '\\') {
+        if (start + 1 >= pattern.len) return null;
+        return .{
+            .atom = switch (pattern[start + 1]) {
+                'd' => .digit,
+                else => .{ .literal = pattern[start + 1] },
+            },
+            .next = start + 2,
+        };
+    }
+
+    return .{
+        .atom = .{ .literal = pattern[start] },
+        .next = start + 1,
+    };
+}
+
+fn atomMatches(atom: PatternAtom, byte: u8) bool {
+    return switch (atom) {
+        .literal => |literal| literal == byte,
+        .digit => byte >= '0' and byte <= '9',
+        .class => |spec| classContains(spec, byte),
+    };
+}
+
+fn classContains(spec: []const u8, byte: u8) bool {
+    var i: usize = 0;
+    while (i < spec.len) {
+        if (spec[i] == '\\' and i + 1 < spec.len) {
+            const escaped = spec[i + 1];
+            if (escaped == 'd') {
+                if (byte >= '0' and byte <= '9') return true;
+            } else if (byte == escaped) {
+                return true;
+            }
+            i += 2;
+            continue;
+        }
+
+        if (i + 2 < spec.len and spec[i + 1] == '-') {
+            if (byte >= spec[i] and byte <= spec[i + 2]) return true;
+            i += 3;
+            continue;
+        }
+
+        if (byte == spec[i]) return true;
+        i += 1;
+    }
+    return false;
+}
+
 /// Evaluate the predicates attached to a query pattern against one match.
 ///
-/// Tree-sitter's C runtime does not apply `#eq?`, `#match?`, `#any-of?`,
-/// or grammar-specific extensions like `#lua-match?` — it simply returns the
-/// raw predicate token stream. This helper walks that stream and implements
-/// the minimal subset we need for highlights.scm:
-///
-///   * `#eq?`, `#not-eq?`          — literal / capture-text equality
-///   * `#any-of?`, `#not-any-of?`  — membership in a list of literals
-///
-/// Regex predicates (`#match?`, `#not-match?`) and editor-specific ones
-/// (`#lua-match?`, `#is-not?`) are rejected (match fails closed). This loses
-/// some regex-based highlighting but prevents the much worse failure mode of
-/// every predicated pattern matching every input.
+/// Tree-sitter's C runtime does not apply query predicates. This helper walks
+/// the raw predicate token stream and implements the subset used by the
+/// shipped highlight queries.
 fn predicatesPass(
     query: *const ts.Query,
     match: ts.Query.Match,
-    source: []const u8,
+    ctx: PredicateContext,
 ) bool {
     const steps = query.predicatesForPattern(match.pattern_index);
     if (steps.len == 0) return true;
@@ -319,7 +605,7 @@ fn predicatesPass(
         const name = query.stringValueForId(pred[0].value_id) orelse return false;
         const args = pred[1..];
 
-        const ok = evaluateSinglePredicate(name, args, query, match, source);
+        const ok = evaluateSinglePredicate(name, args, query, match, ctx);
         if (!ok) return false;
     }
     return true;
@@ -330,7 +616,7 @@ fn evaluateSinglePredicate(
     args: []const ts.Query.PredicateStep,
     query: *const ts.Query,
     match: ts.Query.Match,
-    source: []const u8,
+    ctx: PredicateContext,
 ) bool {
     // Tree-sitter distinguishes two kinds of `#name`-prefixed forms:
     //   * Predicates (end with `?`) filter matches — e.g. `#eq?`, `#match?`.
@@ -343,21 +629,29 @@ fn evaluateSinglePredicate(
     if (name.len > 0 and name[name.len - 1] == '!') return true;
 
     if (std.mem.eql(u8, name, "eq?")) {
-        return predEq(args, query, match, source, false);
+        return predEq(args, query, match, ctx.source, false);
     }
     if (std.mem.eql(u8, name, "not-eq?")) {
-        return predEq(args, query, match, source, true);
+        return predEq(args, query, match, ctx.source, true);
     }
     if (std.mem.eql(u8, name, "any-of?")) {
-        return predAnyOf(args, query, match, source, false);
+        return predAnyOf(args, query, match, ctx.source, false);
     }
     if (std.mem.eql(u8, name, "not-any-of?")) {
-        return predAnyOf(args, query, match, source, true);
+        return predAnyOf(args, query, match, ctx.source, true);
     }
-    // `#match?`, `#not-match?`, `#lua-match?`, `#is-not?`, and any other
-    // unknown predicates fall through and cause the match to be rejected.
-    // This is deliberately conservative: see the doc comment on
-    // `predicatesPass` for rationale.
+    if (std.mem.eql(u8, name, "match?")) {
+        return predMatch(args, query, match, ctx.source, false);
+    }
+    if (std.mem.eql(u8, name, "not-match?")) {
+        return predMatch(args, query, match, ctx.source, true);
+    }
+    if (std.mem.eql(u8, name, "lua-match?")) {
+        return predMatch(args, query, match, ctx.source, false);
+    }
+    if (std.mem.eql(u8, name, "is-not?")) {
+        return predIsNot(args, query, match, ctx);
+    }
     return false;
 }
 
@@ -390,6 +684,37 @@ fn predAnyOf(
         if (std.mem.eql(u8, capture_text, literal)) return !negated;
     }
     return negated;
+}
+
+fn predMatch(
+    args: []const ts.Query.PredicateStep,
+    query: *const ts.Query,
+    match: ts.Query.Match,
+    source: []const u8,
+    negated: bool,
+) bool {
+    if (args.len != 2) return false;
+    const text = resolvePredicateText(args[0], query, match, source) orelse return false;
+    if (args[1].type != .string) return false;
+    const pattern = query.stringValueForId(args[1].value_id) orelse return false;
+    const matched = matchesPattern(text, pattern);
+    return if (negated) !matched else matched;
+}
+
+fn predIsNot(
+    args: []const ts.Query.PredicateStep,
+    query: *const ts.Query,
+    match: ts.Query.Match,
+    ctx: PredicateContext,
+) bool {
+    if (args.len != 1) return false;
+    if (args[0].type != .string) return false;
+    const property = query.stringValueForId(args[0].value_id) orelse return false;
+    if (!std.mem.eql(u8, property, "local")) return false;
+
+    const locals = ctx.javascript_locals orelse return false;
+    if (match.captures.len == 0) return false;
+    return !locals.isLocal(match.captures[0].node, ctx.source);
 }
 
 /// Resolve a single `PredicateStep` to a `[]const u8`:
@@ -491,6 +816,13 @@ test "captureToStyle: function.builtin maps to func" {
     const sp: theme.SyntaxPalette = theme.syntaxPalette(.solarized_dark);
     const s = captureToStyle("function.builtin", sp);
     try std.testing.expectEqual(sp.func, s.fg.?);
+}
+
+test "matchesPattern handles anchored alternation and classes" {
+    try std.testing.expect(matchesPattern("require", "^(require|module)$"));
+    try std.testing.expect(matchesPattern("MyType", "^[A-Z_][a-zA-Z0-9_]*"));
+    try std.testing.expect(!matchesPattern("not_builtin", "^(require|module)$"));
+    try std.testing.expect(!matchesPattern("myType", "^[A-Z_][a-zA-Z0-9_]*"));
 }
 
 test "captureToStyle: unknown capture name falls back to plain" {
@@ -629,6 +961,64 @@ test "Highlighter: @string captures survive a #set! directive on the pattern" {
     const string_color = "\x1b[38;2;42;161;152m";
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, string_color));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "hi"));
+}
+
+test "Highlighter: lua-match highlights Zig type identifiers" {
+    var hl = Highlighter.init();
+    defer hl.deinit();
+
+    const allocator = std.testing.allocator;
+    var buf: std.io.Writer.Allocating = .init(allocator);
+    defer buf.deinit();
+
+    const source = "const value: MyType = undefined;";
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.syntaxPalette(.solarized_dark));
+
+    var list = buf.toArrayList();
+    defer list.deinit(allocator);
+    const rendered = try list.toOwnedSlice(allocator);
+    defer allocator.free(rendered);
+
+    const type_color = "\x1b[38;2;181;137;0m";
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, type_color ++ "MyType"));
+}
+
+test "Highlighter: javascript require is builtin when not shadowed" {
+    var hl = Highlighter.init();
+    defer hl.deinit();
+
+    const allocator = std.testing.allocator;
+    var buf: std.io.Writer.Allocating = .init(allocator);
+    defer buf.deinit();
+
+    const source = "require('fs');";
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .javascript, theme.syntaxPalette(.solarized_dark));
+
+    var list = buf.toArrayList();
+    defer list.deinit(allocator);
+    const rendered = try list.toOwnedSlice(allocator);
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, func_ansi ++ "require"));
+}
+
+test "Highlighter: javascript local require does not use builtin styling" {
+    var hl = Highlighter.init();
+    defer hl.deinit();
+
+    const allocator = std.testing.allocator;
+    var buf: std.io.Writer.Allocating = .init(allocator);
+    defer buf.deinit();
+
+    const source = "function demo(require) { return require; }";
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .javascript, theme.syntaxPalette(.solarized_dark));
+
+    var list = buf.toArrayList();
+    defer list.deinit(allocator);
+    const rendered = try list.toOwnedSlice(allocator);
+    defer allocator.free(rendered);
+
+    try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, func_ansi ++ "require"));
 }
 
 test "Highlighter: @spell meta capture does not override @comment italic" {
