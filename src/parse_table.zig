@@ -1,15 +1,8 @@
 const std = @import("std");
+const block_ast = @import("block_ast.zig");
 const parse_block = @import("parse_block.zig");
 
-pub const Alignment = enum { left, center, right };
 pub const CellParseError = std.mem.Allocator.Error || error{UnclosedCodeSpan};
-
-pub const Table = struct {
-    header: []const []const u8,
-    alignments: []const Alignment,
-    rows: []const []const []const u8,
-    col_count: usize,
-};
 
 /// Check if a line is a valid table delimiter row.
 /// Pattern: optional leading `|`, then cells of `:?-+:?` separated by `|`.
@@ -42,9 +35,9 @@ fn isDelimiterCell(cell: []const u8) bool {
     return i == cell.len;
 }
 
-pub fn parseAlignments(allocator: std.mem.Allocator, line: []const u8) ![]Alignment {
+pub fn alignments(allocator: std.mem.Allocator, line: []const u8) ![]block_ast.Alignment {
     const trimmed = std.mem.trim(u8, line, parse_block.horizontal_whitespace);
-    var aligns: std.ArrayListUnmanaged(Alignment) = .{};
+    var aligns: std.ArrayListUnmanaged(block_ast.Alignment) = .{};
     defer aligns.deinit(allocator);
 
     var iter = CellIterator.init(trimmed);
@@ -53,7 +46,7 @@ pub fn parseAlignments(allocator: std.mem.Allocator, line: []const u8) ![]Alignm
         const starts_colon = c.len > 0 and c[0] == ':';
         const ends_colon = c.len > 0 and c[c.len - 1] == ':';
 
-        const col_align: Alignment = if (starts_colon and ends_colon)
+        const col_align: block_ast.Alignment = if (starts_colon and ends_colon)
             .center
         else if (ends_colon)
             .right
@@ -67,21 +60,21 @@ pub fn parseAlignments(allocator: std.mem.Allocator, line: []const u8) ![]Alignm
 }
 
 /// Parse a row into cells (split on unescaped `|`).
-pub fn parseCells(allocator: std.mem.Allocator, line: []const u8) CellParseError![][]const u8 {
+pub fn cells(allocator: std.mem.Allocator, line: []const u8) CellParseError![][]const u8 {
     const trimmed = std.mem.trim(u8, line, parse_block.horizontal_whitespace);
-    var cells: std.ArrayListUnmanaged([]const u8) = .{};
-    defer cells.deinit(allocator);
+    var result: std.ArrayListUnmanaged([]const u8) = .{};
+    defer result.deinit(allocator);
 
     var iter = CellIterator.init(trimmed);
     while (iter.next()) |cell| {
-        try cells.append(allocator, std.mem.trim(u8, cell, parse_block.horizontal_whitespace));
+        try result.append(allocator, std.mem.trim(u8, cell, parse_block.horizontal_whitespace));
     }
     if (iter.invalid) return error.UnclosedCodeSpan;
 
-    return try cells.toOwnedSlice(allocator);
+    return try result.toOwnedSlice(allocator);
 }
 
-pub fn countCells(line: []const u8) usize {
+pub fn cellCount(line: []const u8) usize {
     const trimmed = std.mem.trim(u8, line, parse_block.horizontal_whitespace);
     var count: usize = 0;
     var iter = CellIterator.init(trimmed);
@@ -169,69 +162,69 @@ test "isDelimiterRow rejects invalid rows" {
     try std.testing.expect(!isDelimiterRow("|||"));
 }
 
-test "parseAlignments" {
+test "alignments" {
     const allocator = std.testing.allocator;
-    const aligns = try parseAlignments(allocator, "| :--- | :---: | ---: |");
+    const aligns = try alignments(allocator, "| :--- | :---: | ---: |");
     defer allocator.free(aligns);
 
     try std.testing.expectEqual(@as(usize, 3), aligns.len);
-    try std.testing.expectEqual(Alignment.left, aligns[0]);
-    try std.testing.expectEqual(Alignment.center, aligns[1]);
-    try std.testing.expectEqual(Alignment.right, aligns[2]);
+    try std.testing.expectEqual(block_ast.Alignment.left, aligns[0]);
+    try std.testing.expectEqual(block_ast.Alignment.center, aligns[1]);
+    try std.testing.expectEqual(block_ast.Alignment.right, aligns[2]);
 }
 
-test "parseCells handles basic table row" {
+test "cells handles basic table row" {
     const allocator = std.testing.allocator;
-    const cells = try parseCells(allocator, "| foo | bar | baz |");
-    defer allocator.free(cells);
+    const parsed = try cells(allocator, "| foo | bar | baz |");
+    defer allocator.free(parsed);
 
-    try std.testing.expectEqual(@as(usize, 3), cells.len);
-    try std.testing.expectEqualStrings("foo", cells[0]);
-    try std.testing.expectEqualStrings("bar", cells[1]);
-    try std.testing.expectEqualStrings("baz", cells[2]);
+    try std.testing.expectEqual(@as(usize, 3), parsed.len);
+    try std.testing.expectEqualStrings("foo", parsed[0]);
+    try std.testing.expectEqualStrings("bar", parsed[1]);
+    try std.testing.expectEqualStrings("baz", parsed[2]);
 }
 
-test "parseCells handles escaped pipe" {
+test "cells handles escaped pipe" {
     const allocator = std.testing.allocator;
-    const cells = try parseCells(allocator, "| foo \\| bar | baz |");
-    defer allocator.free(cells);
+    const parsed = try cells(allocator, "| foo \\| bar | baz |");
+    defer allocator.free(parsed);
 
-    try std.testing.expectEqual(@as(usize, 2), cells.len);
-    try std.testing.expectEqualStrings("foo \\| bar", cells[0]);
-    try std.testing.expectEqualStrings("baz", cells[1]);
+    try std.testing.expectEqual(@as(usize, 2), parsed.len);
+    try std.testing.expectEqualStrings("foo \\| bar", parsed[0]);
+    try std.testing.expectEqualStrings("baz", parsed[1]);
 }
 
-test "parseCells without outer pipes" {
+test "cells without outer pipes" {
     const allocator = std.testing.allocator;
-    const cells = try parseCells(allocator, "foo | bar");
-    defer allocator.free(cells);
+    const parsed = try cells(allocator, "foo | bar");
+    defer allocator.free(parsed);
 
-    try std.testing.expectEqual(@as(usize, 2), cells.len);
-    try std.testing.expectEqualStrings("foo", cells[0]);
-    try std.testing.expectEqualStrings("bar", cells[1]);
+    try std.testing.expectEqual(@as(usize, 2), parsed.len);
+    try std.testing.expectEqualStrings("foo", parsed[0]);
+    try std.testing.expectEqualStrings("bar", parsed[1]);
 }
 
-test "parseCells keeps pipe inside code span in one cell" {
+test "cells keeps pipe inside code span in one cell" {
     const allocator = std.testing.allocator;
-    const cells = try parseCells(allocator, "| `a|b` | c |");
-    defer allocator.free(cells);
+    const parsed = try cells(allocator, "| `a|b` | c |");
+    defer allocator.free(parsed);
 
-    try std.testing.expectEqual(@as(usize, 2), cells.len);
-    try std.testing.expectEqualStrings("`a|b`", cells[0]);
-    try std.testing.expectEqualStrings("c", cells[1]);
+    try std.testing.expectEqual(@as(usize, 2), parsed.len);
+    try std.testing.expectEqualStrings("`a|b`", parsed[0]);
+    try std.testing.expectEqualStrings("c", parsed[1]);
 }
 
-test "parseCells keeps pipe inside multi-backtick code span in one cell" {
+test "cells keeps pipe inside multi-backtick code span in one cell" {
     const allocator = std.testing.allocator;
-    const cells = try parseCells(allocator, "| ``a|b`` | c |");
-    defer allocator.free(cells);
+    const parsed = try cells(allocator, "| ``a|b`` | c |");
+    defer allocator.free(parsed);
 
-    try std.testing.expectEqual(@as(usize, 2), cells.len);
-    try std.testing.expectEqualStrings("``a|b``", cells[0]);
-    try std.testing.expectEqualStrings("c", cells[1]);
+    try std.testing.expectEqual(@as(usize, 2), parsed.len);
+    try std.testing.expectEqualStrings("``a|b``", parsed[0]);
+    try std.testing.expectEqualStrings("c", parsed[1]);
 }
 
-test "parseCells rejects rows with unclosed code span" {
+test "cells rejects rows with unclosed code span" {
     const allocator = std.testing.allocator;
-    try std.testing.expectError(error.UnclosedCodeSpan, parseCells(allocator, "| `a|b | c |"));
+    try std.testing.expectError(error.UnclosedCodeSpan, cells(allocator, "| `a|b | c |"));
 }

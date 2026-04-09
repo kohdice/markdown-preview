@@ -6,10 +6,10 @@ const parse_link = @import("parse_link.zig");
 
 pub const ParseResult = struct {
     blocks: []block_ast.BlockNode,
-    link_defs: parse_link.LinkDefMap,
+    link_defs: block_ast.LinkDefMap,
 };
 
-pub fn parseLines(allocator: std.mem.Allocator, lines: []const []const u8) !ParseResult {
+pub fn parse(allocator: std.mem.Allocator, lines: []const []const u8) !ParseResult {
     var parser = Parser{
         .allocator = allocator,
         .lines = lines,
@@ -32,7 +32,7 @@ const Parser = struct {
     allocator: std.mem.Allocator,
     lines: []const []const u8,
     pos: usize,
-    link_defs: parse_link.LinkDefMap,
+    link_defs: block_ast.LinkDefMap,
 
     fn deinitLinkDefs(self: *Parser) void {
         var it = self.link_defs.keyIterator();
@@ -55,7 +55,7 @@ const Parser = struct {
         const next_line = self.peekNextLine() orelse return false;
         if (!parse_table.isDelimiterRow(next_line)) return false;
 
-        return parse_table.countCells(line) == parse_table.countCells(next_line);
+        return parse_table.cellCount(line) == parse_table.cellCount(next_line);
     }
 
     fn peekNextLine(self: *const Parser) ?[]const u8 {
@@ -95,13 +95,13 @@ const Parser = struct {
 
             const line = self.peekLine();
 
-            if (parse_block.parseFence(line)) |fence_info| {
+            if (parse_block.fence(line)) |fence_info| {
                 const cf = try self.parseFenceBlock(fence_info);
                 try blocks.append(self.allocator, cf);
                 continue;
             }
 
-            if (parse_link.parseLinkDefinition(line)) |def| {
+            if (parse_link.definition(line)) |def| {
                 try self.addLinkDef(def);
                 self.advanceLine();
                 continue;
@@ -118,7 +118,7 @@ const Parser = struct {
                 continue;
             }
 
-            if (parse_block.parseHeading(line)) |h| {
+            if (parse_block.heading(line)) |h| {
                 self.advanceLine();
                 try blocks.append(self.allocator, .{
                     .heading = .{ .level = h.level, .content = h.content },
@@ -126,18 +126,18 @@ const Parser = struct {
                 continue;
             }
 
-            if (parse_block.parseBlockQuote(line)) |_| {
+            if (parse_block.blockquote(line)) |_| {
                 const bq = try self.parseBlockQuoteBlock();
                 try blocks.append(self.allocator, bq);
                 continue;
             }
 
-            if (parse_block.parseListItem(line) != null) {
+            if (parse_block.listItem(line) != null) {
                 const list = try self.parseListBlock(.unordered);
                 try blocks.append(self.allocator, list);
                 continue;
             }
-            if (parse_block.parseOrderedListItem(line) != null) {
+            if (parse_block.orderedListItem(line) != null) {
                 const list = try self.parseListBlock(.ordered);
                 try blocks.append(self.allocator, list);
                 continue;
@@ -150,7 +150,7 @@ const Parser = struct {
         return blocks.toOwnedSlice(self.allocator);
     }
 
-    fn addLinkDef(self: *Parser, def: parse_link.LinkDefinition) !void {
+    fn addLinkDef(self: *Parser, def: parse_link.Definition) !void {
         const key = try std.ascii.allocLowerString(self.allocator, def.label);
         errdefer self.allocator.free(key);
 
@@ -158,7 +158,10 @@ const Parser = struct {
         if (result.found_existing) {
             self.allocator.free(key);
         } else {
-            result.value_ptr.* = .{ .url = def.url, .title = def.title };
+            result.value_ptr.* = block_ast.LinkDef{
+                .url = def.url,
+                .title = def.title,
+            };
         }
     }
 
@@ -175,7 +178,7 @@ const Parser = struct {
             const line = self.peekLine();
             if (isBlankLine(line)) break;
             if (parse_block.isBlockLevelStart(line)) break;
-            if (parse_link.parseLinkDefinition(line) != null) break;
+            if (parse_link.definition(line) != null) break;
             if (self.lineStartsTable()) break;
 
             try paragraph_lines.append(self.allocator, line);
@@ -234,7 +237,7 @@ const Parser = struct {
 
     fn parseBlockQuoteBlock(self: *Parser) anyerror!block_ast.BlockNode {
         const first_line = self.peekLine();
-        const first_bq = parse_block.parseBlockQuote(first_line) orelse unreachable;
+        const first_bq = parse_block.blockquote(first_line) orelse unreachable;
         const indent = first_bq.indent;
 
         var child_lines: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -242,7 +245,7 @@ const Parser = struct {
 
         while (self.pos < self.lines.len) {
             const line = self.peekLine();
-            const bq = parse_block.parseBlockQuote(line) orelse break;
+            const bq = parse_block.blockquote(line) orelse break;
             if (bq.indent != indent) break;
             try child_lines.append(self.allocator, bq.content);
             self.advanceLine();
@@ -274,7 +277,7 @@ const Parser = struct {
 
             const item_node: block_ast.ListItem = switch (kind) {
                 .unordered => blk: {
-                    const parsed = parse_block.parseListItem(line) orelse break :outer;
+                    const parsed = parse_block.listItem(line) orelse break :outer;
                     if (min_indent) |mi| {
                         if (parsed.indent < mi) break :outer;
                         if (parsed.indent >= prev_child_indent.?) break :outer;
@@ -285,7 +288,7 @@ const Parser = struct {
                     break :blk try self.buildUnorderedItem(parsed);
                 },
                 .ordered => blk: {
-                    const parsed = parse_block.parseOrderedListItem(line) orelse break :outer;
+                    const parsed = parse_block.orderedListItem(line) orelse break :outer;
                     if (min_indent) |mi| {
                         if (parsed.indent < mi) break :outer;
                         if (parsed.indent >= prev_child_indent.?) break :outer;
@@ -383,13 +386,13 @@ const Parser = struct {
         const delim_line = self.lines[self.pos + 1];
         if (!parse_table.isDelimiterRow(delim_line)) return null;
 
-        const header_cells = parse_table.parseCells(self.allocator, header_line) catch |err| switch (err) {
+        const header_cells = parse_table.cells(self.allocator, header_line) catch |err| switch (err) {
             error.UnclosedCodeSpan => return null,
             else => return err,
         };
         errdefer self.allocator.free(header_cells);
 
-        const alignments = parse_table.parseAlignments(self.allocator, delim_line) catch |err| switch (err) {
+        const alignments = parse_table.alignments(self.allocator, delim_line) catch |err| switch (err) {
             error.UnclosedCodeSpan => return null,
             else => return err,
         };
@@ -415,7 +418,7 @@ const Parser = struct {
             if (std.mem.indexOfScalar(u8, row_line, '|') == null) break;
             if (parse_block.isBlockLevelStart(row_line)) break;
 
-            const row_cells = parse_table.parseCells(self.allocator, row_line) catch |err| switch (err) {
+            const row_cells = parse_table.cells(self.allocator, row_line) catch |err| switch (err) {
                 error.UnclosedCodeSpan => break,
                 else => return err,
             };

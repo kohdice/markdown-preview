@@ -1,8 +1,8 @@
 const std = @import("std");
+const block_ast = @import("block_ast.zig");
 const parse_block = @import("parse_block.zig");
-const parse_link = @import("parse_link.zig");
 
-const LinkDefMap = parse_link.LinkDefMap;
+const DefMap = block_ast.LinkDefMap;
 
 const max_ref_label_len = 256;
 
@@ -28,7 +28,7 @@ pub const InlineSegment = struct {
     content: []const u8,
 };
 
-pub fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segments: *std.ArrayListUnmanaged(InlineSegment), link_defs: *const LinkDefMap) !void {
+pub fn segments(allocator: std.mem.Allocator, text: []const u8, out: *std.ArrayListUnmanaged(InlineSegment), link_defs: *const DefMap) !void {
     var index: usize = 0;
     var plain_start: usize = 0;
 
@@ -37,8 +37,8 @@ pub fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segme
             '\\' => {
                 if (index + 1 < text.len and isEscapable(text[index + 1])) {
                     if (plain_start < index)
-                        try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
-                    try segments.append(allocator, .{ .kind = .text, .content = text[index + 1 .. index + 2] });
+                        try out.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
+                    try out.append(allocator, .{ .kind = .text, .content = text[index + 1 .. index + 2] });
                     index += 2;
                     plain_start = index;
                     continue;
@@ -48,8 +48,8 @@ pub fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segme
             '`' => {
                 if (findCodeSpanEnd(text, index)) |end| {
                     if (plain_start < index)
-                        try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
-                    try segments.append(allocator, .{ .kind = .code_span, .content = text[index .. end + 1] });
+                        try out.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
+                    try out.append(allocator, .{ .kind = .code_span, .content = text[index .. end + 1] });
                     index = end + 1;
                     plain_start = index;
                     continue;
@@ -60,11 +60,11 @@ pub fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segme
                 if (index + 1 < text.len and text[index + 1] == '[') {
                     if (findLinkParts(text, index + 1)) |link| {
                         if (plain_start < index)
-                            try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
-                        try segments.append(allocator, .{ .kind = .image_alt, .content = text[link.text_start..link.text_end] });
-                        try segments.append(allocator, .{ .kind = .image_url, .content = text[link.url_start..link.url_end] });
+                            try out.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
+                        try out.append(allocator, .{ .kind = .image_alt, .content = text[link.text_start..link.text_end] });
+                        try out.append(allocator, .{ .kind = .image_url, .content = text[link.url_start..link.url_end] });
                         if (link.title) |title|
-                            try segments.append(allocator, .{ .kind = .link_title, .content = title });
+                            try out.append(allocator, .{ .kind = .link_title, .content = title });
                         index = link.full_end;
                         plain_start = index;
                         continue;
@@ -75,22 +75,22 @@ pub fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segme
             '[' => {
                 if (findLinkParts(text, index)) |link| {
                     if (plain_start < index)
-                        try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
-                    try segments.append(allocator, .{ .kind = .link_text, .content = text[link.text_start..link.text_end] });
-                    try segments.append(allocator, .{ .kind = .link_url, .content = text[link.url_start..link.url_end] });
+                        try out.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
+                    try out.append(allocator, .{ .kind = .link_text, .content = text[link.text_start..link.text_end] });
+                    try out.append(allocator, .{ .kind = .link_url, .content = text[link.url_start..link.url_end] });
                     if (link.title) |title|
-                        try segments.append(allocator, .{ .kind = .link_title, .content = title });
+                        try out.append(allocator, .{ .kind = .link_title, .content = title });
                     index = link.full_end;
                     plain_start = index;
                     continue;
                 }
                 if (tryParseRefLink(text, index, link_defs)) |ref| {
                     if (plain_start < index)
-                        try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
-                    try segments.append(allocator, .{ .kind = .link_text, .content = ref.link_text });
-                    try segments.append(allocator, .{ .kind = .link_url, .content = ref.url });
+                        try out.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
+                    try out.append(allocator, .{ .kind = .link_text, .content = ref.link_text });
+                    try out.append(allocator, .{ .kind = .link_url, .content = ref.url });
                     if (ref.title) |title|
-                        try segments.append(allocator, .{ .kind = .link_title, .content = title });
+                        try out.append(allocator, .{ .kind = .link_title, .content = title });
                     index = ref.end;
                     plain_start = index;
                     continue;
@@ -100,8 +100,8 @@ pub fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segme
             '*', '_' => {
                 if (tryParseEmphasis(text, index)) |em| {
                     if (plain_start < index)
-                        try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
-                    try segments.append(allocator, .{ .kind = em.kind, .content = em.content });
+                        try out.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
+                    try out.append(allocator, .{ .kind = em.kind, .content = em.content });
                     index = em.end;
                     plain_start = index;
                     continue;
@@ -111,8 +111,8 @@ pub fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segme
             '~' => {
                 if (tryParseStrikethrough(text, index)) |st| {
                     if (plain_start < index)
-                        try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
-                    try segments.append(allocator, .{ .kind = .strikethrough, .content = st.content });
+                        try out.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
+                    try out.append(allocator, .{ .kind = .strikethrough, .content = st.content });
                     index = st.end;
                     plain_start = index;
                     continue;
@@ -122,8 +122,8 @@ pub fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segme
             '<' => {
                 if (tryParseAutolink(text, index)) |al| {
                     if (plain_start < index)
-                        try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
-                    try segments.append(allocator, .{ .kind = .autolink, .content = al.url });
+                        try out.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
+                    try out.append(allocator, .{ .kind = .autolink, .content = al.url });
                     index = al.end;
                     plain_start = index;
                     continue;
@@ -134,8 +134,8 @@ pub fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segme
                 if (text[index] == 'h') {
                     if (tryParseBareUrl(text, index)) |bare| {
                         if (plain_start < index)
-                            try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
-                        try segments.append(allocator, .{ .kind = .autolink, .content = text[index..bare.end] });
+                            try out.append(allocator, .{ .kind = .text, .content = text[plain_start..index] });
+                        try out.append(allocator, .{ .kind = .autolink, .content = text[index..bare.end] });
                         index = bare.end;
                         plain_start = index;
                         continue;
@@ -147,10 +147,10 @@ pub fn parseInlineSegments(allocator: std.mem.Allocator, text: []const u8, segme
     }
 
     if (plain_start < text.len)
-        try segments.append(allocator, .{ .kind = .text, .content = text[plain_start..] });
+        try out.append(allocator, .{ .kind = .text, .content = text[plain_start..] });
 }
 
-pub fn findCodeSpanEnd(text: []const u8, start: usize) ?usize {
+fn findCodeSpanEnd(text: []const u8, start: usize) ?usize {
     var open_len: usize = 0;
     while (start + open_len < text.len and text[start + open_len] == '`') : (open_len += 1) {}
     if (open_len == 0) return null;
@@ -171,7 +171,7 @@ pub fn findCodeSpanEnd(text: []const u8, start: usize) ?usize {
     return null;
 }
 
-pub fn isEscapable(c: u8) bool {
+fn isEscapable(c: u8) bool {
     return switch (c) {
         '!', '"', '#', '$', '%', '&', '\'', '(', ')', '*', '+', ',', '-', '.', '/' => true,
         ':', ';', '<', '=', '>', '?', '@' => true,
@@ -566,7 +566,7 @@ const RefLinkResult = struct {
     end: usize,
 };
 
-fn tryParseRefLink(text: []const u8, start: usize, link_defs: *const LinkDefMap) ?RefLinkResult {
+fn tryParseRefLink(text: []const u8, start: usize, link_defs: *const DefMap) ?RefLinkResult {
     if (start >= text.len or text[start] != '[') return null;
 
     var bracket_depth: usize = 1;

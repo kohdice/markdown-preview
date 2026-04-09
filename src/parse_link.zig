@@ -1,20 +1,13 @@
 const std = @import("std");
 const parse_block = @import("parse_block.zig");
 
-pub const LinkDef = struct {
-    url: []const u8,
-    title: ?[]const u8 = null,
-};
-
-pub const LinkDefMap = std.StringHashMapUnmanaged(LinkDef);
-
-pub const LinkDefinition = struct {
+pub const Definition = struct {
     label: []const u8,
     url: []const u8,
     title: ?[]const u8,
 };
 
-pub fn parseLinkDefinition(line: []const u8) ?LinkDefinition {
+pub fn definition(line: []const u8) ?Definition {
     const indent = parse_block.countIndentUpTo(line, parse_block.max_block_indent);
     if (indent >= line.len or line[indent] != '[') return null;
 

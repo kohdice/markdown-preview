@@ -1,25 +1,22 @@
 const std = @import("std");
 
 pub const max_block_indent = 3;
-pub const max_heading_level = 6;
-pub const min_fence_len = 3;
-pub const min_thematic_break_markers = 3;
-pub const max_ordered_digits = 9;
+const max_heading_level = 6;
+const min_fence_len = 3;
+const min_thematic_break_markers = 3;
+const max_ordered_digits = 9;
 /// CommonMark §6.7: a hard line break is signaled by a backslash or by
 /// at least two trailing spaces at the end of a line.
-pub const min_hard_break_spaces = 2;
-/// One marker character (`-`, `*`, `+`, `.`, or `)`) plus the mandatory
-/// trailing space.
-pub const marker_suffix_width: usize = 2;
+const min_hard_break_spaces = 2;
 
 /// CommonMark §5.2: unordered list bullet markers.
-pub const unordered_list_markers = "-*+";
+const unordered_list_markers = "-*+";
 /// CommonMark §5.2: ordered list number-delimiter characters.
-pub const ordered_list_markers = ".)";
+const ordered_list_markers = ".)";
 /// CommonMark §4.1: thematic break markers.
-pub const thematic_break_markers = "-_*";
+const thematic_break_markers = "-_*";
 /// CommonMark §4.5: fenced code block delimiter characters.
-pub const fence_chars = "`~";
+const fence_chars = "`~";
 /// CommonMark §2.1: horizontal tab (U+0009) and space (U+0020).
 /// Excludes line terminators because block-level parsers work line-by-line.
 pub const horizontal_whitespace = " \t";
@@ -69,7 +66,7 @@ pub const Fence = struct {
     language: []const u8,
 };
 
-pub fn parseHeading(line: []const u8) ?Heading {
+pub fn heading(line: []const u8) ?Heading {
     var index = countIndentUpTo(line, max_block_indent);
     if (index >= line.len or line[index] != '#') return null;
 
@@ -89,7 +86,7 @@ pub fn parseHeading(line: []const u8) ?Heading {
     };
 }
 
-pub fn trimClosingHashes(text: []const u8) []const u8 {
+fn trimClosingHashes(text: []const u8) []const u8 {
     const trimmed = std.mem.trimEnd(u8, text, horizontal_whitespace);
     var end = trimmed.len;
 
@@ -101,7 +98,7 @@ pub fn trimClosingHashes(text: []const u8) []const u8 {
     return trimmed;
 }
 
-pub fn parseListItem(line: []const u8) ?ListItem {
+pub fn listItem(line: []const u8) ?ListItem {
     const indent = countLeadingWhitespace(line);
     if (indent >= line.len) return null;
 
@@ -113,17 +110,17 @@ pub fn parseListItem(line: []const u8) ?ListItem {
     var content_index = indent + 1;
     while (content_index < line.len and isHorizontalWhitespace(line[content_index])) : (content_index += 1) {}
 
-    const checkbox = parseCheckbox(line[content_index..]);
+    const checked_state = checkbox(line[content_index..]);
     return .{
         .indent = indent,
         .marker = marker,
-        .content = checkbox.rest,
+        .content = checked_state.rest,
         .content_col = content_index,
-        .checked = checkbox.checked,
+        .checked = checked_state.checked,
     };
 }
 
-pub fn parseCheckbox(content: []const u8) struct { checked: ?bool, rest: []const u8 } {
+fn checkbox(content: []const u8) struct { checked: ?bool, rest: []const u8 } {
     if (content.len >= 4 and content[0] == '[' and content[2] == ']' and
         isHorizontalWhitespace(content[3]))
     {
@@ -136,7 +133,7 @@ pub fn parseCheckbox(content: []const u8) struct { checked: ?bool, rest: []const
     return .{ .checked = null, .rest = content };
 }
 
-pub fn parseOrderedListItem(line: []const u8) ?OrderedListItem {
+pub fn orderedListItem(line: []const u8) ?OrderedListItem {
     const indent = countLeadingWhitespace(line);
     if (indent >= line.len) return null;
 
@@ -156,18 +153,18 @@ pub fn parseOrderedListItem(line: []const u8) ?OrderedListItem {
     var content_index = digit_end + 1;
     while (content_index < line.len and isHorizontalWhitespace(line[content_index])) : (content_index += 1) {}
 
-    const checkbox = parseCheckbox(line[content_index..]);
+    const checked_state = checkbox(line[content_index..]);
     return .{
         .indent = indent,
         .number = line[digit_start..digit_end],
         .marker = marker,
-        .content = checkbox.rest,
+        .content = checked_state.rest,
         .content_col = content_index,
-        .checked = checkbox.checked,
+        .checked = checked_state.checked,
     };
 }
 
-pub fn parseBlockQuote(line: []const u8) ?BlockQuote {
+pub fn blockquote(line: []const u8) ?BlockQuote {
     const indent = countIndentUpTo(line, max_block_indent);
     if (indent >= line.len or line[indent] != '>') return null;
 
@@ -180,7 +177,7 @@ pub fn parseBlockQuote(line: []const u8) ?BlockQuote {
     };
 }
 
-pub fn parseFence(line: []const u8) ?Fence {
+pub fn fence(line: []const u8) ?Fence {
     const index = countIndentUpTo(line, max_block_indent);
     if (index >= line.len) return null;
 
@@ -201,13 +198,13 @@ pub fn parseFence(line: []const u8) ?Fence {
     };
 }
 
-pub fn isClosingFence(line: []const u8, fence: Fence) bool {
+pub fn isClosingFence(line: []const u8, fence_info: Fence) bool {
     const index = countIndentUpTo(line, max_block_indent);
     if (index >= line.len) return false;
-    if (line[index] != fence.fence_char) return false;
+    if (line[index] != fence_info.fence_char) return false;
 
-    const fence_len = countRepeatedByte(line[index..], fence.fence_char);
-    if (fence_len < fence.fence_len) return false;
+    const fence_len = countRepeatedByte(line[index..], fence_info.fence_char);
+    if (fence_len < fence_info.fence_len) return false;
 
     return std.mem.trim(u8, line[index + fence_len ..], horizontal_whitespace).len == 0;
 }
@@ -234,11 +231,11 @@ pub fn isThematicBreak(line: []const u8) bool {
 }
 
 pub fn isBlockLevelStart(line: []const u8) bool {
-    if (parseHeading(line) != null) return true;
-    if (parseBlockQuote(line) != null) return true;
-    if (parseListItem(line) != null) return true;
-    if (parseOrderedListItem(line) != null) return true;
-    if (parseFence(line) != null) return true;
+    if (heading(line) != null) return true;
+    if (blockquote(line) != null) return true;
+    if (listItem(line) != null) return true;
+    if (orderedListItem(line) != null) return true;
+    if (fence(line) != null) return true;
     if (isThematicBreak(line)) return true;
     return false;
 }

@@ -5,7 +5,7 @@ const parse_document = @import("parse_document.zig");
 
 pub const Document = block_ast.Document;
 
-pub fn parseDocument(allocator: std.mem.Allocator, input: []const u8) !Document {
+pub fn parse(allocator: std.mem.Allocator, input: []const u8) !Document {
     const has_trailing_newline = input.len > 0 and input[input.len - 1] == '\n';
 
     var lines: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -23,7 +23,7 @@ pub fn parseDocument(allocator: std.mem.Allocator, input: []const u8) !Document 
         }
     }
 
-    const parsed = try parse_document.parseLines(allocator, lines.items);
+    const parsed = try parse_document.parse(allocator, lines.items);
     return .{
         .blocks = parsed.blocks,
         .link_defs = parsed.link_defs,
@@ -31,8 +31,8 @@ pub fn parseDocument(allocator: std.mem.Allocator, input: []const u8) !Document 
     };
 }
 
-test "parseDocument builds a document for a single paragraph" {
-    var doc = try parseDocument(std.testing.allocator, "Hello\n");
+test "parse builds a document for a single paragraph" {
+    var doc = try parse(std.testing.allocator, "Hello\n");
     defer doc.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);

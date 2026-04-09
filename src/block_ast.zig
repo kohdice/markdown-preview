@@ -1,10 +1,17 @@
 const std = @import("std");
-const parse_table = @import("parse_table.zig");
-const parse_link = @import("parse_link.zig");
+
+pub const LinkDef = struct {
+    url: []const u8,
+    title: ?[]const u8 = null,
+};
+
+pub const LinkDefMap = std.StringHashMapUnmanaged(LinkDef);
+
+pub const Alignment = enum { left, center, right };
 
 pub const Document = struct {
     blocks: []BlockNode,
-    link_defs: parse_link.LinkDefMap,
+    link_defs: LinkDefMap,
     has_trailing_newline: bool,
 
     pub fn deinit(self: *Document, allocator: std.mem.Allocator) void {
@@ -104,7 +111,7 @@ pub const CodeFence = struct {
 
 pub const Table = struct {
     header: [][]const u8,
-    alignments: []parse_table.Alignment,
+    alignments: []Alignment,
     rows: [][][]const u8,
 
     pub fn deinit(self: *Table, allocator: std.mem.Allocator) void {
