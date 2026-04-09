@@ -4,11 +4,6 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const mp_mod = b.createModule(.{
-        .root_source_file = b.path("src/markdown_preview.zig"),
-        .target = target,
-    });
-
     const ts_dep = b.dependency("tree_sitter", .{
         .target = target,
         .optimize = optimize,
@@ -28,7 +23,7 @@ pub fn build(b: *std.Build) void {
     const ts_javascript_dep = b.dependency("tree_sitter_javascript", .{});
     const ts_bash_dep = b.dependency("tree_sitter_bash", .{});
 
-    attachTreeSitter(b, mp_mod, .{
+    const ts_support = prepareTreeSitterSupport(b, .{
         .target = target,
         .optimize = optimize,
         .ts_dep = ts_dep,
@@ -46,7 +41,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    exe_mod.addImport("markdown_preview", mp_mod);
+    attachTreeSitter(exe_mod, ts_support);
 
     const exe = b.addExecutable(.{
         .name = "mp",
@@ -64,13 +59,38 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    const mp_tests = b.addTest(.{
-        .root_module = mp_mod,
-    });
-    const run_mp_tests = b.addRunArtifact(mp_tests);
-
     const test_step = b.step("test", "Run tests");
-    test_step.dependOn(&run_mp_tests.step);
+    const test_roots = [_]struct {
+        path: []const u8,
+        needs_tree_sitter: bool,
+    }{
+        .{ .path = "src/parse.zig", .needs_tree_sitter = false },
+        .{ .path = "src/parse_document_test.zig", .needs_tree_sitter = false },
+        .{ .path = "src/render.zig", .needs_tree_sitter = true },
+        .{ .path = "src/cli.zig", .needs_tree_sitter = true },
+        .{ .path = "src/terminal.zig", .needs_tree_sitter = false },
+        .{ .path = "src/highlight.zig", .needs_tree_sitter = true },
+        .{ .path = "src/parse_table.zig", .needs_tree_sitter = false },
+        .{ .path = "src/entity.zig", .needs_tree_sitter = false },
+        .{ .path = "src/width.zig", .needs_tree_sitter = false },
+    };
+
+    for (test_roots) |test_root| {
+        const test_mod = b.createModule(.{
+            .root_source_file = b.path(test_root.path),
+            .target = target,
+            .optimize = optimize,
+        });
+        if (test_root.needs_tree_sitter) {
+            attachTreeSitter(test_mod, ts_support);
+        }
+
+        const unit_tests = b.addTest(.{
+            .root_module = test_mod,
+        });
+        const run_unit_tests = b.addRunArtifact(unit_tests);
+        test_step.dependOn(&run_unit_tests.step);
+    }
 }
 
 /// Options bundle for `attachTreeSitter`. Keeping the argument list as one
@@ -99,59 +119,56 @@ const GrammarSource = struct {
     embed_name: []const u8, // key used by @embedFile in the wrapper
 };
 
-/// Attach tree-sitter runtime and all grammar libraries to a module.
-///
-/// Propagation: Called once on `mp_mod` (the library module).
-/// - `mp_tests` uses `mp_mod` as its root_module → inherits imports + C link.
-/// - `exe.root_module` imports `mp_mod` via the `markdown_preview` named
-///   module so the exe compile unit never re-includes library files directly;
-///   tree_sitter resolution therefore stays inside `mp_mod`.
-fn attachTreeSitter(b: *std.Build, module: *std.Build.Module, a: TreeSitterAttach) void {
-    module.addImport("tree_sitter", a.ts_dep.module("tree_sitter"));
-    // tree-sitter-zig is still packaged with Zig bindings upstream, so we can
-    // reuse its module directly.
-    module.addImport("tree-sitter-zig", a.ts_zig_dep.module("tree-sitter-zig"));
+const TreeSitterSupport = struct {
+    runtime_module: *std.Build.Module,
+    zig_module: *std.Build.Module,
+    queries_module: *std.Build.Module,
+    c_lib: *std.Build.Step.Compile,
+    rust_lib: *std.Build.Step.Compile,
+    go_lib: *std.Build.Step.Compile,
+    python_lib: *std.Build.Step.Compile,
+    javascript_lib: *std.Build.Step.Compile,
+    bash_lib: *std.Build.Step.Compile,
+};
 
-    const grammars = [_]struct {
-        src: GrammarSource,
-        lib_name: []const u8,
-    }{
-        .{ .src = .{ .dep = a.ts_c_dep, .has_scanner = false, .embed_name = "c_highlights.scm" }, .lib_name = "tree-sitter-c" },
-        .{ .src = .{ .dep = a.ts_rust_dep, .has_scanner = true, .embed_name = "rust_highlights.scm" }, .lib_name = "tree-sitter-rust" },
-        .{ .src = .{ .dep = a.ts_go_dep, .has_scanner = false, .embed_name = "go_highlights.scm" }, .lib_name = "tree-sitter-go" },
-        .{ .src = .{ .dep = a.ts_python_dep, .has_scanner = true, .embed_name = "python_highlights.scm" }, .lib_name = "tree-sitter-python" },
-        .{ .src = .{ .dep = a.ts_javascript_dep, .has_scanner = true, .embed_name = "javascript_highlights.scm" }, .lib_name = "tree-sitter-javascript" },
-        .{ .src = .{ .dep = a.ts_bash_dep, .has_scanner = true, .embed_name = "bash_highlights.scm" }, .lib_name = "tree-sitter-bash" },
-    };
+/// Prepare tree-sitter runtime state once, then attach it to any module that
+/// directly imports engine files. This keeps the CLI root module and the
+/// library facade aligned without duplicating grammar compilation steps.
+fn prepareTreeSitterSupport(b: *std.Build, a: TreeSitterAttach) TreeSitterSupport {
+    const runtime_module = a.ts_dep.module("tree_sitter");
+    const zig_module = a.ts_zig_dep.module("tree-sitter-zig");
 
-    for (grammars) |g| {
-        const lib = b.addLibrary(.{
-            .name = g.lib_name,
-            .linkage = .static,
-            .root_module = b.createModule(.{
-                .target = a.target,
-                .optimize = a.optimize,
-                .link_libc = true,
-            }),
-        });
-        lib.addCSourceFile(.{
-            .file = g.src.dep.path("src/parser.c"),
-            .flags = &.{"-std=c11"},
-        });
-        if (g.src.has_scanner) {
-            lib.addCSourceFile(.{
-                .file = g.src.dep.path("src/scanner.c"),
-                .flags = &.{"-std=c11"},
-            });
-        }
-        lib.addIncludePath(g.src.dep.path("src"));
-        module.linkLibrary(lib);
-    }
+    const c_lib = compileGrammarLibrary(b, a.target, a.optimize, .{
+        .dep = a.ts_c_dep,
+        .has_scanner = false,
+        .embed_name = "c_highlights.scm",
+    }, "tree-sitter-c");
+    const rust_lib = compileGrammarLibrary(b, a.target, a.optimize, .{
+        .dep = a.ts_rust_dep,
+        .has_scanner = true,
+        .embed_name = "rust_highlights.scm",
+    }, "tree-sitter-rust");
+    const go_lib = compileGrammarLibrary(b, a.target, a.optimize, .{
+        .dep = a.ts_go_dep,
+        .has_scanner = false,
+        .embed_name = "go_highlights.scm",
+    }, "tree-sitter-go");
+    const python_lib = compileGrammarLibrary(b, a.target, a.optimize, .{
+        .dep = a.ts_python_dep,
+        .has_scanner = true,
+        .embed_name = "python_highlights.scm",
+    }, "tree-sitter-python");
+    const javascript_lib = compileGrammarLibrary(b, a.target, a.optimize, .{
+        .dep = a.ts_javascript_dep,
+        .has_scanner = true,
+        .embed_name = "javascript_highlights.scm",
+    }, "tree-sitter-javascript");
+    const bash_lib = compileGrammarLibrary(b, a.target, a.optimize, .{
+        .dep = a.ts_bash_dep,
+        .has_scanner = true,
+        .embed_name = "bash_highlights.scm",
+    }, "tree-sitter-bash");
 
-    // Embed highlights.scm query files via a build-time generated wrapper
-    // module. @embedFile resolves relative to the wrapper Zig source file,
-    // so we copy each .scm next to the wrapper and reference it by a fixed
-    // filename.
     const queries = b.addWriteFiles();
     _ = queries.addCopyFile(a.ts_zig_dep.path("queries/highlights.scm"), "zig_highlights.scm");
     _ = queries.addCopyFile(a.ts_c_dep.path("queries/highlights.scm"), "c_highlights.scm");
@@ -173,7 +190,66 @@ fn attachTreeSitter(b: *std.Build, module: *std.Build.Module, a: TreeSitterAttac
         \\pub const bash_highlights: []const u8 = @embedFile("bash_highlights.scm");
         \\
     );
-    module.addAnonymousImport("ts_queries", .{
-        .root_source_file = wrapper,
+
+    return .{
+        .runtime_module = runtime_module,
+        .zig_module = zig_module,
+        .queries_module = b.createModule(.{
+            .root_source_file = wrapper,
+            .target = a.target,
+            .optimize = a.optimize,
+        }),
+        .c_lib = c_lib,
+        .rust_lib = rust_lib,
+        .go_lib = go_lib,
+        .python_lib = python_lib,
+        .javascript_lib = javascript_lib,
+        .bash_lib = bash_lib,
+    };
+}
+
+fn compileGrammarLibrary(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    src: GrammarSource,
+    lib_name: []const u8,
+) *std.Build.Step.Compile {
+    const lib = b.addLibrary(.{
+        .name = lib_name,
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
     });
+    lib.addCSourceFile(.{
+        .file = src.dep.path("src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    if (src.has_scanner) {
+        lib.addCSourceFile(.{
+            .file = src.dep.path("src/scanner.c"),
+            .flags = &.{"-std=c11"},
+        });
+    }
+    lib.addIncludePath(src.dep.path("src"));
+    return lib;
+}
+
+/// Attach tree-sitter runtime and grammar assets to a module that directly
+/// compiles engine code.
+fn attachTreeSitter(module: *std.Build.Module, support: TreeSitterSupport) void {
+    module.addImport("tree_sitter", support.runtime_module);
+    // tree-sitter-zig is still packaged with Zig bindings upstream, so we can
+    // reuse its module directly.
+    module.addImport("tree-sitter-zig", support.zig_module);
+    module.addImport("ts_queries", support.queries_module);
+    module.linkLibrary(support.c_lib);
+    module.linkLibrary(support.rust_lib);
+    module.linkLibrary(support.go_lib);
+    module.linkLibrary(support.python_lib);
+    module.linkLibrary(support.javascript_lib);
+    module.linkLibrary(support.bash_lib);
 }

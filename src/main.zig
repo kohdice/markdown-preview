@@ -1,5 +1,5 @@
 const std = @import("std");
-const mp = @import("markdown_preview");
+const cli = @import("cli.zig");
 const terminal = @import("terminal.zig");
 
 const stdout_buffer_size = 4096;
@@ -33,7 +33,7 @@ pub fn main() !void {
     const wrap_width = if (enable_ansi) terminal.getTerminalWidth(stdout_file.handle) else null;
     const ambiguous_default = terminal.detectAmbiguousWidthFromProcess();
 
-    const exit_code = mp.cli.run(
+    const exit_code = cli.run(
         allocator,
         std.fs.cwd(),
         args,
@@ -42,9 +42,9 @@ pub fn main() !void {
         enable_ansi,
         wrap_width,
         ambiguous_default,
-    ) catch |err| return mp.cli.unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
+    ) catch |err| return cli.unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
 
-    stdout_stream.interface.flush() catch |err| return mp.cli.unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
-    stderr_stream.interface.flush() catch |err| return mp.cli.unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
+    stdout_stream.interface.flush() catch |err| return cli.unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
+    stderr_stream.interface.flush() catch |err| return cli.unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
     if (exit_code != 0) std.process.exit(exit_code);
 }
