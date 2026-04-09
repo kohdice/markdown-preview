@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const ansi = @import("ansi.zig");
 
 const ESC = 0x1b;
@@ -17,6 +18,151 @@ const BOM = 0xFEFF;
 /// xterm-cjk) treat them as 2 columns. Callers pick the interpretation that
 /// matches their target terminal.
 pub const AmbiguousWidth = enum { narrow, wide };
+
+const multibyte_charsets = [_][]const u8{
+    "utf-8",   "utf8",
+    "jis",     "eucjp",
+    "euckr",   "euccn",
+    "sjis",    "cp932",
+    "cp51932", "cp936",
+    "cp949",   "cp950",
+    "big5",    "gbk",
+    "gb2312",  "gb18030",
+};
+
+fn isMultibyteCharset(charset: []const u8) bool {
+    for (multibyte_charsets) |name| {
+        if (std.ascii.eqlIgnoreCase(charset, name)) return true;
+    }
+    return false;
+}
+
+const LocaleInfo = struct {
+    language: []const u8,
+    charset: ?[]const u8,
+    modifier: ?[]const u8,
+};
+
+fn isCjkLanguage(language: []const u8) bool {
+    return std.mem.eql(u8, language, "ja") or
+        std.mem.eql(u8, language, "ko") or
+        std.mem.eql(u8, language, "zh");
+}
+
+fn parseLocale(locale: []const u8) ?LocaleInfo {
+    if (locale.len == 0) return null;
+
+    var i: usize = 0;
+    while (i < locale.len and std.ascii.isLower(locale[i])) : (i += 1) {}
+    if (i < 2 or i > 3) return null;
+
+    const language = locale[0..i];
+
+    if (i < locale.len and locale[i] == '_') {
+        if (i + 2 >= locale.len) return null;
+        if (!std.ascii.isUpper(locale[i + 1]) or !std.ascii.isUpper(locale[i + 2])) return null;
+        i += 3;
+    }
+
+    var charset: ?[]const u8 = null;
+    if (i < locale.len and locale[i] == '.') {
+        const start = i + 1;
+        if (start >= locale.len) return null;
+        i = start;
+        while (i < locale.len and locale[i] != '@') : (i += 1) {}
+        if (start == i) return null;
+        charset = locale[start..i];
+    }
+
+    var modifier: ?[]const u8 = null;
+    if (i < locale.len and locale[i] == '@') {
+        const start = i + 1;
+        if (start >= locale.len) return null;
+        modifier = locale[start..];
+        i = locale.len;
+    }
+
+    if (i != locale.len) return null;
+    return .{
+        .language = language,
+        .charset = charset,
+        .modifier = modifier,
+    };
+}
+
+fn classifyWindowsCodePage(code_page: u32, wt_session_nonempty: bool) AmbiguousWidth {
+    if (wt_session_nonempty) return .narrow;
+    return switch (code_page) {
+        932, 51932, 936, 949, 950 => .wide,
+        else => .narrow,
+    };
+}
+
+/// Heuristic East Asian width detection modeled after `mattn/go-runewidth`.
+/// The parser is intentionally conservative: malformed locale strings fall back
+/// to narrow instead of assuming CJK behavior.
+pub fn classifyLocale(locale: []const u8) AmbiguousWidth {
+    if (std.mem.eql(u8, locale, "C")) return .narrow;
+    if (std.mem.eql(u8, locale, "POSIX")) return .narrow;
+    if (locale.len > 1 and locale[0] == 'C' and
+        (locale[1] == '.' or locale[1] == '-'))
+    {
+        return .narrow;
+    }
+    if (locale.len == 0) return .narrow;
+
+    const parsed = parseLocale(locale) orelse return .narrow;
+    if (parsed.modifier) |modifier| {
+        if (std.ascii.eqlIgnoreCase(modifier, "cjk_narrow")) return .narrow;
+    }
+
+    const charset = parsed.charset orelse return .narrow;
+    if (!isMultibyteCharset(charset)) return .narrow;
+
+    if (std.ascii.toLower(charset[0]) != 'u') return .wide;
+
+    if (isCjkLanguage(parsed.language)) {
+        return .wide;
+    }
+    return .narrow;
+}
+
+pub fn detectAmbiguousWidth(env: anytype) AmbiguousWidth {
+    if (env.get("RUNEWIDTH_EASTASIAN")) |v| {
+        if (v.len > 0) {
+            return if (std.mem.eql(u8, v, "1")) .wide else .narrow;
+        }
+    }
+
+    const names = [_][]const u8{ "LC_ALL", "LC_CTYPE", "LANG" };
+    for (names) |name| {
+        if (env.get(name)) |v| {
+            if (v.len == 0) continue;
+            return classifyLocale(v);
+        }
+    }
+    return .narrow;
+}
+
+pub fn detectAmbiguousFromProcess() AmbiguousWidth {
+    if (builtin.os.tag == .windows) {
+        if (std.process.hasNonEmptyEnvVarConstant("RUNEWIDTH_EASTASIAN")) {
+            const env = std.process.getenvW(std.unicode.wtf8ToWtf16LeStringLiteral("RUNEWIDTH_EASTASIAN")) orelse unreachable;
+            return if (env.len == 1 and env[0] == @as(u16, '1')) .wide else .narrow;
+        }
+        return classifyWindowsCodePage(
+            std.os.windows.kernel32.GetConsoleOutputCP(),
+            std.process.hasNonEmptyEnvVarConstant("WT_SESSION"),
+        );
+    }
+
+    const process_env = struct {
+        pub fn get(name: []const u8) ?[]const u8 {
+            return std.posix.getenv(name);
+        }
+    };
+    return detectAmbiguousWidth(process_env);
+}
 
 /// ANSI CSI parameter byte range (0x20–0x3f per ECMA-48 §5.4)
 fn isCsiParamByte(byte: u8) bool {
@@ -301,7 +447,7 @@ fn isEmoji(cp: u21) bool {
 /// (Apple Terminal east-asian-wide, Vim `set ambiwidth=double` in
 /// the CJK font families that ship these glyphs as double-wide)
 /// display them as 2 columns. Without the override, opting into
-/// `--ambiguous-width=wide` would fix top-level `•` bullets and
+/// wide ambiguous rendering would fix top-level `•` bullets and
 /// `│` gutters but leave `◦` / `▪` / `☐` / `☑` misaligned, which
 /// defeats the feature's stated user goal.
 ///
@@ -909,4 +1055,226 @@ test "wrapText with Greek text wraps at wide-mode width" {
     const wide_result = try wrapText(allocator, "ΑΒΓ", 4, .wide);
     defer allocator.free(wide_result);
     try std.testing.expectEqualStrings("ΑΒ\nΓ", wide_result);
+}
+
+test "classifyLocale wide for ja/ko/zh UTF-8 locales" {
+    try std.testing.expectEqual(AmbiguousWidth.wide, classifyLocale("ja_JP.UTF-8"));
+    try std.testing.expectEqual(AmbiguousWidth.wide, classifyLocale("ja_JP.utf8"));
+    try std.testing.expectEqual(AmbiguousWidth.wide, classifyLocale("ko_KR.UTF-8"));
+    try std.testing.expectEqual(AmbiguousWidth.wide, classifyLocale("zh_CN.UTF-8"));
+}
+
+test "classifyLocale wide for CJK non-UTF multi-byte charsets" {
+    try std.testing.expectEqual(AmbiguousWidth.wide, classifyLocale("ja_JP.eucJP"));
+    try std.testing.expectEqual(AmbiguousWidth.wide, classifyLocale("ko_KR.eucKR"));
+    try std.testing.expectEqual(AmbiguousWidth.wide, classifyLocale("zh_CN.GB2312"));
+    try std.testing.expectEqual(AmbiguousWidth.wide, classifyLocale("zh_CN.GB18030"));
+    try std.testing.expectEqual(AmbiguousWidth.wide, classifyLocale("zh_TW.Big5"));
+}
+
+test "classifyLocale wide for non-CJK locale with multi-byte non-UTF charset" {
+    try std.testing.expectEqual(AmbiguousWidth.wide, classifyLocale("en_US.eucJP"));
+}
+
+test "classifyLocale narrow for big5hkscs charset not in mblenTable" {
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale("zh_HK.Big5HKSCS"));
+}
+
+test "classifyLocale narrow for non-CJK UTF-8 locales" {
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale("en_US.UTF-8"));
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale("fr_FR.UTF-8"));
+}
+
+test "classifyLocale narrow for single-byte charset" {
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale("en_US.ISO8859-1"));
+}
+
+test "classifyLocale narrow for C and POSIX family" {
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale("C"));
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale("POSIX"));
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale("C.UTF-8"));
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale("C-UTF8"));
+}
+
+test "classifyLocale @cjk_narrow suffix overrides to narrow" {
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale("ja_JP.UTF-8@cjk_narrow"));
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale("ja_JP@cjk_narrow"));
+}
+
+test "classifyLocale narrow for locale without charset" {
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale("ja_JP"));
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale("ja"));
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale("ja_JP@cjk"));
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale("fr_FR@euro"));
+}
+
+test "classifyLocale narrow for empty string" {
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale(""));
+}
+
+test "classifyLocale narrow for malformed locale: single uppercase after underscore" {
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale("ja_A.UTF-8"));
+}
+
+test "classifyLocale narrow for malformed locale: three uppercase after underscore" {
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale("ja_JPN.UTF-8"));
+}
+
+test "classifyLocale narrow for malformed locale: lowercase region" {
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale("ja_jp.UTF-8"));
+}
+
+test "classifyLocale narrow for malformed locale: four lowercase letters before dot" {
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale("abcd.UTF-8"));
+}
+
+test "classifyLocale narrow for uppercase leading letters" {
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale("JA_JP.UTF-8"));
+}
+
+test "classifyLocale narrow for two-letter non-CJK with charset" {
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale("ab.UTF-8"));
+}
+
+test "classifyLocale wide for three-letter lowercase with non-UTF charset" {
+    try std.testing.expectEqual(AmbiguousWidth.wide, classifyLocale("abc.eucjp"));
+}
+
+test "classifyLocale narrow for three-letter UTF-8 locale sharing a CJK prefix" {
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale("jan.UTF-8"));
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale("kok.UTF-8"));
+}
+
+test "classifyLocale narrow for malformed long locale with @cjk_narrow suffix" {
+    const locale = "ja_JP.UTF-8" ++ ("x" ** 80) ++ "@cjk_narrow";
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale(locale));
+}
+
+test "classifyLocale narrow for malformed long non-UTF locale with @cjk_narrow suffix" {
+    const locale = "en_US.eucJP" ++ ("y" ** 80) ++ "@cjk_narrow";
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale(locale));
+}
+
+test "classifyLocale narrow for long non-CJK locale" {
+    const locale = "en_US.UTF-8" ++ ("z" ** 100);
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale(locale));
+}
+
+fn StubEnv(comptime pairs: anytype) type {
+    return struct {
+        pub fn get(name: []const u8) ?[]const u8 {
+            inline for (pairs) |pair| {
+                if (std.mem.eql(u8, name, pair[0])) return pair[1];
+            }
+            return null;
+        }
+    };
+}
+
+test "detectAmbiguousWidth RUNEWIDTH_EASTASIAN=1 forces wide" {
+    const env = StubEnv(.{
+        .{ "RUNEWIDTH_EASTASIAN", "1" },
+    });
+    try std.testing.expectEqual(AmbiguousWidth.wide, detectAmbiguousWidth(env));
+}
+
+test "detectAmbiguousWidth RUNEWIDTH_EASTASIAN=0 forces narrow" {
+    const env = StubEnv(.{
+        .{ "RUNEWIDTH_EASTASIAN", "0" },
+    });
+    try std.testing.expectEqual(AmbiguousWidth.narrow, detectAmbiguousWidth(env));
+}
+
+test "detectAmbiguousWidth RUNEWIDTH_EASTASIAN=true forces narrow" {
+    const env = StubEnv(.{
+        .{ "RUNEWIDTH_EASTASIAN", "true" },
+    });
+    try std.testing.expectEqual(AmbiguousWidth.narrow, detectAmbiguousWidth(env));
+}
+
+test "detectAmbiguousWidth empty RUNEWIDTH_EASTASIAN falls through to locale" {
+    const env = StubEnv(.{
+        .{ "RUNEWIDTH_EASTASIAN", "" },
+        .{ "LANG", "ja_JP.UTF-8" },
+    });
+    try std.testing.expectEqual(AmbiguousWidth.wide, detectAmbiguousWidth(env));
+}
+
+test "detectAmbiguousWidth override beats CJK locale" {
+    const env = StubEnv(.{
+        .{ "RUNEWIDTH_EASTASIAN", "0" },
+        .{ "LANG", "ja_JP.UTF-8" },
+    });
+    try std.testing.expectEqual(AmbiguousWidth.narrow, detectAmbiguousWidth(env));
+}
+
+test "detectAmbiguousWidth override forces wide on narrow locale" {
+    const env = StubEnv(.{
+        .{ "RUNEWIDTH_EASTASIAN", "1" },
+        .{ "LANG", "en_US.UTF-8" },
+    });
+    try std.testing.expectEqual(AmbiguousWidth.wide, detectAmbiguousWidth(env));
+}
+
+test "detectAmbiguousWidth LC_ALL alone triggers wide" {
+    const env = StubEnv(.{
+        .{ "LC_ALL", "ja_JP.UTF-8" },
+    });
+    try std.testing.expectEqual(AmbiguousWidth.wide, detectAmbiguousWidth(env));
+}
+
+test "detectAmbiguousWidth empty LC_ALL skipped to LC_CTYPE" {
+    const env = StubEnv(.{
+        .{ "LC_ALL", "" },
+        .{ "LC_CTYPE", "ja_JP.UTF-8" },
+    });
+    try std.testing.expectEqual(AmbiguousWidth.wide, detectAmbiguousWidth(env));
+}
+
+test "detectAmbiguousWidth empty LC_ALL and LC_CTYPE skipped to LANG" {
+    const env = StubEnv(.{
+        .{ "LC_ALL", "" },
+        .{ "LC_CTYPE", "" },
+        .{ "LANG", "ja_JP.UTF-8" },
+    });
+    try std.testing.expectEqual(AmbiguousWidth.wide, detectAmbiguousWidth(env));
+}
+
+test "detectAmbiguousWidth LANG en_US narrow" {
+    const env = StubEnv(.{
+        .{ "LANG", "en_US.UTF-8" },
+    });
+    try std.testing.expectEqual(AmbiguousWidth.narrow, detectAmbiguousWidth(env));
+}
+
+test "detectAmbiguousWidth no env vars narrow" {
+    const env = StubEnv(.{});
+    try std.testing.expectEqual(AmbiguousWidth.narrow, detectAmbiguousWidth(env));
+}
+
+test "detectAmbiguousWidth LC_ALL beats LC_CTYPE and LANG" {
+    const env = StubEnv(.{
+        .{ "LC_ALL", "en_US.UTF-8" },
+        .{ "LC_CTYPE", "ja_JP.UTF-8" },
+        .{ "LANG", "ja_JP.UTF-8" },
+    });
+    try std.testing.expectEqual(AmbiguousWidth.narrow, detectAmbiguousWidth(env));
+}
+
+test "classifyWindowsCodePage wide for classic CJK code pages" {
+    try std.testing.expectEqual(AmbiguousWidth.wide, classifyWindowsCodePage(932, false));
+    try std.testing.expectEqual(AmbiguousWidth.wide, classifyWindowsCodePage(51932, false));
+    try std.testing.expectEqual(AmbiguousWidth.wide, classifyWindowsCodePage(936, false));
+    try std.testing.expectEqual(AmbiguousWidth.wide, classifyWindowsCodePage(949, false));
+    try std.testing.expectEqual(AmbiguousWidth.wide, classifyWindowsCodePage(950, false));
+}
+
+test "classifyWindowsCodePage WT_SESSION forces narrow" {
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyWindowsCodePage(932, true));
+}
+
+test "classifyWindowsCodePage narrow for UTF-8 and unknown code pages" {
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyWindowsCodePage(65001, false));
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyWindowsCodePage(0, false));
+    try std.testing.expectEqual(AmbiguousWidth.narrow, classifyWindowsCodePage(1252, false));
 }
