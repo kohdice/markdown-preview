@@ -4,27 +4,15 @@ const parse_block = @import("parse_block.zig");
 const parse_table = @import("parse_table.zig");
 const parse_link = @import("parse_link.zig");
 
-pub fn parseDocument(allocator: std.mem.Allocator, input: []const u8) !block_ast.Document {
-    const has_trailing_newline = input.len > 0 and input[input.len - 1] == '\n';
+pub const ParseResult = struct {
+    blocks: []block_ast.BlockNode,
+    link_defs: parse_link.LinkDefMap,
+};
 
-    var lines: std.ArrayListUnmanaged([]const u8) = .empty;
-    defer lines.deinit(allocator);
-
-    if (input.len > 0) {
-        var it = std.mem.splitScalar(u8, input, '\n');
-        while (it.next()) |raw| {
-            const line = std.mem.trimEnd(u8, raw, parse_block.carriage_return);
-            try lines.append(allocator, line);
-        }
-
-        if (has_trailing_newline and lines.items.len > 0) {
-            _ = lines.pop();
-        }
-    }
-
+pub fn parseLines(allocator: std.mem.Allocator, lines: []const []const u8) !ParseResult {
     var parser = Parser{
         .allocator = allocator,
-        .lines = lines.items,
+        .lines = lines,
         .pos = 0,
         .link_defs = .{},
     };
@@ -37,7 +25,6 @@ pub fn parseDocument(allocator: std.mem.Allocator, input: []const u8) !block_ast
     return .{
         .blocks = blocks,
         .link_defs = parser.link_defs,
-        .has_trailing_newline = has_trailing_newline,
     };
 }
 
@@ -467,8 +454,4 @@ fn shiftBlockIndents(blocks: []block_ast.BlockNode, offset: usize) void {
             else => {},
         }
     }
-}
-
-test {
-    _ = @import("parse_document_test.zig");
 }

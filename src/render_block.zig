@@ -40,33 +40,12 @@ pub const RenderContext = struct {
     link_defs: *const LinkDefMap,
 };
 
-pub fn renderDocument(
-    allocator: std.mem.Allocator,
+pub fn writeBlocks(
     writer: *std.io.Writer,
-    doc: block_ast.Document,
-    enable_ansi: bool,
-    wrap_width: ?usize,
-    ambiguous_width: width.AmbiguousWidth,
-    palette: theme.Palette,
-    syn_palette: theme.SyntaxPalette,
+    blocks: []const block_ast.BlockNode,
+    ctx: RenderContext,
 ) !void {
-    var highlighter = highlight.Highlighter.init();
-    defer highlighter.deinit();
-
-    const ctx: RenderContext = .{
-        .allocator = allocator,
-        .enable_ansi = enable_ansi,
-        .wrap_width = wrap_width,
-        .ambiguous_width = ambiguous_width,
-        .palette = palette,
-        .syn_palette = syn_palette,
-        .highlighter = &highlighter,
-        .link_defs = &doc.link_defs,
-    };
-
-    try renderBlocks(writer, doc.blocks, ctx);
-
-    if (doc.has_trailing_newline) try writer.writeByte('\n');
+    try renderBlocks(writer, blocks, ctx);
 }
 
 fn renderBlocks(
@@ -448,26 +427,32 @@ fn writeFenceBody(
     }
 }
 
-test "renderDocument compile-check smoke" {
+test "writeBlocks renders heading content without document trailing newline" {
     const allocator = std.testing.allocator;
-    const parse_document = @import("parse_document.zig");
+    const parse = @import("parse.zig");
+    var highlighter = highlight.Highlighter.init();
+    defer highlighter.deinit();
 
-    var doc = try parse_document.parseDocument(allocator, "# Hello\n");
+    var doc = try parse.parseDocument(allocator, "# Hello\n");
     defer doc.deinit(allocator);
 
     var buf: std.io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
 
-    try renderDocument(
-        allocator,
+    try writeBlocks(
         &buf.writer,
-        doc,
-        false,
-        null,
-        .narrow,
-        theme.palette(.solarized_dark),
-        theme.syntaxPalette(.solarized_dark),
+        doc.blocks,
+        .{
+            .allocator = allocator,
+            .enable_ansi = false,
+            .wrap_width = null,
+            .ambiguous_width = .narrow,
+            .palette = theme.palette(.solarized_dark),
+            .syn_palette = theme.syntaxPalette(.solarized_dark),
+            .highlighter = &highlighter,
+            .link_defs = &doc.link_defs,
+        },
     );
 
-    try std.testing.expectEqualStrings("Hello\n", buf.writer.buffered());
+    try std.testing.expectEqualStrings("Hello", buf.writer.buffered());
 }

@@ -1,7 +1,8 @@
 const std = @import("std");
+const block_ast = @import("block_ast.zig");
+const highlight = @import("highlight.zig");
 const theme = @import("theme.zig");
 const width = @import("width.zig");
-const parse_document = @import("parse_document.zig");
 const render_block = @import("render_block.zig");
 
 pub const RenderOptions = struct {
@@ -11,27 +12,29 @@ pub const RenderOptions = struct {
     ambiguous_width: width.AmbiguousWidth = .narrow,
 };
 
-pub fn renderMarkdown(
+pub fn renderDocument(
     allocator: std.mem.Allocator,
     writer: *std.io.Writer,
-    input: []const u8,
+    doc: block_ast.Document,
     opts: RenderOptions,
 ) !void {
-    if (input.len == 0) return;
+    var highlighter = highlight.Highlighter.init();
+    defer highlighter.deinit();
 
-    var doc = try parse_document.parseDocument(allocator, input);
-    defer doc.deinit(allocator);
+    const ctx: render_block.RenderContext = .{
+        .allocator = allocator,
+        .enable_ansi = opts.enable_ansi,
+        .wrap_width = opts.wrap_width,
+        .ambiguous_width = opts.ambiguous_width,
+        .palette = theme.palette(opts.theme),
+        .syn_palette = theme.syntaxPalette(opts.theme),
+        .highlighter = &highlighter,
+        .link_defs = &doc.link_defs,
+    };
 
-    try render_block.renderDocument(
-        allocator,
-        writer,
-        doc,
-        opts.enable_ansi,
-        opts.wrap_width,
-        opts.ambiguous_width,
-        theme.palette(opts.theme),
-        theme.syntaxPalette(opts.theme),
-    );
+    try render_block.writeBlocks(writer, doc.blocks, ctx);
+
+    if (doc.has_trailing_newline) try writer.writeByte('\n');
 }
 
 test {

@@ -1,4 +1,5 @@
 const std = @import("std");
+const parse = @import("parse.zig");
 const render = @import("render.zig");
 const width = @import("width.zig");
 
@@ -76,7 +77,10 @@ pub fn run(
     };
     defer allocator.free(source);
 
-    try render.renderMarkdown(allocator, stdout, source, .{
+    var doc = try parse.parseDocument(allocator, source);
+    defer doc.deinit(allocator);
+
+    try render.renderDocument(allocator, stdout, doc, .{
         .enable_ansi = enable_ansi,
         .theme = .solarized_dark,
         .wrap_width = wrap_width,

@@ -1,4 +1,5 @@
 const std = @import("std");
+const parse = @import("parse.zig");
 const render = @import("render.zig");
 
 pub fn renderToOwnedSlice(
@@ -9,7 +10,10 @@ pub fn renderToOwnedSlice(
     var output: std.io.Writer.Allocating = .init(allocator);
     defer output.deinit();
 
-    try render.renderMarkdown(allocator, &output.writer, input, opts);
+    var doc = try parse.parseDocument(allocator, input);
+    defer doc.deinit(allocator);
+
+    try render.renderDocument(allocator, &output.writer, doc, opts);
     var list = output.toArrayList();
     return list.toOwnedSlice(allocator);
 }
