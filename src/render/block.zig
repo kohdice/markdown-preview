@@ -1,13 +1,13 @@
 const std = @import("std");
-const ansi = @import("ansi.zig");
-const theme = @import("theme.zig");
-const width = @import("width.zig");
-const block_ast = @import("block_ast.zig");
-const parse_block = @import("parse_block.zig");
-const render_inline = @import("render_inline.zig");
-const highlight = @import("highlight.zig");
+const ansi = @import("../term/ansi.zig");
+const theme = @import("../term/theme.zig");
+const width = @import("../term/width.zig");
+const ast = @import("../ast.zig");
+const parse_block = @import("../parse/block.zig");
+const render_inline = @import("inline.zig");
+const highlight = @import("../term/highlight.zig");
 
-const DefMap = block_ast.LinkDefMap;
+const DefMap = ast.LinkDefMap;
 
 const thematic_break_width = 32;
 const thematic_break_display = "─" ** thematic_break_width;
@@ -86,14 +86,14 @@ pub const Renderer = struct {
     highlighter: *highlight.Highlighter,
     link_defs: *const DefMap,
 
-    pub fn write(self: *Renderer, blocks: []const block_ast.BlockNode) !void {
+    pub fn write(self: *Renderer, blocks: []const ast.BlockNode) !void {
         for (blocks, 0..) |block, i| {
             if (i > 0) try self.writer.writeByte('\n');
             try self.writeBlock(block, 0);
         }
     }
 
-    fn writeBlock(self: *Renderer, block: block_ast.BlockNode, depth: usize) anyerror!void {
+    fn writeBlock(self: *Renderer, block: ast.BlockNode, depth: usize) anyerror!void {
         switch (block) {
             .paragraph => |paragraph| try self.writeParagraph(paragraph),
             .heading => |heading| try self.writeHeading(heading),
@@ -106,7 +106,7 @@ pub const Renderer = struct {
         }
     }
 
-    fn writeParagraph(self: *Renderer, paragraph: block_ast.Paragraph) !void {
+    fn writeParagraph(self: *Renderer, paragraph: ast.Paragraph) !void {
         for (paragraph.lines, 0..) |line, i| {
             if (i > 0) try self.writer.writeByte('\n');
             const stripped = parse_block.stripHardBreak(line);
@@ -176,7 +176,7 @@ pub const Renderer = struct {
         );
     }
 
-    fn writeHeading(self: *Renderer, heading: block_ast.Heading) !void {
+    fn writeHeading(self: *Renderer, heading: ast.Heading) !void {
         const stripped = parse_block.stripHardBreak(heading.content);
         try render_inline.write(
             self.allocator,
@@ -195,7 +195,7 @@ pub const Renderer = struct {
         }, thematic_break_display);
     }
 
-    fn writeBlockQuote(self: *Renderer, blockquote: block_ast.BlockQuote, depth: usize) anyerror!void {
+    fn writeBlockQuote(self: *Renderer, blockquote: ast.BlockQuote, depth: usize) anyerror!void {
         var buf: std.io.Writer.Allocating = .init(self.allocator);
         defer buf.deinit();
 
@@ -225,7 +225,7 @@ pub const Renderer = struct {
         }
     }
 
-    fn writeBlocksInBlockQuote(self: *Renderer, blocks: []const block_ast.BlockNode, depth: usize) anyerror!void {
+    fn writeBlocksInBlockQuote(self: *Renderer, blocks: []const ast.BlockNode, depth: usize) anyerror!void {
         for (blocks, 0..) |block, i| {
             if (i > 0) try self.writer.writeByte('\n');
             switch (block) {
@@ -237,7 +237,7 @@ pub const Renderer = struct {
         }
     }
 
-    fn writeBlockQuoteParagraph(self: *Renderer, paragraph: block_ast.Paragraph) !void {
+    fn writeBlockQuoteParagraph(self: *Renderer, paragraph: ast.Paragraph) !void {
         for (paragraph.lines, 0..) |line, i| {
             if (i > 0) try self.writer.writeByte('\n');
             const stripped = parse_block.stripHardBreak(line);
@@ -245,14 +245,14 @@ pub const Renderer = struct {
         }
     }
 
-    fn writeList(self: *Renderer, list: block_ast.List, depth: usize) anyerror!void {
+    fn writeList(self: *Renderer, list: ast.List, depth: usize) anyerror!void {
         for (list.items, 0..) |item, i| {
             if (i > 0) try self.writer.writeByte('\n');
             try self.writeListItem(item, depth);
         }
     }
 
-    fn writeListItem(self: *Renderer, item: block_ast.ListItem, depth: usize) anyerror!void {
+    fn writeListItem(self: *Renderer, item: ast.ListItem, depth: usize) anyerror!void {
         try self.writer.splatByteAll(' ', item.indent);
 
         const marker_style: ansi.TextStyle = .{
@@ -298,7 +298,7 @@ pub const Renderer = struct {
 
     fn writeListChildIndented(
         self: *Renderer,
-        child_block: block_ast.BlockNode,
+        child_block: ast.BlockNode,
         indent: usize,
         depth: usize,
     ) anyerror!void {
@@ -332,7 +332,7 @@ pub const Renderer = struct {
 
     fn writeListItemParagraph(
         self: *Renderer,
-        paragraph: block_ast.Paragraph,
+        paragraph: ast.Paragraph,
         content_col: usize,
     ) !void {
         for (paragraph.lines, 0..) |line, i| {
@@ -345,7 +345,7 @@ pub const Renderer = struct {
         }
     }
 
-    fn writeCodeFence(self: *Renderer, code_fence: block_ast.CodeFence) !void {
+    fn writeCodeFence(self: *Renderer, code_fence: ast.CodeFence) !void {
         const fence_style: ansi.TextStyle = .{ .fg = self.palette.code_fence, .dim = true };
         try ansi.writeStyled(self.writer, self.enable_ansi, fence_style, code_fence.opener);
 
@@ -403,7 +403,7 @@ pub const Renderer = struct {
         }
     }
 
-    fn writeTable(self: *Renderer, table: block_ast.Table, placement: TablePlacement) !void {
+    fn writeTable(self: *Renderer, table: ast.Table, placement: TablePlacement) !void {
         const col_count = table.alignments.len;
 
         var col_widths = try self.allocator.alloc(usize, col_count);
@@ -459,7 +459,7 @@ pub const Renderer = struct {
         self: *Renderer,
         cells: []const []const u8,
         col_widths: []const usize,
-        alignments: []const block_ast.Alignment,
+        alignments: []const ast.Alignment,
         style: ansi.TextStyle,
     ) !void {
         const bar_style: ansi.TextStyle = .{ .fg = self.palette.muted };
@@ -570,7 +570,7 @@ fn checkboxWidth(checked: ?bool, ambiguous: width.AmbiguousWidth) usize {
 
 test "Renderer.write renders heading content without document trailing newline" {
     const allocator = std.testing.allocator;
-    const parse = @import("parse.zig");
+    const parse = @import("../parse.zig");
     var highlighter = highlight.Highlighter.init();
     defer highlighter.deinit();
 

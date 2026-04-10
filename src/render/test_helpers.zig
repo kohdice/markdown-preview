@@ -1,6 +1,6 @@
 const std = @import("std");
-const parse = @import("parse.zig");
-const render = @import("render.zig");
+const parse = @import("../parse.zig");
+const render = @import("../render.zig");
 
 pub fn renderToOwnedSlice(
     allocator: std.mem.Allocator,

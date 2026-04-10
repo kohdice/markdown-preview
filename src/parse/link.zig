@@ -1,5 +1,5 @@
 const std = @import("std");
-const parse_block = @import("parse_block.zig");
+const parse_block = @import("block.zig");
 
 pub const Definition = struct {
     label: []const u8,

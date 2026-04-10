@@ -75,14 +75,13 @@ pub fn build(b: *std.Build) void {
         needs_tree_sitter: bool,
     }{
         .{ .path = "src/parse.zig", .needs_tree_sitter = false },
-        .{ .path = "src/parse_document_test.zig", .needs_tree_sitter = false },
+        .{ .path = "src/parse_tests.zig", .needs_tree_sitter = false },
         .{ .path = "src/render.zig", .needs_tree_sitter = true },
         .{ .path = "src/cli.zig", .needs_tree_sitter = true },
-        .{ .path = "src/terminal.zig", .needs_tree_sitter = false },
-        .{ .path = "src/highlight.zig", .needs_tree_sitter = true },
-        .{ .path = "src/parse_table.zig", .needs_tree_sitter = false },
-        .{ .path = "src/entity.zig", .needs_tree_sitter = false },
-        .{ .path = "src/width.zig", .needs_tree_sitter = false },
+        .{ .path = "src/term/terminal.zig", .needs_tree_sitter = false },
+        .{ .path = "src/term/highlight.zig", .needs_tree_sitter = true },
+        .{ .path = "src/text.zig", .needs_tree_sitter = false },
+        .{ .path = "src/term/width.zig", .needs_tree_sitter = false },
     };
 
     for (test_roots) |test_root| {

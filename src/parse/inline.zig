@@ -1,8 +1,8 @@
 const std = @import("std");
-const block_ast = @import("block_ast.zig");
-const parse_block = @import("parse_block.zig");
+const ast = @import("../ast.zig");
+const parse_block = @import("block.zig");
 
-const DefMap = block_ast.LinkDefMap;
+const DefMap = ast.LinkDefMap;
 
 const max_ref_label_len = 256;
 

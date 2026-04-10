@@ -1,6 +1,7 @@
 const std = @import("std");
 const cli = @import("cli.zig");
-const terminal = @import("terminal.zig");
+const term = @import("term.zig");
+const terminal = term.terminal;
 
 const stdout_buffer_size = 4096;
 const stderr_buffer_size = 1024;

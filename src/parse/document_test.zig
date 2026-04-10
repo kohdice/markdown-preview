@@ -1,6 +1,6 @@
 const std = @import("std");
-const block_ast = @import("block_ast.zig");
-const parse = @import("parse.zig");
+const ast = @import("../ast.zig");
+const parse = @import("../parse.zig");
 
 test "parseDocument produces a single Paragraph for plain text" {
     const allocator = std.testing.allocator;
@@ -68,7 +68,7 @@ test "parseDocument groups adjacent unordered list items into one List" {
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
     try std.testing.expect(doc.blocks[0] == .list);
-    try std.testing.expectEqual(block_ast.ListKind.unordered, doc.blocks[0].list.kind);
+    try std.testing.expectEqual(ast.ListKind.unordered, doc.blocks[0].list.kind);
     try std.testing.expectEqual(@as(usize, 3), doc.blocks[0].list.items.len);
 
     for (doc.blocks[0].list.items) |item| {
@@ -113,7 +113,7 @@ test "parseDocument groups ordered list items and records numbers" {
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
     try std.testing.expect(doc.blocks[0] == .list);
-    try std.testing.expectEqual(block_ast.ListKind.ordered, doc.blocks[0].list.kind);
+    try std.testing.expectEqual(ast.ListKind.ordered, doc.blocks[0].list.kind);
 
     const items = doc.blocks[0].list.items;
     try std.testing.expectEqual(@as(usize, 3), items.len);
@@ -501,7 +501,7 @@ test "parseDocument represents nested unordered list as ListItem.blocks child" {
 
     try std.testing.expect(parent.blocks[1] == .list);
     const inner_list = parent.blocks[1].list;
-    try std.testing.expectEqual(block_ast.ListKind.unordered, inner_list.kind);
+    try std.testing.expectEqual(ast.ListKind.unordered, inner_list.kind);
     try std.testing.expectEqual(@as(usize, 1), inner_list.items.len);
 
     const child = inner_list.items[0];
@@ -522,7 +522,7 @@ test "parseDocument represents ordered parent containing unordered child" {
     try std.testing.expect(doc.blocks[0] == .list);
 
     const outer_list = doc.blocks[0].list;
-    try std.testing.expectEqual(block_ast.ListKind.ordered, outer_list.kind);
+    try std.testing.expectEqual(ast.ListKind.ordered, outer_list.kind);
     try std.testing.expectEqual(@as(usize, 1), outer_list.items.len);
 
     const outer_item = outer_list.items[0];
@@ -534,7 +534,7 @@ test "parseDocument represents ordered parent containing unordered child" {
 
     try std.testing.expect(outer_item.blocks[1] == .list);
     const inner_list = outer_item.blocks[1].list;
-    try std.testing.expectEqual(block_ast.ListKind.unordered, inner_list.kind);
+    try std.testing.expectEqual(ast.ListKind.unordered, inner_list.kind);
     try std.testing.expectEqual(@as(usize, 1), inner_list.items.len);
 
     const inner_item = inner_list.items[0];
@@ -714,7 +714,7 @@ test "parseDocument represents blockquote containing unordered list" {
     try std.testing.expectEqual(@as(usize, 1), bq.blocks.len);
     try std.testing.expect(bq.blocks[0] == .list);
     const list = bq.blocks[0].list;
-    try std.testing.expectEqual(block_ast.ListKind.unordered, list.kind);
+    try std.testing.expectEqual(ast.ListKind.unordered, list.kind);
     try std.testing.expectEqual(@as(usize, 1), list.items.len);
     try std.testing.expectEqualStrings(
         "item",
@@ -732,7 +732,7 @@ test "parseDocument represents blockquote containing ordered list" {
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
     try std.testing.expect(doc.blocks[0] == .blockquote);
     const list = doc.blocks[0].blockquote.blocks[0].list;
-    try std.testing.expectEqual(block_ast.ListKind.ordered, list.kind);
+    try std.testing.expectEqual(ast.ListKind.ordered, list.kind);
     try std.testing.expectEqual(@as(usize, 2), list.items.len);
     try std.testing.expectEqualStrings("1", list.items[0].number.?);
     try std.testing.expectEqualStrings("2", list.items[1].number.?);

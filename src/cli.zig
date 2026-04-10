@@ -1,7 +1,8 @@
 const std = @import("std");
 const parse = @import("parse.zig");
 const render = @import("render.zig");
-const width = @import("width.zig");
+const term = @import("term.zig");
+const width = term.width;
 
 const max_file_bytes = 10 * 1024 * 1024;
 const exit_success: u8 = 0;

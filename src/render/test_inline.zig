@@ -1,5 +1,5 @@
 const std = @import("std");
-const renderToOwnedSlice = @import("render_test_helpers.zig").renderToOwnedSlice;
+const renderToOwnedSlice = @import("test_helpers.zig").renderToOwnedSlice;
 
 test "link with parentheses inside URL renders semantically" {
     const allocator = std.testing.allocator;

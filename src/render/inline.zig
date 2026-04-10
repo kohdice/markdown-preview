@@ -1,11 +1,11 @@
 const std = @import("std");
-const ansi = @import("ansi.zig");
-const block_ast = @import("block_ast.zig");
-const entity = @import("entity.zig");
-const theme = @import("theme.zig");
-const parse_inline = @import("parse_inline.zig");
+const ansi = @import("../term/ansi.zig");
+const ast = @import("../ast.zig");
+const text = @import("../text.zig");
+const theme = @import("../term/theme.zig");
+const parse_inline = @import("../parse/inline.zig");
 
-const DefMap = block_ast.LinkDefMap;
+const DefMap = ast.LinkDefMap;
 const InlineSegment = parse_inline.InlineSegment;
 
 const link_url_open = "(";
@@ -17,7 +17,7 @@ const image_alt_suffix = "]";
 pub fn write(
     allocator: std.mem.Allocator,
     writer: *std.io.Writer,
-    text: []const u8,
+    content: []const u8,
     enable_ansi: bool,
     base_style: ansi.TextStyle,
     palette: theme.Palette,
@@ -26,7 +26,7 @@ pub fn write(
     var segments: std.ArrayListUnmanaged(InlineSegment) = .{};
     defer segments.deinit(allocator);
 
-    try parse_inline.segments(allocator, text, &segments, link_defs);
+    try parse_inline.segments(allocator, content, &segments, link_defs);
 
     for (segments.items) |seg| {
         switch (seg.kind) {
@@ -71,16 +71,16 @@ fn writeTextWithEntities(
     writer: *std.io.Writer,
     enable_ansi: bool,
     style: ansi.TextStyle,
-    text: []const u8,
+    content: []const u8,
 ) !void {
     var pos: usize = 0;
     var plain_start: usize = 0;
 
-    while (pos < text.len) {
-        if (text[pos] == '&') {
-            if (entity.decode(text, pos)) |result| {
+    while (pos < content.len) {
+        if (content[pos] == '&') {
+            if (text.decode(content, pos)) |result| {
                 if (plain_start < pos)
-                    try ansi.writeStyled(writer, enable_ansi, style, text[plain_start..pos]);
+                    try ansi.writeStyled(writer, enable_ansi, style, content[plain_start..pos]);
                 try ansi.writeStyled(writer, enable_ansi, style, result.bytes[0..result.len]);
                 pos = result.end;
                 plain_start = pos;
@@ -90,6 +90,6 @@ fn writeTextWithEntities(
         pos += 1;
     }
 
-    if (plain_start < text.len)
-        try ansi.writeStyled(writer, enable_ansi, style, text[plain_start..]);
+    if (plain_start < content.len)
+        try ansi.writeStyled(writer, enable_ansi, style, content[plain_start..]);
 }

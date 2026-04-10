@@ -1,9 +1,9 @@
 const std = @import("std");
-const block_ast = @import("block_ast.zig");
-const parse_block = @import("parse_block.zig");
-const parse_document = @import("parse_document.zig");
+const ast = @import("ast.zig");
+const parse_block = @import("parse/block.zig");
+const parse_document = @import("parse/document.zig");
 
-pub const Document = block_ast.Document;
+pub const Document = ast.Document;
 
 pub fn parse(allocator: std.mem.Allocator, input: []const u8) !Document {
     const has_trailing_newline = input.len > 0 and input[input.len - 1] == '\n';

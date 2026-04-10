@@ -1,9 +1,10 @@
 const std = @import("std");
-const block_ast = @import("block_ast.zig");
-const highlight = @import("highlight.zig");
-const theme = @import("theme.zig");
-const width = @import("width.zig");
-const render_block = @import("render_block.zig");
+const ast = @import("ast.zig");
+const term = @import("term.zig");
+const highlight = term.highlight;
+const theme = term.theme;
+const width = term.width;
+const render_block = @import("render/block.zig");
 
 pub const RenderOptions = struct {
     enable_ansi: bool = false,
@@ -15,7 +16,7 @@ pub const RenderOptions = struct {
 pub fn write(
     allocator: std.mem.Allocator,
     writer: *std.io.Writer,
-    doc: block_ast.Document,
+    doc: ast.Document,
     opts: RenderOptions,
 ) !void {
     var highlighter = highlight.Highlighter.init();
@@ -39,9 +40,9 @@ pub fn write(
 }
 
 test {
-    _ = @import("render_block.zig");
-    _ = @import("render_test_block.zig");
-    _ = @import("render_test_inline.zig");
-    _ = @import("render_test_code.zig");
-    _ = @import("render_test_table.zig");
+    _ = @import("render/block.zig");
+    _ = @import("render/test_block.zig");
+    _ = @import("render/test_inline.zig");
+    _ = @import("render/test_code.zig");
+    _ = @import("render/test_table.zig");
 }

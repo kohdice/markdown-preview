@@ -1,12 +1,12 @@
 const std = @import("std");
-const block_ast = @import("block_ast.zig");
-const parse_block = @import("parse_block.zig");
-const parse_table = @import("parse_table.zig");
-const parse_link = @import("parse_link.zig");
+const ast = @import("../ast.zig");
+const parse_block = @import("block.zig");
+const parse_table = @import("table.zig");
+const parse_link = @import("link.zig");
 
 pub const ParseResult = struct {
-    blocks: []block_ast.BlockNode,
-    link_defs: block_ast.LinkDefMap,
+    blocks: []ast.BlockNode,
+    link_defs: ast.LinkDefMap,
 };
 
 pub fn parse(allocator: std.mem.Allocator, lines: []const []const u8) !ParseResult {
@@ -32,7 +32,7 @@ const Parser = struct {
     allocator: std.mem.Allocator,
     lines: []const []const u8,
     pos: usize,
-    link_defs: block_ast.LinkDefMap,
+    link_defs: ast.LinkDefMap,
 
     fn deinitLinkDefs(self: *Parser) void {
         var it = self.link_defs.keyIterator();
@@ -63,7 +63,7 @@ const Parser = struct {
         return self.lines[self.pos + 1];
     }
 
-    fn parseContainerBlocks(self: *Parser, container_lines: []const []const u8) anyerror![]block_ast.BlockNode {
+    fn parseContainerBlocks(self: *Parser, container_lines: []const []const u8) anyerror![]ast.BlockNode {
         const saved_lines = self.lines;
         const saved_pos = self.pos;
         defer {
@@ -77,8 +77,8 @@ const Parser = struct {
         return try self.parseBlocks();
     }
 
-    fn parseBlocks(self: *Parser) ![]block_ast.BlockNode {
-        var blocks: std.ArrayListUnmanaged(block_ast.BlockNode) = .empty;
+    fn parseBlocks(self: *Parser) ![]ast.BlockNode {
+        var blocks: std.ArrayListUnmanaged(ast.BlockNode) = .empty;
         errdefer {
             for (blocks.items) |*b| b.deinit(self.allocator);
             blocks.deinit(self.allocator);
@@ -158,14 +158,14 @@ const Parser = struct {
         if (result.found_existing) {
             self.allocator.free(key);
         } else {
-            result.value_ptr.* = block_ast.LinkDef{
+            result.value_ptr.* = ast.LinkDef{
                 .url = def.url,
                 .title = def.title,
             };
         }
     }
 
-    fn parseParagraph(self: *Parser) !block_ast.BlockNode {
+    fn parseParagraph(self: *Parser) !ast.BlockNode {
         var paragraph_lines: std.ArrayListUnmanaged([]const u8) = .empty;
         errdefer paragraph_lines.deinit(self.allocator);
 
@@ -188,7 +188,7 @@ const Parser = struct {
         return .{ .paragraph = .{ .lines = try paragraph_lines.toOwnedSlice(self.allocator) } };
     }
 
-    fn parseFenceBlock(self: *Parser, fence_info: parse_block.Fence) !block_ast.BlockNode {
+    fn parseFenceBlock(self: *Parser, fence_info: parse_block.Fence) !ast.BlockNode {
         const opener = self.peekLine();
         self.advanceLine();
 
@@ -235,7 +235,7 @@ const Parser = struct {
         };
     }
 
-    fn parseBlockQuoteBlock(self: *Parser) anyerror!block_ast.BlockNode {
+    fn parseBlockQuoteBlock(self: *Parser) anyerror!ast.BlockNode {
         const first_line = self.peekLine();
         const first_bq = parse_block.blockquote(first_line) orelse unreachable;
         const indent = first_bq.indent;
@@ -261,8 +261,8 @@ const Parser = struct {
         };
     }
 
-    fn parseListBlock(self: *Parser, kind: block_ast.ListKind) anyerror!block_ast.BlockNode {
-        var items: std.ArrayListUnmanaged(block_ast.ListItem) = .empty;
+    fn parseListBlock(self: *Parser, kind: ast.ListKind) anyerror!ast.BlockNode {
+        var items: std.ArrayListUnmanaged(ast.ListItem) = .empty;
         errdefer {
             for (items.items) |*it| it.deinit(self.allocator);
             items.deinit(self.allocator);
@@ -275,7 +275,7 @@ const Parser = struct {
             const line = self.peekLine();
             if (isBlankLine(line)) break :outer;
 
-            const item_node: block_ast.ListItem = switch (kind) {
+            const item_node: ast.ListItem = switch (kind) {
                 .unordered => blk: {
                     const parsed = parse_block.listItem(line) orelse break :outer;
                     if (min_indent) |mi| {
@@ -311,7 +311,7 @@ const Parser = struct {
         };
     }
 
-    fn buildUnorderedItem(self: *Parser, item: parse_block.ListItem) anyerror!block_ast.ListItem {
+    fn buildUnorderedItem(self: *Parser, item: parse_block.ListItem) anyerror!ast.ListItem {
         const child_blocks = try self.buildListItemContent(item.content, item.content_col);
         return .{
             .indent = item.indent,
@@ -322,7 +322,7 @@ const Parser = struct {
         };
     }
 
-    fn buildOrderedItem(self: *Parser, item: parse_block.OrderedListItem) anyerror!block_ast.ListItem {
+    fn buildOrderedItem(self: *Parser, item: parse_block.OrderedListItem) anyerror!ast.ListItem {
         const child_blocks = try self.buildListItemContent(item.content, item.content_col);
         return .{
             .indent = item.indent,
@@ -337,7 +337,7 @@ const Parser = struct {
         self: *Parser,
         first_content: []const u8,
         content_col: usize,
-    ) anyerror![]block_ast.BlockNode {
+    ) anyerror![]ast.BlockNode {
         var container_lines: std.ArrayListUnmanaged([]const u8) = .empty;
         defer container_lines.deinit(self.allocator);
 
@@ -379,7 +379,7 @@ const Parser = struct {
         return null;
     }
 
-    fn tryParseTable(self: *Parser, header_line: []const u8) !?block_ast.BlockNode {
+    fn tryParseTable(self: *Parser, header_line: []const u8) !?ast.BlockNode {
         if (std.mem.indexOfScalar(u8, header_line, '|') == null) return null;
 
         if (self.pos + 1 >= self.lines.len) return null;
@@ -441,7 +441,7 @@ fn isBlankLine(line: []const u8) bool {
     return std.mem.trim(u8, line, parse_block.horizontal_whitespace).len == 0;
 }
 
-fn shiftBlockIndents(blocks: []block_ast.BlockNode, offset: usize) void {
+fn shiftBlockIndents(blocks: []ast.BlockNode, offset: usize) void {
     if (offset == 0) return;
     for (blocks) |*b| {
         switch (b.*) {
