@@ -11,13 +11,6 @@ pub fn main() !void {
     const raw_args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, raw_args);
 
-    const args = try allocator.alloc([]const u8, raw_args.len);
-    defer allocator.free(args);
-
-    for (raw_args, 0..) |arg, index| {
-        args[index] = arg;
-    }
-
     const stdout_file = std.fs.File.stdout();
     const stderr_file = std.fs.File.stderr();
 
@@ -34,16 +27,16 @@ pub fn main() !void {
     const wrap_width = if (enable_ansi) terminal.getTerminalWidth(stdout_file.handle) else null;
     const ambiguous_default = terminal.detectAmbiguousWidthFromProcess();
 
-    const exit_code = cli.run(
-        allocator,
-        std.fs.cwd(),
-        args,
-        &stdout_stream.interface,
-        &stderr_stream.interface,
-        enable_ansi,
-        wrap_width,
-        ambiguous_default,
-    ) catch |err| return cli.unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
+    const exit_code = cli.run(.{
+        .allocator = allocator,
+        .cwd = std.fs.cwd(),
+        .args = raw_args,
+        .stdout = &stdout_stream.interface,
+        .stderr = &stderr_stream.interface,
+        .enable_ansi = enable_ansi,
+        .wrap_width = wrap_width,
+        .ambiguous_width = ambiguous_default,
+    }) catch |err| return cli.unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
 
     stdout_stream.interface.flush() catch |err| return cli.unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
     stderr_stream.interface.flush() catch |err| return cli.unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
