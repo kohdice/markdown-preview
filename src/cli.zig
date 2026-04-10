@@ -1,62 +1,152 @@
 const std = @import("std");
-const document = @import("document.zig");
+const parse = @import("parse.zig");
 const render = @import("render.zig");
+const width = @import("width.zig");
 
-pub fn runWithDir(
+const max_file_bytes = 10 * 1024 * 1024;
+const exit_success: u8 = 0;
+const exit_failure: u8 = 1;
+
+const usage_message =
+    "Usage: mp [--] <FILE>\nPreview a Markdown file in the terminal.\nUse -- before a file whose name starts with -- to disambiguate.\n";
+
+const ParsedArgs = struct {
+    path: []const u8,
+};
+
+const ParseError = error{
+    MissingPath,
+    TooManyPositional,
+    UnknownFlag,
+};
+
+fn parseArgs(args: []const []const u8) ParseError!ParsedArgs {
+    var path: ?[]const u8 = null;
+    var positional_only = false;
+
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (!positional_only) {
+            if (std.mem.eql(u8, arg, "--")) {
+                positional_only = true;
+                continue;
+            }
+            if (std.mem.startsWith(u8, arg, "--")) {
+                return error.UnknownFlag;
+            }
+        }
+        if (path != null) return error.TooManyPositional;
+        path = arg;
+    }
+
+    if (path) |p| return .{ .path = p };
+    return error.MissingPath;
+}
+
+pub fn unwrapWriteError(
+    err: anyerror,
+    stdout_err: ?anyerror,
+    stderr_err: ?anyerror,
+) anyerror {
+    if (err == error.WriteFailed) {
+        if (stdout_err) |underlying| return underlying;
+        if (stderr_err) |underlying| return underlying;
+    }
+    return err;
+}
+
+pub fn run(
     allocator: std.mem.Allocator,
     dir: std.fs.Dir,
     args: []const []const u8,
     stdout: *std.io.Writer,
     stderr: *std.io.Writer,
     enable_ansi: bool,
+    wrap_width: ?usize,
+    ambiguous_width: width.AmbiguousWidth,
 ) !u8 {
-    if (args.len != 2) {
-        try writeUsage(stderr);
-        return 1;
-    }
+    const parsed = parseArgs(args) catch {
+        try stderr.writeAll(usage_message);
+        return exit_failure;
+    };
 
-    const path = args[1];
-    const source = document.readFile(allocator, dir, path) catch |err| {
-        try stderr.print("mp: unable to read '{s}': {s}\n", .{ path, @errorName(err) });
-        return 1;
+    const source = dir.readFileAlloc(allocator, parsed.path, max_file_bytes) catch |err| {
+        try stderr.print("mp: unable to read '{s}': {s}\n", .{ parsed.path, @errorName(err) });
+        return exit_failure;
     };
     defer allocator.free(source);
 
-    try render.renderMarkdown(stdout, source, .{
+    var doc = try parse.parse(allocator, source);
+    defer doc.deinit(allocator);
+
+    try render.write(allocator, stdout, doc, .{
         .enable_ansi = enable_ansi,
         .theme = .solarized_dark,
+        .wrap_width = wrap_width,
+        .ambiguous_width = ambiguous_width,
     });
-    return 0;
+    return exit_success;
 }
 
-fn writeUsage(writer: *std.io.Writer) !void {
-    try writer.writeAll("Usage: mp <FILE>\nPreview a Markdown file in the terminal.\n");
+test "parseArgs accepts plain positional path" {
+    const args = [_][]const u8{ "mp", "foo.md" };
+    const parsed = try parseArgs(&args);
+    try std.testing.expectEqualStrings("foo.md", parsed.path);
 }
 
-test "runWithDir reports usage errors" {
+test "parseArgs rejects unknown flag" {
+    const args = [_][]const u8{ "mp", "--unknown", "bar.md" };
+    try std.testing.expectError(error.UnknownFlag, parseArgs(&args));
+}
+
+test "parseArgs rejects two positional args" {
+    const args = [_][]const u8{ "mp", "foo.md", "bar.md" };
+    try std.testing.expectError(error.TooManyPositional, parseArgs(&args));
+}
+
+test "parseArgs rejects no positional args" {
+    const args = [_][]const u8{"mp"};
+    try std.testing.expectError(error.MissingPath, parseArgs(&args));
+}
+
+test "parseArgs with -- sentinel treats following arg as positional even if it starts with --" {
+    const args = [_][]const u8{ "mp", "--", "--notes.md" };
+    const parsed = try parseArgs(&args);
+    try std.testing.expectEqualStrings("--notes.md", parsed.path);
+}
+
+test "parseArgs with -- sentinel still rejects duplicate positional" {
+    const args = [_][]const u8{ "mp", "--", "a.md", "b.md" };
+    try std.testing.expectError(error.TooManyPositional, parseArgs(&args));
+}
+
+test "run reports usage errors" {
     var stdout: std.io.Writer.Allocating = .init(std.testing.allocator);
     defer stdout.deinit();
     var stderr: std.io.Writer.Allocating = .init(std.testing.allocator);
     defer stderr.deinit();
 
-    const exit_code = try runWithDir(
+    const exit_code = try run(
         std.testing.allocator,
         std.fs.cwd(),
         &.{"mp"},
         &stdout.writer,
         &stderr.writer,
         false,
+        null,
+        .narrow,
     );
 
-    try std.testing.expectEqual(@as(u8, 1), exit_code);
+    try std.testing.expectEqual(exit_failure, exit_code);
     try std.testing.expectEqualStrings("", stdout.writer.buffered());
     try std.testing.expectEqualStrings(
-        "Usage: mp <FILE>\nPreview a Markdown file in the terminal.\n",
+        "Usage: mp [--] <FILE>\nPreview a Markdown file in the terminal.\nUse -- before a file whose name starts with -- to disambiguate.\n",
         stderr.writer.buffered(),
     );
 }
 
-test "runWithDir reports missing files" {
+test "run reports missing files" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -65,21 +155,23 @@ test "runWithDir reports missing files" {
     var stderr: std.io.Writer.Allocating = .init(std.testing.allocator);
     defer stderr.deinit();
 
-    const exit_code = try runWithDir(
+    const exit_code = try run(
         std.testing.allocator,
         tmp.dir,
         &.{ "mp", "missing.md" },
         &stdout.writer,
         &stderr.writer,
         false,
+        null,
+        .narrow,
     );
 
-    try std.testing.expectEqual(@as(u8, 1), exit_code);
+    try std.testing.expectEqual(exit_failure, exit_code);
     try std.testing.expectEqualStrings("", stdout.writer.buffered());
     try std.testing.expect(std.mem.containsAtLeast(u8, stderr.writer.buffered(), 1, "missing.md"));
 }
 
-test "runWithDir renders markdown files" {
+test "run renders markdown files" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -97,22 +189,84 @@ test "runWithDir renders markdown files" {
     var stderr: std.io.Writer.Allocating = .init(std.testing.allocator);
     defer stderr.deinit();
 
-    const exit_code = try runWithDir(
+    const exit_code = try run(
         std.testing.allocator,
         tmp.dir,
         &.{ "mp", "example.md" },
         &stdout.writer,
         &stderr.writer,
         false,
+        null,
+        .narrow,
     );
 
-    try std.testing.expectEqual(@as(u8, 0), exit_code);
+    try std.testing.expectEqual(exit_success, exit_code);
     try std.testing.expectEqualStrings(
         \\Hello
-        \\- item
+        \\• item
         \\
     ,
         stdout.writer.buffered(),
     );
     try std.testing.expectEqualStrings("", stderr.writer.buffered());
+}
+
+test "run threads ambiguous_width through to the renderer" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{
+        .sub_path = "cont.md",
+        .data = "- first line\n  continued\n",
+    });
+
+    var stdout: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer stderr.deinit();
+
+    const exit_code = try run(
+        std.testing.allocator,
+        tmp.dir,
+        &.{ "mp", "cont.md" },
+        &stdout.writer,
+        &stderr.writer,
+        false,
+        null,
+        .wide,
+    );
+
+    try std.testing.expectEqual(exit_success, exit_code);
+    try std.testing.expectEqualStrings(
+        "• first line\n   continued\n",
+        stdout.writer.buffered(),
+    );
+}
+
+test "unwrapWriteError passes through errors other than WriteFailed" {
+    try std.testing.expectEqual(
+        @as(anyerror, error.OutOfMemory),
+        unwrapWriteError(error.OutOfMemory, error.AccessDenied, error.AccessDenied),
+    );
+}
+
+test "unwrapWriteError surfaces stdout underlying error and prefers it over stderr" {
+    try std.testing.expectEqual(
+        @as(anyerror, error.NoSpaceLeft),
+        unwrapWriteError(error.WriteFailed, error.NoSpaceLeft, error.AccessDenied),
+    );
+}
+
+test "unwrapWriteError falls back to stderr underlying error when stdout has none" {
+    try std.testing.expectEqual(
+        @as(anyerror, error.AccessDenied),
+        unwrapWriteError(error.WriteFailed, null, error.AccessDenied),
+    );
+}
+
+test "unwrapWriteError returns WriteFailed unchanged when both underlying errors are null" {
+    try std.testing.expectEqual(
+        @as(anyerror, error.WriteFailed),
+        unwrapWriteError(error.WriteFailed, null, null),
+    );
 }
