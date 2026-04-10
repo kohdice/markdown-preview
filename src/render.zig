@@ -40,6 +40,9 @@ pub fn write(
 
 test {
     _ = @import("render/block.zig");
+    _ = @import("render/measure.zig");
+    _ = @import("render/prefix_writer.zig");
+    _ = @import("render/table.zig");
     _ = @import("render/test_block.zig");
     _ = @import("render/test_inline.zig");
     _ = @import("render/test_code.zig");
