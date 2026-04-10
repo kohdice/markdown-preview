@@ -36,6 +36,26 @@
             .url = "https://github.com/tree-sitter/tree-sitter-bash/archive/refs/tags/v0.25.1.tar.gz",
             .hash = "N-V-__8AANjenwCy_cXlIbU8nqBzGxMlEHVokLZJYrmIXtoz",
         },
+        .tree_sitter_cpp = .{
+            .url = "https://github.com/tree-sitter/tree-sitter-cpp/archive/refs/tags/v0.23.4.tar.gz",
+            .hash = "N-V-__8AABV0FwFoNpDVbhYQMEJgss9bkxDorw6hbZVJPCdg",
+        },
+        .tree_sitter_typescript = .{
+            .url = "https://github.com/tree-sitter/tree-sitter-typescript/archive/refs/tags/v0.23.2.tar.gz",
+            .hash = "N-V-__8AALhpIQFpocCrfuYTb_Vzvxj3QG0T-yqi9x1QNRNM",
+        },
+        .tree_sitter_html = .{
+            .url = "https://github.com/tree-sitter/tree-sitter-html/archive/refs/tags/v0.23.2.tar.gz",
+            .hash = "N-V-__8AAPuKAwBRzMNBLGMBD0yI2N2oPf3jdMYqt9sMYUCi",
+        },
+        .tree_sitter_css = .{
+            .url = "https://github.com/tree-sitter/tree-sitter-css/archive/refs/tags/v0.23.2.tar.gz",
+            .hash = "N-V-__8AAFn0DgDXov-R01Pt4vrBAFabs0eXDFlE7Rf_z775",
+        },
+        .tree_sitter_json = .{
+            .url = "https://github.com/tree-sitter/tree-sitter-json/archive/refs/tags/v0.24.8.tar.gz",
+            .hash = "N-V-__8AACVXAgA_t-N8nrK20OmKiOtw3RhaBCAnXwQIiQ8g",
+        },
     },
     .paths = .{
         "build.zig",

@@ -8,7 +8,12 @@ const exit_success: u8 = 0;
 const exit_failure: u8 = 1;
 
 const usage_message =
-    "Usage: mp [--] <FILE>\nPreview a Markdown file in the terminal.\nUse -- before a file whose name starts with -- to disambiguate.\n";
+    \\Usage: mp [--] <FILE>
+    \\
+    \\Preview a Markdown file in the terminal.
+    \\Use -- before a file whose name starts with -- to disambiguate.
+    \\
+;
 
 const ParsedArgs = struct {
     path: []const u8,
@@ -141,7 +146,12 @@ test "run reports usage errors" {
     try std.testing.expectEqual(exit_failure, exit_code);
     try std.testing.expectEqualStrings("", stdout.writer.buffered());
     try std.testing.expectEqualStrings(
-        "Usage: mp [--] <FILE>\nPreview a Markdown file in the terminal.\nUse -- before a file whose name starts with -- to disambiguate.\n",
+        \\Usage: mp [--] <FILE>
+        \\
+        \\Preview a Markdown file in the terminal.
+        \\Use -- before a file whose name starts with -- to disambiguate.
+        \\
+    ,
         stderr.writer.buffered(),
     );
 }
