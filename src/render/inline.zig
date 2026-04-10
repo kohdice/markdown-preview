@@ -4,11 +4,11 @@ const ast = @import("../ast.zig");
 const text = @import("../text.zig");
 const theme = @import("../term/theme.zig");
 
-const link_url_open = "(";
-const link_url_close = ")";
-const link_title_separator = " — ";
-const image_alt_prefix = "[img: ";
-const image_alt_suffix = "]";
+pub const link_url_open = "(";
+pub const link_url_close = ")";
+pub const link_title_separator = " — ";
+pub const image_alt_prefix = "[img: ";
+pub const image_alt_suffix = "]";
 
 pub fn writeInlines(
     writer: *std.io.Writer,
