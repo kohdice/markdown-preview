@@ -294,14 +294,14 @@ test "hard break with backslash at end of line" {
     try std.testing.expectEqualStrings("Line one\nLine two\n", rendered);
 }
 
-test "single trailing space is preserved" {
+test "single trailing space is trimmed by inline parser" {
     const allocator = std.testing.allocator;
     const source = "Line with one trailing space \nNext line\n";
 
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("Line with one trailing space \nNext line\n", rendered);
+    try std.testing.expectEqualStrings("Line with one trailing space\nNext line\n", rendered);
 }
 
 test "blank lines between different block elements are normalized" {

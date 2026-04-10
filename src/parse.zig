@@ -28,6 +28,7 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8) !Document {
         .blocks = parsed.blocks,
         .link_defs = parsed.link_defs,
         .has_trailing_newline = has_trailing_newline,
+        .owned_text = parsed.owned_text,
     };
 }
 

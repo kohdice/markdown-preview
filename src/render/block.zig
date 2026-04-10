@@ -3,11 +3,8 @@ const ansi = @import("../term/ansi.zig");
 const theme = @import("../term/theme.zig");
 const width = @import("../term/width.zig");
 const ast = @import("../ast.zig");
-const parse_block = @import("../parse/block.zig");
 const render_inline = @import("inline.zig");
 const highlight = @import("../term/highlight.zig");
-
-const DefMap = ast.LinkDefMap;
 
 const thematic_break_width = 32;
 const thematic_break_display = "─" ** thematic_break_width;
@@ -84,7 +81,6 @@ pub const Renderer = struct {
     palette: theme.Palette,
     syn_palette: theme.SyntaxPalette,
     highlighter: *highlight.Highlighter,
-    link_defs: *const DefMap,
 
     pub fn write(self: *Renderer, blocks: []const ast.BlockNode) !void {
         for (blocks, 0..) |block, i| {
@@ -107,16 +103,12 @@ pub const Renderer = struct {
     }
 
     fn writeParagraph(self: *Renderer, paragraph: ast.Paragraph) !void {
-        for (paragraph.lines, 0..) |line, i| {
-            if (i > 0) try self.writer.writeByte('\n');
-            const stripped = parse_block.stripHardBreak(line);
-            try self.writeInlineMaybeWrap(stripped, .{ .fg = self.palette.body }, 0);
-        }
+        try self.writeInlinesMaybeWrap(paragraph.children, .{ .fg = self.palette.body }, 0);
     }
 
-    fn writeInlineMaybeWrap(
+    fn writeInlinesMaybeWrap(
         self: *Renderer,
-        text: []const u8,
+        inlines: []const ast.Inline,
         base_style: ansi.TextStyle,
         continuation_indent: usize,
     ) !void {
@@ -124,14 +116,12 @@ pub const Renderer = struct {
             var buf: std.io.Writer.Allocating = .init(self.allocator);
             defer buf.deinit();
 
-            try render_inline.write(
-                self.allocator,
+            try render_inline.writeInlines(
                 &buf.writer,
-                text,
+                inlines,
                 self.enable_ansi,
                 base_style,
                 self.palette,
-                self.link_defs,
             );
 
             var list = buf.toArrayList();
@@ -165,27 +155,22 @@ pub const Renderer = struct {
             return;
         }
 
-        try render_inline.write(
-            self.allocator,
+        try render_inline.writeInlines(
             self.writer,
-            text,
+            inlines,
             self.enable_ansi,
             base_style,
             self.palette,
-            self.link_defs,
         );
     }
 
     fn writeHeading(self: *Renderer, heading: ast.Heading) !void {
-        const stripped = parse_block.stripHardBreak(heading.content);
-        try render_inline.write(
-            self.allocator,
+        try render_inline.writeInlines(
             self.writer,
-            stripped,
+            heading.children,
             self.enable_ansi,
             headingStyle(heading.level, self.palette),
             self.palette,
-            self.link_defs,
         );
     }
 
@@ -238,11 +223,7 @@ pub const Renderer = struct {
     }
 
     fn writeBlockQuoteParagraph(self: *Renderer, paragraph: ast.Paragraph) !void {
-        for (paragraph.lines, 0..) |line, i| {
-            if (i > 0) try self.writer.writeByte('\n');
-            const stripped = parse_block.stripHardBreak(line);
-            try self.writeInlineMaybeWrap(stripped, .{ .fg = self.palette.muted }, 0);
-        }
+        try self.writeInlinesMaybeWrap(paragraph.children, .{ .fg = self.palette.muted }, 0);
     }
 
     fn writeList(self: *Renderer, list: ast.List, depth: usize) anyerror!void {
@@ -335,13 +316,36 @@ pub const Renderer = struct {
         paragraph: ast.Paragraph,
         content_col: usize,
     ) !void {
-        for (paragraph.lines, 0..) |line, i| {
-            if (i > 0) {
+        if (content_col == 0 or self.wrap_width != null) {
+            try self.writeInlinesMaybeWrap(paragraph.children, .{ .fg = self.palette.body }, content_col);
+            return;
+        }
+
+        var buf: std.io.Writer.Allocating = .init(self.allocator);
+        defer buf.deinit();
+
+        try render_inline.writeInlines(
+            &buf.writer,
+            paragraph.children,
+            self.enable_ansi,
+            .{ .fg = self.palette.body },
+            self.palette,
+        );
+
+        var list = buf.toArrayList();
+        defer list.deinit(self.allocator);
+        const rendered = try list.toOwnedSlice(self.allocator);
+        defer self.allocator.free(rendered);
+
+        var it = std.mem.splitScalar(u8, rendered, '\n');
+        var first = true;
+        while (it.next()) |line| {
+            if (!first) {
                 try self.writer.writeByte('\n');
                 try self.writer.splatByteAll(' ', content_col);
             }
-            const stripped = parse_block.stripHardBreak(line);
-            try self.writeInlineMaybeWrap(stripped, .{ .fg = self.palette.body }, content_col);
+            first = false;
+            try self.writer.writeAll(line);
         }
     }
 
@@ -412,10 +416,10 @@ pub const Renderer = struct {
 
         for (0..col_count) |c| {
             if (c < table.header.len)
-                col_widths[c] = @max(col_widths[c], try self.renderedInlineWidth(table.header[c]));
+                col_widths[c] = @max(col_widths[c], try self.renderedInlineWidth(table.header[c].children));
             for (table.rows) |row| {
                 if (c < row.len)
-                    col_widths[c] = @max(col_widths[c], try self.renderedInlineWidth(row[c]));
+                    col_widths[c] = @max(col_widths[c], try self.renderedInlineWidth(row[c].children));
             }
             col_widths[c] = @max(col_widths[c], min_table_col_width);
         }
@@ -457,7 +461,7 @@ pub const Renderer = struct {
 
     fn writeTableRow(
         self: *Renderer,
-        cells: []const []const u8,
+        cells: []const ast.TableCell,
         col_widths: []const usize,
         alignments: []const ast.Alignment,
         style: ansi.TextStyle,
@@ -467,8 +471,8 @@ pub const Renderer = struct {
         try ansi.writeStyled(self.writer, self.enable_ansi, bar_style, table_border.vertical);
         try ansi.writeStyled(self.writer, self.enable_ansi, bar_style, table_border.cell_pad);
         for (0..col_widths.len) |c| {
-            const cell_text = if (c < cells.len) cells[c] else "";
-            const cell_width = try self.renderedInlineWidth(cell_text);
+            const cell_children = if (c < cells.len) cells[c].children else &[_]ast.Inline{};
+            const cell_width = try self.renderedInlineWidth(cell_children);
             const col_w = col_widths[c];
             const padding = if (col_w > cell_width) col_w - cell_width else 0;
             const col_align = if (c < alignments.len) alignments[c] else .left;
@@ -481,14 +485,12 @@ pub const Renderer = struct {
             const right_pad = padding - left_pad;
 
             try self.writer.splatByteAll(' ', left_pad);
-            try render_inline.write(
-                self.allocator,
+            try render_inline.writeInlines(
                 self.writer,
-                cell_text,
+                cell_children,
                 self.enable_ansi,
                 style,
                 self.palette,
-                self.link_defs,
             );
             try self.writer.splatByteAll(' ', right_pad);
 
@@ -540,23 +542,21 @@ pub const Renderer = struct {
         try ansi.writeStyled(self.writer, self.enable_ansi, style, right);
     }
 
-    fn renderedInlineWidth(self: *Renderer, text: []const u8) !usize {
+    fn renderedInlineWidth(self: *Renderer, inlines: []const ast.Inline) !usize {
         var output: std.io.Writer.Allocating = .init(self.allocator);
         defer output.deinit();
 
-        try render_inline.write(
-            self.allocator,
+        try render_inline.writeInlines(
             &output.writer,
-            text,
+            inlines,
             false,
             .{},
             self.palette,
-            self.link_defs,
         );
 
         var list = output.toArrayList();
         defer list.deinit(self.allocator);
-        const rendered = list.toOwnedSlice(self.allocator) catch return width.displayWidth(text, self.ambiguous_width);
+        const rendered = list.toOwnedSlice(self.allocator) catch return 0;
         defer self.allocator.free(rendered);
         return width.displayWidth(rendered, self.ambiguous_width);
     }
@@ -589,7 +589,6 @@ test "Renderer.write renders heading content without document trailing newline" 
         .palette = theme.palette(.solarized_dark),
         .syn_palette = theme.syntaxPalette(.solarized_dark),
         .highlighter = &highlighter,
-        .link_defs = &doc.link_defs,
     };
 
     try renderer.write(doc.blocks);

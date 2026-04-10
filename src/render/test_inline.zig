@@ -229,6 +229,16 @@ test "image syntax renders as alt text placeholder" {
     try std.testing.expectEqualStrings("[img: logo](https://example.com/logo.png)", rendered);
 }
 
+test "image syntax with title renders title after URL" {
+    const allocator = std.testing.allocator;
+    const source = "![logo](https://example.com/logo.png \"Logo Title\")\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("[img: logo](https://example.com/logo.png) — Logo Title\n", rendered);
+}
+
 test "image syntax with ANSI styling" {
     const allocator = std.testing.allocator;
     const source = "![alt](url)";

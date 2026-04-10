@@ -31,7 +31,6 @@ pub fn write(
         .palette = theme.palette(opts.theme),
         .syn_palette = theme.syntaxPalette(opts.theme),
         .highlighter = &highlighter,
-        .link_defs = &doc.link_defs,
     };
 
     try renderer.write(doc.blocks);
