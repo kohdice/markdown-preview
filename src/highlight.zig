@@ -15,6 +15,12 @@ extern fn tree_sitter_go() callconv(.c) *const anyopaque;
 extern fn tree_sitter_python() callconv(.c) *const anyopaque;
 extern fn tree_sitter_javascript() callconv(.c) *const anyopaque;
 extern fn tree_sitter_bash() callconv(.c) *const anyopaque;
+extern fn tree_sitter_cpp() callconv(.c) *const anyopaque;
+extern fn tree_sitter_typescript() callconv(.c) *const anyopaque;
+extern fn tree_sitter_tsx() callconv(.c) *const anyopaque;
+extern fn tree_sitter_html() callconv(.c) *const anyopaque;
+extern fn tree_sitter_css() callconv(.c) *const anyopaque;
+extern fn tree_sitter_json() callconv(.c) *const anyopaque;
 
 /// Languages currently supported for syntax highlighting in code fences.
 pub const Language = enum {
@@ -25,6 +31,12 @@ pub const Language = enum {
     python,
     javascript,
     bash,
+    cpp,
+    typescript,
+    tsx,
+    html,
+    css,
+    json,
 
     /// Map a code fence language string (e.g. from `Fence.language`) to a
     /// `Language` value, returning `null` for unrecognized languages so the
@@ -36,8 +48,20 @@ pub const Language = enum {
         if (eqIgnoreAscii(lang, "rust") or eqIgnoreAscii(lang, "rs")) return .rust;
         if (eqIgnoreAscii(lang, "go")) return .go;
         if (eqIgnoreAscii(lang, "python") or eqIgnoreAscii(lang, "py")) return .python;
-        if (eqIgnoreAscii(lang, "javascript") or eqIgnoreAscii(lang, "js")) return .javascript;
+        // jsx → .javascript (tree-sitter-javascript parses JSX natively).
+        // Do not redirect to .tsx, which also carries TypeScript annotations.
+        if (eqIgnoreAscii(lang, "javascript") or eqIgnoreAscii(lang, "js") or eqIgnoreAscii(lang, "jsx")) return .javascript;
         if (eqIgnoreAscii(lang, "bash") or eqIgnoreAscii(lang, "sh") or eqIgnoreAscii(lang, "shell")) return .bash;
+        if (eqIgnoreAscii(lang, "cpp") or eqIgnoreAscii(lang, "c++") or
+            eqIgnoreAscii(lang, "cxx") or eqIgnoreAscii(lang, "cc") or
+            eqIgnoreAscii(lang, "hpp") or eqIgnoreAscii(lang, "hxx") or
+            eqIgnoreAscii(lang, "h++")) return .cpp;
+        if (eqIgnoreAscii(lang, "typescript") or eqIgnoreAscii(lang, "ts") or
+            eqIgnoreAscii(lang, "mts") or eqIgnoreAscii(lang, "cts")) return .typescript;
+        if (eqIgnoreAscii(lang, "tsx")) return .tsx;
+        if (eqIgnoreAscii(lang, "html") or eqIgnoreAscii(lang, "htm")) return .html;
+        if (eqIgnoreAscii(lang, "css")) return .css;
+        if (eqIgnoreAscii(lang, "json")) return .json;
         return null;
     }
 
@@ -79,11 +103,14 @@ const LocalDefinition = struct {
     name: []const u8,
 };
 
-const JavaScriptLocals = struct {
+/// Language-agnostic local-variable scope analysis built from a
+/// `@local.scope` / `@local.definition` query. Used by the `#is-not? local`
+/// predicate to suppress builtin captures when an identifier is shadowed.
+const Locals = struct {
     scopes: []ScopeRef,
     definitions: []LocalDefinition,
 
-    fn deinit(self: *JavaScriptLocals, allocator: std.mem.Allocator) void {
+    fn deinit(self: *Locals, allocator: std.mem.Allocator) void {
         allocator.free(self.scopes);
         allocator.free(self.definitions);
     }
@@ -93,7 +120,7 @@ const JavaScriptLocals = struct {
         root: ts.Node,
         query: *const ts.Query,
         source: []const u8,
-    ) !JavaScriptLocals {
+    ) !Locals {
         var scopes = std.ArrayListUnmanaged(ScopeRef).empty;
         defer scopes.deinit(allocator);
 
@@ -142,7 +169,7 @@ const JavaScriptLocals = struct {
         };
     }
 
-    fn isLocal(self: *const JavaScriptLocals, node: ts.Node, source: []const u8) bool {
+    fn isLocal(self: *const Locals, node: ts.Node, source: []const u8) bool {
         const name = nodeText(node, source);
         var scope_index = findEnclosingScopeIndex(node, self.scopes) orelse return false;
         while (true) {
@@ -158,7 +185,7 @@ const JavaScriptLocals = struct {
 
 const PredicateContext = struct {
     source: []const u8,
-    javascript_locals: ?*const JavaScriptLocals = null,
+    locals: ?*const Locals = null,
 };
 
 /// Sentinel stored in the per-byte style array to mark "no capture covers
@@ -183,13 +210,16 @@ const CaptureSpan = struct {
 pub const Highlighter = struct {
     parser: *ts.Parser,
     languages: [language_count]LanguageState,
-    javascript_locals_query: QueryState,
+    /// Per-language locals queries. Only the slots for languages with a
+    /// matching `localsSpec` (currently javascript, typescript, tsx) ever
+    /// transition out of `.uninitialized`.
+    locals_queries: [language_count]QueryState,
 
     pub fn init() Highlighter {
         return .{
             .parser = ts.Parser.create(),
             .languages = [_]LanguageState{.uninitialized} ** language_count,
-            .javascript_locals_query = .uninitialized,
+            .locals_queries = [_]QueryState{.uninitialized} ** language_count,
         };
     }
 
@@ -200,9 +230,11 @@ pub const Highlighter = struct {
                 else => {},
             }
         }
-        switch (self.javascript_locals_query) {
-            .ready => |query| query.destroy(),
-            else => {},
+        for (&self.locals_queries) |*state| {
+            switch (state.*) {
+                .ready => |query| query.destroy(),
+                else => {},
+            }
         }
         self.parser.destroy();
     }
@@ -238,11 +270,11 @@ pub const Highlighter = struct {
         const tree = self.parser.parseString(source, null) orelse return error.QueryUnavailable;
         defer tree.destroy();
 
-        var javascript_locals: ?JavaScriptLocals = null;
-        defer if (javascript_locals) |*locals| locals.deinit(allocator);
-        if (lang == .javascript) {
-            if (self.getOrInitJavaScriptLocalsQuery()) |locals_query| {
-                javascript_locals = try JavaScriptLocals.build(
+        var locals: ?Locals = null;
+        defer if (locals) |*l| l.deinit(allocator);
+        if (localsSpec(lang) != null) {
+            if (self.getOrInitLocalsQuery(lang)) |locals_query| {
+                locals = try Locals.build(
                     allocator,
                     tree.rootNode(),
                     locals_query,
@@ -253,7 +285,7 @@ pub const Highlighter = struct {
 
         const predicate_ctx: PredicateContext = .{
             .source = source,
-            .javascript_locals = if (javascript_locals) |*locals| locals else null,
+            .locals = if (locals) |*l| l else null,
         };
 
         const cursor = ts.QueryCursor.create();
@@ -368,21 +400,27 @@ pub const Highlighter = struct {
         return cfg;
     }
 
-    fn getOrInitJavaScriptLocalsQuery(self: *Highlighter) ?*ts.Query {
-        switch (self.javascript_locals_query) {
+    fn getOrInitLocalsQuery(self: *Highlighter, lang: Language) ?*ts.Query {
+        const slot = &self.locals_queries[lang.index()];
+        switch (slot.*) {
             .ready => |query| return query,
             .failed => return null,
             .uninitialized => {},
         }
 
-        const js_language: *const ts.Language = @ptrCast(tree_sitter_javascript());
-        var error_offset: u32 = 0;
-        const query = ts.Query.create(js_language, ts_queries.javascript_locals, &error_offset) catch {
-            self.javascript_locals_query = .failed;
+        const spec = localsSpec(lang) orelse {
+            slot.* = .failed;
             return null;
         };
 
-        self.javascript_locals_query = .{ .ready = query };
+        const ts_language: *const ts.Language = @ptrCast(spec.language_fn());
+        var error_offset: u32 = 0;
+        const query = ts.Query.create(ts_language, spec.source, &error_offset) catch {
+            slot.* = .failed;
+            return null;
+        };
+
+        slot.* = .{ .ready = query };
         return query;
     }
 };
@@ -422,6 +460,57 @@ fn languageSpec(lang: Language) LanguageSpec {
             .language_fn = @ptrCast(&tree_sitter_bash),
             .highlights = ts_queries.bash_highlights,
         },
+        .cpp => .{
+            .language_fn = @ptrCast(&tree_sitter_cpp),
+            .highlights = ts_queries.cpp_highlights,
+        },
+        .typescript => .{
+            .language_fn = @ptrCast(&tree_sitter_typescript),
+            .highlights = ts_queries.typescript_highlights,
+        },
+        .tsx => .{
+            .language_fn = @ptrCast(&tree_sitter_tsx),
+            .highlights = ts_queries.tsx_highlights,
+        },
+        .html => .{
+            .language_fn = @ptrCast(&tree_sitter_html),
+            .highlights = ts_queries.html_highlights,
+        },
+        .css => .{
+            .language_fn = @ptrCast(&tree_sitter_css),
+            .highlights = ts_queries.css_highlights,
+        },
+        .json => .{
+            .language_fn = @ptrCast(&tree_sitter_json),
+            .highlights = ts_queries.json_highlights,
+        },
+    };
+}
+
+const LocalsSpec = struct {
+    language_fn: *const fn () *const anyopaque,
+    source: []const u8,
+};
+
+/// Languages that ship a locals query and whose highlights reference
+/// `#is-not? local`. Returning null disables locals tracking entirely,
+/// which matches upstream tree-sitter.json for every language outside
+/// the javascript family.
+fn localsSpec(lang: Language) ?LocalsSpec {
+    return switch (lang) {
+        .javascript => .{
+            .language_fn = @ptrCast(&tree_sitter_javascript),
+            .source = ts_queries.javascript_locals,
+        },
+        .typescript => .{
+            .language_fn = @ptrCast(&tree_sitter_typescript),
+            .source = ts_queries.typescript_locals,
+        },
+        .tsx => .{
+            .language_fn = @ptrCast(&tree_sitter_tsx),
+            .source = ts_queries.tsx_locals,
+        },
+        else => null,
     };
 }
 
@@ -554,6 +643,17 @@ fn atomMatches(atom: PatternAtom, byte: u8) bool {
 }
 
 fn classContains(spec: []const u8, byte: u8) bool {
+    var body = spec;
+    var negate = false;
+    if (body.len > 0 and body[0] == '^') {
+        negate = true;
+        body = body[1..];
+    }
+    const found = classContainsPositive(body, byte);
+    return if (negate) !found else found;
+}
+
+fn classContainsPositive(spec: []const u8, byte: u8) bool {
     var i: usize = 0;
     while (i < spec.len) {
         if (spec[i] == '\\' and i + 1 < spec.len) {
@@ -712,7 +812,7 @@ fn predIsNot(
     const property = query.stringValueForId(args[0].value_id) orelse return false;
     if (!std.mem.eql(u8, property, "local")) return false;
 
-    const locals = ctx.javascript_locals orelse return false;
+    const locals = ctx.locals orelse return false;
     if (match.captures.len == 0) return false;
     return !locals.isLocal(match.captures[0].node, ctx.source);
 }
@@ -752,6 +852,12 @@ fn captureToStyle(name: []const u8, sp: theme.SyntaxPalette) ansi.TextStyle {
     if (startsWith(name, "number") or startsWith(name, "constant.numeric")) return .{ .fg = sp.number };
     if (startsWith(name, "function") or startsWith(name, "constant.builtin")) return .{ .fg = sp.func };
     if (startsWith(name, "operator") or startsWith(name, "punctuation")) return .{ .fg = sp.operator };
+    // HTML/CSS prefixes; placed last so existing languages keep their
+    // colors. `variable` and generic `constant` catch-alls are omitted
+    // because Rust and Python use those capture names too.
+    if (startsWith(name, "tag")) return .{ .fg = sp.keyword };
+    if (startsWith(name, "attribute")) return .{ .fg = sp.func };
+    if (startsWith(name, "property")) return .{ .fg = sp.type_name };
     return .{ .fg = sp.plain };
 }
 
@@ -798,9 +904,27 @@ test "Language.fromString recognizes all supported names and aliases" {
     try std.testing.expectEqual(Language.python, Language.fromString("py").?);
     try std.testing.expectEqual(Language.javascript, Language.fromString("javascript").?);
     try std.testing.expectEqual(Language.javascript, Language.fromString("js").?);
+    try std.testing.expectEqual(Language.javascript, Language.fromString("jsx").?);
     try std.testing.expectEqual(Language.bash, Language.fromString("bash").?);
     try std.testing.expectEqual(Language.bash, Language.fromString("sh").?);
     try std.testing.expectEqual(Language.bash, Language.fromString("shell").?);
+    try std.testing.expectEqual(Language.cpp, Language.fromString("cpp").?);
+    try std.testing.expectEqual(Language.cpp, Language.fromString("c++").?);
+    try std.testing.expectEqual(Language.cpp, Language.fromString("CXX").?);
+    try std.testing.expectEqual(Language.cpp, Language.fromString("cc").?);
+    try std.testing.expectEqual(Language.cpp, Language.fromString("hpp").?);
+    try std.testing.expectEqual(Language.cpp, Language.fromString("hxx").?);
+    try std.testing.expectEqual(Language.cpp, Language.fromString("h++").?);
+    try std.testing.expectEqual(Language.typescript, Language.fromString("typescript").?);
+    try std.testing.expectEqual(Language.typescript, Language.fromString("ts").?);
+    try std.testing.expectEqual(Language.typescript, Language.fromString("mts").?);
+    try std.testing.expectEqual(Language.typescript, Language.fromString("cts").?);
+    try std.testing.expectEqual(Language.tsx, Language.fromString("tsx").?);
+    try std.testing.expectEqual(Language.tsx, Language.fromString("TSX").?);
+    try std.testing.expectEqual(Language.html, Language.fromString("html").?);
+    try std.testing.expectEqual(Language.html, Language.fromString("HTM").?);
+    try std.testing.expectEqual(Language.css, Language.fromString("css").?);
+    try std.testing.expectEqual(Language.json, Language.fromString("json").?);
     try std.testing.expectEqual(@as(?Language, null), Language.fromString(""));
     try std.testing.expectEqual(@as(?Language, null), Language.fromString("klingon"));
 }
@@ -825,10 +949,43 @@ test "matchesPattern handles anchored alternation and classes" {
     try std.testing.expect(!matchesPattern("myType", "^[A-Z_][a-zA-Z0-9_]*"));
 }
 
+test "matchesPattern handles negated character classes" {
+    try std.testing.expect(matchesPattern("div", "^[a-z][^.]*$"));
+    try std.testing.expect(matchesPattern("my-tag", "^[a-z][^.]*$"));
+    try std.testing.expect(!matchesPattern("my.tag", "^[a-z][^.]*$"));
+    try std.testing.expect(!matchesPattern("Div", "^[a-z][^.]*$"));
+}
+
 test "captureToStyle: unknown capture name falls back to plain" {
     const sp: theme.SyntaxPalette = theme.syntaxPalette(.solarized_dark);
-    const s = captureToStyle("tag", sp);
+    const s = captureToStyle("namespace", sp);
     try std.testing.expectEqual(sp.plain, s.fg.?);
+}
+
+test "captureToStyle: tag maps to keyword color without bold" {
+    const sp: theme.SyntaxPalette = theme.syntaxPalette(.solarized_dark);
+    const s = captureToStyle("tag", sp);
+    try std.testing.expectEqual(sp.keyword, s.fg.?);
+    try std.testing.expect(!s.bold);
+}
+
+test "captureToStyle: tag.delimiter inherits tag mapping via prefix match" {
+    const sp: theme.SyntaxPalette = theme.syntaxPalette(.solarized_dark);
+    const s = captureToStyle("tag.delimiter", sp);
+    try std.testing.expectEqual(sp.keyword, s.fg.?);
+    try std.testing.expect(!s.bold);
+}
+
+test "captureToStyle: attribute maps to func color" {
+    const sp: theme.SyntaxPalette = theme.syntaxPalette(.solarized_dark);
+    const s = captureToStyle("attribute", sp);
+    try std.testing.expectEqual(sp.func, s.fg.?);
+}
+
+test "captureToStyle: property maps to type_name color" {
+    const sp: theme.SyntaxPalette = theme.syntaxPalette(.solarized_dark);
+    const s = captureToStyle("property", sp);
+    try std.testing.expectEqual(sp.type_name, s.fg.?);
 }
 
 test "captureToStyle: comment is italic" {
@@ -880,6 +1037,12 @@ test "Highlighter: highlights every supported language end-to-end" {
         .{ .lang = .python, .source = "def greet():\n    return 1\n", .expected_token = "def" },
         .{ .lang = .javascript, .source = "const x = 1;\n", .expected_token = "const" },
         .{ .lang = .bash, .source = "echo hello\n", .expected_token = "echo" },
+        .{ .lang = .cpp, .source = "int main() { return 0; }", .expected_token = "return" },
+        .{ .lang = .typescript, .source = "const x: number = 1;\n", .expected_token = "const" },
+        .{ .lang = .tsx, .source = "const el = <div>hi</div>;\n", .expected_token = "const" },
+        .{ .lang = .html, .source = "<p>hello</p>\n", .expected_token = "p" },
+        .{ .lang = .css, .source = ".a { color: red; }\n", .expected_token = "color" },
+        .{ .lang = .json, .source = "{\"k\": 1}\n", .expected_token = "1" },
     };
 
     for (cases) |case| {
@@ -1094,4 +1257,168 @@ test "Highlighter: forcing .failed on a .ready language frees the old query" {
         .failed => {},
         else => return error.TestExpectedFailedState,
     }
+}
+
+const string_ansi = "\x1b[38;2;42;161;152m";
+const number_ansi = "\x1b[38;2;211;54;130m";
+const type_name_ansi = "\x1b[38;2;181;137;0m";
+
+fn renderHighlightedForTest(
+    hl: *Highlighter,
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    lang: Language,
+) ![]u8 {
+    var buf: std.io.Writer.Allocating = .init(allocator);
+    defer buf.deinit();
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, lang, theme.syntaxPalette(.solarized_dark));
+    var list = buf.toArrayList();
+    defer list.deinit(allocator);
+    return try list.toOwnedSlice(allocator);
+}
+
+test "Highlighter: cpp keeps c primitive types via comptime query concat" {
+    var hl = Highlighter.init();
+    defer hl.deinit();
+
+    const allocator = std.testing.allocator;
+    const rendered = try renderHighlightedForTest(&hl, allocator, "int main() { return 0; }", .cpp);
+    defer allocator.free(rendered);
+
+    // Both `return` and `int` come from the C base query; if either is
+    // missing, the comptime concat in build.zig's wrapper broke.
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, keyword_ansi ++ "return"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, type_name_ansi ++ "int"));
+}
+
+test "Highlighter: typescript highlights const and number type" {
+    var hl = Highlighter.init();
+    defer hl.deinit();
+
+    const allocator = std.testing.allocator;
+    const rendered = try renderHighlightedForTest(&hl, allocator, "const x: number = 1;\n", .typescript);
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, keyword_ansi ++ "const"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, type_name_ansi ++ "number"));
+}
+
+test "Highlighter: tsx highlights const in function form" {
+    var hl = Highlighter.init();
+    defer hl.deinit();
+
+    const allocator = std.testing.allocator;
+    const rendered = try renderHighlightedForTest(&hl, allocator, "const greet = (name: string) => name;\n", .tsx);
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, keyword_ansi ++ "const"));
+}
+
+test "Highlighter: html colors tag names via the tag prefix branch" {
+    var hl = Highlighter.init();
+    defer hl.deinit();
+
+    const allocator = std.testing.allocator;
+    const rendered = try renderHighlightedForTest(&hl, allocator, "<p>hello</p>\n", .html);
+    defer allocator.free(rendered);
+
+    // @tag shares sp.keyword's color but emits no bold prefix, so the
+    // foreground escape matches `keyword_ansi` exactly.
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, keyword_ansi ++ "p"));
+}
+
+test "Highlighter: css colors property names via the property prefix branch" {
+    var hl = Highlighter.init();
+    defer hl.deinit();
+
+    const allocator = std.testing.allocator;
+    const rendered = try renderHighlightedForTest(&hl, allocator, ".a { color: red; }\n", .css);
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, type_name_ansi ++ "color"));
+}
+
+test "Highlighter: json colors keys as strings and numbers as numbers" {
+    var hl = Highlighter.init();
+    defer hl.deinit();
+
+    const allocator = std.testing.allocator;
+    const rendered = try renderHighlightedForTest(&hl, allocator, "{\"k\": 1}\n", .json);
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, string_ansi ++ "\"k\""));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, number_ansi ++ "1"));
+}
+
+test "Highlighter: tsx highlights jsx tag and attribute" {
+    var hl = Highlighter.init();
+    defer hl.deinit();
+
+    const allocator = std.testing.allocator;
+    const source = "const el = <div className=\"hi\">text</div>;\n";
+    const rendered = try renderHighlightedForTest(&hl, allocator, source, .tsx);
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, keyword_ansi ++ "div"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, func_ansi ++ "className"));
+}
+
+test "Highlighter: javascript highlights jsx tag when used as jsx alias" {
+    var hl = Highlighter.init();
+    defer hl.deinit();
+
+    const allocator = std.testing.allocator;
+    // Mirrors how the renderer handles a ```jsx fence: fromString("jsx")
+    // returns .javascript, which must have the jsx highlights baked in.
+    const rendered = try renderHighlightedForTest(&hl, allocator, "const el = <span>hi</span>;\n", .javascript);
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, keyword_ansi ++ "span"));
+}
+
+test "Highlighter: typescript require is builtin when not shadowed" {
+    var hl = Highlighter.init();
+    defer hl.deinit();
+
+    const allocator = std.testing.allocator;
+    const rendered = try renderHighlightedForTest(&hl, allocator, "require('fs');", .typescript);
+    defer allocator.free(rendered);
+
+    // Without per-language locals, the javascript `(#is-not? local)`
+    // predicate fails and require stays plain. This test guards the
+    // Locals generalization.
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, func_ansi ++ "require"));
+}
+
+test "Highlighter: typescript local require does not use builtin styling" {
+    var hl = Highlighter.init();
+    defer hl.deinit();
+
+    const allocator = std.testing.allocator;
+    const rendered = try renderHighlightedForTest(&hl, allocator, "function demo(require) { return require; }", .typescript);
+    defer allocator.free(rendered);
+
+    try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, func_ansi ++ "require"));
+}
+
+test "Highlighter: tsx require is builtin when not shadowed" {
+    var hl = Highlighter.init();
+    defer hl.deinit();
+
+    const allocator = std.testing.allocator;
+    const rendered = try renderHighlightedForTest(&hl, allocator, "require('fs');", .tsx);
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, func_ansi ++ "require"));
+}
+
+test "Highlighter: tsx local require does not use builtin styling" {
+    var hl = Highlighter.init();
+    defer hl.deinit();
+
+    const allocator = std.testing.allocator;
+    const rendered = try renderHighlightedForTest(&hl, allocator, "function demo(require) { return require; }", .tsx);
+    defer allocator.free(rendered);
+
+    try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, func_ansi ++ "require"));
 }

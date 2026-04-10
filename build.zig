@@ -22,6 +22,11 @@ pub fn build(b: *std.Build) void {
     const ts_python_dep = b.dependency("tree_sitter_python", .{});
     const ts_javascript_dep = b.dependency("tree_sitter_javascript", .{});
     const ts_bash_dep = b.dependency("tree_sitter_bash", .{});
+    const ts_cpp_dep = b.dependency("tree_sitter_cpp", .{});
+    const ts_typescript_dep = b.dependency("tree_sitter_typescript", .{});
+    const ts_html_dep = b.dependency("tree_sitter_html", .{});
+    const ts_css_dep = b.dependency("tree_sitter_css", .{});
+    const ts_json_dep = b.dependency("tree_sitter_json", .{});
 
     const ts_support = prepareTreeSitterSupport(b, .{
         .target = target,
@@ -34,6 +39,11 @@ pub fn build(b: *std.Build) void {
         .ts_python_dep = ts_python_dep,
         .ts_javascript_dep = ts_javascript_dep,
         .ts_bash_dep = ts_bash_dep,
+        .ts_cpp_dep = ts_cpp_dep,
+        .ts_typescript_dep = ts_typescript_dep,
+        .ts_html_dep = ts_html_dep,
+        .ts_css_dep = ts_css_dep,
+        .ts_json_dep = ts_json_dep,
     });
 
     const exe_mod = b.createModule(.{
@@ -107,6 +117,11 @@ const TreeSitterAttach = struct {
     ts_python_dep: *std.Build.Dependency,
     ts_javascript_dep: *std.Build.Dependency,
     ts_bash_dep: *std.Build.Dependency,
+    ts_cpp_dep: *std.Build.Dependency,
+    ts_typescript_dep: *std.Build.Dependency,
+    ts_html_dep: *std.Build.Dependency,
+    ts_css_dep: *std.Build.Dependency,
+    ts_json_dep: *std.Build.Dependency,
 };
 
 /// Grammar C sources and query assets shipped inside each tree-sitter
@@ -116,7 +131,11 @@ const TreeSitterAttach = struct {
 const GrammarSource = struct {
     dep: *std.Build.Dependency,
     has_scanner: bool,
-    embed_name: []const u8, // key used by @embedFile in the wrapper
+    embed_name: []const u8,
+    /// Directory containing parser.c relative to the dep root. Defaults
+    /// to "src". tree-sitter-typescript uses "typescript/src" and
+    /// "tsx/src" because it ships two parsers in one repository.
+    src_subdir: ?[]const u8 = null,
 };
 
 const TreeSitterSupport = struct {
@@ -129,6 +148,12 @@ const TreeSitterSupport = struct {
     python_lib: *std.Build.Step.Compile,
     javascript_lib: *std.Build.Step.Compile,
     bash_lib: *std.Build.Step.Compile,
+    cpp_lib: *std.Build.Step.Compile,
+    typescript_lib: *std.Build.Step.Compile,
+    tsx_lib: *std.Build.Step.Compile,
+    html_lib: *std.Build.Step.Compile,
+    css_lib: *std.Build.Step.Compile,
+    json_lib: *std.Build.Step.Compile,
 };
 
 /// Prepare tree-sitter runtime state once, then attach it to any module that
@@ -168,6 +193,38 @@ fn prepareTreeSitterSupport(b: *std.Build, a: TreeSitterAttach) TreeSitterSuppor
         .has_scanner = true,
         .embed_name = "bash_highlights.scm",
     }, "tree-sitter-bash");
+    const cpp_lib = compileGrammarLibrary(b, a.target, a.optimize, .{
+        .dep = a.ts_cpp_dep,
+        .has_scanner = true,
+        .embed_name = "cpp_extra_highlights.scm",
+    }, "tree-sitter-cpp");
+    const typescript_lib = compileGrammarLibrary(b, a.target, a.optimize, .{
+        .dep = a.ts_typescript_dep,
+        .has_scanner = true,
+        .embed_name = "typescript_highlights.scm",
+        .src_subdir = "typescript/src",
+    }, "tree-sitter-typescript");
+    const tsx_lib = compileGrammarLibrary(b, a.target, a.optimize, .{
+        .dep = a.ts_typescript_dep,
+        .has_scanner = true,
+        .embed_name = "tsx_highlights.scm",
+        .src_subdir = "tsx/src",
+    }, "tree-sitter-tsx");
+    const html_lib = compileGrammarLibrary(b, a.target, a.optimize, .{
+        .dep = a.ts_html_dep,
+        .has_scanner = true,
+        .embed_name = "html_highlights.scm",
+    }, "tree-sitter-html");
+    const css_lib = compileGrammarLibrary(b, a.target, a.optimize, .{
+        .dep = a.ts_css_dep,
+        .has_scanner = true,
+        .embed_name = "css_highlights.scm",
+    }, "tree-sitter-css");
+    const json_lib = compileGrammarLibrary(b, a.target, a.optimize, .{
+        .dep = a.ts_json_dep,
+        .has_scanner = false,
+        .embed_name = "json_highlights.scm",
+    }, "tree-sitter-json");
 
     const queries = b.addWriteFiles();
     _ = queries.addCopyFile(a.ts_zig_dep.path("queries/highlights.scm"), "zig_highlights.scm");
@@ -175,9 +232,16 @@ fn prepareTreeSitterSupport(b: *std.Build, a: TreeSitterAttach) TreeSitterSuppor
     _ = queries.addCopyFile(a.ts_rust_dep.path("queries/highlights.scm"), "rust_highlights.scm");
     _ = queries.addCopyFile(a.ts_go_dep.path("queries/highlights.scm"), "go_highlights.scm");
     _ = queries.addCopyFile(a.ts_python_dep.path("queries/highlights.scm"), "python_highlights.scm");
-    _ = queries.addCopyFile(a.ts_javascript_dep.path("queries/highlights.scm"), "javascript_highlights.scm");
+    _ = queries.addCopyFile(a.ts_javascript_dep.path("queries/highlights.scm"), "javascript_base_highlights.scm");
+    _ = queries.addCopyFile(a.ts_javascript_dep.path("queries/highlights-jsx.scm"), "javascript_jsx_highlights.scm");
     _ = queries.addCopyFile(a.ts_javascript_dep.path("queries/locals.scm"), "javascript_locals.scm");
     _ = queries.addCopyFile(a.ts_bash_dep.path("queries/highlights.scm"), "bash_highlights.scm");
+    _ = queries.addCopyFile(a.ts_cpp_dep.path("queries/highlights.scm"), "cpp_extra_highlights.scm");
+    _ = queries.addCopyFile(a.ts_typescript_dep.path("queries/highlights.scm"), "typescript_extra_highlights.scm");
+    _ = queries.addCopyFile(a.ts_typescript_dep.path("queries/locals.scm"), "typescript_extra_locals.scm");
+    _ = queries.addCopyFile(a.ts_html_dep.path("queries/highlights.scm"), "html_highlights.scm");
+    _ = queries.addCopyFile(a.ts_css_dep.path("queries/highlights.scm"), "css_highlights.scm");
+    _ = queries.addCopyFile(a.ts_json_dep.path("queries/highlights.scm"), "json_highlights.scm");
 
     const wrapper = queries.add("mod.zig",
         \\pub const zig_highlights: []const u8 = @embedFile("zig_highlights.scm");
@@ -185,9 +249,30 @@ fn prepareTreeSitterSupport(b: *std.Build, a: TreeSitterAttach) TreeSitterSuppor
         \\pub const rust_highlights: []const u8 = @embedFile("rust_highlights.scm");
         \\pub const go_highlights: []const u8 = @embedFile("go_highlights.scm");
         \\pub const python_highlights: []const u8 = @embedFile("python_highlights.scm");
-        \\pub const javascript_highlights: []const u8 = @embedFile("javascript_highlights.scm");
-        \\pub const javascript_locals: []const u8 = @embedFile("javascript_locals.scm");
         \\pub const bash_highlights: []const u8 = @embedFile("bash_highlights.scm");
+        \\pub const html_highlights: []const u8 = @embedFile("html_highlights.scm");
+        \\pub const css_highlights: []const u8 = @embedFile("css_highlights.scm");
+        \\pub const json_highlights: []const u8 = @embedFile("json_highlights.scm");
+        \\// Layered highlights for the javascript family. We concatenate
+        \\// from most generic to most specific so the more specific child
+        \\// patterns win under the highlighter's "later pattern wins" rule
+        \\// (e.g. `(jsx_attribute (property_identifier) @attribute)` needs
+        \\// to come after the generic `(property_identifier) @property`
+        \\// in the javascript base highlights, otherwise jsx attributes
+        \\// render as CSS-style properties).
+        \\const javascript_base_highlights: []const u8 = @embedFile("javascript_base_highlights.scm");
+        \\const javascript_jsx_highlights: []const u8 = @embedFile("javascript_jsx_highlights.scm");
+        \\const typescript_extra_highlights: []const u8 = @embedFile("typescript_extra_highlights.scm");
+        \\pub const javascript_highlights: []const u8 = javascript_base_highlights ++ "\n" ++ javascript_jsx_highlights;
+        \\pub const typescript_highlights: []const u8 = javascript_base_highlights ++ "\n" ++ typescript_extra_highlights;
+        \\pub const tsx_highlights: []const u8 = javascript_base_highlights ++ "\n" ++ javascript_jsx_highlights ++ "\n" ++ typescript_extra_highlights;
+        \\// cpp highlights.scm is similarly a semantic shim over c.
+        \\pub const cpp_highlights: []const u8 = c_highlights ++ "\n" ++ @embedFile("cpp_extra_highlights.scm");
+        \\// Locals queries. Upstream assigns typescript a [ts_extra, js]
+        \\// stack and tsx js-only; we mirror that here.
+        \\pub const javascript_locals: []const u8 = @embedFile("javascript_locals.scm");
+        \\pub const typescript_locals: []const u8 = @embedFile("typescript_extra_locals.scm") ++ "\n" ++ javascript_locals;
+        \\pub const tsx_locals: []const u8 = javascript_locals;
         \\
     );
 
@@ -205,6 +290,12 @@ fn prepareTreeSitterSupport(b: *std.Build, a: TreeSitterAttach) TreeSitterSuppor
         .python_lib = python_lib,
         .javascript_lib = javascript_lib,
         .bash_lib = bash_lib,
+        .cpp_lib = cpp_lib,
+        .typescript_lib = typescript_lib,
+        .tsx_lib = tsx_lib,
+        .html_lib = html_lib,
+        .css_lib = css_lib,
+        .json_lib = json_lib,
     };
 }
 
@@ -224,17 +315,20 @@ fn compileGrammarLibrary(
             .link_libc = true,
         }),
     });
+    const subdir = src.src_subdir orelse "src";
+    const parser_path = b.fmt("{s}/parser.c", .{subdir});
     lib.addCSourceFile(.{
-        .file = src.dep.path("src/parser.c"),
+        .file = src.dep.path(parser_path),
         .flags = &.{"-std=c11"},
     });
     if (src.has_scanner) {
+        const scanner_path = b.fmt("{s}/scanner.c", .{subdir});
         lib.addCSourceFile(.{
-            .file = src.dep.path("src/scanner.c"),
+            .file = src.dep.path(scanner_path),
             .flags = &.{"-std=c11"},
         });
     }
-    lib.addIncludePath(src.dep.path("src"));
+    lib.addIncludePath(src.dep.path(subdir));
     return lib;
 }
 
@@ -252,4 +346,10 @@ fn attachTreeSitter(module: *std.Build.Module, support: TreeSitterSupport) void 
     module.linkLibrary(support.python_lib);
     module.linkLibrary(support.javascript_lib);
     module.linkLibrary(support.bash_lib);
+    module.linkLibrary(support.cpp_lib);
+    module.linkLibrary(support.typescript_lib);
+    module.linkLibrary(support.tsx_lib);
+    module.linkLibrary(support.html_lib);
+    module.linkLibrary(support.css_lib);
+    module.linkLibrary(support.json_lib);
 }
