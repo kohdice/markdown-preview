@@ -149,6 +149,14 @@ fn skipAnsiCsi(text: []const u8, start: usize) ?usize {
     return i;
 }
 
+fn isCompleteCsi(text: []const u8, start: usize) bool {
+    if (start + 1 >= text.len) return false;
+    if (text[start] != ESC or text[start + 1] != '[') return false;
+    var i = start + 2;
+    while (i < text.len and isCsiParamByte(text[i])) : (i += 1) {}
+    return i < text.len;
+}
+
 /// Calculate the display width of a UTF-8 string in terminal columns.
 /// ASCII printable characters are width 1, CJK characters are width 2,
 /// ANSI escape sequences are width 0, control characters are width 0.
@@ -393,6 +401,380 @@ pub fn wrapText(
 
     return try result.toOwnedSlice(allocator);
 }
+
+pub const WrapWriter = struct {
+    parent: *std.io.Writer,
+    line_buf: std.ArrayListUnmanaged(u8),
+    col: usize,
+    last_space_buf: ?usize,
+    col_after_last_space: usize,
+    max_width: usize,
+    ambiguous: AmbiguousWidth,
+    allocator: std.mem.Allocator,
+    suppress_next_emoji: bool,
+    pending: [24]u8,
+    pending_len: u5,
+    writer: std.io.Writer,
+
+    pub fn init(
+        parent: *std.io.Writer,
+        max_width: usize,
+        ambiguous: AmbiguousWidth,
+        allocator: std.mem.Allocator,
+    ) WrapWriter {
+        return .{
+            .parent = parent,
+            .line_buf = .{},
+            .col = 0,
+            .last_space_buf = null,
+            .col_after_last_space = 0,
+            .max_width = max_width,
+            .ambiguous = ambiguous,
+            .allocator = allocator,
+            .suppress_next_emoji = false,
+            .pending = undefined,
+            .pending_len = 0,
+            .writer = .{
+                .buffer = &.{},
+                .vtable = &wrap_vtable,
+            },
+        };
+    }
+
+    pub fn deinit(self: *WrapWriter) void {
+        self.line_buf.deinit(self.allocator);
+    }
+
+    pub fn finish(self: *WrapWriter) std.io.Writer.Error!void {
+        if (self.pending_len > 0) {
+            if (self.pending[0] == ESC) {
+                self.line_buf.appendSlice(self.allocator, self.pending[0..self.pending_len]) catch
+                    return error.WriteFailed;
+            }
+            self.pending_len = 0;
+        }
+        if (self.line_buf.items.len > 0) {
+            try self.parent.writeAll(self.line_buf.items);
+            self.line_buf.clearRetainingCapacity();
+        }
+    }
+
+    const wrap_vtable: std.io.Writer.VTable = .{
+        .drain = wrapDrain,
+        .flush = wrapFlush,
+        .rebase = std.io.Writer.failingRebase,
+    };
+
+    fn wrapFlush(w: *std.io.Writer) std.io.Writer.Error!void {
+        const self: *WrapWriter = @fieldParentPtr("writer", w);
+        if (self.line_buf.items.len > 0) {
+            try self.parent.writeAll(self.line_buf.items);
+            self.line_buf.clearRetainingCapacity();
+        }
+        self.last_space_buf = null;
+    }
+
+    fn wrapDrain(w: *std.io.Writer, data: []const []const u8, splat: usize) std.io.Writer.Error!usize {
+        const self: *WrapWriter = @fieldParentPtr("writer", w);
+        var total: usize = 0;
+
+        for (data, 0..) |slice, idx| {
+            const repeat: usize = if (idx == data.len - 1) splat else 1;
+            for (0..repeat) |_| {
+                self.processBytes(slice) catch return error.WriteFailed;
+                total += slice.len;
+            }
+        }
+
+        return total;
+    }
+
+    fn processBytes(self: *WrapWriter, bytes: []const u8) !void {
+        if (self.max_width == 0) {
+            try self.line_buf.appendSlice(self.allocator, bytes);
+            return;
+        }
+
+        if (self.pending_len > 0) {
+            const consumed = try self.drainPending(bytes);
+            if (consumed >= bytes.len) return;
+            return self.processBytes(bytes[consumed..]);
+        }
+
+        var i: usize = 0;
+
+        while (i < bytes.len) {
+            if (bytes[i] == ESC) {
+                if (isCompleteCsi(bytes, i)) {
+                    const after = skipAnsiCsi(bytes, i).?;
+                    try self.line_buf.appendSlice(self.allocator, bytes[i..after]);
+                    i = after;
+                    continue;
+                }
+                if (i + 1 >= bytes.len) {
+                    self.pending[0] = ESC;
+                    self.pending_len = 1;
+                    break;
+                }
+                if (bytes[i + 1] == '[') {
+                    const remaining = bytes.len - i;
+                    if (remaining <= self.pending.len) {
+                        @memcpy(self.pending[0..remaining], bytes[i..]);
+                        self.pending_len = @intCast(remaining);
+                    } else {
+                        try self.line_buf.appendSlice(self.allocator, bytes[i..][0..1]);
+                        i += 1;
+                        continue;
+                    }
+                    break;
+                }
+            }
+
+            if (bytes[i] == '\n') {
+                try self.flushLine();
+                try self.parent.writeByte('\n');
+                self.col = 0;
+                self.last_space_buf = null;
+                self.suppress_next_emoji = false;
+                i += 1;
+                continue;
+            }
+
+            const len = std.unicode.utf8ByteSequenceLength(bytes[i]) catch {
+                try self.appendCharAdvance(bytes[i..][0..1], 1);
+                i += 1;
+                continue;
+            };
+            if (i + len > bytes.len) {
+                const remaining: u5 = @intCast(bytes.len - i);
+                @memcpy(self.pending[0..remaining], bytes[i..]);
+                self.pending_len = remaining;
+                break;
+            }
+
+            const cp = std.unicode.utf8Decode(bytes[i..][0..len]) catch {
+                try self.appendCharAdvance(bytes[i..][0..1], 1);
+                i += 1;
+                continue;
+            };
+
+            if (self.suppress_next_emoji) {
+                self.suppress_next_emoji = false;
+                if (isEmoji(cp)) {
+                    try self.line_buf.appendSlice(self.allocator, bytes[i..][0..len]);
+                    i += len;
+                    continue;
+                }
+            }
+
+            if (cp == ZWJ) {
+                self.suppress_next_emoji = true;
+                try self.line_buf.appendSlice(self.allocator, bytes[i..][0..len]);
+                i += len;
+                continue;
+            }
+
+            const cw = codepointWidth(cp, self.ambiguous);
+
+            if (self.col + cw > self.max_width) {
+                if (bytes[i] == ' ') {
+                    try self.line_buf.append(self.allocator, '\n');
+                    try self.flushLine();
+                    self.col = 0;
+                    self.last_space_buf = null;
+                    i += len;
+                    continue;
+                }
+                if (self.last_space_buf) |space_pos| {
+                    self.line_buf.items[space_pos] = '\n';
+                    self.col -= self.col_after_last_space;
+                    self.last_space_buf = null;
+                    try self.flushUpToLastNewline();
+                } else {
+                    try self.line_buf.append(self.allocator, '\n');
+                    try self.flushLine();
+                    self.col = 0;
+                }
+            }
+
+            if (bytes[i] == ' ') {
+                self.last_space_buf = self.line_buf.items.len;
+                try self.line_buf.appendSlice(self.allocator, bytes[i..][0..len]);
+                self.col += cw;
+                self.col_after_last_space = self.col;
+                i += len;
+                continue;
+            }
+
+            try self.line_buf.appendSlice(self.allocator, bytes[i..][0..len]);
+            self.col += cw;
+            i += len;
+        }
+    }
+
+    fn drainPending(self: *WrapWriter, bytes: []const u8) !usize {
+        if (self.pending[0] == ESC) return self.drainPendingAnsi(bytes);
+        return self.drainPendingUtf8(bytes);
+    }
+
+    fn drainPendingUtf8(self: *WrapWriter, bytes: []const u8) !usize {
+        const p: usize = self.pending_len;
+        const first_byte = self.pending[0];
+        const seq_len: usize = std.unicode.utf8ByteSequenceLength(first_byte) catch {
+            try self.appendCharAdvance(self.pending[0..1], 1);
+            const leftover = p - 1;
+            if (leftover > 0) {
+                std.mem.copyForwards(u8, self.pending[0..leftover], self.pending[1..p]);
+                self.pending_len = @intCast(leftover);
+            } else {
+                self.pending_len = 0;
+            }
+            return 0;
+        };
+
+        const still_needed = seq_len - p;
+        if (still_needed > bytes.len) {
+            @memcpy(self.pending[p .. p + bytes.len], bytes);
+            self.pending_len = @intCast(p + bytes.len);
+            return bytes.len;
+        }
+
+        @memcpy(self.pending[p .. p + still_needed], bytes[0..still_needed]);
+
+        const char_bytes = self.pending[0..seq_len];
+        const cp = std.unicode.utf8Decode(char_bytes) catch {
+            try self.appendCharAdvance(self.pending[0..1], 1);
+            const leftover = seq_len - 1;
+            if (leftover > 0) {
+                std.mem.copyForwards(u8, self.pending[0..leftover], self.pending[1..seq_len]);
+                self.pending_len = @intCast(leftover);
+            } else {
+                self.pending_len = 0;
+            }
+            return still_needed;
+        };
+        self.pending_len = 0;
+
+        if (self.suppress_next_emoji) {
+            self.suppress_next_emoji = false;
+            if (isEmoji(cp)) {
+                try self.line_buf.appendSlice(self.allocator, char_bytes);
+                return still_needed;
+            }
+        }
+
+        if (cp == ZWJ) {
+            self.suppress_next_emoji = true;
+            try self.line_buf.appendSlice(self.allocator, char_bytes);
+            return still_needed;
+        }
+
+        const cw = codepointWidth(cp, self.ambiguous);
+        if (char_bytes[0] == ' ') {
+            if (self.col + cw > self.max_width) {
+                try self.line_buf.append(self.allocator, '\n');
+                try self.flushLine();
+                self.col = 0;
+                self.last_space_buf = null;
+                return still_needed;
+            }
+            self.last_space_buf = self.line_buf.items.len;
+            try self.line_buf.appendSlice(self.allocator, char_bytes);
+            self.col += cw;
+            self.col_after_last_space = self.col;
+            return still_needed;
+        }
+
+        try self.appendCharAdvance(char_bytes, cw);
+        return still_needed;
+    }
+
+    fn drainPendingAnsi(self: *WrapWriter, bytes: []const u8) !usize {
+        const p: usize = self.pending_len;
+        const extra = @min(bytes.len, self.pending.len - p);
+        @memcpy(self.pending[p .. p + extra], bytes[0..extra]);
+        const combined_len = p + extra;
+
+        if (combined_len < 2) {
+            self.pending_len = @intCast(combined_len);
+            return extra;
+        }
+
+        if (self.pending[1] != '[') {
+            try self.line_buf.appendSlice(self.allocator, self.pending[0..1]);
+            const leftover = p - 1;
+            if (leftover > 0) {
+                std.mem.copyForwards(u8, self.pending[0..leftover], self.pending[1..p]);
+                self.pending_len = @intCast(leftover);
+            } else {
+                self.pending_len = 0;
+            }
+            return 0;
+        }
+
+        if (isCompleteCsi(self.pending[0..combined_len], 0)) {
+            const after = skipAnsiCsi(self.pending[0..combined_len], 0).?;
+            try self.line_buf.appendSlice(self.allocator, self.pending[0..after]);
+            self.pending_len = 0;
+            return if (after > p) after - p else 0;
+        }
+
+        if (combined_len >= self.pending.len) {
+            try self.line_buf.appendSlice(self.allocator, self.pending[0..p]);
+            self.pending_len = 0;
+            return 0;
+        }
+
+        self.pending_len = @intCast(combined_len);
+        return extra;
+    }
+
+    fn appendCharAdvance(self: *WrapWriter, char_bytes: []const u8, cw: usize) !void {
+        if (self.col + cw > self.max_width) {
+            if (self.last_space_buf) |space_pos| {
+                self.line_buf.items[space_pos] = '\n';
+                self.col -= self.col_after_last_space;
+                self.last_space_buf = null;
+                try self.flushUpToLastNewline();
+            } else {
+                try self.line_buf.append(self.allocator, '\n');
+                try self.flushLine();
+                self.col = 0;
+            }
+        }
+        try self.line_buf.appendSlice(self.allocator, char_bytes);
+        self.col += cw;
+    }
+
+    fn flushLine(self: *WrapWriter) !void {
+        if (self.line_buf.items.len > 0) {
+            try self.parent.writeAll(self.line_buf.items);
+            self.line_buf.clearRetainingCapacity();
+        }
+    }
+
+    fn flushUpToLastNewline(self: *WrapWriter) !void {
+        const items = self.line_buf.items;
+        var nl_pos: ?usize = null;
+        var j: usize = items.len;
+        while (j > 0) {
+            j -= 1;
+            if (items[j] == '\n') {
+                nl_pos = j;
+                break;
+            }
+        }
+
+        if (nl_pos) |pos| {
+            try self.parent.writeAll(items[0 .. pos + 1]);
+            const remaining = items.len - (pos + 1);
+            if (remaining > 0) {
+                std.mem.copyForwards(u8, items[0..remaining], items[pos + 1 ..]);
+            }
+            self.line_buf.shrinkRetainingCapacity(remaining);
+        }
+    }
+};
 
 fn isEmoji(cp: u21) bool {
     if (cp >= 0x1F300 and cp <= 0x1F9FF) return true;
@@ -1203,4 +1585,194 @@ test "detectAmbiguousWidth LC_ALL beats LC_CTYPE and LANG" {
         .{ "LANG", "ja_JP.UTF-8" },
     });
     try std.testing.expectEqual(AmbiguousWidth.narrow, detectAmbiguousWidth(env));
+}
+
+fn wrapWriterCollect(input: []const u8, max_w: usize, ambiguous: AmbiguousWidth) ![]u8 {
+    const allocator = std.testing.allocator;
+    var buf: std.io.Writer.Allocating = .init(allocator);
+    errdefer buf.deinit();
+
+    var ww = WrapWriter.init(&buf.writer, max_w, ambiguous, allocator);
+    defer ww.deinit();
+    try ww.writer.writeAll(input);
+    try ww.finish();
+
+    var list = buf.toArrayList();
+    defer buf.deinit();
+    return list.toOwnedSlice(allocator);
+}
+
+fn expectWrapParity(input: []const u8, max_w: usize, ambiguous: AmbiguousWidth) !void {
+    const allocator = std.testing.allocator;
+
+    const expected = try wrapText(allocator, input, max_w, ambiguous);
+    defer allocator.free(expected);
+
+    const actual = try wrapWriterCollect(input, max_w, ambiguous);
+    defer allocator.free(actual);
+
+    try std.testing.expectEqualStrings(expected, actual);
+}
+
+test "WrapWriter basic word wrap matches wrapText" {
+    try expectWrapParity("Hello World", 5, .narrow);
+}
+
+test "WrapWriter multiple words" {
+    try expectWrapParity("one two three four five", 10, .narrow);
+}
+
+test "WrapWriter long word hard break" {
+    try expectWrapParity("abcdefghij", 5, .narrow);
+}
+
+test "WrapWriter preserves existing newlines" {
+    try expectWrapParity("abc\ndef\nghi", 10, .narrow);
+}
+
+test "WrapWriter consecutive spaces" {
+    try expectWrapParity("a  b", 5, .narrow);
+}
+
+test "WrapWriter leading and trailing spaces" {
+    try expectWrapParity(" hello ", 10, .narrow);
+}
+
+test "WrapWriter ANSI sequences preserved" {
+    try expectWrapParity("\x1b[1mHello\x1b[0m \x1b[3mWorld\x1b[0m", 5, .narrow);
+}
+
+test "WrapWriter CJK characters width 2" {
+    try expectWrapParity("漢字テスト", 6, .narrow);
+}
+
+test "WrapWriter styled fragment boundaries" {
+    const allocator = std.testing.allocator;
+    const input = "\x1b[1mbold\x1b[0m \x1b[3mitalic\x1b[0m word";
+
+    const expected = try wrapText(allocator, input, 10, .narrow);
+    defer allocator.free(expected);
+
+    var buf: std.io.Writer.Allocating = .init(allocator);
+    errdefer buf.deinit();
+
+    var ww = WrapWriter.init(&buf.writer, 10, .narrow, allocator);
+    defer ww.deinit();
+
+    // Write in fragments as ansi.writeStyled would
+    try ww.writer.writeAll("\x1b[1m");
+    try ww.writer.writeAll("bold");
+    try ww.writer.writeAll("\x1b[0m");
+    try ww.writer.writeAll(" ");
+    try ww.writer.writeAll("\x1b[3m");
+    try ww.writer.writeAll("italic");
+    try ww.writer.writeAll("\x1b[0m");
+    try ww.writer.writeAll(" word");
+    try ww.finish();
+
+    var list = buf.toArrayList();
+    defer buf.deinit();
+    const actual = try list.toOwnedSlice(allocator);
+    defer allocator.free(actual);
+
+    try std.testing.expectEqualStrings(expected, actual);
+}
+
+test "WrapWriter max_width 0 passes through" {
+    try expectWrapParity("hello world", 0, .narrow);
+}
+
+test "WrapWriter single char per line" {
+    try expectWrapParity("ab cd", 1, .narrow);
+}
+
+test "WrapWriter non-CSI ESC matches wrapText" {
+    // "\x1bX" — ESC followed by non-'[' is not a CSI.
+    // wrapText processes ESC as width 0 and X as width 1.
+    try expectWrapParity("\x1bXhello", 10, .narrow);
+}
+
+test "WrapWriter trailing ESC preserved" {
+    try expectWrapParity("abc\x1b", 10, .narrow);
+}
+
+test "WrapWriter trailing incomplete CSI preserved" {
+    try expectWrapParity("abc\x1b[", 10, .narrow);
+}
+
+test "WrapWriter trailing incomplete CSI with params preserved" {
+    try expectWrapParity("abc\x1b[31", 10, .narrow);
+}
+
+test "WrapWriter split ANSI CSI across writes" {
+    const allocator = std.testing.allocator;
+    const input = "\x1b[31mred\x1b[0m text";
+
+    const expected = try wrapText(allocator, input, 10, .narrow);
+    defer allocator.free(expected);
+
+    var buf: std.io.Writer.Allocating = .init(allocator);
+    errdefer buf.deinit();
+
+    var ww = WrapWriter.init(&buf.writer, 10, .narrow, allocator);
+    defer ww.deinit();
+
+    try ww.writer.writeAll("\x1b");
+    try ww.writer.writeAll("[31m");
+    try ww.writer.writeAll("red");
+    try ww.writer.writeAll("\x1b[0m text");
+    try ww.finish();
+
+    var list = buf.toArrayList();
+    defer buf.deinit();
+    const actual = try list.toOwnedSlice(allocator);
+    defer allocator.free(actual);
+
+    try std.testing.expectEqualStrings(expected, actual);
+}
+
+test "WrapWriter split ANSI ESC+[ across writes" {
+    const allocator = std.testing.allocator;
+
+    var buf: std.io.Writer.Allocating = .init(allocator);
+    errdefer buf.deinit();
+
+    var ww = WrapWriter.init(&buf.writer, 10, .narrow, allocator);
+    defer ww.deinit();
+
+    try ww.writer.writeAll("\x1b[");
+    try ww.writer.writeAll("1m");
+    try ww.writer.writeAll("bold");
+    try ww.writer.writeAll("\x1b[0m");
+    try ww.finish();
+
+    var list = buf.toArrayList();
+    defer buf.deinit();
+    const actual = try list.toOwnedSlice(allocator);
+    defer allocator.free(actual);
+
+    try std.testing.expectEqualStrings("\x1b[1mbold\x1b[0m", actual);
+}
+
+test "WrapWriter split UTF-8 across writes" {
+    const allocator = std.testing.allocator;
+    const full = "漢字";
+    const expected = try wrapText(allocator, full, 10, .narrow);
+    defer allocator.free(expected);
+
+    var buf: std.io.Writer.Allocating = .init(allocator);
+    errdefer buf.deinit();
+
+    var ww = WrapWriter.init(&buf.writer, 10, .narrow, allocator);
+    defer ww.deinit();
+    try ww.writer.writeAll(full[0..1]);
+    try ww.writer.writeAll(full[1..]);
+    try ww.finish();
+
+    var list = buf.toArrayList();
+    defer buf.deinit();
+    const actual = try list.toOwnedSlice(allocator);
+    defer allocator.free(actual);
+
+    try std.testing.expectEqualStrings(expected, actual);
 }

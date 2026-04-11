@@ -1,6 +1,6 @@
 const std = @import("std");
-const block_ast = @import("block_ast.zig");
-const parse_block = @import("parse_block.zig");
+const ast = @import("../ast.zig");
+const parse_block = @import("block.zig");
 
 pub const CellParseError = std.mem.Allocator.Error || error{UnclosedCodeSpan};
 
@@ -35,9 +35,9 @@ fn isDelimiterCell(cell: []const u8) bool {
     return i == cell.len;
 }
 
-pub fn alignments(allocator: std.mem.Allocator, line: []const u8) ![]block_ast.Alignment {
+pub fn alignments(allocator: std.mem.Allocator, line: []const u8) ![]ast.Alignment {
     const trimmed = std.mem.trim(u8, line, parse_block.horizontal_whitespace);
-    var aligns: std.ArrayListUnmanaged(block_ast.Alignment) = .{};
+    var aligns: std.ArrayListUnmanaged(ast.Alignment) = .{};
     defer aligns.deinit(allocator);
 
     var iter = CellIterator.init(trimmed);
@@ -46,7 +46,7 @@ pub fn alignments(allocator: std.mem.Allocator, line: []const u8) ![]block_ast.A
         const starts_colon = c.len > 0 and c[0] == ':';
         const ends_colon = c.len > 0 and c[c.len - 1] == ':';
 
-        const col_align: block_ast.Alignment = if (starts_colon and ends_colon)
+        const col_align: ast.Alignment = if (starts_colon and ends_colon)
             .center
         else if (ends_colon)
             .right
@@ -168,9 +168,9 @@ test "alignments" {
     defer allocator.free(aligns);
 
     try std.testing.expectEqual(@as(usize, 3), aligns.len);
-    try std.testing.expectEqual(block_ast.Alignment.left, aligns[0]);
-    try std.testing.expectEqual(block_ast.Alignment.center, aligns[1]);
-    try std.testing.expectEqual(block_ast.Alignment.right, aligns[2]);
+    try std.testing.expectEqual(ast.Alignment.left, aligns[0]);
+    try std.testing.expectEqual(ast.Alignment.center, aligns[1]);
+    try std.testing.expectEqual(ast.Alignment.right, aligns[2]);
 }
 
 test "cells handles basic table row" {

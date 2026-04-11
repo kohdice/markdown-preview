@@ -1,11 +1,22 @@
 const std = @import("std");
-const parse = @import("parse.zig");
-const render = @import("render.zig");
-const width = @import("width.zig");
+const preview = @import("preview.zig");
+const term = @import("term.zig");
+const width = term.width;
 
 const max_file_bytes = 10 * 1024 * 1024;
 const exit_success: u8 = 0;
 const exit_failure: u8 = 1;
+
+pub const RunOptions = struct {
+    allocator: std.mem.Allocator,
+    cwd: std.fs.Dir,
+    args: []const [:0]const u8,
+    stdout: *std.io.Writer,
+    stderr: *std.io.Writer,
+    enable_ansi: bool,
+    wrap_width: ?usize,
+    ambiguous_width: width.AmbiguousWidth,
+};
 
 const usage_message =
     \\Usage: mp [--] <FILE>
@@ -25,7 +36,7 @@ const ParseError = error{
     UnknownFlag,
 };
 
-fn parseArgs(args: []const []const u8) ParseError!ParsedArgs {
+fn parseArgs(args: []const [:0]const u8) ParseError!ParsedArgs {
     var path: ?[]const u8 = null;
     var positional_only = false;
 
@@ -61,68 +72,56 @@ pub fn unwrapWriteError(
     return err;
 }
 
-pub fn run(
-    allocator: std.mem.Allocator,
-    dir: std.fs.Dir,
-    args: []const []const u8,
-    stdout: *std.io.Writer,
-    stderr: *std.io.Writer,
-    enable_ansi: bool,
-    wrap_width: ?usize,
-    ambiguous_width: width.AmbiguousWidth,
-) !u8 {
-    const parsed = parseArgs(args) catch {
-        try stderr.writeAll(usage_message);
+pub fn run(opts: RunOptions) !u8 {
+    const parsed = parseArgs(opts.args) catch {
+        try opts.stderr.writeAll(usage_message);
         return exit_failure;
     };
 
-    const source = dir.readFileAlloc(allocator, parsed.path, max_file_bytes) catch |err| {
-        try stderr.print("mp: unable to read '{s}': {s}\n", .{ parsed.path, @errorName(err) });
+    const source = opts.cwd.readFileAlloc(opts.allocator, parsed.path, max_file_bytes) catch |err| {
+        try opts.stderr.print("mp: unable to read '{s}': {s}\n", .{ parsed.path, @errorName(err) });
         return exit_failure;
     };
-    defer allocator.free(source);
+    defer opts.allocator.free(source);
 
-    var doc = try parse.parse(allocator, source);
-    defer doc.deinit(allocator);
-
-    try render.write(allocator, stdout, doc, .{
-        .enable_ansi = enable_ansi,
+    try preview.renderSource(opts.allocator, opts.stdout, source, .{
+        .enable_ansi = opts.enable_ansi,
         .theme = .solarized_dark,
-        .wrap_width = wrap_width,
-        .ambiguous_width = ambiguous_width,
+        .wrap_width = opts.wrap_width,
+        .ambiguous_width = opts.ambiguous_width,
     });
     return exit_success;
 }
 
 test "parseArgs accepts plain positional path" {
-    const args = [_][]const u8{ "mp", "foo.md" };
+    const args = [_][:0]const u8{ "mp", "foo.md" };
     const parsed = try parseArgs(&args);
     try std.testing.expectEqualStrings("foo.md", parsed.path);
 }
 
 test "parseArgs rejects unknown flag" {
-    const args = [_][]const u8{ "mp", "--unknown", "bar.md" };
+    const args = [_][:0]const u8{ "mp", "--unknown", "bar.md" };
     try std.testing.expectError(error.UnknownFlag, parseArgs(&args));
 }
 
 test "parseArgs rejects two positional args" {
-    const args = [_][]const u8{ "mp", "foo.md", "bar.md" };
+    const args = [_][:0]const u8{ "mp", "foo.md", "bar.md" };
     try std.testing.expectError(error.TooManyPositional, parseArgs(&args));
 }
 
 test "parseArgs rejects no positional args" {
-    const args = [_][]const u8{"mp"};
+    const args = [_][:0]const u8{"mp"};
     try std.testing.expectError(error.MissingPath, parseArgs(&args));
 }
 
 test "parseArgs with -- sentinel treats following arg as positional even if it starts with --" {
-    const args = [_][]const u8{ "mp", "--", "--notes.md" };
+    const args = [_][:0]const u8{ "mp", "--", "--notes.md" };
     const parsed = try parseArgs(&args);
     try std.testing.expectEqualStrings("--notes.md", parsed.path);
 }
 
 test "parseArgs with -- sentinel still rejects duplicate positional" {
-    const args = [_][]const u8{ "mp", "--", "a.md", "b.md" };
+    const args = [_][:0]const u8{ "mp", "--", "a.md", "b.md" };
     try std.testing.expectError(error.TooManyPositional, parseArgs(&args));
 }
 
@@ -132,16 +131,16 @@ test "run reports usage errors" {
     var stderr: std.io.Writer.Allocating = .init(std.testing.allocator);
     defer stderr.deinit();
 
-    const exit_code = try run(
-        std.testing.allocator,
-        std.fs.cwd(),
-        &.{"mp"},
-        &stdout.writer,
-        &stderr.writer,
-        false,
-        null,
-        .narrow,
-    );
+    const exit_code = try run(.{
+        .allocator = std.testing.allocator,
+        .cwd = std.fs.cwd(),
+        .args = &.{"mp"},
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+        .enable_ansi = false,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    });
 
     try std.testing.expectEqual(exit_failure, exit_code);
     try std.testing.expectEqualStrings("", stdout.writer.buffered());
@@ -165,16 +164,16 @@ test "run reports missing files" {
     var stderr: std.io.Writer.Allocating = .init(std.testing.allocator);
     defer stderr.deinit();
 
-    const exit_code = try run(
-        std.testing.allocator,
-        tmp.dir,
-        &.{ "mp", "missing.md" },
-        &stdout.writer,
-        &stderr.writer,
-        false,
-        null,
-        .narrow,
-    );
+    const exit_code = try run(.{
+        .allocator = std.testing.allocator,
+        .cwd = tmp.dir,
+        .args = &.{ "mp", "missing.md" },
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+        .enable_ansi = false,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    });
 
     try std.testing.expectEqual(exit_failure, exit_code);
     try std.testing.expectEqualStrings("", stdout.writer.buffered());
@@ -199,16 +198,16 @@ test "run renders markdown files" {
     var stderr: std.io.Writer.Allocating = .init(std.testing.allocator);
     defer stderr.deinit();
 
-    const exit_code = try run(
-        std.testing.allocator,
-        tmp.dir,
-        &.{ "mp", "example.md" },
-        &stdout.writer,
-        &stderr.writer,
-        false,
-        null,
-        .narrow,
-    );
+    const exit_code = try run(.{
+        .allocator = std.testing.allocator,
+        .cwd = tmp.dir,
+        .args = &.{ "mp", "example.md" },
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+        .enable_ansi = false,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    });
 
     try std.testing.expectEqual(exit_success, exit_code);
     try std.testing.expectEqualStrings(
@@ -235,16 +234,16 @@ test "run threads ambiguous_width through to the renderer" {
     var stderr: std.io.Writer.Allocating = .init(std.testing.allocator);
     defer stderr.deinit();
 
-    const exit_code = try run(
-        std.testing.allocator,
-        tmp.dir,
-        &.{ "mp", "cont.md" },
-        &stdout.writer,
-        &stderr.writer,
-        false,
-        null,
-        .wide,
-    );
+    const exit_code = try run(.{
+        .allocator = std.testing.allocator,
+        .cwd = tmp.dir,
+        .args = &.{ "mp", "cont.md" },
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+        .enable_ansi = false,
+        .wrap_width = null,
+        .ambiguous_width = .wide,
+    });
 
     try std.testing.expectEqual(exit_success, exit_code);
     try std.testing.expectEqualStrings(

@@ -1,6 +1,6 @@
 const std = @import("std");
-const renderToOwnedSlice = @import("render_test_helpers.zig").renderToOwnedSlice;
-const width = @import("width.zig");
+const renderToOwnedSlice = @import("test_helpers.zig").renderToOwnedSlice;
+const width = @import("../term/width.zig");
 
 test "simple table renders with aligned columns" {
     const allocator = std.testing.allocator;

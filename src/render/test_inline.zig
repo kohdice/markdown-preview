@@ -1,5 +1,5 @@
 const std = @import("std");
-const renderToOwnedSlice = @import("render_test_helpers.zig").renderToOwnedSlice;
+const renderToOwnedSlice = @import("test_helpers.zig").renderToOwnedSlice;
 
 test "link with parentheses inside URL renders semantically" {
     const allocator = std.testing.allocator;
@@ -227,6 +227,16 @@ test "image syntax renders as alt text placeholder" {
     defer allocator.free(rendered);
 
     try std.testing.expectEqualStrings("[img: logo](https://example.com/logo.png)", rendered);
+}
+
+test "image syntax with title renders title after URL" {
+    const allocator = std.testing.allocator;
+    const source = "![logo](https://example.com/logo.png \"Logo Title\")\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("[img: logo](https://example.com/logo.png) — Logo Title\n", rendered);
 }
 
 test "image syntax with ANSI styling" {
@@ -585,6 +595,26 @@ test "same-delimiter nesting with ANSI" {
     try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, "***"));
 }
 
+test "multi-line emphasis stays inside one inline span" {
+    const allocator = std.testing.allocator;
+    const source = "foo *bar\nbaz* qux";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("foo bar\nbaz qux", rendered);
+}
+
+test "multi-line link text stays inside one link" {
+    const allocator = std.testing.allocator;
+    const source = "[foo\nbar](https://example.com)";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("foo\nbar(https://example.com)", rendered);
+}
+
 test "reference-style link resolves to definition" {
     const allocator = std.testing.allocator;
     const source = "[GitHub][1]\n\n[1]: https://github.com\n";
@@ -595,6 +625,17 @@ test "reference-style link resolves to definition" {
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "GitHub"));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "https://github.com"));
     try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, "[1]:"));
+}
+
+test "multi-line reference-style link resolves to definition" {
+    const allocator = std.testing.allocator;
+    const source = "[foo\nbar][ref]\n\n[ref]: https://example.com\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "foo\nbar"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "https://example.com"));
 }
 
 test "reference link with empty ref uses text as label" {

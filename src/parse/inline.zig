@@ -1,0 +1,1307 @@
+const std = @import("std");
+const ast = @import("../ast.zig");
+const parse_block = @import("block.zig");
+
+const DefMap = ast.LinkDefMap;
+
+const max_ref_label_len = 256;
+
+/// CommonMark §6.2: delimiter runs of length 1/2/3 map to emphasis, strong,
+/// and strong+emphasis; the same value drives the multiple-of-three
+/// rejection rule in the closer search.
+const max_emphasis_delim_run: usize = 3;
+
+/// Accept both `~text~` and `~~text~~`; longer runs fall through as literal
+/// tildes.
+const max_strikethrough_delim_run: usize = 2;
+
+/// RFC 3629 §3: a UTF-8 continuation byte has the bit pattern `10xxxxxx`.
+const utf8_continuation_mask: u8 = 0xC0;
+const utf8_continuation_tag: u8 = 0x80;
+
+const scheme_separator: []const u8 = "://";
+const http_scheme: []const u8 = "http://";
+const https_scheme: []const u8 = "https://";
+
+/// CommonMark §6.7: a hard line break is signaled by a backslash or by
+/// at least two trailing spaces at the end of a line.
+const min_hard_break_spaces: usize = 2;
+
+pub const InlineBuilder = struct {
+    allocator: std.mem.Allocator,
+    nodes: std.ArrayListUnmanaged(ast.InlineNode) = .empty,
+    next: std.ArrayListUnmanaged(ast.InlineRef) = .empty,
+
+    pub fn init(allocator: std.mem.Allocator) InlineBuilder {
+        return .{
+            .allocator = allocator,
+        };
+    }
+
+    pub const Storage = struct {
+        nodes: []ast.InlineNode,
+        next: []ast.InlineRef,
+    };
+
+    pub fn finish(self: *InlineBuilder) anyerror!Storage {
+        const nodes = try self.nodes.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(nodes);
+        const next = try self.next.toOwnedSlice(self.allocator);
+        return .{
+            .nodes = nodes,
+            .next = next,
+        };
+    }
+
+    pub fn parseSlice(self: *InlineBuilder, content: []const u8, link_defs: *const DefMap) anyerror!ast.InlineRef {
+        if (content.len == 0) return ast.no_inline;
+
+        const lines = [_][]const u8{content};
+        return self.parseLogical(&lines, link_defs);
+    }
+
+    pub fn parseLines(self: *InlineBuilder, lines: []const []const u8, link_defs: *const DefMap) anyerror!ast.InlineRef {
+        if (lines.len == 0) return ast.no_inline;
+        var logical_lines = try self.allocator.alloc([]const u8, lines.len);
+        defer self.allocator.free(logical_lines);
+
+        for (lines, 0..) |line, index| {
+            logical_lines[index] = if (index == 0)
+                line
+            else
+                line[skipLeadingSpaces(line)..];
+        }
+
+        return self.parseLogical(logical_lines, link_defs);
+    }
+
+    fn parseLogical(self: *InlineBuilder, lines: []const []const u8, link_defs: *const DefMap) anyerror!ast.InlineRef {
+        const start_index = self.nodes.items.len;
+        errdefer {
+            self.nodes.shrinkRetainingCapacity(start_index);
+            self.next.shrinkRetainingCapacity(start_index);
+        }
+
+        var parser = TempParser.init(self, lines, link_defs);
+        defer parser.deinit();
+
+        return try parser.parse();
+    }
+
+    fn appendText(self: *InlineBuilder, chain: *InlineChain, content: []const u8) !void {
+        if (content.len == 0) return;
+        try self.appendNode(chain, .{ .text = content });
+    }
+
+    fn appendNode(self: *InlineBuilder, chain: *InlineChain, node: ast.InlineNode) !void {
+        const ref = try self.allocNode(node);
+        self.appendRef(chain, ref);
+    }
+
+    fn allocNode(self: *InlineBuilder, node: ast.InlineNode) !ast.InlineRef {
+        const ref = std.math.cast(ast.InlineRef, self.nodes.items.len) orelse return error.Overflow;
+        try self.nodes.append(self.allocator, node);
+        try self.next.append(self.allocator, ast.no_inline);
+        return ref;
+    }
+
+    fn appendRef(self: *InlineBuilder, chain: *InlineChain, ref: ast.InlineRef) void {
+        if (!ast.hasInline(chain.head)) {
+            chain.head = ref;
+            chain.tail = ref;
+            return;
+        }
+
+        const tail_index: usize = @intCast(chain.tail);
+        self.next.items[tail_index] = ref;
+        chain.tail = ref;
+    }
+};
+
+const InlineChain = struct {
+    head: ast.InlineRef = ast.no_inline,
+    tail: ast.InlineRef = ast.no_inline,
+};
+
+const TokenRef = ast.InlineRef;
+const no_token: TokenRef = ast.no_inline;
+
+fn hasToken(ref: TokenRef) bool {
+    return ref != no_token;
+}
+
+const Delimiter = struct {
+    node: TokenRef,
+    ch: u8,
+    remaining: u8,
+    can_open: bool,
+    can_close: bool,
+    active: bool = true,
+};
+
+const Bracket = struct {
+    node: TokenRef,
+    line_index: usize,
+    content_start: usize,
+    is_image: bool,
+    active: bool = true,
+};
+
+const CodeSpanMatch = struct {
+    slice: []const u8,
+    end_line: usize,
+    end_col: usize,
+};
+
+const LinkTail = struct {
+    url: []const u8,
+    title: ?[]const u8,
+    end_col: usize,
+};
+
+const DelimiterClass = struct {
+    can_open: bool,
+    can_close: bool,
+};
+
+const TempParser = struct {
+    builder: *InlineBuilder,
+    lines: []const []const u8,
+    link_defs: *const DefMap,
+    start_index: usize,
+    prev: std.ArrayListUnmanaged(TokenRef) = .empty,
+    delimiters: std.ArrayListUnmanaged(Delimiter) = .empty,
+    brackets: std.ArrayListUnmanaged(Bracket) = .empty,
+    chain: InlineChain = .{},
+
+    fn init(
+        builder: *InlineBuilder,
+        lines: []const []const u8,
+        link_defs: *const DefMap,
+    ) TempParser {
+        return .{
+            .builder = builder,
+            .lines = lines,
+            .link_defs = link_defs,
+            .start_index = builder.nodes.items.len,
+        };
+    }
+
+    fn deinit(self: *TempParser) void {
+        self.prev.deinit(self.builder.allocator);
+        self.delimiters.deinit(self.builder.allocator);
+        self.brackets.deinit(self.builder.allocator);
+    }
+
+    fn parse(self: *TempParser) !TokenRef {
+        var line_index: usize = 0;
+        var col: usize = 0;
+        var plain_start: usize = 0;
+
+        while (line_index < self.lines.len) {
+            const line = self.lines[line_index];
+
+            if (col >= line.len) {
+                if (line_index + 1 < self.lines.len) {
+                    const tail = line[plain_start..];
+                    const trimmed_end = trimTrailingBreakChars(tail);
+                    try self.appendText(tail[0..trimmed_end]);
+                    _ = try self.appendNode(if (isHardBreak(tail))
+                        .{ .hard_break = {} }
+                    else
+                        .{ .soft_break = {} });
+                    line_index += 1;
+                    col = 0;
+                    plain_start = 0;
+                    continue;
+                }
+
+                try self.appendText(line[plain_start..]);
+                break;
+            }
+
+            switch (line[col]) {
+                '\\' => {
+                    if (col + 1 < line.len and isEscapable(line[col + 1])) {
+                        try self.appendText(line[plain_start..col]);
+                        try self.appendText(line[col + 1 .. col + 2]);
+                        col += 2;
+                        plain_start = col;
+                        continue;
+                    }
+                    col += 1;
+                },
+                '`' => {
+                    if (try self.scanCodeSpan(line_index, col)) |code| {
+                        try self.appendText(line[plain_start..col]);
+                        _ = try self.appendNode(.{ .code_span = code.slice });
+                        line_index = code.end_line;
+                        col = code.end_col;
+                        plain_start = col;
+                        continue;
+                    }
+                    col += 1;
+                },
+                '!' => {
+                    if (col + 1 < line.len and line[col + 1] == '[') {
+                        try self.appendText(line[plain_start..col]);
+                        const ref = try self.appendNode(.{ .text = line[col .. col + 2] });
+                        try self.brackets.append(self.builder.allocator, .{
+                            .node = ref,
+                            .line_index = line_index,
+                            .content_start = col + 2,
+                            .is_image = true,
+                        });
+                        col += 2;
+                        plain_start = col;
+                        continue;
+                    }
+                    col += 1;
+                },
+                '[' => {
+                    try self.appendText(line[plain_start..col]);
+                    const ref = try self.appendNode(.{ .text = line[col .. col + 1] });
+                    try self.brackets.append(self.builder.allocator, .{
+                        .node = ref,
+                        .line_index = line_index,
+                        .content_start = col + 1,
+                        .is_image = false,
+                    });
+                    col += 1;
+                    plain_start = col;
+                },
+                ']' => {
+                    try self.appendText(line[plain_start..col]);
+                    if (try self.tryResolveBracket(line_index, col)) |end_col| {
+                        col = end_col;
+                        plain_start = col;
+                        continue;
+                    }
+
+                    if (self.findActiveBracket()) |bracket_index| {
+                        self.brackets.items[bracket_index].active = false;
+                    }
+
+                    try self.appendText(line[col .. col + 1]);
+                    col += 1;
+                    plain_start = col;
+                },
+                '*', '_' => {
+                    const run_len = countRun(line, col, line[col]);
+                    if (run_len > 0 and run_len <= max_emphasis_delim_run) {
+                        const class = classifyEmphasisDelimiter(self.lines, line_index, col, run_len, line[col]);
+                        if (class.can_open or class.can_close) {
+                            try self.appendText(line[plain_start..col]);
+                            const ref = try self.appendNode(.{ .text = line[col .. col + run_len] });
+                            try self.delimiters.append(self.builder.allocator, .{
+                                .node = ref,
+                                .ch = line[col],
+                                .remaining = @intCast(run_len),
+                                .can_open = class.can_open,
+                                .can_close = class.can_close,
+                            });
+                            if (class.can_close) {
+                                try self.resolveDelimiter(self.delimiters.items.len - 1);
+                            }
+                            col += run_len;
+                            plain_start = col;
+                            continue;
+                        }
+                    }
+                    col += run_len;
+                },
+                '~' => {
+                    const run_len = countRun(line, col, '~');
+                    if (run_len > 0 and run_len <= max_strikethrough_delim_run) {
+                        const class = classifyStrikethroughDelimiter(self.lines, line_index, col, run_len);
+                        if (class.can_open or class.can_close) {
+                            try self.appendText(line[plain_start..col]);
+                            const ref = try self.appendNode(.{ .text = line[col .. col + run_len] });
+                            try self.delimiters.append(self.builder.allocator, .{
+                                .node = ref,
+                                .ch = '~',
+                                .remaining = @intCast(run_len),
+                                .can_open = class.can_open,
+                                .can_close = class.can_close,
+                            });
+                            if (class.can_close) {
+                                try self.resolveDelimiter(self.delimiters.items.len - 1);
+                            }
+                            col += run_len;
+                            plain_start = col;
+                            continue;
+                        }
+                    }
+                    col += run_len;
+                },
+                '<' => {
+                    if (tryParseAutolink(line, col)) |autolink| {
+                        try self.appendText(line[plain_start..col]);
+                        _ = try self.appendNode(.{ .autolink = autolink.url });
+                        col = autolink.end;
+                        plain_start = col;
+                        continue;
+                    }
+                    col += 1;
+                },
+                'h' => {
+                    if (tryParseBareUrl(line, col)) |bare| {
+                        try self.appendText(line[plain_start..col]);
+                        _ = try self.appendNode(.{ .autolink = line[col..bare.end] });
+                        col = bare.end;
+                        plain_start = col;
+                        continue;
+                    }
+                    col += 1;
+                },
+                else => {
+                    col += 1;
+                },
+            }
+        }
+
+        return self.chain.head;
+    }
+
+    fn appendText(self: *TempParser, content: []const u8) !void {
+        if (content.len == 0) return;
+        _ = try self.appendNode(.{ .text = content });
+    }
+
+    fn appendNode(self: *TempParser, node: ast.InlineNode) !TokenRef {
+        const ref = try self.allocNode(node);
+        self.appendRef(ref);
+        return ref;
+    }
+
+    fn allocNode(self: *TempParser, node: ast.InlineNode) !TokenRef {
+        const ref = std.math.cast(TokenRef, self.builder.nodes.items.len) orelse return error.Overflow;
+        try self.builder.nodes.append(self.builder.allocator, node);
+        try self.builder.next.append(self.builder.allocator, no_token);
+        try self.prev.append(self.builder.allocator, no_token);
+        return ref;
+    }
+
+    fn appendRef(self: *TempParser, ref: TokenRef) void {
+        if (!hasToken(self.chain.head)) {
+            self.chain.head = ref;
+            self.chain.tail = ref;
+            return;
+        }
+
+        const tail_index = tokenIndex(self.chain.tail);
+        self.builder.next.items[tail_index] = ref;
+        self.setPrev(ref, self.chain.tail);
+        self.chain.tail = ref;
+    }
+
+    fn scanCodeSpan(self: *TempParser, start_line: usize, start_col: usize) !?CodeSpanMatch {
+        const opener_line = self.lines[start_line];
+        const opener_len = countRun(opener_line, start_col, '`');
+        if (opener_len == 0) return null;
+
+        var line_index = start_line;
+        var col = start_col + opener_len;
+
+        while (line_index < self.lines.len) {
+            const line = self.lines[line_index];
+            while (col < line.len) {
+                if (line[col] == '`') {
+                    const close_len = countRun(line, col, '`');
+                    if (close_len == opener_len) {
+                        return .{
+                            .slice = try self.captureRange(start_line, start_col, line_index, col + close_len),
+                            .end_line = line_index,
+                            .end_col = col + close_len,
+                        };
+                    }
+                    col += close_len;
+                } else {
+                    col += 1;
+                }
+            }
+
+            line_index += 1;
+            col = 0;
+        }
+
+        return null;
+    }
+
+    fn tryResolveBracket(self: *TempParser, line_index: usize, close_col: usize) !?usize {
+        const opener_index = self.findActiveBracket() orelse return null;
+        const opener = self.brackets.items[opener_index];
+        const line = self.lines[line_index];
+
+        const link_tail = self.parseInlineLinkTail(line, close_col) orelse try self.parseReferenceLinkTail(opener, line_index, close_col) orelse return null;
+
+        const opener_node = opener.node;
+        const child_head = self.builder.next.items[tokenIndex(opener_node)];
+        const child_tail = self.chain.tail;
+
+        if (hasToken(child_head)) {
+            self.setPrev(child_head, no_token);
+            self.builder.next.items[tokenIndex(child_tail)] = no_token;
+        }
+
+        self.builder.next.items[tokenIndex(opener_node)] = no_token;
+        self.chain.tail = opener_node;
+        self.brackets.items[opener_index].active = false;
+
+        self.builder.nodes.items[tokenIndex(opener_node)] = if (opener.is_image)
+            .{ .image = .{
+                .url = link_tail.url,
+                .title = link_tail.title,
+                .children = child_head,
+            } }
+        else
+            .{ .link = .{
+                .url = link_tail.url,
+                .title = link_tail.title,
+                .children = child_head,
+            } };
+
+        if (!opener.is_image) {
+            for (self.brackets.items[0..opener_index]) |*bracket| {
+                if (!bracket.is_image) bracket.active = false;
+            }
+        }
+
+        return link_tail.end_col;
+    }
+
+    fn parseInlineLinkTail(self: *TempParser, line: []const u8, close_col: usize) ?LinkTail {
+        _ = self;
+        if (close_col + 1 >= line.len or line[close_col + 1] != '(') return null;
+
+        var depth: usize = 1;
+        var pos = close_col + 2;
+        while (pos < line.len) : (pos += 1) {
+            switch (line[pos]) {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if (depth == 0) {
+                        const inner = line[close_col + 2 .. pos];
+                        const title_info = extractTitle(inner);
+                        return .{
+                            .url = inner[0..title_info.url_len],
+                            .title = title_info.title,
+                            .end_col = pos + 1,
+                        };
+                    }
+                },
+                else => {},
+            }
+        }
+
+        return null;
+    }
+
+    fn parseReferenceLinkTail(
+        self: *TempParser,
+        opener: Bracket,
+        line_index: usize,
+        close_col: usize,
+    ) !?LinkTail {
+        if (self.link_defs.count() == 0) return null;
+
+        const line = self.lines[line_index];
+        if (close_col + 1 < line.len and line[close_col + 1] == '[') {
+            const ref_start = close_col + 2;
+            const ref_end = std.mem.indexOfScalarPos(u8, line, ref_start, ']') orelse return null;
+            const label = if (ref_end > ref_start)
+                line[ref_start..ref_end]
+            else
+                try self.captureRange(opener.line_index, opener.content_start, line_index, close_col);
+
+            if (lookupReferenceDefinition(self.link_defs, label)) |def| {
+                return .{
+                    .url = def.url,
+                    .title = def.title,
+                    .end_col = ref_end + 1,
+                };
+            }
+            return null;
+        }
+
+        if (close_col + 1 < line.len and (line[close_col + 1] == '(' or line[close_col + 1] == '['))
+            return null;
+
+        const label = try self.captureRange(opener.line_index, opener.content_start, line_index, close_col);
+        if (lookupReferenceDefinition(self.link_defs, label)) |def| {
+            return .{
+                .url = def.url,
+                .title = def.title,
+                .end_col = close_col + 1,
+            };
+        }
+
+        return null;
+    }
+
+    fn resolveDelimiter(self: *TempParser, closer_index: usize) !void {
+        while (true) {
+            if (closer_index >= self.delimiters.items.len) break;
+            const closer = self.delimiters.items[closer_index];
+            if (!closer.active or !closer.can_close or closer.remaining == 0) break;
+
+            const opener_index = self.findMatchingOpener(closer_index) orelse break;
+            if (!try self.wrapDelimiter(opener_index, closer_index)) break;
+        }
+    }
+
+    fn findMatchingOpener(self: *TempParser, closer_index: usize) ?usize {
+        const closer = self.delimiters.items[closer_index];
+        var index = closer_index;
+        while (index > 0) {
+            index -= 1;
+            const opener = self.delimiters.items[index];
+            if (!opener.active or !opener.can_open) continue;
+            if (opener.ch != closer.ch) continue;
+
+            if ((closer.ch == '*' or closer.ch == '_') and violatesMultipleOfThree(opener.remaining, closer.remaining))
+                continue;
+
+            return index;
+        }
+        return null;
+    }
+
+    fn wrapDelimiter(self: *TempParser, opener_index: usize, closer_index: usize) !bool {
+        const opener = self.delimiters.items[opener_index];
+        const closer = self.delimiters.items[closer_index];
+        const use_len = chooseDelimiterUse(opener.remaining, closer.remaining, opener.ch);
+        const opener_left = opener.remaining - use_len;
+        const closer_left = closer.remaining - use_len;
+        const opener_node = opener.node;
+        const closer_node = closer.node;
+        const child_head = self.builder.next.items[tokenIndex(opener_node)];
+
+        if (!hasToken(child_head) or child_head == closer_node) return false;
+
+        const child_tail = self.prevOf(closer_node);
+        if (!hasToken(child_tail) or child_tail == opener_node) return false;
+
+        self.setPrev(child_head, no_token);
+        self.builder.next.items[tokenIndex(child_tail)] = no_token;
+
+        const container_children = child_head;
+        const container_node: ast.InlineNode = switch (opener.ch) {
+            '~' => .{ .strikethrough = container_children },
+            else => switch (use_len) {
+                3 => .{ .bold_italic = container_children },
+                2 => .{ .strong = container_children },
+                else => .{ .emphasis = container_children },
+            },
+        };
+
+        var container_ref = opener_node;
+        if (opener_left == 0) {
+            self.builder.nodes.items[tokenIndex(opener_node)] = container_node;
+            self.delimiters.items[opener_index].active = false;
+            self.delimiters.items[opener_index].remaining = 0;
+        } else {
+            const opener_text = self.textSlice(opener_node);
+            self.builder.nodes.items[tokenIndex(opener_node)] = .{ .text = opener_text[0..opener_left] };
+            self.delimiters.items[opener_index].remaining = opener_left;
+            container_ref = try self.allocNode(container_node);
+            self.builder.next.items[tokenIndex(opener_node)] = container_ref;
+            self.setPrev(container_ref, opener_node);
+        }
+
+        if (closer_left == 0) {
+            self.builder.next.items[tokenIndex(container_ref)] = no_token;
+            self.delimiters.items[closer_index].active = false;
+            self.delimiters.items[closer_index].remaining = 0;
+            self.chain.tail = container_ref;
+        } else {
+            const closer_text = self.textSlice(closer_node);
+            self.builder.nodes.items[tokenIndex(closer_node)] = .{ .text = closer_text[closer_text.len - closer_left ..] };
+            self.delimiters.items[closer_index].remaining = closer_left;
+            self.builder.next.items[tokenIndex(container_ref)] = closer_node;
+            self.setPrev(closer_node, container_ref);
+            self.chain.tail = closer_node;
+        }
+
+        return true;
+    }
+
+    fn findActiveBracket(self: *TempParser) ?usize {
+        var index = self.brackets.items.len;
+        while (index > 0) {
+            index -= 1;
+            if (self.brackets.items[index].active) return index;
+        }
+        return null;
+    }
+
+    fn textSlice(self: *TempParser, ref: TokenRef) []const u8 {
+        return self.builder.nodes.items[tokenIndex(ref)].text;
+    }
+
+    fn captureRange(
+        self: *TempParser,
+        start_line: usize,
+        start_col: usize,
+        end_line: usize,
+        end_col: usize,
+    ) ![]const u8 {
+        if (start_line == end_line) {
+            return self.lines[start_line][start_col..end_col];
+        }
+
+        var total_len: usize = 0;
+        var line_index = start_line;
+        while (line_index <= end_line) : (line_index += 1) {
+            const line = self.lines[line_index];
+            const chunk = if (line_index == start_line)
+                line[start_col..]
+            else if (line_index == end_line)
+                line[0..end_col]
+            else
+                line;
+            total_len += chunk.len;
+            if (line_index < end_line) total_len += 1;
+        }
+
+        const allocator = self.builder.allocator;
+        const buffer = try allocator.alloc(u8, total_len);
+        var out: usize = 0;
+        line_index = start_line;
+        while (line_index <= end_line) : (line_index += 1) {
+            const line = self.lines[line_index];
+            const chunk = if (line_index == start_line)
+                line[start_col..]
+            else if (line_index == end_line)
+                line[0..end_col]
+            else
+                line;
+            @memcpy(buffer[out .. out + chunk.len], chunk);
+            out += chunk.len;
+            if (line_index < end_line) {
+                buffer[out] = '\n';
+                out += 1;
+            }
+        }
+        return buffer;
+    }
+
+    fn prevOf(self: *TempParser, ref: TokenRef) TokenRef {
+        return self.prev.items[self.localIndex(ref)];
+    }
+
+    fn setPrev(self: *TempParser, ref: TokenRef, value: TokenRef) void {
+        self.prev.items[self.localIndex(ref)] = value;
+    }
+
+    fn localIndex(self: *TempParser, ref: TokenRef) usize {
+        return tokenIndex(ref) - self.start_index;
+    }
+};
+
+fn tokenIndex(ref: TokenRef) usize {
+    return @intCast(ref);
+}
+
+fn countRun(line: []const u8, start: usize, ch: u8) usize {
+    var len: usize = 0;
+    while (start + len < line.len and line[start + len] == ch) : (len += 1) {}
+    return len;
+}
+
+fn prevCodepointAt(lines: []const []const u8, line_index: usize, col: usize) ?u21 {
+    if (col > 0) return prevCodepoint(lines[line_index], col);
+    if (line_index > 0) return '\n';
+    return null;
+}
+
+fn nextCodepointAt(lines: []const []const u8, line_index: usize, col: usize) ?u21 {
+    const line = lines[line_index];
+    if (col < line.len) return nextCodepoint(line, col);
+    if (line_index + 1 < lines.len) return '\n';
+    return null;
+}
+
+fn classifyEmphasisDelimiter(
+    lines: []const []const u8,
+    line_index: usize,
+    start_col: usize,
+    run_len: usize,
+    ch: u8,
+) DelimiterClass {
+    const before = cpClass(prevCodepointAt(lines, line_index, start_col));
+    const after = cpClass(nextCodepointAt(lines, line_index, start_col + run_len));
+    const flank = checkFlanking(before, after);
+
+    var can_open = flank.left;
+    var can_close = flank.right;
+    if (ch == '_') {
+        can_open = can_open and (!flank.right or before == .punctuation);
+        can_close = can_close and (!flank.left or after == .punctuation);
+    }
+
+    return .{
+        .can_open = can_open,
+        .can_close = can_close,
+    };
+}
+
+fn classifyStrikethroughDelimiter(
+    lines: []const []const u8,
+    line_index: usize,
+    start_col: usize,
+    run_len: usize,
+) DelimiterClass {
+    _ = run_len;
+    const before = cpClass(prevCodepointAt(lines, line_index, start_col));
+    const after = cpClass(nextCodepointAt(lines, line_index, start_col + 1));
+    return .{
+        .can_open = after != .whitespace,
+        .can_close = before != .whitespace,
+    };
+}
+
+fn chooseDelimiterUse(opener_len: u8, closer_len: u8, ch: u8) u8 {
+    if (ch == '~') {
+        return if (opener_len >= 2 and closer_len >= 2) 2 else 1;
+    }
+    if (opener_len >= 3 and closer_len >= 3) return 3;
+    if (opener_len >= 2 and closer_len >= 2) return 2;
+    return 1;
+}
+
+fn violatesMultipleOfThree(opener_len: u8, closer_len: u8) bool {
+    const sum: u8 = opener_len + closer_len;
+    return sum % max_emphasis_delim_run == 0 and
+        (opener_len % max_emphasis_delim_run != 0 or closer_len % max_emphasis_delim_run != 0);
+}
+
+fn lookupReferenceDefinition(link_defs: *const DefMap, label: []const u8) ?ast.LinkDef {
+    var lower_buf: [max_ref_label_len]u8 = undefined;
+    if (label.len > lower_buf.len) return null;
+    const lower_key = std.ascii.lowerString(lower_buf[0..label.len], label);
+    return link_defs.get(lower_key);
+}
+
+fn isHardBreak(line: []const u8) bool {
+    if (line.len > 0 and line[line.len - 1] == '\\') return true;
+
+    var trailing_spaces: usize = 0;
+    var pos = line.len;
+    while (pos > 0 and line[pos - 1] == ' ') {
+        trailing_spaces += 1;
+        pos -= 1;
+    }
+    return trailing_spaces >= min_hard_break_spaces;
+}
+
+fn trimTrailingBreakChars(line: []const u8) usize {
+    if (line.len > 0 and line[line.len - 1] == '\\')
+        return line.len - 1;
+
+    var end = line.len;
+    while (end > 0 and line[end - 1] == ' ')
+        end -= 1;
+    return end;
+}
+
+fn skipLeadingSpaces(content: []const u8) usize {
+    var pos: usize = 0;
+    while (pos < content.len and content[pos] == ' ')
+        pos += 1;
+    return pos;
+}
+
+fn findCodeSpanEnd(text: []const u8, start: usize) ?usize {
+    var open_len: usize = 0;
+    while (start + open_len < text.len and text[start + open_len] == '`') : (open_len += 1) {}
+    if (open_len == 0) return null;
+
+    var pos = start + open_len;
+    while (pos < text.len) {
+        if (text[pos] == '`') {
+            var close_len: usize = 0;
+            while (pos + close_len < text.len and text[pos + close_len] == '`') : (close_len += 1) {}
+            if (close_len == open_len) {
+                return pos + close_len - 1;
+            }
+            pos += close_len;
+        } else {
+            pos += 1;
+        }
+    }
+    return null;
+}
+
+fn isEscapable(c: u8) bool {
+    return switch (c) {
+        '!', '"', '#', '$', '%', '&', '\'', '(', ')', '*', '+', ',', '-', '.', '/' => true,
+        ':', ';', '<', '=', '>', '?', '@' => true,
+        '[', '\\', ']', '^', '_', '`' => true,
+        '{', '|', '}', '~' => true,
+        else => false,
+    };
+}
+
+const LinkParts = struct {
+    text_start: usize,
+    text_end: usize,
+    url_start: usize,
+    url_end: usize,
+    title: ?[]const u8 = null,
+    full_end: usize,
+};
+
+fn findLinkParts(text: []const u8, start: usize) ?LinkParts {
+    const span = findBracketSpan(text, start) orelse return null;
+    return findLinkPartsWithSpan(text, span);
+}
+
+const BracketSpan = struct {
+    text_start: usize,
+    text_end: usize,
+    close_bracket: usize,
+};
+
+fn findBracketSpan(text: []const u8, start: usize) ?BracketSpan {
+    if (start >= text.len or text[start] != '[') return null;
+
+    var bracket_depth: usize = 1;
+    var pos = start + 1;
+    while (pos < text.len) : (pos += 1) {
+        switch (text[pos]) {
+            '[' => bracket_depth += 1,
+            ']' => {
+                bracket_depth -= 1;
+                if (bracket_depth == 0) {
+                    return .{
+                        .text_start = start + 1,
+                        .text_end = pos,
+                        .close_bracket = pos,
+                    };
+                }
+            },
+            '\\' => {
+                if (pos + 1 < text.len) pos += 1;
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+fn findLinkPartsWithSpan(text: []const u8, span: BracketSpan) ?LinkParts {
+    const close_bracket = span.close_bracket;
+    if (close_bracket + 1 >= text.len or text[close_bracket + 1] != '(') return null;
+
+    var depth: usize = 1;
+    var pos = close_bracket + 2;
+    while (pos < text.len) : (pos += 1) {
+        switch (text[pos]) {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if (depth == 0) {
+                    const inner_start = close_bracket + 2;
+                    const inner_end = pos;
+                    const title_info = extractTitle(text[inner_start..inner_end]);
+
+                    return .{
+                        .text_start = span.text_start,
+                        .text_end = span.text_end,
+                        .url_start = inner_start,
+                        .url_end = inner_start + title_info.url_len,
+                        .title = title_info.title,
+                        .full_end = pos + 1,
+                    };
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+const TitleInfo = struct {
+    url_len: usize,
+    title: ?[]const u8,
+};
+
+fn extractTitle(inner: []const u8) TitleInfo {
+    const trimmed = std.mem.trimEnd(u8, inner, parse_block.horizontal_whitespace);
+    if (trimmed.len < 4) return .{ .url_len = inner.len, .title = null };
+
+    const last = trimmed[trimmed.len - 1];
+    const open_quote: u8 = switch (last) {
+        '"' => '"',
+        '\'' => '\'',
+        else => return .{ .url_len = inner.len, .title = null },
+    };
+
+    var i = trimmed.len - 2;
+    while (i > 0) : (i -= 1) {
+        if (trimmed[i] == open_quote) {
+            if (i > 0 and parse_block.isHorizontalWhitespace(trimmed[i - 1])) {
+                const url_part = std.mem.trimEnd(u8, trimmed[0 .. i - 1], parse_block.horizontal_whitespace);
+                if (url_part.len == 0) return .{ .url_len = inner.len, .title = null };
+                return .{
+                    .url_len = url_part.len,
+                    .title = trimmed[i + 1 .. trimmed.len - 1],
+                };
+            }
+        }
+    }
+
+    return .{ .url_len = inner.len, .title = null };
+}
+
+const CharClass = enum { whitespace, punctuation, other };
+
+fn prevCodepoint(text: []const u8, pos: usize) ?u21 {
+    if (pos == 0) return null;
+    var start = pos - 1;
+    while (start > 0 and text[start] & utf8_continuation_mask == utf8_continuation_tag) : (start -= 1) {}
+    if (text[start] & utf8_continuation_mask == utf8_continuation_tag) return null;
+    const len = std.unicode.utf8ByteSequenceLength(text[start]) catch return null;
+    if (start + len != pos) return null;
+    return std.unicode.utf8Decode(text[start..][0..len]) catch null;
+}
+
+fn nextCodepoint(text: []const u8, pos: usize) ?u21 {
+    if (pos >= text.len) return null;
+    const len = std.unicode.utf8ByteSequenceLength(text[pos]) catch return null;
+    if (pos + len > text.len) return null;
+    return std.unicode.utf8Decode(text[pos..][0..len]) catch null;
+}
+
+fn cpClass(cp: ?u21) CharClass {
+    const c = cp orelse return .whitespace;
+    if (c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '\x0c') return .whitespace;
+    if (c == 0x00A0) return .whitespace;
+    if (c >= 0x2000 and c <= 0x200A) return .whitespace;
+    if (c == 0x202F or c == 0x205F or c == 0x3000) return .whitespace;
+    if (c >= 0x21 and c <= 0x2F) return .punctuation;
+    if (c >= 0x3A and c <= 0x40) return .punctuation;
+    if (c >= 0x5B and c <= 0x60) return .punctuation;
+    if (c >= 0x7B and c <= 0x7E) return .punctuation;
+    if (c >= 0x00A1 and c <= 0x00BF) return .punctuation;
+    if (c == 0x00D7 or c == 0x00F7) return .punctuation;
+    if (c >= 0x2010 and c <= 0x2027) return .punctuation;
+    if (c >= 0x2030 and c <= 0x205E) return .punctuation;
+    if (c >= 0x20A0 and c <= 0x20CF) return .punctuation;
+    if (c >= 0x2100 and c <= 0x214F) return .punctuation;
+    if (c >= 0x2190 and c <= 0x21FF) return .punctuation;
+    if (c >= 0x2200 and c <= 0x22FF) return .punctuation;
+    if (c >= 0x2300 and c <= 0x23FF) return .punctuation;
+    if (c >= 0x2500 and c <= 0x25FF) return .punctuation;
+    if (c >= 0x2600 and c <= 0x26FF) return .punctuation;
+    if (c >= 0x2E00 and c <= 0x2E4F) return .punctuation;
+    if (c >= 0x3001 and c <= 0x303F) return .punctuation;
+    if (c >= 0xFF01 and c <= 0xFF0F) return .punctuation;
+    if (c >= 0xFF1A and c <= 0xFF20) return .punctuation;
+    if (c >= 0xFF3B and c <= 0xFF3F) return .punctuation;
+    if (c >= 0xFF5B and c <= 0xFF65) return .punctuation;
+    return .other;
+}
+
+fn checkFlanking(before: CharClass, after: CharClass) struct { left: bool, right: bool } {
+    const left = after != .whitespace and
+        (after != .punctuation or before == .whitespace or before == .punctuation);
+
+    const right = before != .whitespace and
+        (before != .punctuation or after == .whitespace or after == .punctuation);
+
+    return .{ .left = left, .right = right };
+}
+
+const EmphasisKind = enum { emphasis, strong, bold_italic };
+
+const EmphasisResult = struct {
+    kind: EmphasisKind,
+    content: []const u8,
+    end: usize,
+};
+
+fn tryParseEmphasis(text: []const u8, start: usize) ?EmphasisResult {
+    const delim_char = text[start];
+    var delim_len: usize = 0;
+    while (start + delim_len < text.len and text[start + delim_len] == delim_char) : (delim_len += 1) {}
+
+    if (delim_len == 0 or delim_len > max_emphasis_delim_run) return null;
+
+    const after_delim = start + delim_len;
+    if (after_delim >= text.len) return null;
+
+    const open_before = cpClass(prevCodepoint(text, start));
+    const open_after = cpClass(nextCodepoint(text, after_delim));
+    const open_flank = checkFlanking(open_before, open_after);
+
+    if (!open_flank.left) return null;
+
+    if (delim_char == '_' and open_flank.right and open_before != .punctuation) return null;
+
+    var pos = after_delim;
+    while (pos < text.len) {
+        if (text[pos] == '\\' and pos + 1 < text.len and isEscapable(text[pos + 1])) {
+            pos += 2;
+            continue;
+        }
+        if (text[pos] == '`') {
+            if (findCodeSpanEnd(text, pos)) |code_end| {
+                pos = code_end + 1;
+                continue;
+            }
+        }
+        if (text[pos] == delim_char) {
+            var close_len: usize = 0;
+            while (pos + close_len < text.len and text[pos + close_len] == delim_char) : (close_len += 1) {}
+
+            if (close_len >= delim_len) {
+                const close_after_pos = pos + close_len;
+                const close_before = cpClass(prevCodepoint(text, pos));
+                const close_after = cpClass(if (close_after_pos < text.len) nextCodepoint(text, close_after_pos) else null);
+                const close_flank = checkFlanking(close_before, close_after);
+
+                if (close_flank.right) {
+                    if (delim_char == '_' and close_flank.left and close_after != .punctuation) {
+                        pos += close_len;
+                        continue;
+                    }
+
+                    const sum = delim_len + close_len;
+                    if (sum % max_emphasis_delim_run == 0 and
+                        (delim_len % max_emphasis_delim_run != 0 or
+                            close_len % max_emphasis_delim_run != 0))
+                    {
+                        pos += close_len;
+                        continue;
+                    }
+
+                    const extra = close_len - delim_len;
+                    const em_content = text[after_delim .. pos + extra];
+                    if (em_content.len == 0) {
+                        pos += close_len;
+                        continue;
+                    }
+
+                    const kind: EmphasisKind = if (delim_len >= max_emphasis_delim_run)
+                        .bold_italic
+                    else if (delim_len == 2)
+                        .strong
+                    else
+                        .emphasis;
+
+                    return .{
+                        .kind = kind,
+                        .content = em_content,
+                        .end = pos + close_len,
+                    };
+                }
+            }
+            pos += close_len;
+        } else {
+            pos += 1;
+        }
+    }
+    return null;
+}
+
+const StrikethroughResult = struct {
+    content: []const u8,
+    end: usize,
+};
+
+fn tryParseStrikethrough(text: []const u8, start: usize) ?StrikethroughResult {
+    var delim_len: usize = 0;
+    while (start + delim_len < text.len and text[start + delim_len] == '~') : (delim_len += 1) {}
+
+    if (delim_len < 1 or delim_len > max_strikethrough_delim_run) return null;
+
+    const after_delim = start + delim_len;
+    if (after_delim >= text.len) return null;
+    if (parse_block.isHorizontalWhitespace(text[after_delim])) return null;
+
+    var pos = after_delim;
+    while (pos < text.len) {
+        if (text[pos] == '\\' and pos + 1 < text.len and isEscapable(text[pos + 1])) {
+            pos += 2;
+            continue;
+        }
+        if (text[pos] == '~') {
+            var close_len: usize = 0;
+            while (pos + close_len < text.len and text[pos + close_len] == '~') : (close_len += 1) {}
+
+            if (close_len >= delim_len and pos > after_delim) {
+                if (!parse_block.isHorizontalWhitespace(text[pos - 1])) {
+                    return .{
+                        .content = text[after_delim..pos],
+                        .end = pos + delim_len,
+                    };
+                }
+            }
+            pos += close_len;
+        } else {
+            pos += 1;
+        }
+    }
+    return null;
+}
+
+const AutolinkResult = struct {
+    url: []const u8,
+    end: usize,
+};
+
+fn tryParseAutolink(text: []const u8, start: usize) ?AutolinkResult {
+    if (start >= text.len or text[start] != '<') return null;
+
+    var pos = start + 1;
+    var scheme_end: usize = 0;
+    while (pos < text.len) {
+        switch (text[pos]) {
+            '>' => {
+                if (scheme_end == 0) return null;
+                const scheme = text[start + 1 .. scheme_end - scheme_separator.len];
+                if (scheme.len == 0) return null;
+                if (!std.ascii.isAlphabetic(scheme[0])) return null;
+                return .{
+                    .url = text[start + 1 .. pos],
+                    .end = pos + 1,
+                };
+            },
+            ' ', '\t', '\n', '<' => return null,
+            ':' => {
+                if (scheme_end == 0 and std.mem.startsWith(u8, text[pos..], scheme_separator)) {
+                    scheme_end = pos + scheme_separator.len;
+                }
+                pos += 1;
+            },
+            else => {
+                pos += 1;
+            },
+        }
+    }
+    return null;
+}
+
+const BareUrlResult = struct {
+    end: usize,
+};
+
+fn tryParseBareUrl(text: []const u8, start: usize) ?BareUrlResult {
+    const rest = text[start..];
+    const https: []const u8 = "https://";
+    const http: []const u8 = "http://";
+    const prefix_len: usize = if (std.mem.startsWith(u8, rest, https))
+        https.len
+    else if (std.mem.startsWith(u8, rest, http))
+        http.len
+    else
+        return null;
+
+    if (start > 0) {
+        const prev = text[start - 1];
+        if (std.ascii.isAlphanumeric(prev) or prev == '.' or prev == '/' or prev == ':')
+            return null;
+    }
+
+    if (start + prefix_len >= text.len) return null;
+
+    var pos = start + prefix_len;
+    while (pos < text.len) {
+        switch (text[pos]) {
+            ' ', '<', '>', 0...0x1f, 0x7f => break,
+            else => pos += 1,
+        }
+    }
+
+    while (pos > start + prefix_len) {
+        switch (text[pos - 1]) {
+            '.', ',', ':', '!', '?', '*', '_', '~', '\'', '"' => pos -= 1,
+            ')' => {
+                var open_count: usize = 0;
+                var close_count: usize = 0;
+                for (text[start..pos]) |c| {
+                    if (c == '(') open_count += 1;
+                    if (c == ')') close_count += 1;
+                }
+                if (close_count > open_count) {
+                    pos -= 1;
+                } else {
+                    break;
+                }
+            },
+            else => break,
+        }
+    }
+
+    if (pos <= start + prefix_len) return null;
+
+    const domain_start = start + prefix_len;
+    const path_start = std.mem.indexOfScalarPos(u8, text[0..pos], domain_start, '/') orelse pos;
+    const domain = text[domain_start..path_start];
+    if (std.mem.indexOfScalar(u8, domain, '.') == null) return null;
+
+    return .{ .end = pos };
+}
+
+const RefLinkResult = struct {
+    link_text: []const u8,
+    url: []const u8,
+    title: ?[]const u8,
+    end: usize,
+};
+
+fn tryParseRefLink(text: []const u8, start: usize, link_defs: *const DefMap) ?RefLinkResult {
+    const span = findBracketSpan(text, start) orelse return null;
+    return tryParseRefLinkWithSpan(text, span, link_defs);
+}
+
+fn tryParseRefLinkWithSpan(
+    text: []const u8,
+    span: BracketSpan,
+    link_defs: *const DefMap,
+) ?RefLinkResult {
+    if (link_defs.count() == 0) return null;
+
+    const text_end = span.close_bracket;
+    const link_text = text[span.text_start..span.text_end];
+
+    if (text_end + 1 < text.len and text[text_end + 1] == '[') {
+        const ref_start = text_end + 2;
+        const ref_end = std.mem.indexOfScalarPos(u8, text, ref_start, ']') orelse return null;
+        const ref_label = if (ref_end > ref_start) text[ref_start..ref_end] else link_text;
+
+        var lower_buf: [max_ref_label_len]u8 = undefined;
+        if (ref_label.len > lower_buf.len) return null;
+        const lower_key = std.ascii.lowerString(lower_buf[0..ref_label.len], ref_label);
+
+        if (link_defs.get(lower_key)) |def| {
+            return .{
+                .link_text = link_text,
+                .url = def.url,
+                .title = def.title,
+                .end = ref_end + 1,
+            };
+        }
+    }
+
+    if (text_end + 1 < text.len and (text[text_end + 1] == '(' or text[text_end + 1] == '['))
+        return null;
+
+    var lower_buf: [max_ref_label_len]u8 = undefined;
+    if (link_text.len > lower_buf.len) return null;
+    const lower_key = std.ascii.lowerString(lower_buf[0..link_text.len], link_text);
+
+    if (link_defs.get(lower_key)) |def| {
+        return .{
+            .link_text = link_text,
+            .url = def.url,
+            .title = def.title,
+            .end = text_end + 1,
+        };
+    }
+
+    return null;
+}

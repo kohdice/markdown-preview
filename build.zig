@@ -60,6 +60,18 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
+    const bench_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_inline.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    attachTreeSitter(bench_mod, ts_support);
+
+    const bench_exe = b.addExecutable(.{
+        .name = "inline-bench",
+        .root_module = bench_mod,
+    });
+
     const run_step = b.step("run", "Run the app");
     const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);
@@ -69,20 +81,23 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
+    const bench_step = b.step("bench-inline", "Run inline parser/render benchmarks");
+    const run_bench = b.addRunArtifact(bench_exe);
+    bench_step.dependOn(&run_bench.step);
+
     const test_step = b.step("test", "Run tests");
     const test_roots = [_]struct {
         path: []const u8,
         needs_tree_sitter: bool,
     }{
         .{ .path = "src/parse.zig", .needs_tree_sitter = false },
-        .{ .path = "src/parse_document_test.zig", .needs_tree_sitter = false },
+        .{ .path = "src/parse_tests.zig", .needs_tree_sitter = false },
         .{ .path = "src/render.zig", .needs_tree_sitter = true },
         .{ .path = "src/cli.zig", .needs_tree_sitter = true },
-        .{ .path = "src/terminal.zig", .needs_tree_sitter = false },
-        .{ .path = "src/highlight.zig", .needs_tree_sitter = true },
-        .{ .path = "src/parse_table.zig", .needs_tree_sitter = false },
-        .{ .path = "src/entity.zig", .needs_tree_sitter = false },
-        .{ .path = "src/width.zig", .needs_tree_sitter = false },
+        .{ .path = "src/term/terminal.zig", .needs_tree_sitter = false },
+        .{ .path = "src/term/highlight.zig", .needs_tree_sitter = true },
+        .{ .path = "src/text.zig", .needs_tree_sitter = false },
+        .{ .path = "src/term/width.zig", .needs_tree_sitter = false },
     };
 
     for (test_roots) |test_root| {
