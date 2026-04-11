@@ -53,24 +53,15 @@ pub const Renderer = struct {
     }
 };
 
-pub fn write(
-    allocator: std.mem.Allocator,
-    writer: *std.io.Writer,
-    doc: *const ast.Document,
-    opts: RenderOptions,
-) !void {
-    var renderer = Renderer.init(allocator, opts);
-    defer renderer.deinit();
-    try renderer.renderDocument(writer, doc);
-}
-
 test {
     _ = @import("render/block.zig");
     _ = @import("render/measure.zig");
     _ = @import("render/prefix_writer.zig");
     _ = @import("render/table.zig");
-    _ = @import("render/test_block.zig");
-    _ = @import("render/test_inline.zig");
-    _ = @import("render/test_code.zig");
-    _ = @import("render/test_table.zig");
+    _ = @import("render/ast_helpers_test.zig");
+    _ = @import("render/document_test.zig");
+    _ = @import("render/inline_test.zig");
+    _ = @import("render/block_test.zig");
+    _ = @import("render/table_test.zig");
+    _ = @import("render/code_test.zig");
 }

@@ -62,17 +62,7 @@ pub const InlineBuilder = struct {
 
     pub fn parseLines(self: *InlineBuilder, lines: []const []const u8, link_defs: *const DefMap) anyerror!ast.InlineRef {
         if (lines.len == 0) return ast.no_inline;
-        var logical_lines = try self.allocator.alloc([]const u8, lines.len);
-        defer self.allocator.free(logical_lines);
-
-        for (lines, 0..) |line, index| {
-            logical_lines[index] = if (index == 0)
-                line
-            else
-                line[skipLeadingSpaces(line)..];
-        }
-
-        return self.parseLogical(logical_lines, link_defs);
+        return self.parseLogical(lines, link_defs);
     }
 
     fn parseLogical(self: *InlineBuilder, lines: []const []const u8, link_defs: *const DefMap) anyerror!ast.InlineRef {
@@ -804,13 +794,6 @@ fn trimTrailingBreakChars(line: []const u8) usize {
     while (end > 0 and line[end - 1] == ' ')
         end -= 1;
     return end;
-}
-
-fn skipLeadingSpaces(content: []const u8) usize {
-    var pos: usize = 0;
-    while (pos < content.len and content[pos] == ' ')
-        pos += 1;
-    return pos;
 }
 
 fn findCodeSpanEnd(text: []const u8, start: usize) ?usize {

@@ -141,7 +141,7 @@ fn runScenario(scenario: Scenario) !void {
     const allocator = counting.allocator();
 
     var timer = try std.time.Timer.start();
-    var doc = try parse.parse(allocator, scenario.input);
+    var doc = try parse.parseBorrowed(allocator, scenario.input);
     defer doc.deinit();
     const parse_elapsed_ns = timer.read();
     const after_parse = counting.snapshot();

@@ -163,7 +163,10 @@ pub const Renderer = struct {
 
     fn writeList(self: *Renderer, list: ast.List, depth: usize) anyerror!void {
         for (list.items, 0..) |item, i| {
-            if (i > 0) try self.writer.writeByte('\n');
+            if (i > 0) {
+                try self.writer.writeByte('\n');
+                if (list.loose) try self.writer.writeByte('\n');
+            }
             try self.writeListItem(item, depth);
         }
     }
@@ -324,12 +327,21 @@ fn checkboxWidth(checked: ?bool, ambiguous: width.AmbiguousWidth) usize {
 
 test "Renderer.write renders heading content without document trailing newline" {
     const allocator = std.testing.allocator;
-    const parse = @import("../parse.zig");
     var highlighter = highlight.Highlighter.init();
     defer highlighter.deinit();
 
-    var doc = try parse.parse(allocator, "# Hello\n");
-    defer doc.deinit();
+    const inline_nodes = [_]ast.InlineNode{.{ .text = "Hello" }};
+    const inline_next = [_]ast.InlineRef{ast.no_inline};
+    var blocks = [_]ast.BlockNode{
+        .{ .heading = .{ .level = 1, .children = 0 } },
+    };
+    const doc: ast.Document = .{
+        .inline_nodes = &inline_nodes,
+        .inline_next = &inline_next,
+        .blocks = &blocks,
+        .link_defs = .{},
+        .has_trailing_newline = false,
+    };
 
     var buf: std.io.Writer.Allocating = .init(allocator);
     defer buf.deinit();

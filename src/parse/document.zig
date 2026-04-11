@@ -1,9 +1,11 @@
 const std = @import("std");
 const ast = @import("../ast.zig");
 const parse_block = @import("block.zig");
-const parse_table = @import("table.zig");
-const parse_link = @import("link.zig");
 const parse_inline = @import("inline.zig");
+const parse_link = @import("link.zig");
+const parse_table = @import("table.zig");
+
+const max_inline_ref_label_len = 256;
 
 pub const ParseResult = struct {
     blocks: []ast.BlockNode,
@@ -12,22 +14,18 @@ pub const ParseResult = struct {
     link_defs: ast.LinkDefMap,
 };
 
-pub fn parse(allocator: std.mem.Allocator, lines: []const []const u8) !ParseResult {
+pub fn parse(allocator: std.mem.Allocator, source: []const u8) !ParseResult {
     var parser = Parser{
         .allocator = allocator,
-        .lines = lines,
-        .pos = 0,
         .inline_builder = parse_inline.InlineBuilder.init(allocator),
         .link_defs = .{},
     };
-    const estimated_link_defs = countLinkDefinitions(lines);
-    if (estimated_link_defs > 0) {
-        const map_capacity = std.math.cast(u32, estimated_link_defs) orelse return error.Overflow;
-        try parser.link_defs.ensureTotalCapacity(allocator, map_capacity);
-    }
 
-    const raw_blocks = try parser.parseBlocks();
-    const blocks = try parser.resolveInlines(raw_blocks);
+    var defs_ctx = BlockCursor.initRoot(source);
+    try parser.collectLinkDefinitions(&defs_ctx);
+
+    var blocks_ctx = BlockCursor.initRoot(source);
+    const blocks = try parser.parseBlocks(&blocks_ctx);
     const inline_storage = try parser.inline_builder.finish();
 
     return .{
@@ -38,287 +36,220 @@ pub fn parse(allocator: std.mem.Allocator, lines: []const []const u8) !ParseResu
     };
 }
 
-const RawBlock = union(enum) {
-    paragraph: RawParagraph,
-    heading: RawHeading,
-    blockquote: RawBlockQuote,
-    list: RawList,
-    code_fence: ast.CodeFence,
-    thematic_break: void,
-    table: RawTable,
-    blank_line: void,
-
-    fn deinit(self: *RawBlock, allocator: std.mem.Allocator) void {
-        switch (self.*) {
-            .paragraph => |*p| p.deinit(allocator),
-            .heading => {},
-            .blockquote => |*bq| bq.deinit(allocator),
-            .list => |*l| l.deinit(allocator),
-            .code_fence => {},
-            .thematic_break => {},
-            .table => |*t| t.deinit(allocator),
-            .blank_line => {},
-        }
-    }
-
-    fn deinitShallow(self: *RawBlock, allocator: std.mem.Allocator) void {
-        switch (self.*) {
-            .paragraph => |*p| allocator.free(p.lines),
-            .heading => {},
-            .blockquote => |*bq| {
-                for (bq.blocks) |*b| b.deinitShallow(allocator);
-                allocator.free(bq.blocks);
-            },
-            .list => |*l| {
-                for (l.items) |*it| {
-                    for (it.blocks) |*b| b.deinitShallow(allocator);
-                    allocator.free(it.blocks);
-                }
-                allocator.free(l.items);
-            },
-            .code_fence => {},
-            .thematic_break => {},
-            .table => |*t| {
-                allocator.free(t.header);
-                for (t.rows) |row| allocator.free(row);
-                allocator.free(t.rows);
-            },
-            .blank_line => {},
-        }
-    }
-};
-
-const RawParagraph = struct {
-    lines: [][]const u8,
-
-    fn deinit(self: *RawParagraph, allocator: std.mem.Allocator) void {
-        allocator.free(self.lines);
-    }
-};
-
-const RawHeading = struct {
-    level: u8,
-    content: []const u8,
-};
-
-const RawBlockQuote = struct {
-    indent: usize,
-    blocks: []RawBlock,
-
-    fn deinit(self: *RawBlockQuote, allocator: std.mem.Allocator) void {
-        for (self.blocks) |*b| b.deinit(allocator);
-        allocator.free(self.blocks);
-    }
-};
-
-const RawList = struct {
-    kind: ast.ListKind,
-    items: []RawListItem,
-
-    fn deinit(self: *RawList, allocator: std.mem.Allocator) void {
-        for (self.items) |*it| it.deinit(allocator);
-        allocator.free(self.items);
-    }
-};
-
-const RawListItem = struct {
-    indent: usize,
-    marker: u8,
-    number: ?[]const u8 = null,
-    checked: ?bool = null,
-    blocks: []RawBlock,
-
-    fn deinit(self: *RawListItem, allocator: std.mem.Allocator) void {
-        for (self.blocks) |*b| b.deinit(allocator);
-        allocator.free(self.blocks);
-    }
-};
-
-const RawTable = struct {
-    header: [][]const u8,
-    alignments: []ast.Alignment,
-    rows: [][][]const u8,
-
-    fn deinit(self: *RawTable, allocator: std.mem.Allocator) void {
-        allocator.free(self.header);
-        allocator.free(self.alignments);
-        for (self.rows) |row| allocator.free(row);
-        allocator.free(self.rows);
-    }
-};
-
 const Parser = struct {
     allocator: std.mem.Allocator,
-    lines: []const []const u8,
-    pos: usize,
     inline_builder: parse_inline.InlineBuilder,
     link_defs: ast.LinkDefMap,
 
-    fn peekLine(self: *const Parser) []const u8 {
-        return self.lines[self.pos];
-    }
-
-    fn advanceLine(self: *Parser) void {
-        self.pos += 1;
-    }
-
-    fn lineStartsTable(self: *const Parser) bool {
-        const line = self.peekLine();
-        if (std.mem.indexOfScalar(u8, line, '|') == null) return false;
-
-        const next_line = self.peekNextLine() orelse return false;
-        if (!parse_table.isDelimiterRow(next_line)) return false;
-
-        return parse_table.cellCount(line) == parse_table.cellCount(next_line);
-    }
-
-    fn peekNextLine(self: *const Parser) ?[]const u8 {
-        if (self.pos + 1 >= self.lines.len) return null;
-        return self.lines[self.pos + 1];
-    }
-
-    fn parseContainerBlocks(self: *Parser, container_lines: []const []const u8) anyerror![]RawBlock {
-        const saved_lines = self.lines;
-        const saved_pos = self.pos;
-        defer {
-            self.lines = saved_lines;
-            self.pos = saved_pos;
-        }
-
-        self.lines = container_lines;
-        self.pos = 0;
-
-        return try self.parseBlocks();
-    }
-
-    fn parseBlocks(self: *Parser) ![]RawBlock {
-        var blocks: std.ArrayListUnmanaged(RawBlock) = .empty;
-        errdefer {
-            for (blocks.items) |*b| b.deinit(self.allocator);
-            blocks.deinit(self.allocator);
-        }
-
-        while (self.pos < self.lines.len) {
-            if (isBlankLine(self.peekLine())) {
-                while (self.pos < self.lines.len and isBlankLine(self.peekLine())) {
-                    self.advanceLine();
+    fn collectLinkDefinitions(self: *Parser, cursor: *BlockCursor) anyerror!void {
+        while (cursor.peekLine()) |line| {
+            if (isBlankLine(line)) {
+                while (cursor.peekLine()) |blank| {
+                    if (!isBlankLine(blank)) break;
+                    cursor.advanceLine();
                 }
-                try blocks.append(self.allocator, .{ .blank_line = {} });
                 continue;
             }
 
-            const line = self.peekLine();
-
             if (parse_block.fence(line)) |fence_info| {
-                const cf = try self.parseFenceBlock(fence_info);
-                try blocks.append(self.allocator, cf);
+                self.skipFenceBlock(cursor, fence_info);
                 continue;
             }
 
             if (parse_link.definition(line)) |def| {
                 try self.addLinkDef(def);
-                self.advanceLine();
+                cursor.advanceLine();
                 continue;
             }
 
             if (parse_block.isThematicBreak(line)) {
-                self.advanceLine();
-                try blocks.append(self.allocator, .{ .thematic_break = {} });
+                cursor.advanceLine();
                 continue;
             }
 
-            if (try self.tryParseTable(line)) |table_node| {
-                try blocks.append(self.allocator, table_node);
+            if (lineStartsTable(cursor.*)) {
+                self.skipTable(cursor);
                 continue;
             }
 
-            if (parse_block.heading(line)) |h| {
-                self.advanceLine();
-                try blocks.append(self.allocator, .{
-                    .heading = .{ .level = h.level, .content = h.content },
-                });
+            if (parse_block.heading(line) != null) {
+                cursor.advanceLine();
                 continue;
             }
 
-            if (parse_block.blockquote(line)) |_| {
-                const bq = try self.parseBlockQuoteBlock();
-                try blocks.append(self.allocator, bq);
+            if (parse_block.blockquote(line) != null) {
+                const blockquote = parse_block.blockquote(line) orelse unreachable;
+                var child_ctx = BlockCursor.initBlockQuote(cursor, blockquote.indent);
+                try self.collectLinkDefinitions(&child_ctx);
+                cursor.raw_pos = child_ctx.raw_pos;
                 continue;
             }
 
             if (parse_block.listItem(line) != null) {
-                const list = try self.parseListBlock(.unordered);
-                try blocks.append(self.allocator, list);
+                try self.skipListBlock(cursor, .unordered);
                 continue;
             }
+
             if (parse_block.orderedListItem(line) != null) {
-                const list = try self.parseListBlock(.ordered);
-                try blocks.append(self.allocator, list);
+                try self.skipListBlock(cursor, .ordered);
                 continue;
             }
 
-            const p = try self.parseParagraph();
-            try blocks.append(self.allocator, p);
+            self.skipParagraph(cursor);
         }
-
-        return blocks.toOwnedSlice(self.allocator);
     }
 
-    fn addLinkDef(self: *Parser, def: parse_link.Definition) !void {
-        const key = try std.ascii.allocLowerString(self.allocator, def.label);
-        errdefer self.allocator.free(key);
+    fn parseBlocks(self: *Parser, cursor: *BlockCursor) anyerror![]ast.BlockNode {
+        var blocks: std.ArrayListUnmanaged(ast.BlockNode) = .empty;
 
-        const result = try self.link_defs.getOrPut(self.allocator, key);
-        if (result.found_existing) {
-            self.allocator.free(key);
-        } else {
-            result.value_ptr.* = ast.LinkDef{
+        while (cursor.peekLine()) |line| {
+            if (isBlankLine(line)) {
+                while (cursor.peekLine()) |blank| {
+                    if (!isBlankLine(blank)) break;
+                    cursor.advanceLine();
+                }
+                try blocks.append(self.allocator, .{ .blank_line = {} });
+                continue;
+            }
+
+            if (parse_block.fence(line)) |fence_info| {
+                try blocks.append(self.allocator, try self.parseFenceBlock(cursor, fence_info));
+                continue;
+            }
+
+            if (parse_link.definition(line)) |def| {
+                try self.addLinkDef(def);
+                cursor.advanceLine();
+                continue;
+            }
+
+            if (parse_block.isThematicBreak(line)) {
+                cursor.advanceLine();
+                try blocks.append(self.allocator, .{ .thematic_break = {} });
+                continue;
+            }
+
+            if (try self.tryParseTable(cursor)) |table_node| {
+                try blocks.append(self.allocator, table_node);
+                continue;
+            }
+
+            if (parse_block.heading(line)) |heading| {
+                cursor.advanceLine();
+                try blocks.append(self.allocator, .{
+                    .heading = .{
+                        .level = heading.level,
+                        .children = try self.inline_builder.parseSlice(heading.content, &self.link_defs),
+                    },
+                });
+                continue;
+            }
+
+            if (parse_block.blockquote(line) != null) {
+                try blocks.append(self.allocator, try self.parseBlockQuoteBlock(cursor));
+                continue;
+            }
+
+            if (parse_block.listItem(line) != null) {
+                try blocks.append(self.allocator, try self.parseListBlock(cursor, .unordered));
+                continue;
+            }
+
+            if (parse_block.orderedListItem(line) != null) {
+                try blocks.append(self.allocator, try self.parseListBlock(cursor, .ordered));
+                continue;
+            }
+
+            try blocks.append(self.allocator, try self.parseParagraph(cursor));
+        }
+
+        return try blocks.toOwnedSlice(self.allocator);
+    }
+
+    fn addLinkDef(self: *Parser, def: parse_link.Definition) anyerror!void {
+        var lower_buf: [max_inline_ref_label_len]u8 = undefined;
+        if (def.label.len <= lower_buf.len) {
+            const lower_key = std.ascii.lowerString(lower_buf[0..def.label.len], def.label);
+            if (self.link_defs.get(lower_key) != null) return;
+
+            const key = try self.allocator.dupe(u8, lower_key);
+            const result = try self.link_defs.getOrPut(self.allocator, key);
+            std.debug.assert(!result.found_existing);
+            result.value_ptr.* = .{
                 .url = def.url,
                 .title = def.title,
             };
+            return;
         }
+
+        const key = try std.ascii.allocLowerString(self.allocator, def.label);
+        const result = try self.link_defs.getOrPut(self.allocator, key);
+        if (result.found_existing) {
+            self.allocator.free(key);
+            return;
+        }
+
+        result.value_ptr.* = .{
+            .url = def.url,
+            .title = def.title,
+        };
     }
 
-    fn parseParagraph(self: *Parser) !RawBlock {
-        var paragraph_lines: std.ArrayListUnmanaged([]const u8) = .empty;
-        errdefer paragraph_lines.deinit(self.allocator);
-
-        if (self.pos < self.lines.len and !isBlankLine(self.peekLine())) {
-            try paragraph_lines.append(self.allocator, self.peekLine());
-            self.advanceLine();
-        }
-
-        while (self.pos < self.lines.len) {
-            const line = self.peekLine();
+    fn skipParagraph(self: *Parser, cursor: *BlockCursor) void {
+        _ = self;
+        var is_first = true;
+        while (cursor.peekLine()) |line| {
             if (isBlankLine(line)) break;
-            if (parse_block.isBlockLevelStart(line)) break;
-            if (parse_link.definition(line) != null) break;
-            if (self.lineStartsTable()) break;
+            if (!is_first) {
+                if (parse_block.isBlockLevelStart(line)) break;
+                if (parse_link.definition(line) != null) break;
+                if (lineStartsTable(cursor.*)) break;
+            }
 
-            try paragraph_lines.append(self.allocator, line);
-            self.advanceLine();
+            cursor.advanceLine();
+            is_first = false;
         }
-
-        return .{ .paragraph = .{ .lines = try paragraph_lines.toOwnedSlice(self.allocator) } };
     }
 
-    fn parseFenceBlock(self: *Parser, fence_info: parse_block.Fence) !RawBlock {
-        const opener = self.peekLine();
-        self.advanceLine();
+    fn parseParagraph(self: *Parser, cursor: *BlockCursor) anyerror!ast.BlockNode {
+        var lines: std.ArrayListUnmanaged([]const u8) = .empty;
+        var is_first = true;
+
+        while (cursor.peekLine()) |line| {
+            if (isBlankLine(line)) break;
+            if (!is_first) {
+                if (parse_block.isBlockLevelStart(line)) break;
+                if (parse_link.definition(line) != null) break;
+                if (lineStartsTable(cursor.*)) break;
+            }
+
+            try lines.append(self.allocator, if (is_first) line else line[skipLeadingSpaces(line)..]);
+            cursor.advanceLine();
+            is_first = false;
+        }
+
+        return .{
+            .paragraph = .{
+                .children = try self.inline_builder.parseLines(lines.items, &self.link_defs),
+            },
+        };
+    }
+
+    fn parseFenceBlock(self: *Parser, cursor: *BlockCursor, fence_info: parse_block.Fence) anyerror!ast.BlockNode {
+        const opener = cursor.peekLine() orelse unreachable;
+        cursor.advanceLine();
 
         var body_lines: std.ArrayListUnmanaged([]const u8) = .empty;
-        defer body_lines.deinit(self.allocator);
-
         var closer: ?[]const u8 = null;
-        while (self.pos < self.lines.len) {
-            const line = self.peekLine();
+        while (cursor.peekLine()) |line| {
             if (parse_block.isClosingFence(line, fence_info)) {
                 closer = line;
-                self.advanceLine();
+                cursor.advanceLine();
                 break;
             }
+
             try body_lines.append(self.allocator, line);
-            self.advanceLine();
+            cursor.advanceLine();
         }
 
         const content = switch (body_lines.items.len) {
@@ -337,185 +268,230 @@ const Parser = struct {
         };
     }
 
-    fn parseBlockQuoteBlock(self: *Parser) anyerror!RawBlock {
-        const first_line = self.peekLine();
-        const first_bq = parse_block.blockquote(first_line) orelse unreachable;
-        const indent = first_bq.indent;
-
-        var child_lines: std.ArrayListUnmanaged([]const u8) = .empty;
-        defer child_lines.deinit(self.allocator);
-
-        while (self.pos < self.lines.len) {
-            const line = self.peekLine();
-            const bq = parse_block.blockquote(line) orelse break;
-            if (bq.indent != indent) break;
-            try child_lines.append(self.allocator, bq.content);
-            self.advanceLine();
+    fn skipFenceBlock(self: *Parser, cursor: *BlockCursor, fence_info: parse_block.Fence) void {
+        _ = self;
+        cursor.advanceLine();
+        while (cursor.peekLine()) |line| {
+            cursor.advanceLine();
+            if (parse_block.isClosingFence(line, fence_info)) break;
         }
+    }
 
-        const child_blocks = try self.parseContainerBlocks(child_lines.items);
+    fn parseBlockQuoteBlock(self: *Parser, cursor: *BlockCursor) anyerror!ast.BlockNode {
+        const first_line = cursor.peekLine() orelse unreachable;
+        const first_bq = parse_block.blockquote(first_line) orelse unreachable;
+        const base_indent = cursor.blockIndentBase();
+
+        var child_ctx = BlockCursor.initBlockQuote(cursor, first_bq.indent);
+        const child_blocks = try self.parseBlocks(&child_ctx);
+        cursor.raw_pos = child_ctx.raw_pos;
 
         return .{
             .blockquote = .{
-                .indent = indent,
+                .indent = first_bq.indent + base_indent,
                 .blocks = child_blocks,
             },
         };
     }
 
-    fn parseListBlock(self: *Parser, kind: ast.ListKind) anyerror!RawBlock {
-        var items: std.ArrayListUnmanaged(RawListItem) = .empty;
-        errdefer {
-            for (items.items) |*it| it.deinit(self.allocator);
-            items.deinit(self.allocator);
-        }
-
+    fn parseListBlock(self: *Parser, cursor: *BlockCursor, kind: ast.ListKind) anyerror!ast.BlockNode {
+        var items: std.ArrayListUnmanaged(ast.ListItem) = .empty;
         var min_indent: ?usize = null;
         var prev_child_indent: ?usize = null;
+        var list_marker: ?u8 = null;
+        var loose = false;
+        const base_indent = cursor.blockIndentBase();
 
-        outer: while (self.pos < self.lines.len) {
-            const line = self.peekLine();
-            if (isBlankLine(line)) break :outer;
+        outer: while (cursor.peekLine()) |line| {
+            if (isBlankLine(line)) {
+                if (skipInterItemBlankLines(cursor, kind, list_marker, min_indent, prev_child_indent)) {
+                    loose = true;
+                    continue;
+                }
+                break;
+            }
 
-            const item_node: RawListItem = switch (kind) {
-                .unordered => blk: {
-                    const parsed = parse_block.listItem(line) orelse break :outer;
-                    if (min_indent) |mi| {
-                        if (parsed.indent < mi) break :outer;
-                        if (parsed.indent >= prev_child_indent.?) break :outer;
+            switch (kind) {
+                .unordered => {
+                    const item = parse_block.listItem(line) orelse break :outer;
+                    if (list_marker) |marker| {
+                        if (item.marker != marker) break :outer;
+                    } else {
+                        list_marker = item.marker;
                     }
-                    self.advanceLine();
-                    if (min_indent == null) min_indent = parsed.indent;
-                    prev_child_indent = parsed.content_col;
-                    break :blk try self.buildUnorderedItem(parsed);
-                },
-                .ordered => blk: {
-                    const parsed = parse_block.orderedListItem(line) orelse break :outer;
-                    if (min_indent) |mi| {
-                        if (parsed.indent < mi) break :outer;
-                        if (parsed.indent >= prev_child_indent.?) break :outer;
+                    if (min_indent) |existing_min| {
+                        if (item.indent < existing_min) break :outer;
+                        if (item.indent >= prev_child_indent.?) break :outer;
                     }
-                    self.advanceLine();
-                    if (min_indent == null) min_indent = parsed.indent;
-                    prev_child_indent = parsed.content_col;
-                    break :blk try self.buildOrderedItem(parsed);
-                },
-            };
 
-            try items.append(self.allocator, item_node);
+                    cursor.advanceLine();
+                    if (min_indent == null) min_indent = item.indent;
+                    prev_child_indent = item.content_col;
+
+                    var child_ctx = BlockCursor.initListItem(
+                        cursor,
+                        item.content,
+                        item.content_col,
+                        base_indent + item.content_col,
+                    );
+                    const child_blocks = try self.parseBlocks(&child_ctx);
+                    cursor.raw_pos = child_ctx.raw_pos;
+                    if (itemBlocksMakeListLoose(child_blocks)) loose = true;
+
+                    try items.append(self.allocator, .{
+                        .indent = item.indent + base_indent,
+                        .marker = item.marker,
+                        .number = null,
+                        .checked = item.checked,
+                        .blocks = child_blocks,
+                    });
+                },
+                .ordered => {
+                    const item = parse_block.orderedListItem(line) orelse break :outer;
+                    if (list_marker) |marker| {
+                        if (item.marker != marker) break :outer;
+                    } else {
+                        list_marker = item.marker;
+                    }
+                    if (min_indent) |existing_min| {
+                        if (item.indent < existing_min) break :outer;
+                        if (item.indent >= prev_child_indent.?) break :outer;
+                    }
+
+                    cursor.advanceLine();
+                    if (min_indent == null) min_indent = item.indent;
+                    prev_child_indent = item.content_col;
+
+                    var child_ctx = BlockCursor.initListItem(
+                        cursor,
+                        item.content,
+                        item.content_col,
+                        base_indent + item.content_col,
+                    );
+                    const child_blocks = try self.parseBlocks(&child_ctx);
+                    cursor.raw_pos = child_ctx.raw_pos;
+                    if (itemBlocksMakeListLoose(child_blocks)) loose = true;
+
+                    try items.append(self.allocator, .{
+                        .indent = item.indent + base_indent,
+                        .marker = item.marker,
+                        .number = item.number,
+                        .checked = item.checked,
+                        .blocks = child_blocks,
+                    });
+                },
+            }
         }
 
         return .{
             .list = .{
                 .kind = kind,
                 .items = try items.toOwnedSlice(self.allocator),
+                .loose = loose,
             },
         };
     }
 
-    fn buildUnorderedItem(self: *Parser, item: parse_block.ListItem) anyerror!RawListItem {
-        const child_blocks = try self.buildListItemContent(item.content, item.content_col);
-        return .{
-            .indent = item.indent,
-            .marker = item.marker,
-            .number = null,
-            .checked = item.checked,
-            .blocks = child_blocks,
-        };
-    }
+    fn skipListBlock(self: *Parser, cursor: *BlockCursor, kind: ast.ListKind) anyerror!void {
+        var min_indent: ?usize = null;
+        var prev_child_indent: ?usize = null;
+        var list_marker: ?u8 = null;
+        const base_indent = cursor.blockIndentBase();
+        _ = base_indent;
 
-    fn buildOrderedItem(self: *Parser, item: parse_block.OrderedListItem) anyerror!RawListItem {
-        const child_blocks = try self.buildListItemContent(item.content, item.content_col);
-        return .{
-            .indent = item.indent,
-            .marker = item.marker,
-            .number = item.number,
-            .checked = item.checked,
-            .blocks = child_blocks,
-        };
-    }
-
-    fn buildListItemContent(
-        self: *Parser,
-        first_content: []const u8,
-        content_col: usize,
-    ) anyerror![]RawBlock {
-        var container_lines: std.ArrayListUnmanaged([]const u8) = .empty;
-        defer container_lines.deinit(self.allocator);
-
-        try container_lines.append(self.allocator, first_content);
-
-        while (self.pos < self.lines.len) {
-            const line = self.peekLine();
-
+        outer: while (cursor.peekLine()) |line| {
             if (isBlankLine(line)) {
-                const next = self.peekLineAfterBlanks() orelse break;
-                const next_leading = parse_block.countLeadingWhitespace(next);
-                if (next_leading < content_col) break;
-                try container_lines.append(self.allocator, "");
-                self.advanceLine();
-                continue;
+                if (skipInterItemBlankLines(cursor, kind, list_marker, min_indent, prev_child_indent)) continue;
+                break;
             }
 
-            const leading = parse_block.countLeadingWhitespace(line);
-            if (leading < content_col) break;
+            switch (kind) {
+                .unordered => {
+                    const item = parse_block.listItem(line) orelse break :outer;
+                    if (list_marker) |marker| {
+                        if (item.marker != marker) break :outer;
+                    } else {
+                        list_marker = item.marker;
+                    }
+                    if (min_indent) |existing_min| {
+                        if (item.indent < existing_min) break :outer;
+                        if (item.indent >= prev_child_indent.?) break :outer;
+                    }
 
-            try container_lines.append(self.allocator, line[content_col..]);
-            self.advanceLine();
+                    cursor.advanceLine();
+                    if (min_indent == null) min_indent = item.indent;
+                    prev_child_indent = item.content_col;
+
+                    var child_ctx = BlockCursor.initListItem(
+                        cursor,
+                        item.content,
+                        item.content_col,
+                        cursor.blockIndentBase() + item.content_col,
+                    );
+                    try self.collectLinkDefinitions(&child_ctx);
+                    cursor.raw_pos = child_ctx.raw_pos;
+                },
+                .ordered => {
+                    const item = parse_block.orderedListItem(line) orelse break :outer;
+                    if (list_marker) |marker| {
+                        if (item.marker != marker) break :outer;
+                    } else {
+                        list_marker = item.marker;
+                    }
+                    if (min_indent) |existing_min| {
+                        if (item.indent < existing_min) break :outer;
+                        if (item.indent >= prev_child_indent.?) break :outer;
+                    }
+
+                    cursor.advanceLine();
+                    if (min_indent == null) min_indent = item.indent;
+                    prev_child_indent = item.content_col;
+
+                    var child_ctx = BlockCursor.initListItem(
+                        cursor,
+                        item.content,
+                        item.content_col,
+                        cursor.blockIndentBase() + item.content_col,
+                    );
+                    try self.collectLinkDefinitions(&child_ctx);
+                    cursor.raw_pos = child_ctx.raw_pos;
+                },
+            }
         }
-
-        const child_blocks = try self.parseContainerBlocks(container_lines.items);
-
-        shiftBlockIndents(child_blocks, content_col);
-
-        return child_blocks;
     }
 
-    fn peekLineAfterBlanks(self: *const Parser) ?[]const u8 {
-        var p = self.pos;
-        while (p < self.lines.len) {
-            const line = self.lines[p];
-            if (!isBlankLine(line)) return line;
-            p += 1;
-        }
-        return null;
-    }
-
-    fn tryParseTable(self: *Parser, header_line: []const u8) !?RawBlock {
+    fn tryParseTable(self: *Parser, cursor: *BlockCursor) anyerror!?ast.BlockNode {
+        const header_line = cursor.peekLine() orelse return null;
         if (std.mem.indexOfScalar(u8, header_line, '|') == null) return null;
 
-        if (self.pos + 1 >= self.lines.len) return null;
-        const delim_line = self.lines[self.pos + 1];
+        const delim_line = cursor.peekNextLine() orelse return null;
         if (!parse_table.isDelimiterRow(delim_line)) return null;
 
         const header_cells = parse_table.cells(self.allocator, header_line) catch |err| switch (err) {
             error.UnclosedCodeSpan => return null,
             else => return err,
         };
-        errdefer self.allocator.free(header_cells);
 
         const alignments = parse_table.alignments(self.allocator, delim_line) catch |err| switch (err) {
             error.UnclosedCodeSpan => return null,
             else => return err,
         };
-        errdefer self.allocator.free(alignments);
 
-        if (header_cells.len != alignments.len) {
-            self.allocator.free(header_cells);
-            self.allocator.free(alignments);
-            return null;
+        if (header_cells.len != alignments.len) return null;
+
+        cursor.advanceLine();
+        cursor.advanceLine();
+
+        var header: std.ArrayListUnmanaged(ast.TableCell) = .empty;
+        try header.ensureTotalCapacity(self.allocator, header_cells.len);
+        for (header_cells) |cell_text| {
+            try header.append(self.allocator, .{
+                .children = try self.inline_builder.parseSlice(cell_text, &self.link_defs),
+            });
         }
 
-        self.pos += 2;
-
-        var rows: std.ArrayListUnmanaged([][]const u8) = .empty;
-        errdefer {
-            for (rows.items) |row| self.allocator.free(row);
-            rows.deinit(self.allocator);
-        }
-
-        while (self.pos < self.lines.len) {
-            const row_line = self.peekLine();
+        var rows: std.ArrayListUnmanaged([]ast.TableCell) = .empty;
+        while (cursor.peekLine()) |row_line| {
             if (isBlankLine(row_line)) break;
             if (std.mem.indexOfScalar(u8, row_line, '|') == null) break;
             if (parse_block.isBlockLevelStart(row_line)) break;
@@ -524,181 +500,273 @@ const Parser = struct {
                 error.UnclosedCodeSpan => break,
                 else => return err,
             };
-            errdefer self.allocator.free(row_cells);
-            try rows.append(self.allocator, row_cells);
-            self.advanceLine();
+
+            var row: std.ArrayListUnmanaged(ast.TableCell) = .empty;
+            try row.ensureTotalCapacity(self.allocator, row_cells.len);
+            for (row_cells) |cell_text| {
+                try row.append(self.allocator, .{
+                    .children = try self.inline_builder.parseSlice(cell_text, &self.link_defs),
+                });
+            }
+
+            try rows.append(self.allocator, try row.toOwnedSlice(self.allocator));
+            cursor.advanceLine();
         }
 
         return .{
             .table = .{
-                .header = header_cells,
+                .header = try header.toOwnedSlice(self.allocator),
                 .alignments = alignments,
                 .rows = try rows.toOwnedSlice(self.allocator),
             },
         };
     }
 
-    fn resolveInlines(self: *Parser, raw_blocks: []RawBlock) anyerror![]ast.BlockNode {
-        return self.resolveBlockSlice(raw_blocks);
-    }
+    fn skipTable(self: *Parser, cursor: *BlockCursor) void {
+        _ = self;
+        cursor.advanceLine();
+        cursor.advanceLine();
 
-    fn resolveBlockSlice(self: *Parser, raw_blocks: []RawBlock) anyerror![]ast.BlockNode {
-        var blocks: std.ArrayListUnmanaged(ast.BlockNode) = .empty;
-        try blocks.ensureTotalCapacity(self.allocator, raw_blocks.len);
-
-        for (raw_blocks) |rb| {
-            try blocks.append(self.allocator, try self.resolveOne(rb));
+        while (cursor.peekLine()) |row_line| {
+            if (isBlankLine(row_line)) break;
+            if (std.mem.indexOfScalar(u8, row_line, '|') == null) break;
+            if (parse_block.isBlockLevelStart(row_line)) break;
+            cursor.advanceLine();
         }
-
-        return blocks.toOwnedSlice(self.allocator);
     }
+};
 
-    fn resolveOne(self: *Parser, rb: RawBlock) anyerror!ast.BlockNode {
-        return switch (rb) {
-            .paragraph => |p| try self.resolveParagraph(p),
-            .heading => |h| try self.resolveHeading(h),
-            .blockquote => |bq| try self.resolveBlockQuote(bq),
-            .list => |l| try self.resolveList(l),
-            .code_fence => |cf| .{ .code_fence = cf },
-            .thematic_break => .{ .thematic_break = {} },
-            .table => |t| try self.resolveTable(t),
-            .blank_line => .{ .blank_line = {} },
+/// Walks block input under root, blockquote, or list-item rules.
+const BlockCursor = struct {
+    source: []const u8,
+    raw_pos: usize,
+    mode: Mode,
+    parent: ?*const BlockCursor = null,
+
+    const Mode = union(enum) {
+        root,
+        blockquote: struct {
+            outer_indent: usize,
+        },
+        list_item: struct {
+            first_line_pending: bool,
+            first_line_content: []const u8,
+            content_col: usize,
+            indent_offset: usize,
+        },
+    };
+
+    fn initRoot(source: []const u8) BlockCursor {
+        return .{
+            .source = source,
+            .raw_pos = 0,
+            .mode = .root,
         };
     }
 
-    fn resolveParagraph(self: *Parser, p: RawParagraph) anyerror!ast.BlockNode {
-        const children = try self.inline_builder.parseLines(p.lines, &self.link_defs);
-        return .{ .paragraph = .{ .children = children } };
-    }
-
-    fn resolveHeading(self: *Parser, h: RawHeading) anyerror!ast.BlockNode {
-        const children = try self.inline_builder.parseSlice(h.content, &self.link_defs);
-        return .{ .heading = .{ .level = h.level, .children = children } };
-    }
-
-    fn resolveBlockQuote(self: *Parser, bq: RawBlockQuote) anyerror!ast.BlockNode {
-        const child_blocks = try self.resolveBlockSlice(bq.blocks);
-        return .{ .blockquote = .{ .indent = bq.indent, .blocks = child_blocks } };
-    }
-
-    fn resolveList(self: *Parser, l: RawList) anyerror!ast.BlockNode {
-        var items: std.ArrayListUnmanaged(ast.ListItem) = .empty;
-        errdefer {
-            for (items.items) |*it| it.deinit(self.allocator);
-            items.deinit(self.allocator);
-        }
-        try items.ensureTotalCapacity(self.allocator, l.items.len);
-
-        for (l.items) |raw_item| {
-            const child_blocks = try self.resolveBlockSlice(raw_item.blocks);
-            errdefer {
-                for (child_blocks) |*b| @constCast(b).deinit(self.allocator);
-                self.allocator.free(child_blocks);
-            }
-            try items.append(self.allocator, .{
-                .indent = raw_item.indent,
-                .marker = raw_item.marker,
-                .number = raw_item.number,
-                .checked = raw_item.checked,
-                .blocks = child_blocks,
-            });
-        }
-
-        return .{ .list = .{ .kind = l.kind, .items = try items.toOwnedSlice(self.allocator) } };
-    }
-
-    fn resolveTable(self: *Parser, t: RawTable) anyerror!ast.BlockNode {
-        var header_cells: std.ArrayListUnmanaged(ast.TableCell) = .empty;
-        errdefer header_cells.deinit(self.allocator);
-        try header_cells.ensureTotalCapacity(self.allocator, t.header.len);
-
-        for (t.header) |cell_text| {
-            const children = try self.inline_builder.parseSlice(cell_text, &self.link_defs);
-            try header_cells.append(self.allocator, .{ .children = children });
-        }
-
-        var rows: std.ArrayListUnmanaged([]ast.TableCell) = .empty;
-        errdefer {
-            for (rows.items) |row| {
-                self.allocator.free(row);
-            }
-            rows.deinit(self.allocator);
-        }
-        try rows.ensureTotalCapacity(self.allocator, t.rows.len);
-
-        for (t.rows) |raw_row| {
-            var row_cells: std.ArrayListUnmanaged(ast.TableCell) = .empty;
-            errdefer row_cells.deinit(self.allocator);
-            try row_cells.ensureTotalCapacity(self.allocator, raw_row.len);
-
-            for (raw_row) |cell_text| {
-                const children = try self.inline_builder.parseSlice(cell_text, &self.link_defs);
-                try row_cells.append(self.allocator, .{ .children = children });
-            }
-            try rows.append(self.allocator, try row_cells.toOwnedSlice(self.allocator));
-        }
-
+    fn initBlockQuote(parent: *const BlockCursor, outer_indent: usize) BlockCursor {
         return .{
-            .table = .{
-                .header = try header_cells.toOwnedSlice(self.allocator),
-                .alignments = t.alignments,
-                .rows = try rows.toOwnedSlice(self.allocator),
+            .source = parent.source,
+            .raw_pos = parent.raw_pos,
+            .mode = .{ .blockquote = .{ .outer_indent = outer_indent } },
+            .parent = parent,
+        };
+    }
+
+    fn initListItem(
+        parent: *const BlockCursor,
+        first_line_content: []const u8,
+        content_col: usize,
+        indent_offset: usize,
+    ) BlockCursor {
+        return .{
+            .source = parent.source,
+            .raw_pos = parent.raw_pos,
+            .mode = .{
+                .list_item = .{
+                    .first_line_pending = true,
+                    .first_line_content = first_line_content,
+                    .content_col = content_col,
+                    .indent_offset = indent_offset,
+                },
+            },
+            .parent = parent,
+        };
+    }
+
+    fn peekLine(self: *const BlockCursor) ?[]const u8 {
+        return self.peekLineAt(self.raw_pos);
+    }
+
+    fn peekNextLine(self: *const BlockCursor) ?[]const u8 {
+        var lookahead = self.*;
+        _ = lookahead.peekLine() orelse return null;
+        lookahead.advanceLine();
+        return lookahead.peekLine();
+    }
+
+    fn advanceLine(self: *BlockCursor) void {
+        switch (self.mode) {
+            .root, .blockquote => {
+                _ = self.peekLine() orelse return;
+                self.raw_pos = nextRawLinePos(self.source, self.raw_pos);
+            },
+            .list_item => |*list_item| {
+                if (list_item.first_line_pending) {
+                    list_item.first_line_pending = false;
+                    return;
+                }
+
+                _ = self.peekLine() orelse return;
+                self.raw_pos = nextRawLinePos(self.source, self.raw_pos);
+            },
+        }
+    }
+
+    fn blockIndentBase(self: *const BlockCursor) usize {
+        return switch (self.mode) {
+            .root, .blockquote => 0,
+            .list_item => |list_item| list_item.indent_offset,
+        };
+    }
+
+    fn peekLineAt(self: *const BlockCursor, raw_pos: usize) ?[]const u8 {
+        return switch (self.mode) {
+            .root => rawLineAt(self.source, raw_pos),
+            .blockquote => |blockquote| blk: {
+                const line = self.parent.?.peekLineAt(raw_pos) orelse break :blk null;
+                const quote = parse_block.blockquote(line) orelse break :blk null;
+                if (quote.indent != blockquote.outer_indent) break :blk null;
+                break :blk quote.content;
+            },
+            .list_item => |list_item| blk: {
+                if (raw_pos == self.raw_pos and list_item.first_line_pending) {
+                    break :blk list_item.first_line_content;
+                }
+
+                var parent = self.parent.?.*;
+                parent.raw_pos = raw_pos;
+                const line = parent.peekLine() orelse break :blk null;
+
+                if (isBlankLine(line)) {
+                    var lookahead = parent;
+                    while (lookahead.peekLine()) |candidate| {
+                        if (!isBlankLine(candidate)) {
+                            break :blk if (parse_block.countLeadingWhitespace(candidate) >= list_item.content_col) "" else null;
+                        }
+                        lookahead.advanceLine();
+                    }
+                    break :blk null;
+                }
+
+                if (parse_block.countLeadingWhitespace(line) < list_item.content_col) break :blk null;
+                break :blk line[list_item.content_col..];
             },
         };
     }
 };
 
-fn countLinkDefinitions(lines: []const []const u8) usize {
-    var total: usize = 0;
-    for (lines) |line| {
-        if (parse_link.definition(line) != null) total += 1;
-    }
-    return total;
+fn lineStartsTable(cursor: BlockCursor) bool {
+    const line = cursor.peekLine() orelse return false;
+    if (std.mem.indexOfScalar(u8, line, '|') == null) return false;
+
+    const next_line = cursor.peekNextLine() orelse return false;
+    if (!parse_table.isDelimiterRow(next_line)) return false;
+
+    return parse_table.cellCount(line) == parse_table.cellCount(next_line);
 }
 
-fn joinLines(allocator: std.mem.Allocator, lines_slice: []const []const u8) ![]const u8 {
-    if (lines_slice.len == 0) return "";
-    if (lines_slice.len == 1) return lines_slice[0];
+fn skipInterItemBlankLines(
+    cursor: *BlockCursor,
+    kind: ast.ListKind,
+    list_marker: ?u8,
+    min_indent: ?usize,
+    prev_child_indent: ?usize,
+) bool {
+    const existing_min = min_indent orelse return false;
+    const previous_child = prev_child_indent orelse return false;
+    const marker = list_marker orelse return false;
+    const line = cursor.peekLine() orelse return false;
+    if (!isBlankLine(line)) return false;
 
-    var total_len: usize = 0;
-    for (lines_slice, 0..) |line, i| {
-        total_len += line.len;
-        if (i + 1 < lines_slice.len) total_len += 1;
+    var lookahead = cursor.*;
+    while (lookahead.peekLine()) |candidate| {
+        if (!isBlankLine(candidate)) {
+            const continues_list = switch (kind) {
+                .unordered => if (parse_block.listItem(candidate)) |item|
+                    item.marker == marker and item.indent >= existing_min and item.indent < previous_child
+                else
+                    false,
+                .ordered => if (parse_block.orderedListItem(candidate)) |item|
+                    item.marker == marker and item.indent >= existing_min and item.indent < previous_child
+                else
+                    false,
+            };
+
+            if (!continues_list) return false;
+
+            while (cursor.peekLine()) |blank| {
+                if (!isBlankLine(blank)) break;
+                cursor.advanceLine();
+            }
+            return true;
+        }
+
+        lookahead.advanceLine();
     }
 
-    const buf = try allocator.alloc(u8, total_len);
-    errdefer allocator.free(buf);
+    return false;
+}
 
+fn itemBlocksMakeListLoose(blocks: []const ast.BlockNode) bool {
+    if (blocks.len <= 1) return false;
+    for (blocks) |block| {
+        if (block == .blank_line) return true;
+    }
+    return false;
+}
+
+fn rawLineAt(source: []const u8, raw_pos: usize) ?[]const u8 {
+    if (raw_pos >= source.len) return null;
+    const newline_index = std.mem.indexOfScalarPos(u8, source, raw_pos, '\n') orelse source.len;
+    return std.mem.trimEnd(u8, source[raw_pos..newline_index], parse_block.carriage_return);
+}
+
+fn nextRawLinePos(source: []const u8, raw_pos: usize) usize {
+    if (raw_pos >= source.len) return source.len;
+    const newline_index = std.mem.indexOfScalarPos(u8, source, raw_pos, '\n') orelse return source.len;
+    return newline_index + 1;
+}
+
+fn joinLines(allocator: std.mem.Allocator, lines: []const []const u8) ![]const u8 {
+    if (lines.len == 0) return "";
+    if (lines.len == 1) return lines[0];
+
+    var total_len: usize = 0;
+    for (lines, 0..) |line, index| {
+        total_len += line.len;
+        if (index + 1 < lines.len) total_len += 1;
+    }
+
+    const buffer = try allocator.alloc(u8, total_len);
     var offset: usize = 0;
-    for (lines_slice, 0..) |line, i| {
-        @memcpy(buf[offset .. offset + line.len], line);
+    for (lines, 0..) |line, index| {
+        @memcpy(buffer[offset .. offset + line.len], line);
         offset += line.len;
-        if (i + 1 < lines_slice.len) {
-            buf[offset] = '\n';
+        if (index + 1 < lines.len) {
+            buffer[offset] = '\n';
             offset += 1;
         }
     }
-    return buf;
+    return buffer;
 }
 
 fn isBlankLine(line: []const u8) bool {
     return std.mem.trim(u8, line, parse_block.horizontal_whitespace).len == 0;
 }
 
-fn shiftBlockIndents(blocks: []RawBlock, offset: usize) void {
-    if (offset == 0) return;
-    for (blocks) |*b| {
-        switch (b.*) {
-            .list => |*l| {
-                for (l.items) |*it| {
-                    it.indent += offset;
-                    shiftBlockIndents(it.blocks, offset);
-                }
-            },
-            .blockquote => |*bq| {
-                bq.indent += offset;
-            },
-            else => {},
-        }
-    }
+fn skipLeadingSpaces(line: []const u8) usize {
+    var index: usize = 0;
+    while (index < line.len and line[index] == ' ') : (index += 1) {}
+    return index;
 }

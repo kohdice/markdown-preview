@@ -49,13 +49,23 @@ pub const TableCell = struct {
 };
 
 pub const Document = struct {
+    pub const OwnedSource = struct {
+        allocator: std.mem.Allocator,
+        buffer: []u8,
+    };
+
+    pub const SourceStorage = union(enum) {
+        borrowed,
+        owned: OwnedSource,
+    };
+
     pub const Storage = union(enum) {
         none,
         arena: std.heap.ArenaAllocator,
-        allocator: std.mem.Allocator,
     };
 
     source: []const u8 = "",
+    source_storage: SourceStorage = .borrowed,
     inline_nodes: []const InlineNode = &.{},
     inline_next: []const InlineRef = &.{},
     blocks: []BlockNode,
@@ -67,24 +77,23 @@ pub const Document = struct {
         switch (self.storage) {
             .none => {},
             .arena => |arena| arena.deinit(),
-            .allocator => |allocator| self.deinitManual(allocator),
         }
+
+        switch (self.source_storage) {
+            .borrowed => {},
+            .owned => |owned| owned.allocator.free(owned.buffer),
+        }
+
         self.* = .{
+            .source = "",
+            .source_storage = .borrowed,
+            .inline_nodes = &.{},
+            .inline_next = &.{},
             .blocks = &.{},
             .link_defs = .{},
             .has_trailing_newline = false,
+            .storage = .none,
         };
-    }
-
-    fn deinitManual(self: *Document, allocator: std.mem.Allocator) void {
-        for (self.blocks) |*block| block.deinit(allocator);
-        allocator.free(self.blocks);
-        allocator.free(self.inline_nodes);
-        allocator.free(self.inline_next);
-
-        var it = self.link_defs.keyIterator();
-        while (it.next()) |key| allocator.free(key.*);
-        self.link_defs.deinit(allocator);
     }
 
     pub fn inlineNode(self: *const Document, ref: InlineRef) *const InlineNode {
@@ -156,6 +165,7 @@ pub const ListKind = enum { unordered, ordered };
 pub const List = struct {
     kind: ListKind,
     items: []ListItem,
+    loose: bool = false,
 
     pub fn deinit(self: *List, allocator: std.mem.Allocator) void {
         for (self.items) |*item| item.deinit(allocator);
