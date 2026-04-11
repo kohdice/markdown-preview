@@ -93,6 +93,7 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/parse.zig", .needs_tree_sitter = false },
         .{ .path = "src/parse_tests.zig", .needs_tree_sitter = false },
         .{ .path = "src/render.zig", .needs_tree_sitter = true },
+        .{ .path = "test/test.zig", .needs_tree_sitter = true },
         .{ .path = "src/cli.zig", .needs_tree_sitter = true },
         .{ .path = "src/term/terminal.zig", .needs_tree_sitter = false },
         .{ .path = "src/term/highlight.zig", .needs_tree_sitter = true },
@@ -108,6 +109,15 @@ pub fn build(b: *std.Build) void {
         });
         if (test_root.needs_tree_sitter) {
             attachTreeSitter(test_mod, ts_support);
+        }
+        if (std.mem.eql(u8, test_root.path, "test/test.zig")) {
+            const project_mod = b.createModule(.{
+                .root_source_file = b.path("test_project.zig"),
+                .target = target,
+                .optimize = optimize,
+            });
+            attachTreeSitter(project_mod, ts_support);
+            test_mod.addImport("project", project_mod);
         }
 
         const unit_tests = b.addTest(.{
