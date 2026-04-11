@@ -9,21 +9,23 @@ pub const LinkDefMap = std.StringHashMapUnmanaged(LinkDef);
 
 pub const Alignment = enum { left, center, right };
 
-pub const InlineRange = struct {
-    start: u32 = 0,
-    len: u32 = 0,
-};
+pub const InlineRef = u32;
+pub const no_inline: InlineRef = std.math.maxInt(InlineRef);
+
+pub fn hasInline(ref: InlineRef) bool {
+    return ref != no_inline;
+}
 
 pub const LinkInline = struct {
     url: []const u8,
     title: ?[]const u8,
-    children: InlineRange,
+    children: InlineRef = no_inline,
 };
 
 pub const ImageInline = struct {
     url: []const u8,
     title: ?[]const u8,
-    children: InlineRange,
+    children: InlineRef = no_inline,
 };
 
 pub const InlineNode = union(enum) {
@@ -32,10 +34,10 @@ pub const InlineNode = union(enum) {
     autolink: []const u8,
     soft_break: void,
     hard_break: void,
-    emphasis: InlineRange,
-    strong: InlineRange,
-    bold_italic: InlineRange,
-    strikethrough: InlineRange,
+    emphasis: InlineRef,
+    strong: InlineRef,
+    bold_italic: InlineRef,
+    strikethrough: InlineRef,
     link: LinkInline,
     image: ImageInline,
 };
@@ -43,7 +45,7 @@ pub const InlineNode = union(enum) {
 pub const Inline = InlineNode;
 
 pub const TableCell = struct {
-    children: InlineRange,
+    children: InlineRef = no_inline,
 };
 
 pub const Document = struct {
@@ -55,6 +57,7 @@ pub const Document = struct {
 
     source: []const u8 = "",
     inline_nodes: []const InlineNode = &.{},
+    inline_next: []const InlineRef = &.{},
     blocks: []BlockNode,
     link_defs: LinkDefMap,
     has_trailing_newline: bool,
@@ -77,16 +80,21 @@ pub const Document = struct {
         for (self.blocks) |*block| block.deinit(allocator);
         allocator.free(self.blocks);
         allocator.free(self.inline_nodes);
+        allocator.free(self.inline_next);
 
         var it = self.link_defs.keyIterator();
         while (it.next()) |key| allocator.free(key.*);
         self.link_defs.deinit(allocator);
     }
 
-    pub fn inlineSlice(self: *const Document, range: InlineRange) []const InlineNode {
-        const start: usize = @intCast(range.start);
-        const len: usize = @intCast(range.len);
-        return self.inline_nodes[start .. start + len];
+    pub fn inlineNode(self: *const Document, ref: InlineRef) *const InlineNode {
+        const index: usize = @intCast(ref);
+        return &self.inline_nodes[index];
+    }
+
+    pub fn inlineNext(self: *const Document, ref: InlineRef) InlineRef {
+        const index: usize = @intCast(ref);
+        return self.inline_next[index];
     }
 };
 
@@ -115,7 +123,7 @@ pub const BlockNode = union(enum) {
 };
 
 pub const Paragraph = struct {
-    children: InlineRange,
+    children: InlineRef = no_inline,
 
     pub fn deinit(self: *Paragraph, allocator: std.mem.Allocator) void {
         _ = self;
@@ -125,7 +133,7 @@ pub const Paragraph = struct {
 
 pub const Heading = struct {
     level: u8,
-    children: InlineRange,
+    children: InlineRef = no_inline,
 
     pub fn deinit(self: *Heading, allocator: std.mem.Allocator) void {
         _ = self;

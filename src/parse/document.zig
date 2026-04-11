@@ -8,6 +8,7 @@ const parse_inline = @import("inline.zig");
 pub const ParseResult = struct {
     blocks: []ast.BlockNode,
     inline_nodes: []ast.InlineNode,
+    inline_next: []ast.InlineRef,
     link_defs: ast.LinkDefMap,
 };
 
@@ -19,14 +20,20 @@ pub fn parse(allocator: std.mem.Allocator, lines: []const []const u8) !ParseResu
         .inline_builder = parse_inline.InlineBuilder.init(allocator),
         .link_defs = .{},
     };
+    const estimated_link_defs = countLinkDefinitions(lines);
+    if (estimated_link_defs > 0) {
+        const map_capacity = std.math.cast(u32, estimated_link_defs) orelse return error.Overflow;
+        try parser.link_defs.ensureTotalCapacity(allocator, map_capacity);
+    }
 
     const raw_blocks = try parser.parseBlocks();
     const blocks = try parser.resolveInlines(raw_blocks);
-    const inline_nodes = try parser.inline_builder.finish();
+    const inline_storage = try parser.inline_builder.finish();
 
     return .{
         .blocks = blocks,
-        .inline_nodes = inline_nodes,
+        .inline_nodes = inline_storage.nodes,
+        .inline_next = inline_storage.next,
         .link_defs = parser.link_defs,
     };
 }
@@ -537,6 +544,7 @@ const Parser = struct {
 
     fn resolveBlockSlice(self: *Parser, raw_blocks: []RawBlock) anyerror![]ast.BlockNode {
         var blocks: std.ArrayListUnmanaged(ast.BlockNode) = .empty;
+        try blocks.ensureTotalCapacity(self.allocator, raw_blocks.len);
 
         for (raw_blocks) |rb| {
             try blocks.append(self.allocator, try self.resolveOne(rb));
@@ -579,6 +587,7 @@ const Parser = struct {
             for (items.items) |*it| it.deinit(self.allocator);
             items.deinit(self.allocator);
         }
+        try items.ensureTotalCapacity(self.allocator, l.items.len);
 
         for (l.items) |raw_item| {
             const child_blocks = try self.resolveBlockSlice(raw_item.blocks);
@@ -601,6 +610,7 @@ const Parser = struct {
     fn resolveTable(self: *Parser, t: RawTable) anyerror!ast.BlockNode {
         var header_cells: std.ArrayListUnmanaged(ast.TableCell) = .empty;
         errdefer header_cells.deinit(self.allocator);
+        try header_cells.ensureTotalCapacity(self.allocator, t.header.len);
 
         for (t.header) |cell_text| {
             const children = try self.inline_builder.parseSlice(cell_text, &self.link_defs);
@@ -614,10 +624,12 @@ const Parser = struct {
             }
             rows.deinit(self.allocator);
         }
+        try rows.ensureTotalCapacity(self.allocator, t.rows.len);
 
         for (t.rows) |raw_row| {
             var row_cells: std.ArrayListUnmanaged(ast.TableCell) = .empty;
             errdefer row_cells.deinit(self.allocator);
+            try row_cells.ensureTotalCapacity(self.allocator, raw_row.len);
 
             for (raw_row) |cell_text| {
                 const children = try self.inline_builder.parseSlice(cell_text, &self.link_defs);
@@ -635,6 +647,14 @@ const Parser = struct {
         };
     }
 };
+
+fn countLinkDefinitions(lines: []const []const u8) usize {
+    var total: usize = 0;
+    for (lines) |line| {
+        if (parse_link.definition(line) != null) total += 1;
+    }
+    return total;
+}
 
 fn joinLines(allocator: std.mem.Allocator, lines_slice: []const []const u8) ![]const u8 {
     if (lines_slice.len == 0) return "";

@@ -30,7 +30,7 @@ const min_hard_break_spaces: usize = 2;
 pub const InlineBuilder = struct {
     allocator: std.mem.Allocator,
     nodes: std.ArrayListUnmanaged(ast.InlineNode) = .empty,
-    scratch: std.ArrayListUnmanaged(ast.InlineNode) = .empty,
+    next: std.ArrayListUnmanaged(ast.InlineRef) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) InlineBuilder {
         return .{
@@ -38,219 +38,750 @@ pub const InlineBuilder = struct {
         };
     }
 
-    pub fn finish(self: *InlineBuilder) anyerror![]ast.InlineNode {
-        self.scratch.deinit(self.allocator);
-        self.scratch = .empty;
-        return self.nodes.toOwnedSlice(self.allocator);
-    }
+    pub const Storage = struct {
+        nodes: []ast.InlineNode,
+        next: []ast.InlineRef,
+    };
 
-    pub fn parseSlice(self: *InlineBuilder, content: []const u8, link_defs: *const DefMap) anyerror!ast.InlineRange {
-        const scope_start = self.scratch.items.len;
-        errdefer self.scratch.shrinkRetainingCapacity(scope_start);
-
-        try self.parseFragment(content, link_defs);
-        return try self.commitScope(scope_start);
-    }
-
-    pub fn parseLines(self: *InlineBuilder, lines: []const []const u8, link_defs: *const DefMap) anyerror!ast.InlineRange {
-        const scope_start = self.scratch.items.len;
-        errdefer self.scratch.shrinkRetainingCapacity(scope_start);
-
-        for (lines, 0..) |raw_line, index| {
-            const line = if (index == 0)
-                raw_line
-            else
-                raw_line[skipLeadingSpaces(raw_line)..];
-
-            const is_last = index + 1 == lines.len;
-            const trimmed_end = if (is_last) line.len else trimTrailingBreakChars(line);
-            try self.parseFragment(line[0..trimmed_end], link_defs);
-
-            if (!is_last) {
-                const break_node: ast.InlineNode = if (isHardBreak(line))
-                    .{ .hard_break = {} }
-                else
-                    .{ .soft_break = {} };
-                try self.scratch.append(self.allocator, break_node);
-            }
-        }
-
-        return try self.commitScope(scope_start);
-    }
-
-    fn commitScope(self: *InlineBuilder, scope_start: usize) anyerror!ast.InlineRange {
-        const start = self.nodes.items.len;
-        try self.nodes.appendSlice(self.allocator, self.scratch.items[scope_start..]);
-        self.scratch.shrinkRetainingCapacity(scope_start);
+    pub fn finish(self: *InlineBuilder) anyerror!Storage {
+        const nodes = try self.nodes.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(nodes);
+        const next = try self.next.toOwnedSlice(self.allocator);
         return .{
-            .start = std.math.cast(u32, start) orelse return error.Overflow,
-            .len = std.math.cast(u32, self.nodes.items.len - start) orelse return error.Overflow,
+            .nodes = nodes,
+            .next = next,
         };
     }
 
-    fn parseFragment(
-        self: *InlineBuilder,
-        content: []const u8,
+    pub fn parseSlice(self: *InlineBuilder, content: []const u8, link_defs: *const DefMap) anyerror!ast.InlineRef {
+        if (content.len == 0) return ast.no_inline;
+
+        const lines = [_][]const u8{content};
+        return self.parseLogical(&lines, link_defs);
+    }
+
+    pub fn parseLines(self: *InlineBuilder, lines: []const []const u8, link_defs: *const DefMap) anyerror!ast.InlineRef {
+        if (lines.len == 0) return ast.no_inline;
+        var logical_lines = try self.allocator.alloc([]const u8, lines.len);
+        defer self.allocator.free(logical_lines);
+
+        for (lines, 0..) |line, index| {
+            logical_lines[index] = if (index == 0)
+                line
+            else
+                line[skipLeadingSpaces(line)..];
+        }
+
+        return self.parseLogical(logical_lines, link_defs);
+    }
+
+    fn parseLogical(self: *InlineBuilder, lines: []const []const u8, link_defs: *const DefMap) anyerror!ast.InlineRef {
+        const start_index = self.nodes.items.len;
+        errdefer {
+            self.nodes.shrinkRetainingCapacity(start_index);
+            self.next.shrinkRetainingCapacity(start_index);
+        }
+
+        var parser = TempParser.init(self, lines, link_defs);
+        defer parser.deinit();
+
+        return try parser.parse();
+    }
+
+    fn appendText(self: *InlineBuilder, chain: *InlineChain, content: []const u8) !void {
+        if (content.len == 0) return;
+        try self.appendNode(chain, .{ .text = content });
+    }
+
+    fn appendNode(self: *InlineBuilder, chain: *InlineChain, node: ast.InlineNode) !void {
+        const ref = try self.allocNode(node);
+        self.appendRef(chain, ref);
+    }
+
+    fn allocNode(self: *InlineBuilder, node: ast.InlineNode) !ast.InlineRef {
+        const ref = std.math.cast(ast.InlineRef, self.nodes.items.len) orelse return error.Overflow;
+        try self.nodes.append(self.allocator, node);
+        try self.next.append(self.allocator, ast.no_inline);
+        return ref;
+    }
+
+    fn appendRef(self: *InlineBuilder, chain: *InlineChain, ref: ast.InlineRef) void {
+        if (!ast.hasInline(chain.head)) {
+            chain.head = ref;
+            chain.tail = ref;
+            return;
+        }
+
+        const tail_index: usize = @intCast(chain.tail);
+        self.next.items[tail_index] = ref;
+        chain.tail = ref;
+    }
+};
+
+const InlineChain = struct {
+    head: ast.InlineRef = ast.no_inline,
+    tail: ast.InlineRef = ast.no_inline,
+};
+
+const TokenRef = ast.InlineRef;
+const no_token: TokenRef = ast.no_inline;
+
+fn hasToken(ref: TokenRef) bool {
+    return ref != no_token;
+}
+
+const Delimiter = struct {
+    node: TokenRef,
+    ch: u8,
+    remaining: u8,
+    can_open: bool,
+    can_close: bool,
+    active: bool = true,
+};
+
+const Bracket = struct {
+    node: TokenRef,
+    line_index: usize,
+    content_start: usize,
+    is_image: bool,
+    active: bool = true,
+};
+
+const CodeSpanMatch = struct {
+    slice: []const u8,
+    end_line: usize,
+    end_col: usize,
+};
+
+const LinkTail = struct {
+    url: []const u8,
+    title: ?[]const u8,
+    end_col: usize,
+};
+
+const DelimiterClass = struct {
+    can_open: bool,
+    can_close: bool,
+};
+
+const TempParser = struct {
+    builder: *InlineBuilder,
+    lines: []const []const u8,
+    link_defs: *const DefMap,
+    start_index: usize,
+    prev: std.ArrayListUnmanaged(TokenRef) = .empty,
+    delimiters: std.ArrayListUnmanaged(Delimiter) = .empty,
+    brackets: std.ArrayListUnmanaged(Bracket) = .empty,
+    chain: InlineChain = .{},
+
+    fn init(
+        builder: *InlineBuilder,
+        lines: []const []const u8,
         link_defs: *const DefMap,
-    ) anyerror!void {
-        var index: usize = 0;
+    ) TempParser {
+        return .{
+            .builder = builder,
+            .lines = lines,
+            .link_defs = link_defs,
+            .start_index = builder.nodes.items.len,
+        };
+    }
+
+    fn deinit(self: *TempParser) void {
+        self.prev.deinit(self.builder.allocator);
+        self.delimiters.deinit(self.builder.allocator);
+        self.brackets.deinit(self.builder.allocator);
+    }
+
+    fn parse(self: *TempParser) !TokenRef {
+        var line_index: usize = 0;
+        var col: usize = 0;
         var plain_start: usize = 0;
 
-        while (index < content.len) {
-            const next_candidate = findNextInlineStart(content, index) orelse break;
-            index = next_candidate;
+        while (line_index < self.lines.len) {
+            const line = self.lines[line_index];
 
-            switch (content[index]) {
+            if (col >= line.len) {
+                if (line_index + 1 < self.lines.len) {
+                    const tail = line[plain_start..];
+                    const trimmed_end = trimTrailingBreakChars(tail);
+                    try self.appendText(tail[0..trimmed_end]);
+                    _ = try self.appendNode(if (isHardBreak(tail))
+                        .{ .hard_break = {} }
+                    else
+                        .{ .soft_break = {} });
+                    line_index += 1;
+                    col = 0;
+                    plain_start = 0;
+                    continue;
+                }
+
+                try self.appendText(line[plain_start..]);
+                break;
+            }
+
+            switch (line[col]) {
                 '\\' => {
-                    if (index + 1 < content.len and isEscapable(content[index + 1])) {
-                        try self.appendText(content[plain_start..index]);
-                        try self.appendText(content[index + 1 .. index + 2]);
-                        index += 2;
-                        plain_start = index;
+                    if (col + 1 < line.len and isEscapable(line[col + 1])) {
+                        try self.appendText(line[plain_start..col]);
+                        try self.appendText(line[col + 1 .. col + 2]);
+                        col += 2;
+                        plain_start = col;
                         continue;
                     }
-                    index += 1;
+                    col += 1;
                 },
                 '`' => {
-                    if (findCodeSpanEnd(content, index)) |end| {
-                        try self.appendText(content[plain_start..index]);
-                        try self.scratch.append(self.allocator, .{ .code_span = content[index .. end + 1] });
-                        index = end + 1;
-                        plain_start = index;
+                    if (try self.scanCodeSpan(line_index, col)) |code| {
+                        try self.appendText(line[plain_start..col]);
+                        _ = try self.appendNode(.{ .code_span = code.slice });
+                        line_index = code.end_line;
+                        col = code.end_col;
+                        plain_start = col;
                         continue;
                     }
-                    index += 1;
+                    col += 1;
                 },
                 '!' => {
-                    if (index + 1 < content.len and content[index + 1] == '[') {
-                        if (findBracketSpan(content, index + 1)) |span| {
-                            if (findLinkPartsWithSpan(content, span)) |link| {
-                                try self.appendText(content[plain_start..index]);
-
-                                const alt_content = content[link.text_start..link.text_end];
-                                const children = try self.parseSlice(alt_content, link_defs);
-                                try self.scratch.append(self.allocator, .{ .image = .{
-                                    .url = content[link.url_start..link.url_end],
-                                    .title = link.title,
-                                    .children = children,
-                                } });
-                                index = link.full_end;
-                                plain_start = index;
-                                continue;
-                            }
-                        }
+                    if (col + 1 < line.len and line[col + 1] == '[') {
+                        try self.appendText(line[plain_start..col]);
+                        const ref = try self.appendNode(.{ .text = line[col .. col + 2] });
+                        try self.brackets.append(self.builder.allocator, .{
+                            .node = ref,
+                            .line_index = line_index,
+                            .content_start = col + 2,
+                            .is_image = true,
+                        });
+                        col += 2;
+                        plain_start = col;
+                        continue;
                     }
-                    index += 1;
+                    col += 1;
                 },
                 '[' => {
-                    if (findBracketSpan(content, index)) |span| {
-                        if (findLinkPartsWithSpan(content, span)) |link| {
-                            try self.appendText(content[plain_start..index]);
-
-                            const link_text = content[link.text_start..link.text_end];
-                            const children = try self.parseSlice(link_text, link_defs);
-                            try self.scratch.append(self.allocator, .{ .link = .{
-                                .url = content[link.url_start..link.url_end],
-                                .title = link.title,
-                                .children = children,
-                            } });
-                            index = link.full_end;
-                            plain_start = index;
-                            continue;
-                        }
-                        if (tryParseRefLinkWithSpan(content, span, link_defs)) |ref| {
-                            try self.appendText(content[plain_start..index]);
-
-                            const children = try self.parseSlice(ref.link_text, link_defs);
-                            try self.scratch.append(self.allocator, .{ .link = .{
-                                .url = ref.url,
-                                .title = ref.title,
-                                .children = children,
-                            } });
-                            index = ref.end;
-                            plain_start = index;
-                            continue;
-                        }
+                    try self.appendText(line[plain_start..col]);
+                    const ref = try self.appendNode(.{ .text = line[col .. col + 1] });
+                    try self.brackets.append(self.builder.allocator, .{
+                        .node = ref,
+                        .line_index = line_index,
+                        .content_start = col + 1,
+                        .is_image = false,
+                    });
+                    col += 1;
+                    plain_start = col;
+                },
+                ']' => {
+                    try self.appendText(line[plain_start..col]);
+                    if (try self.tryResolveBracket(line_index, col)) |end_col| {
+                        col = end_col;
+                        plain_start = col;
+                        continue;
                     }
-                    index += 1;
+
+                    if (self.findActiveBracket()) |bracket_index| {
+                        self.brackets.items[bracket_index].active = false;
+                    }
+
+                    try self.appendText(line[col .. col + 1]);
+                    col += 1;
+                    plain_start = col;
                 },
                 '*', '_' => {
-                    if (tryParseEmphasis(content, index)) |em| {
-                        try self.appendText(content[plain_start..index]);
-
-                        const children = try self.parseSlice(em.content, link_defs);
-                        const node: ast.InlineNode = switch (em.kind) {
-                            .emphasis => .{ .emphasis = children },
-                            .strong => .{ .strong = children },
-                            .bold_italic => .{ .bold_italic = children },
-                        };
-                        try self.scratch.append(self.allocator, node);
-                        index = em.end;
-                        plain_start = index;
-                        continue;
+                    const run_len = countRun(line, col, line[col]);
+                    if (run_len > 0 and run_len <= max_emphasis_delim_run) {
+                        const class = classifyEmphasisDelimiter(self.lines, line_index, col, run_len, line[col]);
+                        if (class.can_open or class.can_close) {
+                            try self.appendText(line[plain_start..col]);
+                            const ref = try self.appendNode(.{ .text = line[col .. col + run_len] });
+                            try self.delimiters.append(self.builder.allocator, .{
+                                .node = ref,
+                                .ch = line[col],
+                                .remaining = @intCast(run_len),
+                                .can_open = class.can_open,
+                                .can_close = class.can_close,
+                            });
+                            if (class.can_close) {
+                                try self.resolveDelimiter(self.delimiters.items.len - 1);
+                            }
+                            col += run_len;
+                            plain_start = col;
+                            continue;
+                        }
                     }
-                    index += 1;
+                    col += run_len;
                 },
                 '~' => {
-                    if (tryParseStrikethrough(content, index)) |st| {
-                        try self.appendText(content[plain_start..index]);
-
-                        const children = try self.parseSlice(st.content, link_defs);
-                        try self.scratch.append(self.allocator, .{ .strikethrough = children });
-                        index = st.end;
-                        plain_start = index;
-                        continue;
+                    const run_len = countRun(line, col, '~');
+                    if (run_len > 0 and run_len <= max_strikethrough_delim_run) {
+                        const class = classifyStrikethroughDelimiter(self.lines, line_index, col, run_len);
+                        if (class.can_open or class.can_close) {
+                            try self.appendText(line[plain_start..col]);
+                            const ref = try self.appendNode(.{ .text = line[col .. col + run_len] });
+                            try self.delimiters.append(self.builder.allocator, .{
+                                .node = ref,
+                                .ch = '~',
+                                .remaining = @intCast(run_len),
+                                .can_open = class.can_open,
+                                .can_close = class.can_close,
+                            });
+                            if (class.can_close) {
+                                try self.resolveDelimiter(self.delimiters.items.len - 1);
+                            }
+                            col += run_len;
+                            plain_start = col;
+                            continue;
+                        }
                     }
-                    index += 1;
+                    col += run_len;
                 },
                 '<' => {
-                    if (tryParseAutolink(content, index)) |al| {
-                        try self.appendText(content[plain_start..index]);
-                        try self.scratch.append(self.allocator, .{ .autolink = al.url });
-                        index = al.end;
-                        plain_start = index;
+                    if (tryParseAutolink(line, col)) |autolink| {
+                        try self.appendText(line[plain_start..col]);
+                        _ = try self.appendNode(.{ .autolink = autolink.url });
+                        col = autolink.end;
+                        plain_start = col;
                         continue;
                     }
-                    index += 1;
+                    col += 1;
+                },
+                'h' => {
+                    if (tryParseBareUrl(line, col)) |bare| {
+                        try self.appendText(line[plain_start..col]);
+                        _ = try self.appendNode(.{ .autolink = line[col..bare.end] });
+                        col = bare.end;
+                        plain_start = col;
+                        continue;
+                    }
+                    col += 1;
                 },
                 else => {
-                    if (tryParseBareUrl(content, index)) |bare| {
-                        try self.appendText(content[plain_start..index]);
-                        try self.scratch.append(self.allocator, .{ .autolink = content[index..bare.end] });
-                        index = bare.end;
-                        plain_start = index;
-                        continue;
-                    }
-                    index += 1;
+                    col += 1;
                 },
             }
         }
 
-        try self.appendText(content[plain_start..]);
+        return self.chain.head;
     }
 
-    fn appendText(self: *InlineBuilder, content: []const u8) !void {
+    fn appendText(self: *TempParser, content: []const u8) !void {
         if (content.len == 0) return;
-        try self.scratch.append(self.allocator, .{ .text = content });
+        _ = try self.appendNode(.{ .text = content });
+    }
+
+    fn appendNode(self: *TempParser, node: ast.InlineNode) !TokenRef {
+        const ref = try self.allocNode(node);
+        self.appendRef(ref);
+        return ref;
+    }
+
+    fn allocNode(self: *TempParser, node: ast.InlineNode) !TokenRef {
+        const ref = std.math.cast(TokenRef, self.builder.nodes.items.len) orelse return error.Overflow;
+        try self.builder.nodes.append(self.builder.allocator, node);
+        try self.builder.next.append(self.builder.allocator, no_token);
+        try self.prev.append(self.builder.allocator, no_token);
+        return ref;
+    }
+
+    fn appendRef(self: *TempParser, ref: TokenRef) void {
+        if (!hasToken(self.chain.head)) {
+            self.chain.head = ref;
+            self.chain.tail = ref;
+            return;
+        }
+
+        const tail_index = tokenIndex(self.chain.tail);
+        self.builder.next.items[tail_index] = ref;
+        self.setPrev(ref, self.chain.tail);
+        self.chain.tail = ref;
+    }
+
+    fn scanCodeSpan(self: *TempParser, start_line: usize, start_col: usize) !?CodeSpanMatch {
+        const opener_line = self.lines[start_line];
+        const opener_len = countRun(opener_line, start_col, '`');
+        if (opener_len == 0) return null;
+
+        var line_index = start_line;
+        var col = start_col + opener_len;
+
+        while (line_index < self.lines.len) {
+            const line = self.lines[line_index];
+            while (col < line.len) {
+                if (line[col] == '`') {
+                    const close_len = countRun(line, col, '`');
+                    if (close_len == opener_len) {
+                        return .{
+                            .slice = try self.captureRange(start_line, start_col, line_index, col + close_len),
+                            .end_line = line_index,
+                            .end_col = col + close_len,
+                        };
+                    }
+                    col += close_len;
+                } else {
+                    col += 1;
+                }
+            }
+
+            line_index += 1;
+            col = 0;
+        }
+
+        return null;
+    }
+
+    fn tryResolveBracket(self: *TempParser, line_index: usize, close_col: usize) !?usize {
+        const opener_index = self.findActiveBracket() orelse return null;
+        const opener = self.brackets.items[opener_index];
+        const line = self.lines[line_index];
+
+        const link_tail = self.parseInlineLinkTail(line, close_col) orelse try self.parseReferenceLinkTail(opener, line_index, close_col) orelse return null;
+
+        const opener_node = opener.node;
+        const child_head = self.builder.next.items[tokenIndex(opener_node)];
+        const child_tail = self.chain.tail;
+
+        if (hasToken(child_head)) {
+            self.setPrev(child_head, no_token);
+            self.builder.next.items[tokenIndex(child_tail)] = no_token;
+        }
+
+        self.builder.next.items[tokenIndex(opener_node)] = no_token;
+        self.chain.tail = opener_node;
+        self.brackets.items[opener_index].active = false;
+
+        self.builder.nodes.items[tokenIndex(opener_node)] = if (opener.is_image)
+            .{ .image = .{
+                .url = link_tail.url,
+                .title = link_tail.title,
+                .children = child_head,
+            } }
+        else
+            .{ .link = .{
+                .url = link_tail.url,
+                .title = link_tail.title,
+                .children = child_head,
+            } };
+
+        if (!opener.is_image) {
+            for (self.brackets.items[0..opener_index]) |*bracket| {
+                if (!bracket.is_image) bracket.active = false;
+            }
+        }
+
+        return link_tail.end_col;
+    }
+
+    fn parseInlineLinkTail(self: *TempParser, line: []const u8, close_col: usize) ?LinkTail {
+        _ = self;
+        if (close_col + 1 >= line.len or line[close_col + 1] != '(') return null;
+
+        var depth: usize = 1;
+        var pos = close_col + 2;
+        while (pos < line.len) : (pos += 1) {
+            switch (line[pos]) {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if (depth == 0) {
+                        const inner = line[close_col + 2 .. pos];
+                        const title_info = extractTitle(inner);
+                        return .{
+                            .url = inner[0..title_info.url_len],
+                            .title = title_info.title,
+                            .end_col = pos + 1,
+                        };
+                    }
+                },
+                else => {},
+            }
+        }
+
+        return null;
+    }
+
+    fn parseReferenceLinkTail(
+        self: *TempParser,
+        opener: Bracket,
+        line_index: usize,
+        close_col: usize,
+    ) !?LinkTail {
+        if (self.link_defs.count() == 0) return null;
+
+        const line = self.lines[line_index];
+        if (close_col + 1 < line.len and line[close_col + 1] == '[') {
+            const ref_start = close_col + 2;
+            const ref_end = std.mem.indexOfScalarPos(u8, line, ref_start, ']') orelse return null;
+            const label = if (ref_end > ref_start)
+                line[ref_start..ref_end]
+            else
+                try self.captureRange(opener.line_index, opener.content_start, line_index, close_col);
+
+            if (lookupReferenceDefinition(self.link_defs, label)) |def| {
+                return .{
+                    .url = def.url,
+                    .title = def.title,
+                    .end_col = ref_end + 1,
+                };
+            }
+            return null;
+        }
+
+        if (close_col + 1 < line.len and (line[close_col + 1] == '(' or line[close_col + 1] == '['))
+            return null;
+
+        const label = try self.captureRange(opener.line_index, opener.content_start, line_index, close_col);
+        if (lookupReferenceDefinition(self.link_defs, label)) |def| {
+            return .{
+                .url = def.url,
+                .title = def.title,
+                .end_col = close_col + 1,
+            };
+        }
+
+        return null;
+    }
+
+    fn resolveDelimiter(self: *TempParser, closer_index: usize) !void {
+        while (true) {
+            if (closer_index >= self.delimiters.items.len) break;
+            const closer = self.delimiters.items[closer_index];
+            if (!closer.active or !closer.can_close or closer.remaining == 0) break;
+
+            const opener_index = self.findMatchingOpener(closer_index) orelse break;
+            if (!try self.wrapDelimiter(opener_index, closer_index)) break;
+        }
+    }
+
+    fn findMatchingOpener(self: *TempParser, closer_index: usize) ?usize {
+        const closer = self.delimiters.items[closer_index];
+        var index = closer_index;
+        while (index > 0) {
+            index -= 1;
+            const opener = self.delimiters.items[index];
+            if (!opener.active or !opener.can_open) continue;
+            if (opener.ch != closer.ch) continue;
+
+            if ((closer.ch == '*' or closer.ch == '_') and violatesMultipleOfThree(opener.remaining, closer.remaining))
+                continue;
+
+            return index;
+        }
+        return null;
+    }
+
+    fn wrapDelimiter(self: *TempParser, opener_index: usize, closer_index: usize) !bool {
+        const opener = self.delimiters.items[opener_index];
+        const closer = self.delimiters.items[closer_index];
+        const use_len = chooseDelimiterUse(opener.remaining, closer.remaining, opener.ch);
+        const opener_left = opener.remaining - use_len;
+        const closer_left = closer.remaining - use_len;
+        const opener_node = opener.node;
+        const closer_node = closer.node;
+        const child_head = self.builder.next.items[tokenIndex(opener_node)];
+
+        if (!hasToken(child_head) or child_head == closer_node) return false;
+
+        const child_tail = self.prevOf(closer_node);
+        if (!hasToken(child_tail) or child_tail == opener_node) return false;
+
+        self.setPrev(child_head, no_token);
+        self.builder.next.items[tokenIndex(child_tail)] = no_token;
+
+        const container_children = child_head;
+        const container_node: ast.InlineNode = switch (opener.ch) {
+            '~' => .{ .strikethrough = container_children },
+            else => switch (use_len) {
+                3 => .{ .bold_italic = container_children },
+                2 => .{ .strong = container_children },
+                else => .{ .emphasis = container_children },
+            },
+        };
+
+        var container_ref = opener_node;
+        if (opener_left == 0) {
+            self.builder.nodes.items[tokenIndex(opener_node)] = container_node;
+            self.delimiters.items[opener_index].active = false;
+            self.delimiters.items[opener_index].remaining = 0;
+        } else {
+            const opener_text = self.textSlice(opener_node);
+            self.builder.nodes.items[tokenIndex(opener_node)] = .{ .text = opener_text[0..opener_left] };
+            self.delimiters.items[opener_index].remaining = opener_left;
+            container_ref = try self.allocNode(container_node);
+            self.builder.next.items[tokenIndex(opener_node)] = container_ref;
+            self.setPrev(container_ref, opener_node);
+        }
+
+        if (closer_left == 0) {
+            self.builder.next.items[tokenIndex(container_ref)] = no_token;
+            self.delimiters.items[closer_index].active = false;
+            self.delimiters.items[closer_index].remaining = 0;
+            self.chain.tail = container_ref;
+        } else {
+            const closer_text = self.textSlice(closer_node);
+            self.builder.nodes.items[tokenIndex(closer_node)] = .{ .text = closer_text[closer_text.len - closer_left ..] };
+            self.delimiters.items[closer_index].remaining = closer_left;
+            self.builder.next.items[tokenIndex(container_ref)] = closer_node;
+            self.setPrev(closer_node, container_ref);
+            self.chain.tail = closer_node;
+        }
+
+        return true;
+    }
+
+    fn findActiveBracket(self: *TempParser) ?usize {
+        var index = self.brackets.items.len;
+        while (index > 0) {
+            index -= 1;
+            if (self.brackets.items[index].active) return index;
+        }
+        return null;
+    }
+
+    fn textSlice(self: *TempParser, ref: TokenRef) []const u8 {
+        return self.builder.nodes.items[tokenIndex(ref)].text;
+    }
+
+    fn captureRange(
+        self: *TempParser,
+        start_line: usize,
+        start_col: usize,
+        end_line: usize,
+        end_col: usize,
+    ) ![]const u8 {
+        if (start_line == end_line) {
+            return self.lines[start_line][start_col..end_col];
+        }
+
+        var total_len: usize = 0;
+        var line_index = start_line;
+        while (line_index <= end_line) : (line_index += 1) {
+            const line = self.lines[line_index];
+            const chunk = if (line_index == start_line)
+                line[start_col..]
+            else if (line_index == end_line)
+                line[0..end_col]
+            else
+                line;
+            total_len += chunk.len;
+            if (line_index < end_line) total_len += 1;
+        }
+
+        const allocator = self.builder.allocator;
+        const buffer = try allocator.alloc(u8, total_len);
+        var out: usize = 0;
+        line_index = start_line;
+        while (line_index <= end_line) : (line_index += 1) {
+            const line = self.lines[line_index];
+            const chunk = if (line_index == start_line)
+                line[start_col..]
+            else if (line_index == end_line)
+                line[0..end_col]
+            else
+                line;
+            @memcpy(buffer[out .. out + chunk.len], chunk);
+            out += chunk.len;
+            if (line_index < end_line) {
+                buffer[out] = '\n';
+                out += 1;
+            }
+        }
+        return buffer;
+    }
+
+    fn prevOf(self: *TempParser, ref: TokenRef) TokenRef {
+        return self.prev.items[self.localIndex(ref)];
+    }
+
+    fn setPrev(self: *TempParser, ref: TokenRef, value: TokenRef) void {
+        self.prev.items[self.localIndex(ref)] = value;
+    }
+
+    fn localIndex(self: *TempParser, ref: TokenRef) usize {
+        return tokenIndex(ref) - self.start_index;
     }
 };
 
-fn findNextInlineStart(content: []const u8, start: usize) ?usize {
-    var pos = start;
-    while (pos < content.len) : (pos += 1) {
-        switch (content[pos]) {
-            '\\', '`', '!', '[', '*', '_', '~', '<' => return pos,
-            'h' => {
-                if (std.mem.startsWith(u8, content[pos..], http_scheme) or
-                    std.mem.startsWith(u8, content[pos..], https_scheme))
-                {
-                    return pos;
-                }
-            },
-            else => {},
-        }
-    }
+fn tokenIndex(ref: TokenRef) usize {
+    return @intCast(ref);
+}
+
+fn countRun(line: []const u8, start: usize, ch: u8) usize {
+    var len: usize = 0;
+    while (start + len < line.len and line[start + len] == ch) : (len += 1) {}
+    return len;
+}
+
+fn prevCodepointAt(lines: []const []const u8, line_index: usize, col: usize) ?u21 {
+    if (col > 0) return prevCodepoint(lines[line_index], col);
+    if (line_index > 0) return '\n';
     return null;
+}
+
+fn nextCodepointAt(lines: []const []const u8, line_index: usize, col: usize) ?u21 {
+    const line = lines[line_index];
+    if (col < line.len) return nextCodepoint(line, col);
+    if (line_index + 1 < lines.len) return '\n';
+    return null;
+}
+
+fn classifyEmphasisDelimiter(
+    lines: []const []const u8,
+    line_index: usize,
+    start_col: usize,
+    run_len: usize,
+    ch: u8,
+) DelimiterClass {
+    const before = cpClass(prevCodepointAt(lines, line_index, start_col));
+    const after = cpClass(nextCodepointAt(lines, line_index, start_col + run_len));
+    const flank = checkFlanking(before, after);
+
+    var can_open = flank.left;
+    var can_close = flank.right;
+    if (ch == '_') {
+        can_open = can_open and (!flank.right or before == .punctuation);
+        can_close = can_close and (!flank.left or after == .punctuation);
+    }
+
+    return .{
+        .can_open = can_open,
+        .can_close = can_close,
+    };
+}
+
+fn classifyStrikethroughDelimiter(
+    lines: []const []const u8,
+    line_index: usize,
+    start_col: usize,
+    run_len: usize,
+) DelimiterClass {
+    _ = run_len;
+    const before = cpClass(prevCodepointAt(lines, line_index, start_col));
+    const after = cpClass(nextCodepointAt(lines, line_index, start_col + 1));
+    return .{
+        .can_open = after != .whitespace,
+        .can_close = before != .whitespace,
+    };
+}
+
+fn chooseDelimiterUse(opener_len: u8, closer_len: u8, ch: u8) u8 {
+    if (ch == '~') {
+        return if (opener_len >= 2 and closer_len >= 2) 2 else 1;
+    }
+    if (opener_len >= 3 and closer_len >= 3) return 3;
+    if (opener_len >= 2 and closer_len >= 2) return 2;
+    return 1;
+}
+
+fn violatesMultipleOfThree(opener_len: u8, closer_len: u8) bool {
+    const sum: u8 = opener_len + closer_len;
+    return sum % max_emphasis_delim_run == 0 and
+        (opener_len % max_emphasis_delim_run != 0 or closer_len % max_emphasis_delim_run != 0);
+}
+
+fn lookupReferenceDefinition(link_defs: *const DefMap, label: []const u8) ?ast.LinkDef {
+    var lower_buf: [max_ref_label_len]u8 = undefined;
+    if (label.len > lower_buf.len) return null;
+    const lower_key = std.ascii.lowerString(lower_buf[0..label.len], label);
+    return link_defs.get(lower_key);
 }
 
 fn isHardBreak(line: []const u8) bool {

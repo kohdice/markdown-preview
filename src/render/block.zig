@@ -77,7 +77,7 @@ pub const Renderer = struct {
 
     fn writeInlinesMaybeWrap(
         self: *Renderer,
-        range: ast.InlineRange,
+        first: ast.InlineRef,
         base_style: ansi.TextStyle,
         continuation_indent: usize,
     ) !void {
@@ -98,17 +98,17 @@ pub const Renderer = struct {
                 1;
             var wrap = width.WrapWriter.init(target, available, self.ambiguous_width, self.allocator);
             defer wrap.deinit();
-            try render_inline.writeInlineRange(&wrap.writer, self.doc, range, self.enable_ansi, base_style, self.palette);
+            try render_inline.writeInlineChain(&wrap.writer, self.doc, first, self.enable_ansi, base_style, self.palette);
             try wrap.finish();
         } else {
-            try render_inline.writeInlineRange(target, self.doc, range, self.enable_ansi, base_style, self.palette);
+            try render_inline.writeInlineChain(target, self.doc, first, self.enable_ansi, base_style, self.palette);
         }
 
         if (prefix) |*p| try p.finish();
     }
 
     fn writeHeading(self: *Renderer, heading: ast.Heading) !void {
-        try render_inline.writeInlineRange(
+        try render_inline.writeInlineChain(
             self.writer,
             self.doc,
             heading.children,
@@ -246,7 +246,7 @@ pub const Renderer = struct {
             .indent = content_col,
             .prefix_first_line = false,
         });
-        try render_inline.writeInlineRange(
+        try render_inline.writeInlineChain(
             &prefix.writer,
             self.doc,
             paragraph.children,

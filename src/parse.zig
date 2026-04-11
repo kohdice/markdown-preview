@@ -13,6 +13,10 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8) !Document {
 
     var lines: std.ArrayListUnmanaged([]const u8) = .empty;
     defer lines.deinit(allocator);
+    if (input.len > 0) {
+        const newline_count = std.mem.count(u8, input, "\n");
+        try lines.ensureTotalCapacity(allocator, newline_count + 1);
+    }
 
     if (input.len > 0) {
         var it = std.mem.splitScalar(u8, input, '\n');
@@ -30,6 +34,7 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8) !Document {
     return .{
         .source = input,
         .inline_nodes = parsed.inline_nodes,
+        .inline_next = parsed.inline_next,
         .blocks = parsed.blocks,
         .link_defs = parsed.link_defs,
         .has_trailing_newline = has_trailing_newline,

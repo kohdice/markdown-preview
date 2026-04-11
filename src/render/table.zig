@@ -139,7 +139,7 @@ fn writeRow(
     palette: theme.Palette,
 ) !void {
     const bar_style: ansi.TextStyle = .{ .fg = palette.muted };
-    const empty_children: ast.InlineRange = .{};
+    const empty_children: ast.InlineRef = ast.no_inline;
 
     try ansi.writeStyled(writer, enable_ansi, bar_style, border.vertical);
     try ansi.writeStyled(writer, enable_ansi, bar_style, border.cell_pad);
@@ -161,7 +161,7 @@ fn writeRow(
         const right_pad = padding - left_pad;
 
         try writer.splatByteAll(' ', left_pad);
-        try render_inline.writeInlineRange(
+        try render_inline.writeInlineChain(
             writer,
             doc,
             cell_children,
