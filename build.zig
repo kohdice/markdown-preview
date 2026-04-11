@@ -60,6 +60,18 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
+    const bench_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_inline.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    attachTreeSitter(bench_mod, ts_support);
+
+    const bench_exe = b.addExecutable(.{
+        .name = "inline-bench",
+        .root_module = bench_mod,
+    });
+
     const run_step = b.step("run", "Run the app");
     const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);
@@ -68,6 +80,10 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
+
+    const bench_step = b.step("bench-inline", "Run inline parser/render benchmarks");
+    const run_bench = b.addRunArtifact(bench_exe);
+    bench_step.dependOn(&run_bench.step);
 
     const test_step = b.step("test", "Run tests");
     const test_roots = [_]struct {
