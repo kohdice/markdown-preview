@@ -1,6 +1,5 @@
 const std = @import("std");
-const parse = @import("parse.zig");
-const render = @import("render.zig");
+const preview = @import("preview.zig");
 const term = @import("term.zig");
 const width = term.width;
 
@@ -85,10 +84,7 @@ pub fn run(opts: RunOptions) !u8 {
     };
     defer opts.allocator.free(source);
 
-    var doc = try parse.parse(opts.allocator, source);
-    defer doc.deinit(opts.allocator);
-
-    try render.write(opts.allocator, opts.stdout, doc, .{
+    try preview.renderSource(opts.allocator, opts.stdout, source, .{
         .enable_ansi = opts.enable_ansi,
         .theme = .solarized_dark,
         .wrap_width = opts.wrap_width,
