@@ -36,6 +36,7 @@ pub const Renderer = struct {
 
     pub fn renderDocument(self: *Renderer, writer: *std.io.Writer, doc: *const ast.Document) !void {
         var block_renderer: render_block.Renderer = .{
+            .doc = doc,
             .writer = writer,
             .allocator = self.allocator,
             .enable_ansi = self.opts.enable_ansi,

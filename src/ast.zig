@@ -9,56 +9,41 @@ pub const LinkDefMap = std.StringHashMapUnmanaged(LinkDef);
 
 pub const Alignment = enum { left, center, right };
 
+pub const InlineRange = struct {
+    start: u32 = 0,
+    len: u32 = 0,
+};
+
 pub const LinkInline = struct {
     url: []const u8,
     title: ?[]const u8,
-    children: []Inline,
+    children: InlineRange,
 };
 
 pub const ImageInline = struct {
     url: []const u8,
     title: ?[]const u8,
-    children: []Inline,
+    children: InlineRange,
 };
 
-pub const Inline = union(enum) {
+pub const InlineNode = union(enum) {
     text: []const u8,
     code_span: []const u8,
     autolink: []const u8,
     soft_break: void,
     hard_break: void,
-    emphasis: []Inline,
-    strong: []Inline,
-    bold_italic: []Inline,
-    strikethrough: []Inline,
+    emphasis: InlineRange,
+    strong: InlineRange,
+    bold_italic: InlineRange,
+    strikethrough: InlineRange,
     link: LinkInline,
     image: ImageInline,
 };
 
-pub fn deinitInlines(allocator: std.mem.Allocator, inlines: []Inline) void {
-    for (inlines) |inline_node| {
-        switch (inline_node) {
-            .emphasis, .strong, .bold_italic, .strikethrough => |children| {
-                deinitInlines(allocator, children);
-            },
-            .link => |l| {
-                deinitInlines(allocator, l.children);
-            },
-            .image => |i| {
-                deinitInlines(allocator, i.children);
-            },
-            .text, .code_span, .autolink, .soft_break, .hard_break => {},
-        }
-    }
-    allocator.free(inlines);
-}
+pub const Inline = InlineNode;
 
 pub const TableCell = struct {
-    children: []Inline,
-
-    pub fn deinit(self: *TableCell, allocator: std.mem.Allocator) void {
-        deinitInlines(allocator, self.children);
-    }
+    children: InlineRange,
 };
 
 pub const Document = struct {
@@ -69,6 +54,7 @@ pub const Document = struct {
     };
 
     source: []const u8 = "",
+    inline_nodes: []const InlineNode = &.{},
     blocks: []BlockNode,
     link_defs: LinkDefMap,
     has_trailing_newline: bool,
@@ -90,10 +76,17 @@ pub const Document = struct {
     fn deinitManual(self: *Document, allocator: std.mem.Allocator) void {
         for (self.blocks) |*block| block.deinit(allocator);
         allocator.free(self.blocks);
+        allocator.free(self.inline_nodes);
 
         var it = self.link_defs.keyIterator();
         while (it.next()) |key| allocator.free(key.*);
         self.link_defs.deinit(allocator);
+    }
+
+    pub fn inlineSlice(self: *const Document, range: InlineRange) []const InlineNode {
+        const start: usize = @intCast(range.start);
+        const len: usize = @intCast(range.len);
+        return self.inline_nodes[start .. start + len];
     }
 };
 
@@ -113,7 +106,7 @@ pub const BlockNode = union(enum) {
             .heading => |*h| h.deinit(allocator),
             .blockquote => |*bq| bq.deinit(allocator),
             .list => |*l| l.deinit(allocator),
-            .code_fence => |*cf| cf.deinit(allocator),
+            .code_fence => {},
             .thematic_break => {},
             .table => |*t| t.deinit(allocator),
             .blank_line => {},
@@ -122,19 +115,21 @@ pub const BlockNode = union(enum) {
 };
 
 pub const Paragraph = struct {
-    children: []Inline,
+    children: InlineRange,
 
     pub fn deinit(self: *Paragraph, allocator: std.mem.Allocator) void {
-        deinitInlines(allocator, self.children);
+        _ = self;
+        _ = allocator;
     }
 };
 
 pub const Heading = struct {
     level: u8,
-    children: []Inline,
+    children: InlineRange,
 
     pub fn deinit(self: *Heading, allocator: std.mem.Allocator) void {
-        deinitInlines(allocator, self.children);
+        _ = self;
+        _ = allocator;
     }
 };
 
@@ -180,10 +175,6 @@ pub const CodeFence = struct {
     closer: ?[]const u8,
     language: []const u8,
     content: []const u8,
-
-    pub fn deinit(self: *CodeFence, allocator: std.mem.Allocator) void {
-        allocator.free(self.content);
-    }
 };
 
 pub const Table = struct {
@@ -192,11 +183,9 @@ pub const Table = struct {
     rows: [][]TableCell,
 
     pub fn deinit(self: *Table, allocator: std.mem.Allocator) void {
-        for (self.header) |*cell| cell.deinit(allocator);
         allocator.free(self.header);
         allocator.free(self.alignments);
         for (self.rows) |row| {
-            for (row) |*cell| cell.deinit(allocator);
             allocator.free(row);
         }
         allocator.free(self.rows);

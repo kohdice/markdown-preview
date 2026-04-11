@@ -44,6 +44,7 @@ pub const TablePlacement = enum {
 pub fn writeTable(
     writer: *std.io.Writer,
     allocator: std.mem.Allocator,
+    doc: *const ast.Document,
     table: ast.Table,
     placement: TablePlacement,
     enable_ansi: bool,
@@ -71,7 +72,7 @@ pub fn writeTable(
         body_widths[row_index] = row_cached;
         initialized_body_rows += 1;
         for (row, 0..) |cell, cell_index| {
-            const cw = measure.inlineWidth(cell.children, ambiguous_width);
+            const cw = measure.inlineWidth(doc, cell.children, ambiguous_width);
             row_cached[cell_index] = cw;
             if (cell_index < col_count) {
                 col_widths[cell_index] = @max(col_widths[cell_index], cw);
@@ -81,7 +82,7 @@ pub fn writeTable(
 
     for (0..col_count) |c| {
         if (c < table.header.len) {
-            const cw = measure.inlineWidth(table.header[c].children, ambiguous_width);
+            const cw = measure.inlineWidth(doc, table.header[c].children, ambiguous_width);
             cell_widths_header[c] = cw;
             col_widths[c] = @max(col_widths[c], cw);
         } else {
@@ -101,7 +102,7 @@ pub fn writeTable(
     try writeBorder(writer, col_widths, .top, enable_ansi, ambiguous_width, palette);
     try writer.writeByte('\n');
 
-    try writeRow(writer, table.header, col_widths, cell_widths_header, table.alignments, .{
+    try writeRow(writer, doc, table.header, col_widths, cell_widths_header, table.alignments, .{
         .fg = cell_fg,
         .bold = true,
     }, enable_ansi, ambiguous_width, palette);
@@ -111,7 +112,7 @@ pub fn writeTable(
 
     for (table.rows, 0..) |row, i| {
         try writer.writeByte('\n');
-        try writeRow(writer, row, col_widths, body_widths[i], table.alignments, .{
+        try writeRow(writer, doc, row, col_widths, body_widths[i], table.alignments, .{
             .fg = cell_fg,
         }, enable_ansi, ambiguous_width, palette);
 
@@ -127,6 +128,7 @@ pub fn writeTable(
 
 fn writeRow(
     writer: *std.io.Writer,
+    doc: *const ast.Document,
     cells: []const ast.TableCell,
     col_widths: []const usize,
     pre_cell_widths: ?[]const usize,
@@ -137,15 +139,16 @@ fn writeRow(
     palette: theme.Palette,
 ) !void {
     const bar_style: ansi.TextStyle = .{ .fg = palette.muted };
+    const empty_children: ast.InlineRange = .{};
 
     try ansi.writeStyled(writer, enable_ansi, bar_style, border.vertical);
     try ansi.writeStyled(writer, enable_ansi, bar_style, border.cell_pad);
     for (0..col_widths.len) |c| {
-        const cell_children = if (c < cells.len) cells[c].children else &[_]ast.Inline{};
+        const cell_children = if (c < cells.len) cells[c].children else empty_children;
         const cell_width = if (pre_cell_widths) |pw|
             (if (c < pw.len) pw[c] else 0)
         else
-            measure.inlineWidth(cell_children, ambiguous_width);
+            measure.inlineWidth(doc, cell_children, ambiguous_width);
         const col_w = col_widths[c];
         const padding = if (col_w > cell_width) col_w - cell_width else 0;
         const col_align = if (c < alignments.len) alignments[c] else .left;
@@ -158,8 +161,9 @@ fn writeRow(
         const right_pad = padding - left_pad;
 
         try writer.splatByteAll(' ', left_pad);
-        try render_inline.writeInlines(
+        try render_inline.writeInlineRange(
             writer,
+            doc,
             cell_children,
             enable_ansi,
             style,

@@ -25,66 +25,122 @@ const scheme_separator: []const u8 = "://";
 /// at least two trailing spaces at the end of a line.
 const min_hard_break_spaces: usize = 2;
 
-pub fn parseInlines(allocator: std.mem.Allocator, content: []const u8, link_defs: *const DefMap) ![]ast.Inline {
-    var result: std.ArrayListUnmanaged(ast.Inline) = .{};
-    errdefer {
-        for (result.items) |*item| freeInline(allocator, item);
-        result.deinit(allocator);
+pub const InlineBuilder = struct {
+    allocator: std.mem.Allocator,
+    nodes: std.ArrayListUnmanaged(ast.InlineNode) = .empty,
+
+    pub fn init(allocator: std.mem.Allocator) InlineBuilder {
+        return .{
+            .allocator = allocator,
+        };
     }
 
-    var index: usize = 0;
-    var plain_start: usize = 0;
+    pub fn finish(self: *InlineBuilder) anyerror![]ast.InlineNode {
+        return self.nodes.toOwnedSlice(self.allocator);
+    }
 
-    while (index < content.len) {
-        switch (content[index]) {
-            '\n' => {
-                const preceding_end = trimTrailingBreakChars(content, plain_start, index);
-                if (preceding_end > plain_start)
-                    try result.append(allocator, .{ .text = content[plain_start..preceding_end] });
+    pub fn parseSlice(self: *InlineBuilder, content: []const u8, link_defs: *const DefMap) anyerror!ast.InlineRange {
+        var result: std.ArrayListUnmanaged(ast.InlineNode) = .empty;
+        errdefer result.deinit(self.allocator);
 
-                const is_hard = isHardBreak(content, plain_start, index);
-                try result.append(allocator, if (is_hard) .{ .hard_break = {} } else .{ .soft_break = {} });
+        try self.parseFragment(content, link_defs, &result);
+        return try self.commit(&result);
+    }
 
-                index += 1;
-                plain_start = skipLeadingSpaces(content, index);
-                index = plain_start;
-                continue;
-            },
-            '\\' => {
-                if (index + 1 < content.len and isEscapable(content[index + 1])) {
-                    if (plain_start < index)
-                        try result.append(allocator, .{ .text = content[plain_start..index] });
-                    try result.append(allocator, .{ .text = content[index + 1 .. index + 2] });
-                    index += 2;
-                    plain_start = index;
-                    continue;
-                }
-                index += 1;
-            },
-            '`' => {
-                if (findCodeSpanEnd(content, index)) |end| {
-                    if (plain_start < index)
-                        try result.append(allocator, .{ .text = content[plain_start..index] });
-                    try result.append(allocator, .{ .code_span = content[index .. end + 1] });
-                    index = end + 1;
-                    plain_start = index;
-                    continue;
-                }
-                index += 1;
-            },
-            '!' => {
-                if (index + 1 < content.len and content[index + 1] == '[') {
-                    if (findLinkParts(content, index + 1)) |link| {
-                        if (plain_start < index)
-                            try result.append(allocator, .{ .text = content[plain_start..index] });
+    pub fn parseLines(self: *InlineBuilder, lines: []const []const u8, link_defs: *const DefMap) anyerror!ast.InlineRange {
+        var result: std.ArrayListUnmanaged(ast.InlineNode) = .empty;
+        errdefer result.deinit(self.allocator);
 
-                        const alt_content = content[link.text_start..link.text_end];
-                        const children = try parseInlines(allocator, alt_content, link_defs);
-                        errdefer {
-                            for (children) |*c| freeInline(allocator, c);
-                            allocator.free(children);
+        for (lines, 0..) |raw_line, index| {
+            const line = if (index == 0)
+                raw_line
+            else
+                raw_line[skipLeadingSpaces(raw_line)..];
+
+            const is_last = index + 1 == lines.len;
+            const trimmed_end = if (is_last) line.len else trimTrailingBreakChars(line);
+            try self.parseFragment(line[0..trimmed_end], link_defs, &result);
+
+            if (!is_last) {
+                const break_node: ast.InlineNode = if (isHardBreak(line))
+                    .{ .hard_break = {} }
+                else
+                    .{ .soft_break = {} };
+                try result.append(self.allocator, break_node);
+            }
+        }
+
+        return try self.commit(&result);
+    }
+
+    fn commit(self: *InlineBuilder, result: *std.ArrayListUnmanaged(ast.InlineNode)) anyerror!ast.InlineRange {
+        const start = self.nodes.items.len;
+        try self.nodes.appendSlice(self.allocator, result.items);
+        result.deinit(self.allocator);
+        result.* = .empty;
+        return .{
+            .start = std.math.cast(u32, start) orelse return error.Overflow,
+            .len = std.math.cast(u32, self.nodes.items.len - start) orelse return error.Overflow,
+        };
+    }
+
+    fn parseFragment(
+        self: *InlineBuilder,
+        content: []const u8,
+        link_defs: *const DefMap,
+        out: *std.ArrayListUnmanaged(ast.InlineNode),
+    ) anyerror!void {
+        var index: usize = 0;
+        var plain_start: usize = 0;
+
+        while (index < content.len) {
+            switch (content[index]) {
+                '\\' => {
+                    if (index + 1 < content.len and isEscapable(content[index + 1])) {
+                        try appendText(self.allocator, out, content[plain_start..index]);
+                        try appendText(self.allocator, out, content[index + 1 .. index + 2]);
+                        index += 2;
+                        plain_start = index;
+                        continue;
+                    }
+                    index += 1;
+                },
+                '`' => {
+                    if (findCodeSpanEnd(content, index)) |end| {
+                        try appendText(self.allocator, out, content[plain_start..index]);
+                        try out.append(self.allocator, .{ .code_span = content[index .. end + 1] });
+                        index = end + 1;
+                        plain_start = index;
+                        continue;
+                    }
+                    index += 1;
+                },
+                '!' => {
+                    if (index + 1 < content.len and content[index + 1] == '[') {
+                        if (findLinkParts(content, index + 1)) |link| {
+                            try appendText(self.allocator, out, content[plain_start..index]);
+
+                            const alt_content = content[link.text_start..link.text_end];
+                            const children = try self.parseSlice(alt_content, link_defs);
+                            try out.append(self.allocator, .{ .image = .{
+                                .url = content[link.url_start..link.url_end],
+                                .title = link.title,
+                                .children = children,
+                            } });
+                            index = link.full_end;
+                            plain_start = index;
+                            continue;
                         }
-                        try result.append(allocator, .{ .image = .{
+                    }
+                    index += 1;
+                },
+                '[' => {
+                    if (findLinkParts(content, index)) |link| {
+                        try appendText(self.allocator, out, content[plain_start..index]);
+
+                        const link_text = content[link.text_start..link.text_end];
+                        const children = try self.parseSlice(link_text, link_defs);
+                        try out.append(self.allocator, .{ .link = .{
                             .url = content[link.url_start..link.url_end],
                             .title = link.title,
                             .children = children,
@@ -93,165 +149,115 @@ pub fn parseInlines(allocator: std.mem.Allocator, content: []const u8, link_defs
                         plain_start = index;
                         continue;
                     }
-                }
-                index += 1;
-            },
-            '[' => {
-                if (findLinkParts(content, index)) |link| {
-                    if (plain_start < index)
-                        try result.append(allocator, .{ .text = content[plain_start..index] });
+                    if (tryParseRefLink(content, index, link_defs)) |ref| {
+                        try appendText(self.allocator, out, content[plain_start..index]);
 
-                    const link_text = content[link.text_start..link.text_end];
-                    const children = try parseInlines(allocator, link_text, link_defs);
-                    errdefer {
-                        for (children) |*c| freeInline(allocator, c);
-                        allocator.free(children);
-                    }
-                    try result.append(allocator, .{ .link = .{
-                        .url = content[link.url_start..link.url_end],
-                        .title = link.title,
-                        .children = children,
-                    } });
-                    index = link.full_end;
-                    plain_start = index;
-                    continue;
-                }
-                if (tryParseRefLink(content, index, link_defs)) |ref| {
-                    if (plain_start < index)
-                        try result.append(allocator, .{ .text = content[plain_start..index] });
-
-                    const children = try parseInlines(allocator, ref.link_text, link_defs);
-                    errdefer {
-                        for (children) |*c| freeInline(allocator, c);
-                        allocator.free(children);
-                    }
-                    try result.append(allocator, .{ .link = .{
-                        .url = ref.url,
-                        .title = ref.title,
-                        .children = children,
-                    } });
-                    index = ref.end;
-                    plain_start = index;
-                    continue;
-                }
-                index += 1;
-            },
-            '*', '_' => {
-                if (tryParseEmphasis(content, index)) |em| {
-                    if (plain_start < index)
-                        try result.append(allocator, .{ .text = content[plain_start..index] });
-
-                    const children = try parseInlines(allocator, em.content, link_defs);
-                    errdefer {
-                        for (children) |*c| freeInline(allocator, c);
-                        allocator.free(children);
-                    }
-                    const node: ast.Inline = switch (em.kind) {
-                        .emphasis => .{ .emphasis = children },
-                        .strong => .{ .strong = children },
-                        .bold_italic => .{ .bold_italic = children },
-                    };
-                    try result.append(allocator, node);
-                    index = em.end;
-                    plain_start = index;
-                    continue;
-                }
-                index += 1;
-            },
-            '~' => {
-                if (tryParseStrikethrough(content, index)) |st| {
-                    if (plain_start < index)
-                        try result.append(allocator, .{ .text = content[plain_start..index] });
-
-                    const children = try parseInlines(allocator, st.content, link_defs);
-                    errdefer {
-                        for (children) |*c| freeInline(allocator, c);
-                        allocator.free(children);
-                    }
-                    try result.append(allocator, .{ .strikethrough = children });
-                    index = st.end;
-                    plain_start = index;
-                    continue;
-                }
-                index += 1;
-            },
-            '<' => {
-                if (tryParseAutolink(content, index)) |al| {
-                    if (plain_start < index)
-                        try result.append(allocator, .{ .text = content[plain_start..index] });
-                    try result.append(allocator, .{ .autolink = al.url });
-                    index = al.end;
-                    plain_start = index;
-                    continue;
-                }
-                index += 1;
-            },
-            else => {
-                if (content[index] == 'h') {
-                    if (tryParseBareUrl(content, index)) |bare| {
-                        if (plain_start < index)
-                            try result.append(allocator, .{ .text = content[plain_start..index] });
-                        try result.append(allocator, .{ .autolink = content[index..bare.end] });
-                        index = bare.end;
+                        const children = try self.parseSlice(ref.link_text, link_defs);
+                        try out.append(self.allocator, .{ .link = .{
+                            .url = ref.url,
+                            .title = ref.title,
+                            .children = children,
+                        } });
+                        index = ref.end;
                         plain_start = index;
                         continue;
                     }
-                }
-                index += 1;
-            },
+                    index += 1;
+                },
+                '*', '_' => {
+                    if (tryParseEmphasis(content, index)) |em| {
+                        try appendText(self.allocator, out, content[plain_start..index]);
+
+                        const children = try self.parseSlice(em.content, link_defs);
+                        const node: ast.InlineNode = switch (em.kind) {
+                            .emphasis => .{ .emphasis = children },
+                            .strong => .{ .strong = children },
+                            .bold_italic => .{ .bold_italic = children },
+                        };
+                        try out.append(self.allocator, node);
+                        index = em.end;
+                        plain_start = index;
+                        continue;
+                    }
+                    index += 1;
+                },
+                '~' => {
+                    if (tryParseStrikethrough(content, index)) |st| {
+                        try appendText(self.allocator, out, content[plain_start..index]);
+
+                        const children = try self.parseSlice(st.content, link_defs);
+                        try out.append(self.allocator, .{ .strikethrough = children });
+                        index = st.end;
+                        plain_start = index;
+                        continue;
+                    }
+                    index += 1;
+                },
+                '<' => {
+                    if (tryParseAutolink(content, index)) |al| {
+                        try appendText(self.allocator, out, content[plain_start..index]);
+                        try out.append(self.allocator, .{ .autolink = al.url });
+                        index = al.end;
+                        plain_start = index;
+                        continue;
+                    }
+                    index += 1;
+                },
+                else => {
+                    if (content[index] == 'h') {
+                        if (tryParseBareUrl(content, index)) |bare| {
+                            try appendText(self.allocator, out, content[plain_start..index]);
+                            try out.append(self.allocator, .{ .autolink = content[index..bare.end] });
+                            index = bare.end;
+                            plain_start = index;
+                            continue;
+                        }
+                    }
+                    index += 1;
+                },
+            }
         }
+
+        try appendText(self.allocator, out, content[plain_start..]);
     }
+};
 
-    if (plain_start < content.len)
-        try result.append(allocator, .{ .text = content[plain_start..] });
-
-    return result.toOwnedSlice(allocator);
+fn appendText(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayListUnmanaged(ast.InlineNode),
+    content: []const u8,
+) !void {
+    if (content.len == 0) return;
+    try out.append(allocator, .{ .text = content });
 }
 
-fn isHardBreak(content: []const u8, plain_start: usize, newline_pos: usize) bool {
-    if (newline_pos > 0 and content[newline_pos - 1] == '\\') {
-        if (newline_pos - 1 >= plain_start) return true;
-    }
+fn isHardBreak(line: []const u8) bool {
+    if (line.len > 0 and line[line.len - 1] == '\\') return true;
+
     var trailing_spaces: usize = 0;
-    var pos = newline_pos;
-    while (pos > plain_start and content[pos - 1] == ' ') {
+    var pos = line.len;
+    while (pos > 0 and line[pos - 1] == ' ') {
         trailing_spaces += 1;
         pos -= 1;
     }
     return trailing_spaces >= min_hard_break_spaces;
 }
 
-fn trimTrailingBreakChars(content: []const u8, plain_start: usize, newline_pos: usize) usize {
-    if (newline_pos > 0 and content[newline_pos - 1] == '\\')
-        return newline_pos - 1;
-    var end = newline_pos;
-    while (end > plain_start and content[end - 1] == ' ')
+fn trimTrailingBreakChars(line: []const u8) usize {
+    if (line.len > 0 and line[line.len - 1] == '\\')
+        return line.len - 1;
+
+    var end = line.len;
+    while (end > 0 and line[end - 1] == ' ')
         end -= 1;
     return end;
 }
 
-fn skipLeadingSpaces(content: []const u8, start: usize) usize {
-    var pos = start;
+fn skipLeadingSpaces(content: []const u8) usize {
+    var pos: usize = 0;
     while (pos < content.len and content[pos] == ' ')
         pos += 1;
     return pos;
-}
-
-fn freeInline(allocator: std.mem.Allocator, node: *const ast.Inline) void {
-    switch (node.*) {
-        .text, .code_span, .autolink, .soft_break, .hard_break => {},
-        .emphasis => |children| freeChildren(allocator, children),
-        .strong => |children| freeChildren(allocator, children),
-        .bold_italic => |children| freeChildren(allocator, children),
-        .strikethrough => |children| freeChildren(allocator, children),
-        .link => |l| freeChildren(allocator, l.children),
-        .image => |img| freeChildren(allocator, img.children),
-    }
-}
-
-fn freeChildren(allocator: std.mem.Allocator, children: []ast.Inline) void {
-    for (children) |*c| freeInline(allocator, c);
-    allocator.free(children);
 }
 
 fn findCodeSpanEnd(text: []const u8, start: usize) ?usize {

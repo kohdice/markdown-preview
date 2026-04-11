@@ -29,6 +29,7 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8) !Document {
     const parsed = try parse_document.parse(arena_allocator, lines.items);
     return .{
         .source = input,
+        .inline_nodes = parsed.inline_nodes,
         .blocks = parsed.blocks,
         .link_defs = parsed.link_defs,
         .has_trailing_newline = has_trailing_newline,

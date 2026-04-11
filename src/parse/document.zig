@@ -7,6 +7,7 @@ const parse_inline = @import("inline.zig");
 
 pub const ParseResult = struct {
     blocks: []ast.BlockNode,
+    inline_nodes: []ast.InlineNode,
     link_defs: ast.LinkDefMap,
 };
 
@@ -15,14 +16,17 @@ pub fn parse(allocator: std.mem.Allocator, lines: []const []const u8) !ParseResu
         .allocator = allocator,
         .lines = lines,
         .pos = 0,
+        .inline_builder = parse_inline.InlineBuilder.init(allocator),
         .link_defs = .{},
     };
 
     const raw_blocks = try parser.parseBlocks();
     const blocks = try parser.resolveInlines(raw_blocks);
+    const inline_nodes = try parser.inline_builder.finish();
 
     return .{
         .blocks = blocks,
+        .inline_nodes = inline_nodes,
         .link_defs = parser.link_defs,
     };
 }
@@ -43,7 +47,7 @@ const RawBlock = union(enum) {
             .heading => {},
             .blockquote => |*bq| bq.deinit(allocator),
             .list => |*l| l.deinit(allocator),
-            .code_fence => |*cf| cf.deinit(allocator),
+            .code_fence => {},
             .thematic_break => {},
             .table => |*t| t.deinit(allocator),
             .blank_line => {},
@@ -140,6 +144,7 @@ const Parser = struct {
     allocator: std.mem.Allocator,
     lines: []const []const u8,
     pos: usize,
+    inline_builder: parse_inline.InlineBuilder,
     link_defs: ast.LinkDefMap,
 
     fn peekLine(self: *const Parser) []const u8 {
@@ -312,7 +317,7 @@ const Parser = struct {
         const content = switch (body_lines.items.len) {
             0 => "",
             1 => body_lines.items[0],
-            else => try self.joinLines(body_lines.items),
+            else => try joinLines(self.allocator, body_lines.items),
         };
 
         return .{
@@ -554,13 +559,12 @@ const Parser = struct {
     }
 
     fn resolveParagraph(self: *Parser, p: RawParagraph) anyerror!ast.BlockNode {
-        const joined = try self.joinLines(p.lines);
-        const children = try parse_inline.parseInlines(self.allocator, joined, &self.link_defs);
+        const children = try self.inline_builder.parseLines(p.lines, &self.link_defs);
         return .{ .paragraph = .{ .children = children } };
     }
 
     fn resolveHeading(self: *Parser, h: RawHeading) anyerror!ast.BlockNode {
-        const children = try parse_inline.parseInlines(self.allocator, h.content, &self.link_defs);
+        const children = try self.inline_builder.parseSlice(h.content, &self.link_defs);
         return .{ .heading = .{ .level = h.level, .children = children } };
     }
 
@@ -596,20 +600,16 @@ const Parser = struct {
 
     fn resolveTable(self: *Parser, t: RawTable) anyerror!ast.BlockNode {
         var header_cells: std.ArrayListUnmanaged(ast.TableCell) = .empty;
-        errdefer {
-            for (header_cells.items) |*c| c.deinit(self.allocator);
-            header_cells.deinit(self.allocator);
-        }
+        errdefer header_cells.deinit(self.allocator);
 
         for (t.header) |cell_text| {
-            const children = try parse_inline.parseInlines(self.allocator, cell_text, &self.link_defs);
+            const children = try self.inline_builder.parseSlice(cell_text, &self.link_defs);
             try header_cells.append(self.allocator, .{ .children = children });
         }
 
         var rows: std.ArrayListUnmanaged([]ast.TableCell) = .empty;
         errdefer {
             for (rows.items) |row| {
-                for (row) |*c| @constCast(c).deinit(self.allocator);
                 self.allocator.free(row);
             }
             rows.deinit(self.allocator);
@@ -617,13 +617,10 @@ const Parser = struct {
 
         for (t.rows) |raw_row| {
             var row_cells: std.ArrayListUnmanaged(ast.TableCell) = .empty;
-            errdefer {
-                for (row_cells.items) |*c| c.deinit(self.allocator);
-                row_cells.deinit(self.allocator);
-            }
+            errdefer row_cells.deinit(self.allocator);
 
             for (raw_row) |cell_text| {
-                const children = try parse_inline.parseInlines(self.allocator, cell_text, &self.link_defs);
+                const children = try self.inline_builder.parseSlice(cell_text, &self.link_defs);
                 try row_cells.append(self.allocator, .{ .children = children });
             }
             try rows.append(self.allocator, try row_cells.toOwnedSlice(self.allocator));
@@ -637,32 +634,32 @@ const Parser = struct {
             },
         };
     }
-
-    fn joinLines(self: *Parser, lines_slice: []const []const u8) ![]const u8 {
-        if (lines_slice.len == 0) return "";
-        if (lines_slice.len == 1) return lines_slice[0];
-
-        var total_len: usize = 0;
-        for (lines_slice, 0..) |line, i| {
-            total_len += line.len;
-            if (i + 1 < lines_slice.len) total_len += 1;
-        }
-
-        const buf = try self.allocator.alloc(u8, total_len);
-        errdefer self.allocator.free(buf);
-
-        var offset: usize = 0;
-        for (lines_slice, 0..) |line, i| {
-            @memcpy(buf[offset .. offset + line.len], line);
-            offset += line.len;
-            if (i + 1 < lines_slice.len) {
-                buf[offset] = '\n';
-                offset += 1;
-            }
-        }
-        return buf;
-    }
 };
+
+fn joinLines(allocator: std.mem.Allocator, lines_slice: []const []const u8) ![]const u8 {
+    if (lines_slice.len == 0) return "";
+    if (lines_slice.len == 1) return lines_slice[0];
+
+    var total_len: usize = 0;
+    for (lines_slice, 0..) |line, i| {
+        total_len += line.len;
+        if (i + 1 < lines_slice.len) total_len += 1;
+    }
+
+    const buf = try allocator.alloc(u8, total_len);
+    errdefer allocator.free(buf);
+
+    var offset: usize = 0;
+    for (lines_slice, 0..) |line, i| {
+        @memcpy(buf[offset .. offset + line.len], line);
+        offset += line.len;
+        if (i + 1 < lines_slice.len) {
+            buf[offset] = '\n';
+            offset += 1;
+        }
+    }
+    return buf;
+}
 
 fn isBlankLine(line: []const u8) bool {
     return std.mem.trim(u8, line, parse_block.horizontal_whitespace).len == 0;

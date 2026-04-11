@@ -41,6 +41,7 @@ fn headingStyle(level: u8, p: theme.Palette) ansi.TextStyle {
 }
 
 pub const Renderer = struct {
+    doc: *const ast.Document,
     writer: *std.io.Writer,
     allocator: std.mem.Allocator,
     enable_ansi: bool,
@@ -65,7 +66,7 @@ pub const Renderer = struct {
             .list => |list| try self.writeList(list, depth),
             .code_fence => |code_fence| try self.writeCodeFence(code_fence),
             .thematic_break => try self.writeThematicBreak(),
-            .table => |table| try render_table.writeTable(self.writer, self.allocator, table, .top_level, self.enable_ansi, self.ambiguous_width, self.palette),
+            .table => |table| try render_table.writeTable(self.writer, self.allocator, self.doc, table, .top_level, self.enable_ansi, self.ambiguous_width, self.palette),
             .blank_line => {},
         }
     }
@@ -76,7 +77,7 @@ pub const Renderer = struct {
 
     fn writeInlinesMaybeWrap(
         self: *Renderer,
-        inlines: []const ast.Inline,
+        range: ast.InlineRange,
         base_style: ansi.TextStyle,
         continuation_indent: usize,
     ) !void {
@@ -97,18 +98,19 @@ pub const Renderer = struct {
                 1;
             var wrap = width.WrapWriter.init(target, available, self.ambiguous_width, self.allocator);
             defer wrap.deinit();
-            try render_inline.writeInlines(&wrap.writer, inlines, self.enable_ansi, base_style, self.palette);
+            try render_inline.writeInlineRange(&wrap.writer, self.doc, range, self.enable_ansi, base_style, self.palette);
             try wrap.finish();
         } else {
-            try render_inline.writeInlines(target, inlines, self.enable_ansi, base_style, self.palette);
+            try render_inline.writeInlineRange(target, self.doc, range, self.enable_ansi, base_style, self.palette);
         }
 
         if (prefix) |*p| try p.finish();
     }
 
     fn writeHeading(self: *Renderer, heading: ast.Heading) !void {
-        try render_inline.writeInlines(
+        try render_inline.writeInlineRange(
             self.writer,
+            self.doc,
             heading.children,
             self.enable_ansi,
             headingStyle(heading.level, self.palette),
@@ -149,7 +151,7 @@ pub const Renderer = struct {
             switch (block) {
                 .paragraph => |paragraph| try self.writeBlockQuoteParagraph(paragraph),
                 .blockquote => |blockquote| try self.writeBlockQuote(blockquote, depth),
-                .table => |table| try render_table.writeTable(self.writer, self.allocator, table, .blockquote, self.enable_ansi, self.ambiguous_width, self.palette),
+                .table => |table| try render_table.writeTable(self.writer, self.allocator, self.doc, table, .blockquote, self.enable_ansi, self.ambiguous_width, self.palette),
                 else => try self.writeBlock(block, depth),
             }
         }
@@ -244,8 +246,9 @@ pub const Renderer = struct {
             .indent = content_col,
             .prefix_first_line = false,
         });
-        try render_inline.writeInlines(
+        try render_inline.writeInlineRange(
             &prefix.writer,
+            self.doc,
             paragraph.children,
             self.enable_ansi,
             .{ .fg = self.palette.body },
@@ -332,6 +335,7 @@ test "Renderer.write renders heading content without document trailing newline" 
     defer buf.deinit();
 
     var renderer: Renderer = .{
+        .doc = &doc,
         .writer = &buf.writer,
         .allocator = allocator,
         .enable_ansi = false,

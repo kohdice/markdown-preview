@@ -10,26 +10,27 @@ pub const link_title_separator = " — ";
 pub const image_alt_prefix = "[img: ";
 pub const image_alt_suffix = "]";
 
-pub fn writeInlines(
+pub fn writeInlineRange(
     writer: *std.io.Writer,
-    inlines: []const ast.Inline,
+    doc: *const ast.Document,
+    range: ast.InlineRange,
     enable_ansi: bool,
     base_style: ansi.TextStyle,
     palette: theme.Palette,
 ) !void {
-    for (inlines) |inline_node| {
+    for (doc.inlineSlice(range)) |inline_node| {
         switch (inline_node) {
             .text => |content| try writeTextWithEntities(writer, enable_ansi, base_style, content),
             .code_span => |content| try ansi.writeStyled(writer, enable_ansi, .{ .fg = palette.inline_code }, content),
             .autolink => |url| try ansi.writeStyled(writer, enable_ansi, base_style.merge(.{ .fg = palette.link, .underline = true }), url),
             .soft_break => try writer.writeByte('\n'),
             .hard_break => try writer.writeByte('\n'),
-            .emphasis => |children| try writeInlines(writer, children, enable_ansi, base_style.merge(.{ .italic = true }), palette),
-            .strong => |children| try writeInlines(writer, children, enable_ansi, base_style.merge(.{ .bold = true }), palette),
-            .bold_italic => |children| try writeInlines(writer, children, enable_ansi, base_style.merge(.{ .bold = true, .italic = true }), palette),
-            .strikethrough => |children| try writeInlines(writer, children, enable_ansi, base_style.merge(.{ .strikethrough = true }), palette),
+            .emphasis => |children| try writeInlineRange(writer, doc, children, enable_ansi, base_style.merge(.{ .italic = true }), palette),
+            .strong => |children| try writeInlineRange(writer, doc, children, enable_ansi, base_style.merge(.{ .bold = true }), palette),
+            .bold_italic => |children| try writeInlineRange(writer, doc, children, enable_ansi, base_style.merge(.{ .bold = true, .italic = true }), palette),
+            .strikethrough => |children| try writeInlineRange(writer, doc, children, enable_ansi, base_style.merge(.{ .strikethrough = true }), palette),
             .link => |link| {
-                try writeInlines(writer, link.children, enable_ansi, base_style.merge(.{ .fg = palette.link, .underline = true }), palette);
+                try writeInlineRange(writer, doc, link.children, enable_ansi, base_style.merge(.{ .fg = palette.link, .underline = true }), palette);
                 const muted_dim: ansi.TextStyle = .{ .fg = palette.muted, .dim = true };
                 try ansi.writeStyled(writer, enable_ansi, muted_dim, link_url_open);
                 try ansi.writeStyled(writer, enable_ansi, muted_dim, link.url);
@@ -43,7 +44,7 @@ pub fn writeInlines(
             .image => |img| {
                 const img_style: ansi.TextStyle = .{ .fg = palette.muted, .italic = true };
                 try ansi.writeStyled(writer, enable_ansi, img_style, image_alt_prefix);
-                try writeInlines(writer, img.children, enable_ansi, img_style, palette);
+                try writeInlineRange(writer, doc, img.children, enable_ansi, img_style, palette);
                 try ansi.writeStyled(writer, enable_ansi, img_style, image_alt_suffix);
                 const muted_dim: ansi.TextStyle = .{ .fg = palette.muted, .dim = true };
                 try ansi.writeStyled(writer, enable_ansi, muted_dim, link_url_open);
