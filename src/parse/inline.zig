@@ -20,6 +20,8 @@ const utf8_continuation_mask: u8 = 0xC0;
 const utf8_continuation_tag: u8 = 0x80;
 
 const scheme_separator: []const u8 = "://";
+const http_scheme: []const u8 = "http://";
+const https_scheme: []const u8 = "https://";
 
 /// CommonMark §6.7: a hard line break is signaled by a backslash or by
 /// at least two trailing spaces at the end of a line.
@@ -28,6 +30,7 @@ const min_hard_break_spaces: usize = 2;
 pub const InlineBuilder = struct {
     allocator: std.mem.Allocator,
     nodes: std.ArrayListUnmanaged(ast.InlineNode) = .empty,
+    scratch: std.ArrayListUnmanaged(ast.InlineNode) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) InlineBuilder {
         return .{
@@ -36,20 +39,22 @@ pub const InlineBuilder = struct {
     }
 
     pub fn finish(self: *InlineBuilder) anyerror![]ast.InlineNode {
+        self.scratch.deinit(self.allocator);
+        self.scratch = .empty;
         return self.nodes.toOwnedSlice(self.allocator);
     }
 
     pub fn parseSlice(self: *InlineBuilder, content: []const u8, link_defs: *const DefMap) anyerror!ast.InlineRange {
-        var result: std.ArrayListUnmanaged(ast.InlineNode) = .empty;
-        errdefer result.deinit(self.allocator);
+        const scope_start = self.scratch.items.len;
+        errdefer self.scratch.shrinkRetainingCapacity(scope_start);
 
-        try self.parseFragment(content, link_defs, &result);
-        return try self.commit(&result);
+        try self.parseFragment(content, link_defs);
+        return try self.commitScope(scope_start);
     }
 
     pub fn parseLines(self: *InlineBuilder, lines: []const []const u8, link_defs: *const DefMap) anyerror!ast.InlineRange {
-        var result: std.ArrayListUnmanaged(ast.InlineNode) = .empty;
-        errdefer result.deinit(self.allocator);
+        const scope_start = self.scratch.items.len;
+        errdefer self.scratch.shrinkRetainingCapacity(scope_start);
 
         for (lines, 0..) |raw_line, index| {
             const line = if (index == 0)
@@ -59,25 +64,24 @@ pub const InlineBuilder = struct {
 
             const is_last = index + 1 == lines.len;
             const trimmed_end = if (is_last) line.len else trimTrailingBreakChars(line);
-            try self.parseFragment(line[0..trimmed_end], link_defs, &result);
+            try self.parseFragment(line[0..trimmed_end], link_defs);
 
             if (!is_last) {
                 const break_node: ast.InlineNode = if (isHardBreak(line))
                     .{ .hard_break = {} }
                 else
                     .{ .soft_break = {} };
-                try result.append(self.allocator, break_node);
+                try self.scratch.append(self.allocator, break_node);
             }
         }
 
-        return try self.commit(&result);
+        return try self.commitScope(scope_start);
     }
 
-    fn commit(self: *InlineBuilder, result: *std.ArrayListUnmanaged(ast.InlineNode)) anyerror!ast.InlineRange {
+    fn commitScope(self: *InlineBuilder, scope_start: usize) anyerror!ast.InlineRange {
         const start = self.nodes.items.len;
-        try self.nodes.appendSlice(self.allocator, result.items);
-        result.deinit(self.allocator);
-        result.* = .empty;
+        try self.nodes.appendSlice(self.allocator, self.scratch.items[scope_start..]);
+        self.scratch.shrinkRetainingCapacity(scope_start);
         return .{
             .start = std.math.cast(u32, start) orelse return error.Overflow,
             .len = std.math.cast(u32, self.nodes.items.len - start) orelse return error.Overflow,
@@ -88,17 +92,19 @@ pub const InlineBuilder = struct {
         self: *InlineBuilder,
         content: []const u8,
         link_defs: *const DefMap,
-        out: *std.ArrayListUnmanaged(ast.InlineNode),
     ) anyerror!void {
         var index: usize = 0;
         var plain_start: usize = 0;
 
         while (index < content.len) {
+            const next_candidate = findNextInlineStart(content, index) orelse break;
+            index = next_candidate;
+
             switch (content[index]) {
                 '\\' => {
                     if (index + 1 < content.len and isEscapable(content[index + 1])) {
-                        try appendText(self.allocator, out, content[plain_start..index]);
-                        try appendText(self.allocator, out, content[index + 1 .. index + 2]);
+                        try self.appendText(content[plain_start..index]);
+                        try self.appendText(content[index + 1 .. index + 2]);
                         index += 2;
                         plain_start = index;
                         continue;
@@ -107,8 +113,8 @@ pub const InlineBuilder = struct {
                 },
                 '`' => {
                     if (findCodeSpanEnd(content, index)) |end| {
-                        try appendText(self.allocator, out, content[plain_start..index]);
-                        try out.append(self.allocator, .{ .code_span = content[index .. end + 1] });
+                        try self.appendText(content[plain_start..index]);
+                        try self.scratch.append(self.allocator, .{ .code_span = content[index .. end + 1] });
                         index = end + 1;
                         plain_start = index;
                         continue;
@@ -117,12 +123,33 @@ pub const InlineBuilder = struct {
                 },
                 '!' => {
                     if (index + 1 < content.len and content[index + 1] == '[') {
-                        if (findLinkParts(content, index + 1)) |link| {
-                            try appendText(self.allocator, out, content[plain_start..index]);
+                        if (findBracketSpan(content, index + 1)) |span| {
+                            if (findLinkPartsWithSpan(content, span)) |link| {
+                                try self.appendText(content[plain_start..index]);
 
-                            const alt_content = content[link.text_start..link.text_end];
-                            const children = try self.parseSlice(alt_content, link_defs);
-                            try out.append(self.allocator, .{ .image = .{
+                                const alt_content = content[link.text_start..link.text_end];
+                                const children = try self.parseSlice(alt_content, link_defs);
+                                try self.scratch.append(self.allocator, .{ .image = .{
+                                    .url = content[link.url_start..link.url_end],
+                                    .title = link.title,
+                                    .children = children,
+                                } });
+                                index = link.full_end;
+                                plain_start = index;
+                                continue;
+                            }
+                        }
+                    }
+                    index += 1;
+                },
+                '[' => {
+                    if (findBracketSpan(content, index)) |span| {
+                        if (findLinkPartsWithSpan(content, span)) |link| {
+                            try self.appendText(content[plain_start..index]);
+
+                            const link_text = content[link.text_start..link.text_end];
+                            const children = try self.parseSlice(link_text, link_defs);
+                            try self.scratch.append(self.allocator, .{ .link = .{
                                 .url = content[link.url_start..link.url_end],
                                 .title = link.title,
                                 .children = children,
@@ -131,42 +158,25 @@ pub const InlineBuilder = struct {
                             plain_start = index;
                             continue;
                         }
-                    }
-                    index += 1;
-                },
-                '[' => {
-                    if (findLinkParts(content, index)) |link| {
-                        try appendText(self.allocator, out, content[plain_start..index]);
+                        if (tryParseRefLinkWithSpan(content, span, link_defs)) |ref| {
+                            try self.appendText(content[plain_start..index]);
 
-                        const link_text = content[link.text_start..link.text_end];
-                        const children = try self.parseSlice(link_text, link_defs);
-                        try out.append(self.allocator, .{ .link = .{
-                            .url = content[link.url_start..link.url_end],
-                            .title = link.title,
-                            .children = children,
-                        } });
-                        index = link.full_end;
-                        plain_start = index;
-                        continue;
-                    }
-                    if (tryParseRefLink(content, index, link_defs)) |ref| {
-                        try appendText(self.allocator, out, content[plain_start..index]);
-
-                        const children = try self.parseSlice(ref.link_text, link_defs);
-                        try out.append(self.allocator, .{ .link = .{
-                            .url = ref.url,
-                            .title = ref.title,
-                            .children = children,
-                        } });
-                        index = ref.end;
-                        plain_start = index;
-                        continue;
+                            const children = try self.parseSlice(ref.link_text, link_defs);
+                            try self.scratch.append(self.allocator, .{ .link = .{
+                                .url = ref.url,
+                                .title = ref.title,
+                                .children = children,
+                            } });
+                            index = ref.end;
+                            plain_start = index;
+                            continue;
+                        }
                     }
                     index += 1;
                 },
                 '*', '_' => {
                     if (tryParseEmphasis(content, index)) |em| {
-                        try appendText(self.allocator, out, content[plain_start..index]);
+                        try self.appendText(content[plain_start..index]);
 
                         const children = try self.parseSlice(em.content, link_defs);
                         const node: ast.InlineNode = switch (em.kind) {
@@ -174,7 +184,7 @@ pub const InlineBuilder = struct {
                             .strong => .{ .strong = children },
                             .bold_italic => .{ .bold_italic = children },
                         };
-                        try out.append(self.allocator, node);
+                        try self.scratch.append(self.allocator, node);
                         index = em.end;
                         plain_start = index;
                         continue;
@@ -183,10 +193,10 @@ pub const InlineBuilder = struct {
                 },
                 '~' => {
                     if (tryParseStrikethrough(content, index)) |st| {
-                        try appendText(self.allocator, out, content[plain_start..index]);
+                        try self.appendText(content[plain_start..index]);
 
                         const children = try self.parseSlice(st.content, link_defs);
-                        try out.append(self.allocator, .{ .strikethrough = children });
+                        try self.scratch.append(self.allocator, .{ .strikethrough = children });
                         index = st.end;
                         plain_start = index;
                         continue;
@@ -195,8 +205,8 @@ pub const InlineBuilder = struct {
                 },
                 '<' => {
                     if (tryParseAutolink(content, index)) |al| {
-                        try appendText(self.allocator, out, content[plain_start..index]);
-                        try out.append(self.allocator, .{ .autolink = al.url });
+                        try self.appendText(content[plain_start..index]);
+                        try self.scratch.append(self.allocator, .{ .autolink = al.url });
                         index = al.end;
                         plain_start = index;
                         continue;
@@ -204,31 +214,43 @@ pub const InlineBuilder = struct {
                     index += 1;
                 },
                 else => {
-                    if (content[index] == 'h') {
-                        if (tryParseBareUrl(content, index)) |bare| {
-                            try appendText(self.allocator, out, content[plain_start..index]);
-                            try out.append(self.allocator, .{ .autolink = content[index..bare.end] });
-                            index = bare.end;
-                            plain_start = index;
-                            continue;
-                        }
+                    if (tryParseBareUrl(content, index)) |bare| {
+                        try self.appendText(content[plain_start..index]);
+                        try self.scratch.append(self.allocator, .{ .autolink = content[index..bare.end] });
+                        index = bare.end;
+                        plain_start = index;
+                        continue;
                     }
                     index += 1;
                 },
             }
         }
 
-        try appendText(self.allocator, out, content[plain_start..]);
+        try self.appendText(content[plain_start..]);
+    }
+
+    fn appendText(self: *InlineBuilder, content: []const u8) !void {
+        if (content.len == 0) return;
+        try self.scratch.append(self.allocator, .{ .text = content });
     }
 };
 
-fn appendText(
-    allocator: std.mem.Allocator,
-    out: *std.ArrayListUnmanaged(ast.InlineNode),
-    content: []const u8,
-) !void {
-    if (content.len == 0) return;
-    try out.append(allocator, .{ .text = content });
+fn findNextInlineStart(content: []const u8, start: usize) ?usize {
+    var pos = start;
+    while (pos < content.len) : (pos += 1) {
+        switch (content[pos]) {
+            '\\', '`', '!', '[', '*', '_', '~', '<' => return pos,
+            'h' => {
+                if (std.mem.startsWith(u8, content[pos..], http_scheme) or
+                    std.mem.startsWith(u8, content[pos..], https_scheme))
+                {
+                    return pos;
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
 }
 
 fn isHardBreak(line: []const u8) bool {
@@ -301,23 +323,45 @@ const LinkParts = struct {
 };
 
 fn findLinkParts(text: []const u8, start: usize) ?LinkParts {
+    const span = findBracketSpan(text, start) orelse return null;
+    return findLinkPartsWithSpan(text, span);
+}
+
+const BracketSpan = struct {
+    text_start: usize,
+    text_end: usize,
+    close_bracket: usize,
+};
+
+fn findBracketSpan(text: []const u8, start: usize) ?BracketSpan {
+    if (start >= text.len or text[start] != '[') return null;
+
     var bracket_depth: usize = 1;
-    var bpos = start + 1;
-    while (bpos < text.len) : (bpos += 1) {
-        switch (text[bpos]) {
+    var pos = start + 1;
+    while (pos < text.len) : (pos += 1) {
+        switch (text[pos]) {
             '[' => bracket_depth += 1,
             ']' => {
                 bracket_depth -= 1;
-                if (bracket_depth == 0) break;
+                if (bracket_depth == 0) {
+                    return .{
+                        .text_start = start + 1,
+                        .text_end = pos,
+                        .close_bracket = pos,
+                    };
+                }
             },
             '\\' => {
-                if (bpos + 1 < text.len) bpos += 1;
+                if (pos + 1 < text.len) pos += 1;
             },
             else => {},
         }
     }
-    if (bracket_depth != 0) return null;
-    const close_bracket = bpos;
+    return null;
+}
+
+fn findLinkPartsWithSpan(text: []const u8, span: BracketSpan) ?LinkParts {
+    const close_bracket = span.close_bracket;
     if (close_bracket + 1 >= text.len or text[close_bracket + 1] != '(') return null;
 
     var depth: usize = 1;
@@ -333,8 +377,8 @@ fn findLinkParts(text: []const u8, start: usize) ?LinkParts {
                     const title_info = extractTitle(text[inner_start..inner_end]);
 
                     return .{
-                        .text_start = start + 1,
-                        .text_end = close_bracket,
+                        .text_start = span.text_start,
+                        .text_end = span.text_end,
                         .url_start = inner_start,
                         .url_end = inner_start + title_info.url_len,
                         .title = title_info.title,
@@ -679,27 +723,19 @@ const RefLinkResult = struct {
 };
 
 fn tryParseRefLink(text: []const u8, start: usize, link_defs: *const DefMap) ?RefLinkResult {
-    if (start >= text.len or text[start] != '[') return null;
+    const span = findBracketSpan(text, start) orelse return null;
+    return tryParseRefLinkWithSpan(text, span, link_defs);
+}
 
-    var bracket_depth: usize = 1;
-    var bpos = start + 1;
-    while (bpos < text.len) : (bpos += 1) {
-        switch (text[bpos]) {
-            '[' => bracket_depth += 1,
-            ']' => {
-                bracket_depth -= 1;
-                if (bracket_depth == 0) break;
-            },
-            '\\' => {
-                if (bpos + 1 < text.len) bpos += 1;
-            },
-            else => {},
-        }
-    }
-    if (bracket_depth != 0) return null;
+fn tryParseRefLinkWithSpan(
+    text: []const u8,
+    span: BracketSpan,
+    link_defs: *const DefMap,
+) ?RefLinkResult {
+    if (link_defs.count() == 0) return null;
 
-    const text_end = bpos;
-    const link_text = text[start + 1 .. text_end];
+    const text_end = span.close_bracket;
+    const link_text = text[span.text_start..span.text_end];
 
     if (text_end + 1 < text.len and text[text_end + 1] == '[') {
         const ref_start = text_end + 2;
