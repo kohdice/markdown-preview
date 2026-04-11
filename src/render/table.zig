@@ -59,6 +59,26 @@ pub fn writeTable(
     var cell_widths_header = try allocator.alloc(usize, col_count);
     defer allocator.free(cell_widths_header);
 
+    var body_widths = try allocator.alloc([]usize, table.rows.len);
+    var initialized_body_rows: usize = 0;
+    defer {
+        for (body_widths[0..initialized_body_rows]) |row_widths| allocator.free(row_widths);
+        allocator.free(body_widths);
+    }
+
+    for (table.rows, 0..) |row, row_index| {
+        const row_cached = try allocator.alloc(usize, row.len);
+        body_widths[row_index] = row_cached;
+        initialized_body_rows += 1;
+        for (row, 0..) |cell, cell_index| {
+            const cw = measure.inlineWidth(cell.children, ambiguous_width);
+            row_cached[cell_index] = cw;
+            if (cell_index < col_count) {
+                col_widths[cell_index] = @max(col_widths[cell_index], cw);
+            }
+        }
+    }
+
     for (0..col_count) |c| {
         if (c < table.header.len) {
             const cw = measure.inlineWidth(table.header[c].children, ambiguous_width);
@@ -66,10 +86,6 @@ pub fn writeTable(
             col_widths[c] = @max(col_widths[c], cw);
         } else {
             cell_widths_header[c] = 0;
-        }
-        for (table.rows) |row| {
-            if (c < row.len)
-                col_widths[c] = @max(col_widths[c], measure.inlineWidth(row[c].children, ambiguous_width));
         }
         col_widths[c] = @max(col_widths[c], min_col_width);
     }
@@ -95,7 +111,7 @@ pub fn writeTable(
 
     for (table.rows, 0..) |row, i| {
         try writer.writeByte('\n');
-        try writeRow(writer, row, col_widths, null, table.alignments, .{
+        try writeRow(writer, row, col_widths, body_widths[i], table.alignments, .{
             .fg = cell_fg,
         }, enable_ansi, ambiguous_width, palette);
 
