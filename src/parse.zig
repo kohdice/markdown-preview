@@ -7,6 +7,9 @@ pub const Document = ast.Document;
 
 pub fn parse(allocator: std.mem.Allocator, input: []const u8) !Document {
     const has_trailing_newline = input.len > 0 and input[input.len - 1] == '\n';
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    const arena_allocator = arena.allocator();
 
     var lines: std.ArrayListUnmanaged([]const u8) = .empty;
     defer lines.deinit(allocator);
@@ -23,18 +26,19 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8) !Document {
         }
     }
 
-    const parsed = try parse_document.parse(allocator, lines.items);
+    const parsed = try parse_document.parse(arena_allocator, lines.items);
     return .{
+        .source = input,
         .blocks = parsed.blocks,
         .link_defs = parsed.link_defs,
         .has_trailing_newline = has_trailing_newline,
-        .owned_text = parsed.owned_text,
+        .storage = .{ .arena = arena },
     };
 }
 
 test "parse builds a document for a single paragraph" {
     var doc = try parse(std.testing.allocator, "Hello\n");
-    defer doc.deinit(std.testing.allocator);
+    defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
     try std.testing.expect(doc.has_trailing_newline);

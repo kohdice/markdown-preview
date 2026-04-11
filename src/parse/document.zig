@@ -8,7 +8,6 @@ const parse_inline = @import("inline.zig");
 pub const ParseResult = struct {
     blocks: []ast.BlockNode,
     link_defs: ast.LinkDefMap,
-    owned_text: [][]u8,
 };
 
 pub fn parse(allocator: std.mem.Allocator, lines: []const []const u8) !ParseResult {
@@ -17,25 +16,14 @@ pub fn parse(allocator: std.mem.Allocator, lines: []const []const u8) !ParseResu
         .lines = lines,
         .pos = 0,
         .link_defs = .{},
-        .owned_text = .empty,
     };
-    errdefer parser.deinitLinkDefs();
-    errdefer parser.deinitOwnedText();
 
     const raw_blocks = try parser.parseBlocks();
-
     const blocks = try parser.resolveInlines(raw_blocks);
-    errdefer {
-        for (blocks) |*b| @constCast(b).deinit(allocator);
-        allocator.free(blocks);
-    }
-
-    const owned_text = try parser.owned_text.toOwnedSlice(allocator);
 
     return .{
         .blocks = blocks,
         .link_defs = parser.link_defs,
-        .owned_text = owned_text,
     };
 }
 
@@ -153,18 +141,6 @@ const Parser = struct {
     lines: []const []const u8,
     pos: usize,
     link_defs: ast.LinkDefMap,
-    owned_text: std.ArrayListUnmanaged([]u8),
-
-    fn deinitLinkDefs(self: *Parser) void {
-        var it = self.link_defs.keyIterator();
-        while (it.next()) |key| self.allocator.free(key.*);
-        self.link_defs.deinit(self.allocator);
-    }
-
-    fn deinitOwnedText(self: *Parser) void {
-        for (self.owned_text.items) |buf| self.allocator.free(buf);
-        self.owned_text.deinit(self.allocator);
-    }
 
     fn peekLine(self: *const Parser) []const u8 {
         return self.lines[self.pos];
@@ -333,23 +309,11 @@ const Parser = struct {
             self.advanceLine();
         }
 
-        var total_len: usize = 0;
-        for (body_lines.items, 0..) |bl, i| {
-            total_len += bl.len;
-            if (i + 1 < body_lines.items.len) total_len += 1;
-        }
-        const content = try self.allocator.alloc(u8, total_len);
-        errdefer self.allocator.free(content);
-
-        var offset: usize = 0;
-        for (body_lines.items, 0..) |bl, i| {
-            @memcpy(content[offset .. offset + bl.len], bl);
-            offset += bl.len;
-            if (i + 1 < body_lines.items.len) {
-                content[offset] = '\n';
-                offset += 1;
-            }
-        }
+        const content = switch (body_lines.items.len) {
+            0 => "",
+            1 => body_lines.items[0],
+            else => try self.joinLines(body_lines.items),
+        };
 
         return .{
             .code_fence = .{
@@ -563,41 +527,17 @@ const Parser = struct {
     }
 
     fn resolveInlines(self: *Parser, raw_blocks: []RawBlock) anyerror![]ast.BlockNode {
-        const result = self.resolveBlockSlice(raw_blocks) catch |err| {
-            for (raw_blocks) |*rb| rb.deinit(self.allocator);
-            self.allocator.free(raw_blocks);
-            return err;
-        };
-        for (raw_blocks) |*rb| rb.deinitShallow(self.allocator);
-        self.allocator.free(raw_blocks);
-        return result;
+        return self.resolveBlockSlice(raw_blocks);
     }
 
     fn resolveBlockSlice(self: *Parser, raw_blocks: []RawBlock) anyerror![]ast.BlockNode {
         var blocks: std.ArrayListUnmanaged(ast.BlockNode) = .empty;
-        errdefer {
-            for (blocks.items) |*b| b.deinit(self.allocator);
-            blocks.deinit(self.allocator);
-        }
 
-        for (raw_blocks) |*rb| {
-            var node = try self.resolveOne(rb.*);
-            consumeRaw(rb);
-            blocks.append(self.allocator, node) catch |err| {
-                node.deinit(self.allocator);
-                return err;
-            };
+        for (raw_blocks) |rb| {
+            try blocks.append(self.allocator, try self.resolveOne(rb));
         }
 
         return blocks.toOwnedSlice(self.allocator);
-    }
-
-    fn consumeRaw(rb: *RawBlock) void {
-        switch (rb.*) {
-            .code_fence => rb.* = .{ .blank_line = {} },
-            .table => |*t| t.alignments = &.{},
-            else => {},
-        }
     }
 
     fn resolveOne(self: *Parser, rb: RawBlock) anyerror!ast.BlockNode {
@@ -720,8 +660,6 @@ const Parser = struct {
                 offset += 1;
             }
         }
-
-        try self.owned_text.append(self.allocator, buf);
         return buf;
     }
 };

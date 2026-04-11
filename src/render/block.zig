@@ -326,7 +326,7 @@ test "Renderer.write renders heading content without document trailing newline" 
     defer highlighter.deinit();
 
     var doc = try parse.parse(allocator, "# Hello\n");
-    defer doc.deinit(allocator);
+    defer doc.deinit();
 
     var buf: std.io.Writer.Allocating = .init(allocator);
     defer buf.deinit();

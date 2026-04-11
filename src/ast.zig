@@ -62,21 +62,38 @@ pub const TableCell = struct {
 };
 
 pub const Document = struct {
+    pub const Storage = union(enum) {
+        none,
+        arena: std.heap.ArenaAllocator,
+        allocator: std.mem.Allocator,
+    };
+
+    source: []const u8 = "",
     blocks: []BlockNode,
     link_defs: LinkDefMap,
     has_trailing_newline: bool,
-    owned_text: [][]u8 = &.{},
+    storage: Storage = .none,
 
-    pub fn deinit(self: *Document, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *Document) void {
+        switch (self.storage) {
+            .none => {},
+            .arena => |arena| arena.deinit(),
+            .allocator => |allocator| self.deinitManual(allocator),
+        }
+        self.* = .{
+            .blocks = &.{},
+            .link_defs = .{},
+            .has_trailing_newline = false,
+        };
+    }
+
+    fn deinitManual(self: *Document, allocator: std.mem.Allocator) void {
         for (self.blocks) |*block| block.deinit(allocator);
         allocator.free(self.blocks);
 
         var it = self.link_defs.keyIterator();
         while (it.next()) |key| allocator.free(key.*);
         self.link_defs.deinit(allocator);
-
-        for (self.owned_text) |buf| allocator.free(buf);
-        allocator.free(self.owned_text);
     }
 };
 
