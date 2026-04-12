@@ -112,6 +112,7 @@ pub const BlockNode = union(enum) {
     heading: Heading,
     blockquote: BlockQuote,
     list: List,
+    code_block: CodeBlock,
     code_fence: CodeFence,
     thematic_break: void,
     table: Table,
@@ -123,6 +124,7 @@ pub const BlockNode = union(enum) {
             .heading => |*h| h.deinit(allocator),
             .blockquote => |*bq| bq.deinit(allocator),
             .list => |*l| l.deinit(allocator),
+            .code_block => {},
             .code_fence => {},
             .thematic_break => {},
             .table => |*t| t.deinit(allocator),
@@ -186,6 +188,10 @@ pub const ListItem = struct {
         for (self.blocks) |*b| b.deinit(allocator);
         allocator.free(self.blocks);
     }
+};
+
+pub const CodeBlock = struct {
+    content: []const u8,
 };
 
 pub const CodeFence = struct {
