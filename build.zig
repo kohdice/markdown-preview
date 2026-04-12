@@ -90,15 +90,15 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const project_mod = b.createModule(.{
+    const markdown_preview_mod = b.createModule(.{
         .root_source_file = b.path("src/lib.zig"),
         .target = target,
         .optimize = optimize,
     });
-    attachTreeSitter(project_mod, ts_support);
+    attachTreeSitter(markdown_preview_mod, ts_support);
 
-    bench_mod.addImport("project", project_mod);
-    bench_render_mod.addImport("project", project_mod);
+    bench_mod.addImport("markdown_preview", markdown_preview_mod);
+    bench_render_mod.addImport("markdown_preview", markdown_preview_mod);
 
     const run_step = b.step("run", "Run the app");
     const run_cmd = b.addRunArtifact(exe);
@@ -144,7 +144,7 @@ pub fn build(b: *std.Build) void {
         }
         test_mod.addImport("bench_support", bench_support_mod);
         if (std.mem.eql(u8, test_root.path, "test/test.zig")) {
-            test_mod.addImport("project", project_mod);
+            test_mod.addImport("markdown_preview", markdown_preview_mod);
         }
 
         const unit_tests = b.addTest(.{

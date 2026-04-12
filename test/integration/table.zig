@@ -1,7 +1,7 @@
 const std = @import("std");
-const project = @import("project");
+const markdown_preview = @import("markdown_preview");
 const renderToOwnedSlice = @import("../helpers/render_from_source.zig").renderToOwnedSlice;
-const width = project.term.width;
+const width = markdown_preview.term.width;
 
 test "simple table renders with aligned columns" {
     const allocator = std.testing.allocator;

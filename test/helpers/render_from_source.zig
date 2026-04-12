@@ -1,7 +1,7 @@
 const std = @import("std");
-const project = @import("project");
-const parse = project.parse;
-const render = project.render;
+const markdown_preview = @import("markdown_preview");
+const parse = markdown_preview.parse;
+const render = markdown_preview.render;
 
 pub fn renderToOwnedSlice(
     allocator: std.mem.Allocator,
