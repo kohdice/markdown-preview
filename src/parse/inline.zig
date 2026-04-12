@@ -1,10 +1,9 @@
 const std = @import("std");
 const ast = @import("../ast.zig");
 const parse_block = @import("block.zig");
+const parse_link = @import("link.zig");
 
 const DefMap = ast.LinkDefMap;
-
-const max_ref_label_len = 256;
 
 /// CommonMark §6.2: delimiter runs of length 1/2/3 map to emphasis, strong,
 /// and strong+emphasis; the same value drives the multiple-of-three
@@ -146,6 +145,12 @@ const CodeSpanMatch = struct {
 const LinkTail = struct {
     url: []const u8,
     title: ?[]const u8,
+    end_line: usize,
+    end_col: usize,
+};
+
+const BracketResolution = struct {
+    end_line: usize,
     end_col: usize,
 };
 
@@ -162,6 +167,8 @@ const TempParser = struct {
     prev: std.ArrayListUnmanaged(TokenRef) = .empty,
     delimiters: std.ArrayListUnmanaged(Delimiter) = .empty,
     brackets: std.ArrayListUnmanaged(Bracket) = .empty,
+    reference_label_scratch: std.ArrayListUnmanaged(u8) = .empty,
+    inline_link_scratch: std.ArrayListUnmanaged(u8) = .empty,
     chain: InlineChain = .{},
 
     fn init(
@@ -181,6 +188,8 @@ const TempParser = struct {
         self.prev.deinit(self.builder.allocator);
         self.delimiters.deinit(self.builder.allocator);
         self.brackets.deinit(self.builder.allocator);
+        self.reference_label_scratch.deinit(self.builder.allocator);
+        self.inline_link_scratch.deinit(self.builder.allocator);
     }
 
     fn parse(self: *TempParser) !TokenRef {
@@ -262,8 +271,9 @@ const TempParser = struct {
                 },
                 ']' => {
                     try self.appendText(line[plain_start..col]);
-                    if (try self.tryResolveBracket(line_index, col)) |end_col| {
-                        col = end_col;
+                    if (try self.tryResolveBracket(line_index, col)) |resolved| {
+                        line_index = resolved.end_line;
+                        col = resolved.end_col;
                         plain_start = col;
                         continue;
                     }
@@ -418,12 +428,10 @@ const TempParser = struct {
         return null;
     }
 
-    fn tryResolveBracket(self: *TempParser, line_index: usize, close_col: usize) !?usize {
+    fn tryResolveBracket(self: *TempParser, line_index: usize, close_col: usize) !?BracketResolution {
         const opener_index = self.findActiveBracket() orelse return null;
         const opener = self.brackets.items[opener_index];
-        const line = self.lines[line_index];
-
-        const link_tail = self.parseInlineLinkTail(line, close_col) orelse try self.parseReferenceLinkTail(opener, line_index, close_col) orelse return null;
+        const link_tail = try self.parseInlineLinkTail(line_index, close_col) orelse try self.parseReferenceLinkTail(opener, line_index, close_col) orelse return null;
 
         const opener_node = opener.node;
         const child_head = self.builder.next.items[tokenIndex(opener_node)];
@@ -457,35 +465,94 @@ const TempParser = struct {
             }
         }
 
-        return link_tail.end_col;
+        return .{
+            .end_line = link_tail.end_line,
+            .end_col = link_tail.end_col,
+        };
     }
 
-    fn parseInlineLinkTail(self: *TempParser, line: []const u8, close_col: usize) ?LinkTail {
-        _ = self;
+    fn parseInlineLinkTail(self: *TempParser, start_line: usize, close_col: usize) !?LinkTail {
+        const line = self.lines[start_line];
         if (close_col + 1 >= line.len or line[close_col + 1] != '(') return null;
 
-        var depth: usize = 1;
-        var pos = close_col + 2;
-        while (pos < line.len) : (pos += 1) {
-            switch (line[pos]) {
-                '(' => depth += 1,
-                ')' => {
-                    depth -= 1;
-                    if (depth == 0) {
-                        const inner = line[close_col + 2 .. pos];
-                        const title_info = extractTitle(inner);
-                        return .{
-                            .url = inner[0..title_info.url_len],
-                            .title = title_info.title,
-                            .end_col = pos + 1,
-                        };
-                    }
-                },
-                else => {},
+        self.inline_link_scratch.clearRetainingCapacity();
+
+        var line_index = start_line;
+        var line_start_col = close_col + 2;
+        while (line_index < self.lines.len) {
+            const current_line = self.lines[line_index];
+            if (self.inline_link_scratch.items.len > 0) {
+                try self.inline_link_scratch.append(self.builder.allocator, '\n');
             }
+            try self.inline_link_scratch.appendSlice(
+                self.builder.allocator,
+                current_line[line_start_col..],
+            );
+
+            switch (try parse_link.parseInlineTarget(self.builder.allocator, self.inline_link_scratch.items)) {
+                .match => |target| {
+                    const end_loc = self.inlineLinkOffsetToLocation(
+                        start_line,
+                        close_col + 2,
+                        target.end,
+                    );
+                    return .{
+                        .url = target.url,
+                        .title = target.title,
+                        .end_line = end_loc.line_index,
+                        .end_col = end_loc.col,
+                    };
+                },
+                .invalid => return null,
+                .incomplete => {},
+            }
+
+            line_index += 1;
+            line_start_col = 0;
         }
 
         return null;
+    }
+
+    const LineLocation = struct {
+        line_index: usize,
+        col: usize,
+    };
+
+    fn inlineLinkOffsetToLocation(
+        self: *TempParser,
+        start_line: usize,
+        start_col: usize,
+        offset: usize,
+    ) LineLocation {
+        var remaining = offset;
+        var line_index = start_line;
+        var col = start_col;
+
+        while (line_index < self.lines.len) {
+            const line = self.lines[line_index];
+            const line_remaining = line.len - col;
+            if (remaining <= line_remaining) {
+                return .{
+                    .line_index = line_index,
+                    .col = col + remaining,
+                };
+            }
+
+            remaining -= line_remaining;
+            if (line_index + 1 >= self.lines.len or remaining == 0) {
+                return .{
+                    .line_index = line_index,
+                    .col = line.len,
+                };
+            }
+
+            remaining -= 1;
+            line_index += 1;
+            col = 0;
+        }
+
+        unreachable;
     }
 
     fn parseReferenceLinkTail(
@@ -499,16 +566,22 @@ const TempParser = struct {
         const line = self.lines[line_index];
         if (close_col + 1 < line.len and line[close_col + 1] == '[') {
             const ref_start = close_col + 2;
-            const ref_end = std.mem.indexOfScalarPos(u8, line, ref_start, ']') orelse return null;
+            const ref_end = parse_link.findReferenceLabelEnd(line, ref_start) orelse return null;
             const label = if (ref_end > ref_start)
                 line[ref_start..ref_end]
             else
                 try self.captureRange(opener.line_index, opener.content_start, line_index, close_col);
 
-            if (lookupReferenceDefinition(self.link_defs, label)) |def| {
+            if (try lookupReferenceDefinition(
+                self.builder.allocator,
+                self.link_defs,
+                &self.reference_label_scratch,
+                label,
+            )) |def| {
                 return .{
                     .url = def.url,
                     .title = def.title,
+                    .end_line = line_index,
                     .end_col = ref_end + 1,
                 };
             }
@@ -519,10 +592,16 @@ const TempParser = struct {
             return null;
 
         const label = try self.captureRange(opener.line_index, opener.content_start, line_index, close_col);
-        if (lookupReferenceDefinition(self.link_defs, label)) |def| {
+        if (try lookupReferenceDefinition(
+            self.builder.allocator,
+            self.link_defs,
+            &self.reference_label_scratch,
+            label,
+        )) |def| {
             return .{
                 .url = def.url,
                 .title = def.title,
+                .end_line = line_index,
                 .end_col = close_col + 1,
             };
         }
@@ -767,11 +846,16 @@ fn violatesMultipleOfThree(opener_len: u8, closer_len: u8) bool {
         (opener_len % max_emphasis_delim_run != 0 or closer_len % max_emphasis_delim_run != 0);
 }
 
-fn lookupReferenceDefinition(link_defs: *const DefMap, label: []const u8) ?ast.LinkDef {
-    var lower_buf: [max_ref_label_len]u8 = undefined;
-    if (label.len > lower_buf.len) return null;
-    const lower_key = std.ascii.lowerString(lower_buf[0..label.len], label);
-    return link_defs.get(lower_key);
+fn lookupReferenceDefinition(
+    allocator: std.mem.Allocator,
+    link_defs: *const DefMap,
+    scratch: *std.ArrayListUnmanaged(u8),
+    label: []const u8,
+) !?ast.LinkDef {
+    if (!parse_link.referenceLabelLengthFits(label)) return null;
+    const normalized = try parse_link.normalizeReferenceLabelInto(scratch, allocator, label);
+    if (normalized.len == 0) return null;
+    return link_defs.get(normalized);
 }
 
 fn isHardBreak(line: []const u8) bool {
@@ -825,118 +909,6 @@ fn isEscapable(c: u8) bool {
         '{', '|', '}', '~' => true,
         else => false,
     };
-}
-
-const LinkParts = struct {
-    text_start: usize,
-    text_end: usize,
-    url_start: usize,
-    url_end: usize,
-    title: ?[]const u8 = null,
-    full_end: usize,
-};
-
-fn findLinkParts(text: []const u8, start: usize) ?LinkParts {
-    const span = findBracketSpan(text, start) orelse return null;
-    return findLinkPartsWithSpan(text, span);
-}
-
-const BracketSpan = struct {
-    text_start: usize,
-    text_end: usize,
-    close_bracket: usize,
-};
-
-fn findBracketSpan(text: []const u8, start: usize) ?BracketSpan {
-    if (start >= text.len or text[start] != '[') return null;
-
-    var bracket_depth: usize = 1;
-    var pos = start + 1;
-    while (pos < text.len) : (pos += 1) {
-        switch (text[pos]) {
-            '[' => bracket_depth += 1,
-            ']' => {
-                bracket_depth -= 1;
-                if (bracket_depth == 0) {
-                    return .{
-                        .text_start = start + 1,
-                        .text_end = pos,
-                        .close_bracket = pos,
-                    };
-                }
-            },
-            '\\' => {
-                if (pos + 1 < text.len) pos += 1;
-            },
-            else => {},
-        }
-    }
-    return null;
-}
-
-fn findLinkPartsWithSpan(text: []const u8, span: BracketSpan) ?LinkParts {
-    const close_bracket = span.close_bracket;
-    if (close_bracket + 1 >= text.len or text[close_bracket + 1] != '(') return null;
-
-    var depth: usize = 1;
-    var pos = close_bracket + 2;
-    while (pos < text.len) : (pos += 1) {
-        switch (text[pos]) {
-            '(' => depth += 1,
-            ')' => {
-                depth -= 1;
-                if (depth == 0) {
-                    const inner_start = close_bracket + 2;
-                    const inner_end = pos;
-                    const title_info = extractTitle(text[inner_start..inner_end]);
-
-                    return .{
-                        .text_start = span.text_start,
-                        .text_end = span.text_end,
-                        .url_start = inner_start,
-                        .url_end = inner_start + title_info.url_len,
-                        .title = title_info.title,
-                        .full_end = pos + 1,
-                    };
-                }
-            },
-            else => {},
-        }
-    }
-    return null;
-}
-
-const TitleInfo = struct {
-    url_len: usize,
-    title: ?[]const u8,
-};
-
-fn extractTitle(inner: []const u8) TitleInfo {
-    const trimmed = std.mem.trimEnd(u8, inner, parse_block.horizontal_whitespace);
-    if (trimmed.len < 4) return .{ .url_len = inner.len, .title = null };
-
-    const last = trimmed[trimmed.len - 1];
-    const open_quote: u8 = switch (last) {
-        '"' => '"',
-        '\'' => '\'',
-        else => return .{ .url_len = inner.len, .title = null },
-    };
-
-    var i = trimmed.len - 2;
-    while (i > 0) : (i -= 1) {
-        if (trimmed[i] == open_quote) {
-            if (i > 0 and parse_block.isHorizontalWhitespace(trimmed[i - 1])) {
-                const url_part = std.mem.trimEnd(u8, trimmed[0 .. i - 1], parse_block.horizontal_whitespace);
-                if (url_part.len == 0) return .{ .url_len = inner.len, .title = null };
-                return .{
-                    .url_len = url_part.len,
-                    .title = trimmed[i + 1 .. trimmed.len - 1],
-                };
-            }
-        }
-    }
-
-    return .{ .url_len = inner.len, .title = null };
 }
 
 const CharClass = enum { whitespace, punctuation, other };
@@ -1227,64 +1199,4 @@ fn tryParseBareUrl(text: []const u8, start: usize) ?BareUrlResult {
     if (std.mem.indexOfScalar(u8, domain, '.') == null) return null;
 
     return .{ .end = pos };
-}
-
-const RefLinkResult = struct {
-    link_text: []const u8,
-    url: []const u8,
-    title: ?[]const u8,
-    end: usize,
-};
-
-fn tryParseRefLink(text: []const u8, start: usize, link_defs: *const DefMap) ?RefLinkResult {
-    const span = findBracketSpan(text, start) orelse return null;
-    return tryParseRefLinkWithSpan(text, span, link_defs);
-}
-
-fn tryParseRefLinkWithSpan(
-    text: []const u8,
-    span: BracketSpan,
-    link_defs: *const DefMap,
-) ?RefLinkResult {
-    if (link_defs.count() == 0) return null;
-
-    const text_end = span.close_bracket;
-    const link_text = text[span.text_start..span.text_end];
-
-    if (text_end + 1 < text.len and text[text_end + 1] == '[') {
-        const ref_start = text_end + 2;
-        const ref_end = std.mem.indexOfScalarPos(u8, text, ref_start, ']') orelse return null;
-        const ref_label = if (ref_end > ref_start) text[ref_start..ref_end] else link_text;
-
-        var lower_buf: [max_ref_label_len]u8 = undefined;
-        if (ref_label.len > lower_buf.len) return null;
-        const lower_key = std.ascii.lowerString(lower_buf[0..ref_label.len], ref_label);
-
-        if (link_defs.get(lower_key)) |def| {
-            return .{
-                .link_text = link_text,
-                .url = def.url,
-                .title = def.title,
-                .end = ref_end + 1,
-            };
-        }
-    }
-
-    if (text_end + 1 < text.len and (text[text_end + 1] == '(' or text[text_end + 1] == '['))
-        return null;
-
-    var lower_buf: [max_ref_label_len]u8 = undefined;
-    if (link_text.len > lower_buf.len) return null;
-    const lower_key = std.ascii.lowerString(lower_buf[0..link_text.len], link_text);
-
-    if (link_defs.get(lower_key)) |def| {
-        return .{
-            .link_text = link_text,
-            .url = def.url,
-            .title = def.title,
-            .end = text_end + 1,
-        };
-    }
-
-    return null;
 }

@@ -5,8 +5,6 @@ const parse_inline = @import("inline.zig");
 const parse_link = @import("link.zig");
 const parse_table = @import("table.zig");
 
-const max_inline_ref_label_len = 256;
-
 pub const ParseResult = struct {
     blocks: []ast.BlockNode,
     inline_nodes: []ast.InlineNode,
@@ -40,6 +38,8 @@ const Parser = struct {
     allocator: std.mem.Allocator,
     inline_builder: parse_inline.InlineBuilder,
     link_defs: ast.LinkDefMap,
+    link_definition_scratch: std.ArrayListUnmanaged(u8) = .empty,
+    link_label_scratch: std.ArrayListUnmanaged(u8) = .empty,
 
     fn collectLinkDefinitions(self: *Parser, cursor: *BlockCursor) anyerror!void {
         while (cursor.peekLine()) |line| {
@@ -56,9 +56,14 @@ const Parser = struct {
                 continue;
             }
 
-            if (parse_link.definition(line)) |def| {
-                try self.addLinkDef(def);
-                cursor.advanceLine();
+            if (try self.peekLinkDefinition(cursor)) |match| {
+                try self.addLinkDef(match.def);
+                advanceLines(cursor, match.lines_consumed);
+                continue;
+            }
+
+            if (parse_block.indentedCodeContent(line) != null) {
+                self.skipIndentedCodeBlock(cursor);
                 continue;
             }
 
@@ -95,7 +100,7 @@ const Parser = struct {
                 continue;
             }
 
-            self.skipParagraph(cursor);
+            try self.skipParagraph(cursor);
         }
     }
 
@@ -117,9 +122,14 @@ const Parser = struct {
                 continue;
             }
 
-            if (parse_link.definition(line)) |def| {
-                try self.addLinkDef(def);
-                cursor.advanceLine();
+            if (try self.peekLinkDefinition(cursor)) |match| {
+                try self.addLinkDef(match.def);
+                advanceLines(cursor, match.lines_consumed);
+                continue;
+            }
+
+            if (parse_block.indentedCodeContent(line) != null) {
+                try blocks.append(self.allocator, try self.parseIndentedCodeBlock(cursor));
                 continue;
             }
 
@@ -167,46 +177,55 @@ const Parser = struct {
     }
 
     fn addLinkDef(self: *Parser, def: parse_link.Definition) anyerror!void {
-        var lower_buf: [max_inline_ref_label_len]u8 = undefined;
-        if (def.label.len <= lower_buf.len) {
-            const lower_key = std.ascii.lowerString(lower_buf[0..def.label.len], def.label);
-            if (self.link_defs.get(lower_key) != null) return;
+        const normalized = try parse_link.normalizeReferenceLabelInto(
+            &self.link_label_scratch,
+            self.allocator,
+            def.label,
+        );
+        if (normalized.len == 0) return;
+        if (self.link_defs.get(normalized) != null) return;
 
-            const key = try self.allocator.dupe(u8, lower_key);
-            const result = try self.link_defs.getOrPut(self.allocator, key);
-            std.debug.assert(!result.found_existing);
-            result.value_ptr.* = .{
-                .url = def.url,
-                .title = def.title,
-            };
-            return;
-        }
+        const key = try self.allocator.dupe(u8, normalized);
 
-        const key = try std.ascii.allocLowerString(self.allocator, def.label);
         const result = try self.link_defs.getOrPut(self.allocator, key);
-        if (result.found_existing) {
-            self.allocator.free(key);
-            return;
-        }
-
+        std.debug.assert(!result.found_existing);
         result.value_ptr.* = .{
-            .url = def.url,
-            .title = def.title,
+            .url = try self.ownLinkText(def.url),
+            .title = if (def.title) |title|
+                try self.ownLinkText(title)
+            else
+                null,
         };
     }
 
-    fn skipParagraph(self: *Parser, cursor: *BlockCursor) void {
-        _ = self;
+    const LinkDefinitionMatch = struct {
+        def: parse_link.Definition,
+        lines_consumed: usize,
+    };
+
+    const ParagraphLine = struct {
+        text: []const u8,
+        lazy: bool,
+    };
+
+    fn skipParagraph(self: *Parser, cursor: *BlockCursor) anyerror!void {
         var is_first = true;
-        while (cursor.peekLine()) |line| {
+        while (try self.peekParagraphLine(cursor, is_first)) |paragraph_line| {
+            const line = paragraph_line.text;
             if (isBlankLine(line)) break;
             if (!is_first) {
-                if (parse_block.isBlockLevelStart(line)) break;
-                if (parse_link.definition(line) != null) break;
-                if (lineStartsTable(cursor.*)) break;
+                if (parse_block.setextHeadingUnderline(line) != null) {
+                    advanceParagraphLine(cursor, paragraph_line.lazy);
+                    break;
+                }
+                if (!paragraph_line.lazy) {
+                    if (parse_block.isBlockLevelStart(line)) break;
+                    if (try self.peekLinkDefinition(cursor) != null) break;
+                    if (lineStartsTable(cursor.*)) break;
+                }
             }
 
-            cursor.advanceLine();
+            advanceParagraphLine(cursor, paragraph_line.lazy);
             is_first = false;
         }
     }
@@ -215,16 +234,28 @@ const Parser = struct {
         var lines: std.ArrayListUnmanaged([]const u8) = .empty;
         var is_first = true;
 
-        while (cursor.peekLine()) |line| {
+        while (try self.peekParagraphLine(cursor, is_first)) |paragraph_line| {
+            const line = paragraph_line.text;
             if (isBlankLine(line)) break;
             if (!is_first) {
-                if (parse_block.isBlockLevelStart(line)) break;
-                if (parse_link.definition(line) != null) break;
-                if (lineStartsTable(cursor.*)) break;
+                if (parse_block.setextHeadingUnderline(line)) |underline| {
+                    advanceParagraphLine(cursor, paragraph_line.lazy);
+                    return .{
+                        .heading = .{
+                            .level = underline.level,
+                            .children = try self.inline_builder.parseLines(lines.items, &self.link_defs),
+                        },
+                    };
+                }
+                if (!paragraph_line.lazy) {
+                    if (parse_block.isBlockLevelStart(line)) break;
+                    if (try self.peekLinkDefinition(cursor) != null) break;
+                    if (lineStartsTable(cursor.*)) break;
+                }
             }
 
-            try lines.append(self.allocator, if (is_first) line else line[skipLeadingSpaces(line)..]);
-            cursor.advanceLine();
+            try lines.append(self.allocator, normalizeParagraphLine(line));
+            advanceParagraphLine(cursor, paragraph_line.lazy);
             is_first = false;
         }
 
@@ -233,6 +264,146 @@ const Parser = struct {
                 .children = try self.inline_builder.parseLines(lines.items, &self.link_defs),
             },
         };
+    }
+
+    fn peekLinkDefinition(self: *Parser, cursor: *const BlockCursor) anyerror!?LinkDefinitionMatch {
+        self.link_definition_scratch.clearRetainingCapacity();
+
+        var lookahead = cursor.*;
+        var lines_consumed: usize = 0;
+        var waiting_for_title_completion = false;
+        var best_match: ?LinkDefinitionMatch = null;
+
+        while (lookahead.peekLine()) |line| {
+            if (lines_consumed > 0 and isBlankLine(line)) {
+                return best_match;
+            }
+
+            if (lines_consumed > 0) {
+                try self.link_definition_scratch.append(self.allocator, '\n');
+            }
+            try self.link_definition_scratch.appendSlice(self.allocator, line);
+            lines_consumed += 1;
+
+            if (parse_link.definition(self.link_definition_scratch.items)) |def| {
+                const match: LinkDefinitionMatch = .{
+                    .def = def,
+                    .lines_consumed = lines_consumed,
+                };
+                best_match = match;
+
+                if (def.title != null) return match;
+
+                var next = lookahead;
+                next.advanceLine();
+                const next_line = next.peekLine() orelse return best_match;
+                if (!parse_link.lineCouldStartLinkTitle(next_line)) return best_match;
+                waiting_for_title_completion = true;
+            } else if (lines_consumed == 1 and parse_link.definitionNeedsDestinationContinuation(line)) {
+                // CommonMark allows the destination to begin on the next line.
+            } else if (!waiting_for_title_completion) {
+                return null;
+            }
+
+            lookahead.advanceLine();
+        }
+
+        return best_match;
+    }
+
+    fn peekParagraphLine(
+        self: *Parser,
+        cursor: *const BlockCursor,
+        is_first: bool,
+    ) anyerror!?ParagraphLine {
+        if (cursor.peekLine()) |line| {
+            return .{
+                .text = line,
+                .lazy = false,
+            };
+        }
+        if (is_first) return null;
+        return try self.peekLazyParagraphContinuation(cursor);
+    }
+
+    fn peekLazyParagraphContinuation(
+        self: *Parser,
+        cursor: *const BlockCursor,
+    ) anyerror!?ParagraphLine {
+        var parent = switch (cursor.mode) {
+            .root => return null,
+            .blockquote => cursor.parent.?.*,
+            .list_item => return null,
+        };
+        parent.raw_pos = cursor.raw_pos;
+
+        const line = parent.peekLine() orelse return null;
+        if (isBlankLine(line)) return null;
+        if (parse_block.isBlockLevelStart(line)) return null;
+        if (try self.peekLinkDefinition(&parent) != null) return null;
+        if (lineStartsTable(parent)) return null;
+
+        return .{
+            .text = line,
+            .lazy = true,
+        };
+    }
+
+    fn parseIndentedCodeBlock(self: *Parser, cursor: *BlockCursor) anyerror!ast.BlockNode {
+        var lines: std.ArrayListUnmanaged([]const u8) = .empty;
+
+        while (cursor.peekLine()) |line| {
+            if (parse_block.indentedCodeContent(line)) |content| {
+                try lines.append(self.allocator, content);
+                cursor.advanceLine();
+                continue;
+            }
+
+            const blank_count = countInterveningCodeBlankLines(cursor);
+            if (blank_count == 0) break;
+
+            var remaining = blank_count;
+            while (remaining > 0) : (remaining -= 1) {
+                try lines.append(self.allocator, "");
+                cursor.advanceLine();
+            }
+        }
+
+        const content = switch (lines.items.len) {
+            0 => "",
+            1 => lines.items[0],
+            else => try joinLines(self.allocator, lines.items),
+        };
+
+        return .{
+            .code_block = .{
+                .content = content,
+            },
+        };
+    }
+
+    fn skipIndentedCodeBlock(self: *Parser, cursor: *BlockCursor) void {
+        _ = self;
+
+        while (cursor.peekLine()) |line| {
+            if (parse_block.indentedCodeContent(line) != null) {
+                cursor.advanceLine();
+                continue;
+            }
+
+            const blank_count = countInterveningCodeBlankLines(cursor);
+            if (blank_count == 0) break;
+
+            advanceLines(cursor, blank_count);
+        }
+    }
+
+    fn ownLinkText(self: *Parser, raw: []const u8) ![]const u8 {
+        const materialized = try parse_link.materializeLinkText(self.allocator, raw);
+        if (materialized.ptr == raw.ptr and materialized.len == raw.len) {
+            return try self.allocator.dupe(u8, raw);
+        }
+        return materialized;
     }
 
     fn parseFenceBlock(self: *Parser, cursor: *BlockCursor, fence_info: parse_block.Fence) anyerror!ast.BlockNode {
@@ -462,9 +633,11 @@ const Parser = struct {
 
     fn tryParseTable(self: *Parser, cursor: *BlockCursor) anyerror!?ast.BlockNode {
         const header_line = cursor.peekLine() orelse return null;
+        if (parse_block.indentedCodeContent(header_line) != null) return null;
         if (std.mem.indexOfScalar(u8, header_line, '|') == null) return null;
 
         const delim_line = cursor.peekNextLine() orelse return null;
+        if (parse_block.indentedCodeContent(delim_line) != null) return null;
         if (!parse_table.isDelimiterRow(delim_line)) return null;
 
         const header_cells = parse_table.cells(self.allocator, header_line) catch |err| switch (err) {
@@ -493,6 +666,7 @@ const Parser = struct {
         var rows: std.ArrayListUnmanaged([]ast.TableCell) = .empty;
         while (cursor.peekLine()) |row_line| {
             if (isBlankLine(row_line)) break;
+            if (parse_block.indentedCodeContent(row_line) != null) break;
             if (std.mem.indexOfScalar(u8, row_line, '|') == null) break;
             if (parse_block.isBlockLevelStart(row_line)) break;
 
@@ -529,6 +703,7 @@ const Parser = struct {
 
         while (cursor.peekLine()) |row_line| {
             if (isBlankLine(row_line)) break;
+            if (parse_block.indentedCodeContent(row_line) != null) break;
             if (std.mem.indexOfScalar(u8, row_line, '|') == null) break;
             if (parse_block.isBlockLevelStart(row_line)) break;
             cursor.advanceLine();
@@ -668,9 +843,11 @@ const BlockCursor = struct {
 
 fn lineStartsTable(cursor: BlockCursor) bool {
     const line = cursor.peekLine() orelse return false;
+    if (parse_block.indentedCodeContent(line) != null) return false;
     if (std.mem.indexOfScalar(u8, line, '|') == null) return false;
 
     const next_line = cursor.peekNextLine() orelse return false;
+    if (parse_block.indentedCodeContent(next_line) != null) return false;
     if (!parse_table.isDelimiterRow(next_line)) return false;
 
     return parse_table.cellCount(line) == parse_table.cellCount(next_line);
@@ -761,12 +938,42 @@ fn joinLines(allocator: std.mem.Allocator, lines: []const []const u8) ![]const u
     return buffer;
 }
 
+fn advanceLines(cursor: *BlockCursor, count: usize) void {
+    var remaining = count;
+    while (remaining > 0) : (remaining -= 1) {
+        cursor.advanceLine();
+    }
+}
+
+fn advanceParagraphLine(cursor: *BlockCursor, lazy: bool) void {
+    if (!lazy) {
+        cursor.advanceLine();
+        return;
+    }
+
+    cursor.raw_pos = nextRawLinePos(cursor.source, cursor.raw_pos);
+}
+
 fn isBlankLine(line: []const u8) bool {
     return std.mem.trim(u8, line, parse_block.horizontal_whitespace).len == 0;
 }
 
-fn skipLeadingSpaces(line: []const u8) usize {
-    var index: usize = 0;
-    while (index < line.len and line[index] == ' ') : (index += 1) {}
-    return index;
+fn normalizeParagraphLine(line: []const u8) []const u8 {
+    return std.mem.trimLeft(u8, line, parse_block.horizontal_whitespace);
+}
+
+fn countInterveningCodeBlankLines(cursor: *const BlockCursor) usize {
+    var lookahead = cursor.*;
+    var blank_count: usize = 0;
+
+    while (lookahead.peekLine()) |line| {
+        if (!isBlankLine(line)) break;
+        blank_count += 1;
+        lookahead.advanceLine();
+    }
+
+    if (blank_count == 0) return 0;
+    const next_line = lookahead.peekLine() orelse return 0;
+    if (parse_block.indentedCodeContent(next_line) == null) return 0;
+    return blank_count;
 }
