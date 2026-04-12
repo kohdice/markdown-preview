@@ -19,6 +19,9 @@ pub fn main() !void {
         .{ .name = "paragraph-100k", .input = try makeRepeatedInlineInput(allocator, 7000, "This is **bold** and [linked](https://example.com) text. ") },
         .{ .name = "nested-inline-depth-64", .input = try makeNestedInlineInput(allocator, 64) },
         .{ .name = "reference-links-256", .input = try makeReferenceLinkInput(allocator, 256) },
+        .{ .name = "many-paragraphs-1024", .input = try makeManyParagraphsInput(allocator, 1024) },
+        .{ .name = "many-headings-1024", .input = try makeManyHeadingsInput(allocator, 1024) },
+        .{ .name = "table-cells-4096", .input = try makeTableInput(allocator, 64, 64) },
     };
 
     std.debug.print("inline benchmark\n", .{});
@@ -122,6 +125,63 @@ fn makeNestedInlineInput(allocator: std.mem.Allocator, depth: usize) ![]u8 {
         } else {
             try out.appendSlice(allocator, "*](https://example.com)");
         }
+    }
+
+    return out.toOwnedSlice(allocator);
+}
+
+fn makeManyParagraphsInput(allocator: std.mem.Allocator, count: usize) ![]u8 {
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(allocator);
+    var writer = out.writer(allocator);
+
+    for (0..count) |i| {
+        try writer.print("Paragraph {d} with **bold** and *italic* text.\n\n", .{i});
+    }
+
+    return out.toOwnedSlice(allocator);
+}
+
+fn makeManyHeadingsInput(allocator: std.mem.Allocator, count: usize) ![]u8 {
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(allocator);
+    var writer = out.writer(allocator);
+
+    for (0..count) |i| {
+        const level = (i % 6) + 1;
+        for (0..level) |_| try out.append(allocator, '#');
+        try writer.print(" Heading {d}\n\n", .{i});
+    }
+
+    return out.toOwnedSlice(allocator);
+}
+
+fn makeTableInput(allocator: std.mem.Allocator, rows: usize, cols: usize) ![]u8 {
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(allocator);
+    var writer = out.writer(allocator);
+
+    // Header row
+    for (0..cols) |c| {
+        if (c > 0) try out.append(allocator, '|');
+        try writer.print(" H{d} ", .{c});
+    }
+    try out.append(allocator, '\n');
+
+    // Delimiter row
+    for (0..cols) |c| {
+        if (c > 0) try out.append(allocator, '|');
+        try out.appendSlice(allocator, " --- ");
+    }
+    try out.append(allocator, '\n');
+
+    // Data rows
+    for (0..rows) |r| {
+        for (0..cols) |c| {
+            if (c > 0) try out.append(allocator, '|');
+            try writer.print(" R{d}C{d} ", .{ r, c });
+        }
+        try out.append(allocator, '\n');
     }
 
     return out.toOwnedSlice(allocator);
