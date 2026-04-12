@@ -7,6 +7,9 @@ const render_inline = @import("inline.zig");
 const prefix_writer = @import("prefix_writer.zig");
 const render_table = @import("table.zig");
 const highlight = @import("../term/highlight.zig");
+const render_context = @import("context.zig");
+
+const RenderContext = render_context.RenderContext;
 
 const thematic_break_width = 32;
 const thematic_break_display = "─" ** thematic_break_width;
@@ -40,26 +43,22 @@ fn headingStyle(level: u8, p: theme.Palette) ansi.TextStyle {
     };
 }
 
-pub const Renderer = struct {
-    doc: *const ast.Document,
+pub const RenderSession = struct {
+    ctx: RenderContext,
     writer: *std.io.Writer,
     allocator: std.mem.Allocator,
     scratch: *render_table.RendererScratch,
-    enable_ansi: bool,
     wrap_width: ?usize,
-    ambiguous_width: width.AmbiguousWidth,
-    palette: theme.Palette,
-    syn_palette: theme.SyntaxPalette,
     highlighter: *highlight.Highlighter,
 
-    pub fn write(self: *Renderer, blocks: []const ast.BlockNode) !void {
+    pub fn write(self: *RenderSession, blocks: []const ast.BlockNode) !void {
         for (blocks, 0..) |block, i| {
             if (i > 0) try self.writer.writeByte('\n');
             try self.writeBlock(block, 0);
         }
     }
 
-    fn writeBlock(self: *Renderer, block: ast.BlockNode, depth: usize) anyerror!void {
+    fn writeBlock(self: *RenderSession, block: ast.BlockNode, depth: usize) anyerror!void {
         switch (block) {
             .paragraph => |paragraph| try self.writeParagraph(paragraph),
             .heading => |heading| try self.writeHeading(heading),
@@ -68,17 +67,17 @@ pub const Renderer = struct {
             .code_block => |code_block| try self.writeCodeBlock(code_block),
             .code_fence => |code_fence| try self.writeCodeFence(code_fence),
             .thematic_break => try self.writeThematicBreak(),
-            .table => |table| try render_table.writeTable(self.writer, self.allocator, &self.scratch.table, self.doc, table, .top_level, self.enable_ansi, self.ambiguous_width, self.palette),
+            .table => |table| try render_table.writeTable(self.ctx, self.writer, self.allocator, &self.scratch.table, table, .top_level),
             .blank_line => {},
         }
     }
 
-    fn writeParagraph(self: *Renderer, paragraph: ast.Paragraph) !void {
-        try self.writeInlinesMaybeWrap(paragraph.children, .{ .fg = self.palette.body }, 0);
+    fn writeParagraph(self: *RenderSession, paragraph: ast.Paragraph) !void {
+        try self.writeInlinesMaybeWrap(paragraph.children, .{ .fg = self.ctx.palette.body }, 0);
     }
 
     fn writeInlinesMaybeWrap(
-        self: *Renderer,
+        self: *RenderSession,
         first: ast.InlineRef,
         base_style: ansi.TextStyle,
         continuation_indent: usize,
@@ -93,48 +92,46 @@ pub const Renderer = struct {
             target = &prefix.?.writer;
         }
 
-        if (self.wrap_width) |wrap_width| {
-            const available = if (wrap_width > continuation_indent)
-                wrap_width - continuation_indent
+        if (self.wrap_width) |wrap_w| {
+            const available = if (wrap_w > continuation_indent)
+                wrap_w - continuation_indent
             else
                 1;
-            var wrap = width.WrapWriter.init(target, available, self.ambiguous_width, self.allocator);
+            var wrap = width.WrapWriter.init(target, available, self.ctx.ambiguous_width, self.allocator);
             defer wrap.deinit();
-            try render_inline.writeInlineChain(&wrap.writer, self.doc, first, self.enable_ansi, base_style, self.palette);
+            try render_inline.writeInlineChain(self.ctx, &wrap.writer, first, base_style);
             try wrap.finish();
         } else {
-            try render_inline.writeInlineChain(target, self.doc, first, self.enable_ansi, base_style, self.palette);
+            try render_inline.writeInlineChain(self.ctx, target, first, base_style);
         }
 
         if (prefix) |*p| try p.finish();
     }
 
-    fn writeHeading(self: *Renderer, heading: ast.Heading) !void {
+    fn writeHeading(self: *RenderSession, heading: ast.Heading) !void {
         try render_inline.writeInlineChain(
+            self.ctx,
             self.writer,
-            self.doc,
             heading.children,
-            self.enable_ansi,
-            headingStyle(heading.level, self.palette),
-            self.palette,
+            headingStyle(heading.level, self.ctx.palette),
         );
     }
 
-    fn writeThematicBreak(self: *Renderer) !void {
-        try ansi.writeStyled(self.writer, self.enable_ansi, .{
-            .fg = self.palette.muted,
+    fn writeThematicBreak(self: *RenderSession) !void {
+        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, .{
+            .fg = self.ctx.palette.muted,
         }, thematic_break_display);
     }
 
-    fn writeBlockQuote(self: *Renderer, blockquote: ast.BlockQuote, depth: usize) anyerror!void {
-        const gutter_style: ansi.TextStyle = .{ .fg = self.palette.muted, .dim = true };
-        const gutter_width = blockquote.indent + width.displayWidth(blockquote_marker, self.ambiguous_width);
+    fn writeBlockQuote(self: *RenderSession, blockquote: ast.BlockQuote, depth: usize) anyerror!void {
+        const gutter_style: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .dim = true };
+        const gutter_width = blockquote.indent + width.displayWidth(blockquote_marker, self.ctx.ambiguous_width);
 
         var prefix = prefix_writer.PrefixWriter.init(self.writer, .{
             .indent = blockquote.indent,
             .styled_prefix = blockquote_marker,
             .style = gutter_style,
-            .enable_ansi = self.enable_ansi,
+            .enable_ansi = self.ctx.enable_ansi,
         });
 
         var child = self.*;
@@ -147,23 +144,23 @@ pub const Renderer = struct {
         try prefix.finish();
     }
 
-    fn writeBlocksInBlockQuote(self: *Renderer, blocks: []const ast.BlockNode, depth: usize) anyerror!void {
+    fn writeBlocksInBlockQuote(self: *RenderSession, blocks: []const ast.BlockNode, depth: usize) anyerror!void {
         for (blocks, 0..) |block, i| {
             if (i > 0) try self.writer.writeByte('\n');
             switch (block) {
                 .paragraph => |paragraph| try self.writeBlockQuoteParagraph(paragraph),
                 .blockquote => |blockquote| try self.writeBlockQuote(blockquote, depth),
-                .table => |table| try render_table.writeTable(self.writer, self.allocator, &self.scratch.table, self.doc, table, .blockquote, self.enable_ansi, self.ambiguous_width, self.palette),
+                .table => |table| try render_table.writeTable(self.ctx, self.writer, self.allocator, &self.scratch.table, table, .blockquote),
                 else => try self.writeBlock(block, depth),
             }
         }
     }
 
-    fn writeBlockQuoteParagraph(self: *Renderer, paragraph: ast.Paragraph) !void {
-        try self.writeInlinesMaybeWrap(paragraph.children, .{ .fg = self.palette.muted }, 0);
+    fn writeBlockQuoteParagraph(self: *RenderSession, paragraph: ast.Paragraph) !void {
+        try self.writeInlinesMaybeWrap(paragraph.children, .{ .fg = self.ctx.palette.muted }, 0);
     }
 
-    fn writeList(self: *Renderer, list: ast.List, depth: usize) anyerror!void {
+    fn writeList(self: *RenderSession, list: ast.List, depth: usize) anyerror!void {
         for (list.items, 0..) |item, i| {
             if (i > 0) {
                 try self.writer.writeByte('\n');
@@ -173,26 +170,26 @@ pub const Renderer = struct {
         }
     }
 
-    fn writeListItem(self: *Renderer, item: ast.ListItem, depth: usize) anyerror!void {
+    fn writeListItem(self: *RenderSession, item: ast.ListItem, depth: usize) anyerror!void {
         try self.writer.splatByteAll(' ', item.indent);
 
         const marker_style: ansi.TextStyle = .{
-            .fg = self.palette.list_marker,
+            .fg = self.ctx.palette.list_marker,
             .bold = true,
         };
 
         var content_col: usize = item.indent;
         if (item.number) |number| {
-            try ansi.writeStyled(self.writer, self.enable_ansi, marker_style, number);
+            try ansi.writeStyled(self.writer, self.ctx.enable_ansi, marker_style, number);
             const marker_buf: [2]u8 = .{ item.marker, ' ' };
-            try ansi.writeStyled(self.writer, self.enable_ansi, marker_style, &marker_buf);
-            content_col += width.displayWidth(number, self.ambiguous_width) + width.displayWidth(&marker_buf, self.ambiguous_width);
+            try ansi.writeStyled(self.writer, self.ctx.enable_ansi, marker_style, &marker_buf);
+            content_col += width.displayWidth(number, self.ctx.ambiguous_width) + width.displayWidth(&marker_buf, self.ctx.ambiguous_width);
         } else {
             const marker_text = bulletForDepth(depth);
-            try ansi.writeStyled(self.writer, self.enable_ansi, marker_style, marker_text);
-            content_col += width.displayWidth(marker_text, self.ambiguous_width);
+            try ansi.writeStyled(self.writer, self.ctx.enable_ansi, marker_style, marker_text);
+            content_col += width.displayWidth(marker_text, self.ctx.ambiguous_width);
         }
-        content_col += checkboxWidth(item.checked, self.ambiguous_width);
+        content_col += checkboxWidth(item.checked, self.ctx.ambiguous_width);
 
         try self.writeCheckbox(item.checked);
 
@@ -218,7 +215,7 @@ pub const Renderer = struct {
     }
 
     fn writeListChildIndented(
-        self: *Renderer,
+        self: *RenderSession,
         child_block: ast.BlockNode,
         indent: usize,
         depth: usize,
@@ -238,12 +235,12 @@ pub const Renderer = struct {
     }
 
     fn writeListItemParagraph(
-        self: *Renderer,
+        self: *RenderSession,
         paragraph: ast.Paragraph,
         content_col: usize,
     ) !void {
         if (content_col == 0 or self.wrap_width != null) {
-            try self.writeInlinesMaybeWrap(paragraph.children, .{ .fg = self.palette.body }, content_col);
+            try self.writeInlinesMaybeWrap(paragraph.children, .{ .fg = self.ctx.palette.body }, content_col);
             return;
         }
 
@@ -252,19 +249,17 @@ pub const Renderer = struct {
             .prefix_first_line = false,
         });
         try render_inline.writeInlineChain(
+            self.ctx,
             &prefix.writer,
-            self.doc,
             paragraph.children,
-            self.enable_ansi,
-            .{ .fg = self.palette.body },
-            self.palette,
+            .{ .fg = self.ctx.palette.body },
         );
         try prefix.finish();
     }
 
-    fn writeCodeFence(self: *Renderer, code_fence: ast.CodeFence) !void {
-        const fence_style: ansi.TextStyle = .{ .fg = self.palette.code_fence, .dim = true };
-        try ansi.writeStyled(self.writer, self.enable_ansi, fence_style, code_fence.opener);
+    fn writeCodeFence(self: *RenderSession, code_fence: ast.CodeFence) !void {
+        const fence_style: ansi.TextStyle = .{ .fg = self.ctx.palette.code_fence, .dim = true };
+        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, fence_style, code_fence.opener);
 
         const language = highlight.Language.fromString(code_fence.language);
         if (code_fence.content.len > 0) {
@@ -274,22 +269,22 @@ pub const Renderer = struct {
 
         if (code_fence.closer) |closer| {
             try self.writer.writeByte('\n');
-            try ansi.writeStyled(self.writer, self.enable_ansi, fence_style, closer);
+            try ansi.writeStyled(self.writer, self.ctx.enable_ansi, fence_style, closer);
         }
     }
 
-    fn writeFenceBody(self: *Renderer, content: []const u8, language: ?highlight.Language) !void {
+    fn writeFenceBody(self: *RenderSession, content: []const u8, language: ?highlight.Language) !void {
         if (language) |lang| {
-            if (self.enable_ansi) {
+            if (self.ctx.enable_ansi) {
                 self.highlighter.writeHighlightedBlock(
                     self.allocator,
                     self.writer,
                     content,
                     lang,
-                    self.syn_palette,
+                    self.ctx.syn_palette,
                 ) catch |err| switch (err) {
                     error.QueryUnavailable => {
-                        try ansi.writeStyled(self.writer, true, .{ .fg = self.palette.inline_code }, content);
+                        try ansi.writeStyled(self.writer, true, .{ .fg = self.ctx.palette.inline_code }, content);
                     },
                     else => return err,
                 };
@@ -300,26 +295,26 @@ pub const Renderer = struct {
             return;
         }
 
-        try ansi.writeStyled(self.writer, self.enable_ansi, .{
-            .fg = self.palette.inline_code,
+        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, .{
+            .fg = self.ctx.palette.inline_code,
         }, content);
     }
 
-    fn writeCodeBlock(self: *Renderer, code_block: ast.CodeBlock) !void {
-        try ansi.writeStyled(self.writer, self.enable_ansi, .{
-            .fg = self.palette.inline_code,
+    fn writeCodeBlock(self: *RenderSession, code_block: ast.CodeBlock) !void {
+        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, .{
+            .fg = self.ctx.palette.inline_code,
         }, code_block.content);
     }
 
-    fn writeCheckbox(self: *Renderer, checked: ?bool) !void {
+    fn writeCheckbox(self: *RenderSession, checked: ?bool) !void {
         if (checked) |is_checked| {
             if (is_checked) {
-                try ansi.writeStyled(self.writer, self.enable_ansi, .{
-                    .fg = self.palette.list_marker,
+                try ansi.writeStyled(self.writer, self.ctx.enable_ansi, .{
+                    .fg = self.ctx.palette.list_marker,
                 }, checkbox_checked);
             } else {
-                try ansi.writeStyled(self.writer, self.enable_ansi, .{
-                    .fg = self.palette.muted,
+                try ansi.writeStyled(self.writer, self.ctx.enable_ansi, .{
+                    .fg = self.ctx.palette.muted,
                     .dim = true,
                 }, checkbox_unchecked);
             }
@@ -333,7 +328,7 @@ fn checkboxWidth(checked: ?bool, ambiguous: width.AmbiguousWidth) usize {
     return width.displayWidth(glyph, ambiguous);
 }
 
-test "Renderer.write renders heading content without document trailing newline" {
+test "RenderSession.write renders heading content without document trailing newline" {
     const allocator = std.testing.allocator;
     var highlighter = highlight.Highlighter.init();
     defer highlighter.deinit();
@@ -356,20 +351,22 @@ test "Renderer.write renders heading content without document trailing newline" 
     var scratch: render_table.RendererScratch = .{};
     defer scratch.deinit(allocator);
 
-    var renderer: Renderer = .{
-        .doc = &doc,
+    var session: RenderSession = .{
+        .ctx = .{
+            .doc = &doc,
+            .enable_ansi = false,
+            .ambiguous_width = .narrow,
+            .palette = theme.palette(.solarized_dark),
+            .syn_palette = theme.syntaxPalette(.solarized_dark),
+        },
         .writer = &buf.writer,
         .allocator = allocator,
         .scratch = &scratch,
-        .enable_ansi = false,
         .wrap_width = null,
-        .ambiguous_width = .narrow,
-        .palette = theme.palette(.solarized_dark),
-        .syn_palette = theme.syntaxPalette(.solarized_dark),
         .highlighter = &highlighter,
     };
 
-    try renderer.write(doc.blocks);
+    try session.write(doc.blocks);
 
     try std.testing.expectEqualStrings("Hello", buf.writer.buffered());
 }

@@ -6,6 +6,7 @@ const theme = term.theme;
 const width = term.width;
 const render_block = @import("render/block.zig");
 const render_table = @import("render/table.zig");
+const render_context = @import("render/context.zig");
 
 pub const RenderOptions = struct {
     enable_ansi: bool = false,
@@ -41,20 +42,22 @@ pub const Renderer = struct {
     pub fn renderDocument(self: *Renderer, writer: *std.io.Writer, doc: *const ast.Document) !void {
         self.scratch.reset();
 
-        var block_renderer: render_block.Renderer = .{
-            .doc = doc,
+        var session: render_block.RenderSession = .{
+            .ctx = .{
+                .doc = doc,
+                .enable_ansi = self.opts.enable_ansi,
+                .ambiguous_width = self.opts.ambiguous_width,
+                .palette = self.palette,
+                .syn_palette = self.syn_palette,
+            },
             .writer = writer,
             .allocator = self.allocator,
-            .enable_ansi = self.opts.enable_ansi,
             .wrap_width = self.opts.wrap_width,
-            .ambiguous_width = self.opts.ambiguous_width,
-            .palette = self.palette,
-            .syn_palette = self.syn_palette,
             .highlighter = &self.highlighter,
             .scratch = &self.scratch,
         };
 
-        try block_renderer.write(doc.blocks);
+        try session.write(doc.blocks);
 
         if (doc.has_trailing_newline) try writer.writeByte('\n');
     }
