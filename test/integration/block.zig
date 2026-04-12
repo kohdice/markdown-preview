@@ -23,7 +23,7 @@ test "renderMarkdown strips heading markers and preserves structure" {
         \\
         \\• item
         \\│ quoted
-        \\link(https://example.com)
+        \\│ link(https://example.com)
         \\```zig
         \\const value = 1;
         \\```
