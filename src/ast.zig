@@ -42,8 +42,6 @@ pub const InlineNode = union(enum) {
     image: ImageInline,
 };
 
-pub const Inline = InlineNode;
-
 pub const TableCell = struct {
     children: InlineRef = no_inline,
 };
@@ -120,36 +118,21 @@ pub const BlockNode = union(enum) {
 
     pub fn deinit(self: *BlockNode, allocator: std.mem.Allocator) void {
         switch (self.*) {
-            .paragraph => |*p| p.deinit(allocator),
-            .heading => |*h| h.deinit(allocator),
             .blockquote => |*bq| bq.deinit(allocator),
             .list => |*l| l.deinit(allocator),
-            .code_block => {},
-            .code_fence => {},
-            .thematic_break => {},
             .table => |*t| t.deinit(allocator),
-            .blank_line => {},
+            .paragraph, .heading, .code_block, .code_fence, .thematic_break, .blank_line => {},
         }
     }
 };
 
 pub const Paragraph = struct {
     children: InlineRef = no_inline,
-
-    pub fn deinit(self: *Paragraph, allocator: std.mem.Allocator) void {
-        _ = self;
-        _ = allocator;
-    }
 };
 
 pub const Heading = struct {
     level: u8,
     children: InlineRef = no_inline,
-
-    pub fn deinit(self: *Heading, allocator: std.mem.Allocator) void {
-        _ = self;
-        _ = allocator;
-    }
 };
 
 pub const BlockQuote = struct {
