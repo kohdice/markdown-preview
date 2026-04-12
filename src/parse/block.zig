@@ -38,6 +38,10 @@ pub const Heading = struct {
     content: []const u8,
 };
 
+pub const SetextHeadingUnderline = struct {
+    level: u8,
+};
+
 pub const ListItem = struct {
     indent: usize,
     marker: u8,
@@ -230,6 +234,42 @@ pub fn isThematicBreak(line: []const u8) bool {
     return marker_count >= min_thematic_break_markers;
 }
 
+pub fn setextHeadingUnderline(line: []const u8) ?SetextHeadingUnderline {
+    const indent = indentBytesAtMost(line, max_block_indent) orelse return null;
+    const trimmed = std.mem.trim(u8, line[indent..], horizontal_whitespace);
+    if (trimmed.len == 0) return null;
+
+    const marker = trimmed[0];
+    const level: u8 = switch (marker) {
+        '=' => 1,
+        '-' => 2,
+        else => return null,
+    };
+
+    for (trimmed) |char| {
+        if (char != marker) return null;
+    }
+
+    return .{ .level = level };
+}
+
+pub fn indentedCodeContent(line: []const u8) ?[]const u8 {
+    if (std.mem.trim(u8, line, horizontal_whitespace).len == 0) return null;
+
+    var index: usize = 0;
+    var columns: usize = 0;
+    while (index < line.len and isHorizontalWhitespace(line[index])) : (index += 1) {
+        columns = switch (line[index]) {
+            ' ' => columns + 1,
+            '\t' => columns + (4 - (columns % 4)),
+            else => unreachable,
+        };
+        if (columns >= 4) return line[index + 1 ..];
+    }
+
+    return null;
+}
+
 pub fn isBlockLevelStart(line: []const u8) bool {
     if (heading(line) != null) return true;
     if (blockquote(line) != null) return true;
@@ -271,4 +311,21 @@ pub fn countRepeatedByte(text: []const u8, byte: u8) usize {
     var count: usize = 0;
     while (count < text.len and text[count] == byte) : (count += 1) {}
     return count;
+}
+
+fn indentBytesAtMost(line: []const u8, max_columns: usize) ?usize {
+    var index: usize = 0;
+    var columns: usize = 0;
+
+    while (index < line.len and isHorizontalWhitespace(line[index])) : (index += 1) {
+        const next_columns = switch (line[index]) {
+            ' ' => columns + 1,
+            '\t' => columns + (4 - (columns % 4)),
+            else => unreachable,
+        };
+        if (next_columns > max_columns) return null;
+        columns = next_columns;
+    }
+
+    return index;
 }
