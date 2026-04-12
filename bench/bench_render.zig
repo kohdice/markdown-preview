@@ -1,6 +1,7 @@
 const std = @import("std");
-const parse = @import("../src/parse.zig");
-const render = @import("../src/render.zig");
+const project = @import("project");
+const parse = project.parse;
+const render = project.render;
 const bench = @import("bench_support.zig");
 
 const Scenario = struct {
