@@ -5,6 +5,7 @@ const highlight = term.highlight;
 const theme = term.theme;
 const width = term.width;
 const render_block = @import("render/block.zig");
+const render_table = @import("render/table.zig");
 
 pub const RenderOptions = struct {
     enable_ansi: bool = false,
@@ -19,6 +20,7 @@ pub const Renderer = struct {
     palette: theme.Palette,
     syn_palette: theme.SyntaxPalette,
     highlighter: highlight.Highlighter,
+    scratch: render_table.RendererScratch,
 
     pub fn init(allocator: std.mem.Allocator, opts: RenderOptions) Renderer {
         return .{
@@ -27,14 +29,18 @@ pub const Renderer = struct {
             .palette = theme.palette(opts.theme),
             .syn_palette = theme.syntaxPalette(opts.theme),
             .highlighter = highlight.Highlighter.init(),
+            .scratch = .{},
         };
     }
 
     pub fn deinit(self: *Renderer) void {
         self.highlighter.deinit();
+        self.scratch.deinit(self.allocator);
     }
 
     pub fn renderDocument(self: *Renderer, writer: *std.io.Writer, doc: *const ast.Document) !void {
+        self.scratch.reset();
+
         var block_renderer: render_block.Renderer = .{
             .doc = doc,
             .writer = writer,
@@ -45,6 +51,7 @@ pub const Renderer = struct {
             .palette = self.palette,
             .syn_palette = self.syn_palette,
             .highlighter = &self.highlighter,
+            .scratch = &self.scratch,
         };
 
         try block_renderer.write(doc.blocks);

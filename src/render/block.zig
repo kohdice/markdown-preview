@@ -44,6 +44,7 @@ pub const Renderer = struct {
     doc: *const ast.Document,
     writer: *std.io.Writer,
     allocator: std.mem.Allocator,
+    scratch: *render_table.RendererScratch,
     enable_ansi: bool,
     wrap_width: ?usize,
     ambiguous_width: width.AmbiguousWidth,
@@ -64,9 +65,10 @@ pub const Renderer = struct {
             .heading => |heading| try self.writeHeading(heading),
             .blockquote => |blockquote| try self.writeBlockQuote(blockquote, depth),
             .list => |list| try self.writeList(list, depth),
+            .code_block => |code_block| try self.writeCodeBlock(code_block),
             .code_fence => |code_fence| try self.writeCodeFence(code_fence),
             .thematic_break => try self.writeThematicBreak(),
-            .table => |table| try render_table.writeTable(self.writer, self.allocator, self.doc, table, .top_level, self.enable_ansi, self.ambiguous_width, self.palette),
+            .table => |table| try render_table.writeTable(self.writer, self.allocator, &self.scratch.table, self.doc, table, .top_level, self.enable_ansi, self.ambiguous_width, self.palette),
             .blank_line => {},
         }
     }
@@ -151,7 +153,7 @@ pub const Renderer = struct {
             switch (block) {
                 .paragraph => |paragraph| try self.writeBlockQuoteParagraph(paragraph),
                 .blockquote => |blockquote| try self.writeBlockQuote(blockquote, depth),
-                .table => |table| try render_table.writeTable(self.writer, self.allocator, self.doc, table, .blockquote, self.enable_ansi, self.ambiguous_width, self.palette),
+                .table => |table| try render_table.writeTable(self.writer, self.allocator, &self.scratch.table, self.doc, table, .blockquote, self.enable_ansi, self.ambiguous_width, self.palette),
                 else => try self.writeBlock(block, depth),
             }
         }
@@ -303,6 +305,12 @@ pub const Renderer = struct {
         }, content);
     }
 
+    fn writeCodeBlock(self: *Renderer, code_block: ast.CodeBlock) !void {
+        try ansi.writeStyled(self.writer, self.enable_ansi, .{
+            .fg = self.palette.inline_code,
+        }, code_block.content);
+    }
+
     fn writeCheckbox(self: *Renderer, checked: ?bool) !void {
         if (checked) |is_checked| {
             if (is_checked) {
@@ -345,11 +353,14 @@ test "Renderer.write renders heading content without document trailing newline" 
 
     var buf: std.io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
+    var scratch: render_table.RendererScratch = .{};
+    defer scratch.deinit(allocator);
 
     var renderer: Renderer = .{
         .doc = &doc,
         .writer = &buf.writer,
         .allocator = allocator,
+        .scratch = &scratch,
         .enable_ansi = false,
         .wrap_width = null,
         .ambiguous_width = .narrow,
