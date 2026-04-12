@@ -1,114 +1,7 @@
 const std = @import("std");
-const parse = @import("parse.zig");
-const render = @import("render.zig");
-
-const CounterSnapshot = struct {
-    alloc_count: usize,
-    resize_count: usize,
-    free_count: usize,
-    bytes_allocated: usize,
-    bytes_freed: usize,
-
-    fn diff(after: CounterSnapshot, before: CounterSnapshot) CounterSnapshot {
-        return .{
-            .alloc_count = after.alloc_count - before.alloc_count,
-            .resize_count = after.resize_count - before.resize_count,
-            .free_count = after.free_count - before.free_count,
-            .bytes_allocated = after.bytes_allocated - before.bytes_allocated,
-            .bytes_freed = after.bytes_freed - before.bytes_freed,
-        };
-    }
-};
-
-const CountingAllocator = struct {
-    child: std.mem.Allocator,
-    alloc_count: usize = 0,
-    resize_count: usize = 0,
-    free_count: usize = 0,
-    bytes_allocated: usize = 0,
-    bytes_freed: usize = 0,
-
-    const vtable: std.mem.Allocator.VTable = .{
-        .alloc = alloc,
-        .resize = resize,
-        .remap = remap,
-        .free = free,
-    };
-
-    fn init(child: std.mem.Allocator) CountingAllocator {
-        return .{ .child = child };
-    }
-
-    fn allocator(self: *CountingAllocator) std.mem.Allocator {
-        return .{
-            .ptr = self,
-            .vtable = &vtable,
-        };
-    }
-
-    fn snapshot(self: *const CountingAllocator) CounterSnapshot {
-        return .{
-            .alloc_count = self.alloc_count,
-            .resize_count = self.resize_count,
-            .free_count = self.free_count,
-            .bytes_allocated = self.bytes_allocated,
-            .bytes_freed = self.bytes_freed,
-        };
-    }
-
-    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
-        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        const ptr = self.child.rawAlloc(len, alignment, ret_addr) orelse return null;
-        self.alloc_count += 1;
-        self.bytes_allocated += len;
-        return ptr;
-    }
-
-    fn resize(
-        ctx: *anyopaque,
-        memory: []u8,
-        alignment: std.mem.Alignment,
-        new_len: usize,
-        ret_addr: usize,
-    ) bool {
-        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        const ok = self.child.rawResize(memory, alignment, new_len, ret_addr);
-        if (ok) {
-            self.resize_count += 1;
-            if (new_len > memory.len) {
-                self.bytes_allocated += new_len - memory.len;
-            } else {
-                self.bytes_freed += memory.len - new_len;
-            }
-        }
-        return ok;
-    }
-
-    fn remap(
-        ctx: *anyopaque,
-        memory: []u8,
-        alignment: std.mem.Alignment,
-        new_len: usize,
-        ret_addr: usize,
-    ) ?[*]u8 {
-        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        const ptr = self.child.rawRemap(memory, alignment, new_len, ret_addr) orelse return null;
-        self.resize_count += 1;
-        if (new_len > memory.len) {
-            self.bytes_allocated += new_len - memory.len;
-        } else {
-            self.bytes_freed += memory.len - new_len;
-        }
-        return ptr;
-    }
-
-    fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
-        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        self.free_count += 1;
-        self.bytes_freed += memory.len;
-        self.child.rawFree(memory, alignment, ret_addr);
-    }
-};
+const parse = @import("../src/parse.zig");
+const render = @import("../src/render.zig");
+const bench = @import("bench_support.zig");
 
 const Scenario = struct {
     name: []const u8,
@@ -137,9 +30,10 @@ fn runScenario(scenario: Scenario) !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
 
-    var counting = CountingAllocator.init(gpa.allocator());
+    var counting = bench.CountingAllocator.init(gpa.allocator());
     const allocator = counting.allocator();
 
+    const before_parse = counting.snapshot();
     var timer = try std.time.Timer.start();
     var doc = try parse.parseBorrowed(allocator, scenario.input);
     defer doc.deinit();
@@ -159,8 +53,8 @@ fn runScenario(scenario: Scenario) !void {
     const render_elapsed_ns = timer.read();
     const after_render = counting.snapshot();
 
-    const parse_counts = after_parse;
-    const render_counts = CounterSnapshot.diff(after_render, after_parse);
+    const parse_counts = bench.CounterSnapshot.diff(after_parse, before_parse);
+    const render_counts = bench.CounterSnapshot.diff(after_render, after_parse);
 
     std.debug.print(
         "{s}: parse={d:.3}ms render={d:.3}ms parse_allocs={d} parse_resizes={d} parse_bytes={d} render_allocs={d} render_resizes={d} render_bytes={d} output_bytes={d}\n",

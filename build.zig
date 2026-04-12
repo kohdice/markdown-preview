@@ -61,7 +61,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe);
 
     const bench_mod = b.createModule(.{
-        .root_source_file = b.path("src/bench_inline.zig"),
+        .root_source_file = b.path("bench/bench_inline.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -71,6 +71,31 @@ pub fn build(b: *std.Build) void {
         .name = "inline-bench",
         .root_module = bench_mod,
     });
+
+    const bench_render_mod = b.createModule(.{
+        .root_source_file = b.path("bench/bench_render.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    attachTreeSitter(bench_render_mod, ts_support);
+
+    const bench_render_exe = b.addExecutable(.{
+        .name = "render-bench",
+        .root_module = bench_render_mod,
+    });
+
+    const bench_support_mod = b.createModule(.{
+        .root_source_file = b.path("bench/bench_support.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const project_mod = b.createModule(.{
+        .root_source_file = b.path("src/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    attachTreeSitter(project_mod, ts_support);
 
     const run_step = b.step("run", "Run the app");
     const run_cmd = b.addRunArtifact(exe);
@@ -84,6 +109,10 @@ pub fn build(b: *std.Build) void {
     const bench_step = b.step("bench-inline", "Run inline parser/render benchmarks");
     const run_bench = b.addRunArtifact(bench_exe);
     bench_step.dependOn(&run_bench.step);
+
+    const bench_render_step = b.step("bench-render", "Run table render benchmarks");
+    const run_bench_render = b.addRunArtifact(bench_render_exe);
+    bench_render_step.dependOn(&run_bench_render.step);
 
     const test_step = b.step("test", "Run tests");
     const test_roots = [_]struct {
@@ -110,13 +139,8 @@ pub fn build(b: *std.Build) void {
         if (test_root.needs_tree_sitter) {
             attachTreeSitter(test_mod, ts_support);
         }
+        test_mod.addImport("bench_support", bench_support_mod);
         if (std.mem.eql(u8, test_root.path, "test/test.zig")) {
-            const project_mod = b.createModule(.{
-                .root_source_file = b.path("test_project.zig"),
-                .target = target,
-                .optimize = optimize,
-            });
-            attachTreeSitter(project_mod, ts_support);
             test_mod.addImport("project", project_mod);
         }
 
