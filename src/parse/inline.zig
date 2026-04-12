@@ -30,6 +30,11 @@ pub const InlineBuilder = struct {
     allocator: std.mem.Allocator,
     nodes: std.ArrayListUnmanaged(ast.InlineNode) = .empty,
     next: std.ArrayListUnmanaged(ast.InlineRef) = .empty,
+    temp_prev: std.ArrayListUnmanaged(TokenRef) = .empty,
+    temp_delimiters: std.ArrayListUnmanaged(Delimiter) = .empty,
+    temp_brackets: std.ArrayListUnmanaged(Bracket) = .empty,
+    temp_reference_scratch: std.ArrayListUnmanaged(u8) = .empty,
+    temp_inline_link_scratch: std.ArrayListUnmanaged(u8) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) InlineBuilder {
         return .{
@@ -164,11 +169,11 @@ const TempParser = struct {
     lines: []const []const u8,
     link_defs: *const DefMap,
     start_index: usize,
-    prev: std.ArrayListUnmanaged(TokenRef) = .empty,
-    delimiters: std.ArrayListUnmanaged(Delimiter) = .empty,
-    brackets: std.ArrayListUnmanaged(Bracket) = .empty,
-    reference_label_scratch: std.ArrayListUnmanaged(u8) = .empty,
-    inline_link_scratch: std.ArrayListUnmanaged(u8) = .empty,
+    prev: std.ArrayListUnmanaged(TokenRef),
+    delimiters: std.ArrayListUnmanaged(Delimiter),
+    brackets: std.ArrayListUnmanaged(Bracket),
+    reference_label_scratch: std.ArrayListUnmanaged(u8),
+    inline_link_scratch: std.ArrayListUnmanaged(u8),
     chain: InlineChain = .{},
 
     fn init(
@@ -176,20 +181,31 @@ const TempParser = struct {
         lines: []const []const u8,
         link_defs: *const DefMap,
     ) TempParser {
-        return .{
+        var result: TempParser = .{
             .builder = builder,
             .lines = lines,
             .link_defs = link_defs,
             .start_index = builder.nodes.items.len,
+            .prev = builder.temp_prev,
+            .delimiters = builder.temp_delimiters,
+            .brackets = builder.temp_brackets,
+            .reference_label_scratch = builder.temp_reference_scratch,
+            .inline_link_scratch = builder.temp_inline_link_scratch,
         };
+        result.prev.clearRetainingCapacity();
+        result.delimiters.clearRetainingCapacity();
+        result.brackets.clearRetainingCapacity();
+        result.reference_label_scratch.clearRetainingCapacity();
+        result.inline_link_scratch.clearRetainingCapacity();
+        return result;
     }
 
     fn deinit(self: *TempParser) void {
-        self.prev.deinit(self.builder.allocator);
-        self.delimiters.deinit(self.builder.allocator);
-        self.brackets.deinit(self.builder.allocator);
-        self.reference_label_scratch.deinit(self.builder.allocator);
-        self.inline_link_scratch.deinit(self.builder.allocator);
+        self.builder.temp_prev = self.prev;
+        self.builder.temp_delimiters = self.delimiters;
+        self.builder.temp_brackets = self.brackets;
+        self.builder.temp_reference_scratch = self.reference_label_scratch;
+        self.builder.temp_inline_link_scratch = self.inline_link_scratch;
     }
 
     fn parse(self: *TempParser) !TokenRef {
@@ -880,27 +896,6 @@ fn trimTrailingBreakChars(line: []const u8) usize {
     return end;
 }
 
-fn findCodeSpanEnd(text: []const u8, start: usize) ?usize {
-    var open_len: usize = 0;
-    while (start + open_len < text.len and text[start + open_len] == '`') : (open_len += 1) {}
-    if (open_len == 0) return null;
-
-    var pos = start + open_len;
-    while (pos < text.len) {
-        if (text[pos] == '`') {
-            var close_len: usize = 0;
-            while (pos + close_len < text.len and text[pos + close_len] == '`') : (close_len += 1) {}
-            if (close_len == open_len) {
-                return pos + close_len - 1;
-            }
-            pos += close_len;
-        } else {
-            pos += 1;
-        }
-    }
-    return null;
-}
-
 fn isEscapable(c: u8) bool {
     return switch (c) {
         '!', '"', '#', '$', '%', '&', '\'', '(', ')', '*', '+', ',', '-', '.', '/' => true,
@@ -968,139 +963,6 @@ fn checkFlanking(before: CharClass, after: CharClass) struct { left: bool, right
         (before != .punctuation or after == .whitespace or after == .punctuation);
 
     return .{ .left = left, .right = right };
-}
-
-const EmphasisKind = enum { emphasis, strong, bold_italic };
-
-const EmphasisResult = struct {
-    kind: EmphasisKind,
-    content: []const u8,
-    end: usize,
-};
-
-fn tryParseEmphasis(text: []const u8, start: usize) ?EmphasisResult {
-    const delim_char = text[start];
-    var delim_len: usize = 0;
-    while (start + delim_len < text.len and text[start + delim_len] == delim_char) : (delim_len += 1) {}
-
-    if (delim_len == 0 or delim_len > max_emphasis_delim_run) return null;
-
-    const after_delim = start + delim_len;
-    if (after_delim >= text.len) return null;
-
-    const open_before = cpClass(prevCodepoint(text, start));
-    const open_after = cpClass(nextCodepoint(text, after_delim));
-    const open_flank = checkFlanking(open_before, open_after);
-
-    if (!open_flank.left) return null;
-
-    if (delim_char == '_' and open_flank.right and open_before != .punctuation) return null;
-
-    var pos = after_delim;
-    while (pos < text.len) {
-        if (text[pos] == '\\' and pos + 1 < text.len and isEscapable(text[pos + 1])) {
-            pos += 2;
-            continue;
-        }
-        if (text[pos] == '`') {
-            if (findCodeSpanEnd(text, pos)) |code_end| {
-                pos = code_end + 1;
-                continue;
-            }
-        }
-        if (text[pos] == delim_char) {
-            var close_len: usize = 0;
-            while (pos + close_len < text.len and text[pos + close_len] == delim_char) : (close_len += 1) {}
-
-            if (close_len >= delim_len) {
-                const close_after_pos = pos + close_len;
-                const close_before = cpClass(prevCodepoint(text, pos));
-                const close_after = cpClass(if (close_after_pos < text.len) nextCodepoint(text, close_after_pos) else null);
-                const close_flank = checkFlanking(close_before, close_after);
-
-                if (close_flank.right) {
-                    if (delim_char == '_' and close_flank.left and close_after != .punctuation) {
-                        pos += close_len;
-                        continue;
-                    }
-
-                    const sum = delim_len + close_len;
-                    if (sum % max_emphasis_delim_run == 0 and
-                        (delim_len % max_emphasis_delim_run != 0 or
-                            close_len % max_emphasis_delim_run != 0))
-                    {
-                        pos += close_len;
-                        continue;
-                    }
-
-                    const extra = close_len - delim_len;
-                    const em_content = text[after_delim .. pos + extra];
-                    if (em_content.len == 0) {
-                        pos += close_len;
-                        continue;
-                    }
-
-                    const kind: EmphasisKind = if (delim_len >= max_emphasis_delim_run)
-                        .bold_italic
-                    else if (delim_len == 2)
-                        .strong
-                    else
-                        .emphasis;
-
-                    return .{
-                        .kind = kind,
-                        .content = em_content,
-                        .end = pos + close_len,
-                    };
-                }
-            }
-            pos += close_len;
-        } else {
-            pos += 1;
-        }
-    }
-    return null;
-}
-
-const StrikethroughResult = struct {
-    content: []const u8,
-    end: usize,
-};
-
-fn tryParseStrikethrough(text: []const u8, start: usize) ?StrikethroughResult {
-    var delim_len: usize = 0;
-    while (start + delim_len < text.len and text[start + delim_len] == '~') : (delim_len += 1) {}
-
-    if (delim_len < 1 or delim_len > max_strikethrough_delim_run) return null;
-
-    const after_delim = start + delim_len;
-    if (after_delim >= text.len) return null;
-    if (parse_block.isHorizontalWhitespace(text[after_delim])) return null;
-
-    var pos = after_delim;
-    while (pos < text.len) {
-        if (text[pos] == '\\' and pos + 1 < text.len and isEscapable(text[pos + 1])) {
-            pos += 2;
-            continue;
-        }
-        if (text[pos] == '~') {
-            var close_len: usize = 0;
-            while (pos + close_len < text.len and text[pos + close_len] == '~') : (close_len += 1) {}
-
-            if (close_len >= delim_len and pos > after_delim) {
-                if (!parse_block.isHorizontalWhitespace(text[pos - 1])) {
-                    return .{
-                        .content = text[after_delim..pos],
-                        .end = pos + delim_len,
-                    };
-                }
-            }
-            pos += close_len;
-        } else {
-            pos += 1;
-        }
-    }
-    return null;
 }
 
 const AutolinkResult = struct {
