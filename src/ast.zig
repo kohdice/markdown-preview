@@ -115,15 +115,6 @@ pub const BlockNode = union(enum) {
     thematic_break: void,
     table: Table,
     blank_line: void,
-
-    pub fn deinit(self: *BlockNode, allocator: std.mem.Allocator) void {
-        switch (self.*) {
-            .blockquote => |*bq| bq.deinit(allocator),
-            .list => |*l| l.deinit(allocator),
-            .table => |*t| t.deinit(allocator),
-            .paragraph, .heading, .code_block, .code_fence, .thematic_break, .blank_line => {},
-        }
-    }
 };
 
 pub const Paragraph = struct {
@@ -138,11 +129,6 @@ pub const Heading = struct {
 pub const BlockQuote = struct {
     indent: usize,
     blocks: []BlockNode,
-
-    pub fn deinit(self: *BlockQuote, allocator: std.mem.Allocator) void {
-        for (self.blocks) |*b| b.deinit(allocator);
-        allocator.free(self.blocks);
-    }
 };
 
 pub const ListKind = enum { unordered, ordered };
@@ -151,11 +137,6 @@ pub const List = struct {
     kind: ListKind,
     items: []ListItem,
     loose: bool = false,
-
-    pub fn deinit(self: *List, allocator: std.mem.Allocator) void {
-        for (self.items) |*item| item.deinit(allocator);
-        allocator.free(self.items);
-    }
 };
 
 pub const ListItem = struct {
@@ -166,11 +147,6 @@ pub const ListItem = struct {
     /// `null` means the item is not a task item; `false` means unchecked.
     checked: ?bool = null,
     blocks: []BlockNode,
-
-    pub fn deinit(self: *ListItem, allocator: std.mem.Allocator) void {
-        for (self.blocks) |*b| b.deinit(allocator);
-        allocator.free(self.blocks);
-    }
 };
 
 pub const CodeBlock = struct {
@@ -188,13 +164,4 @@ pub const Table = struct {
     header: []TableCell,
     alignments: []Alignment,
     rows: [][]TableCell,
-
-    pub fn deinit(self: *Table, allocator: std.mem.Allocator) void {
-        allocator.free(self.header);
-        allocator.free(self.alignments);
-        for (self.rows) |row| {
-            allocator.free(row);
-        }
-        allocator.free(self.rows);
-    }
 };
