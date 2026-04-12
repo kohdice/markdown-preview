@@ -286,7 +286,7 @@ pub fn materializeLinkText(allocator: std.mem.Allocator, raw: []const u8) ![]con
     return try buffer.toOwnedSlice(allocator);
 }
 
-fn ownLinkText(allocator: std.mem.Allocator, raw: []const u8) ![]const u8 {
+pub fn ownLinkText(allocator: std.mem.Allocator, raw: []const u8) ![]const u8 {
     const materialized = try materializeLinkText(allocator, raw);
     if (materialized.ptr == raw.ptr and materialized.len == raw.len) {
         return try allocator.dupe(u8, raw);

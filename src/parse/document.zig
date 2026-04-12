@@ -40,6 +40,8 @@ const Parser = struct {
     link_defs: ast.LinkDefMap,
     link_definition_scratch: std.ArrayListUnmanaged(u8) = .empty,
     link_label_scratch: std.ArrayListUnmanaged(u8) = .empty,
+    paragraph_lines: std.ArrayListUnmanaged([]const u8) = .empty,
+    code_lines: std.ArrayListUnmanaged([]const u8) = .empty,
 
     fn collectLinkDefinitions(self: *Parser, cursor: *BlockCursor) anyerror!void {
         while (cursor.peekLine()) |line| {
@@ -82,9 +84,8 @@ const Parser = struct {
                 continue;
             }
 
-            if (parse_block.blockquote(line) != null) {
-                const blockquote = parse_block.blockquote(line) orelse unreachable;
-                var child_ctx = BlockCursor.initBlockQuote(cursor, blockquote.indent);
+            if (parse_block.blockquote(line)) |bq| {
+                var child_ctx = BlockCursor.initBlockQuote(cursor, bq.indent);
                 try self.collectLinkDefinitions(&child_ctx);
                 cursor.raw_pos = child_ctx.raw_pos;
                 continue;
@@ -155,8 +156,8 @@ const Parser = struct {
                 continue;
             }
 
-            if (parse_block.blockquote(line) != null) {
-                try blocks.append(self.allocator, try self.parseBlockQuoteBlock(cursor));
+            if (parse_block.blockquote(line)) |bq| {
+                try blocks.append(self.allocator, try self.parseBlockQuoteBlock(cursor, bq));
                 continue;
             }
 
@@ -190,9 +191,9 @@ const Parser = struct {
         const result = try self.link_defs.getOrPut(self.allocator, key);
         std.debug.assert(!result.found_existing);
         result.value_ptr.* = .{
-            .url = try self.ownLinkText(def.url),
+            .url = try parse_link.ownLinkText(self.allocator, def.url),
             .title = if (def.title) |title|
-                try self.ownLinkText(title)
+                try parse_link.ownLinkText(self.allocator, title)
             else
                 null,
         };
@@ -231,7 +232,7 @@ const Parser = struct {
     }
 
     fn parseParagraph(self: *Parser, cursor: *BlockCursor) anyerror!ast.BlockNode {
-        var lines: std.ArrayListUnmanaged([]const u8) = .empty;
+        self.paragraph_lines.clearRetainingCapacity();
         var is_first = true;
 
         while (try self.peekParagraphLine(cursor, is_first)) |paragraph_line| {
@@ -243,7 +244,7 @@ const Parser = struct {
                     return .{
                         .heading = .{
                             .level = underline.level,
-                            .children = try self.inline_builder.parseLines(lines.items, &self.link_defs),
+                            .children = try self.inline_builder.parseLines(self.paragraph_lines.items, &self.link_defs),
                         },
                     };
                 }
@@ -254,14 +255,14 @@ const Parser = struct {
                 }
             }
 
-            try lines.append(self.allocator, normalizeParagraphLine(line));
+            try self.paragraph_lines.append(self.allocator, normalizeParagraphLine(line));
             advanceParagraphLine(cursor, paragraph_line.lazy);
             is_first = false;
         }
 
         return .{
             .paragraph = .{
-                .children = try self.inline_builder.parseLines(lines.items, &self.link_defs),
+                .children = try self.inline_builder.parseLines(self.paragraph_lines.items, &self.link_defs),
             },
         };
     }
@@ -350,11 +351,11 @@ const Parser = struct {
     }
 
     fn parseIndentedCodeBlock(self: *Parser, cursor: *BlockCursor) anyerror!ast.BlockNode {
-        var lines: std.ArrayListUnmanaged([]const u8) = .empty;
+        self.code_lines.clearRetainingCapacity();
 
         while (cursor.peekLine()) |line| {
             if (parse_block.indentedCodeContent(line)) |content| {
-                try lines.append(self.allocator, content);
+                try self.code_lines.append(self.allocator, content);
                 cursor.advanceLine();
                 continue;
             }
@@ -364,15 +365,15 @@ const Parser = struct {
 
             var remaining = blank_count;
             while (remaining > 0) : (remaining -= 1) {
-                try lines.append(self.allocator, "");
+                try self.code_lines.append(self.allocator, "");
                 cursor.advanceLine();
             }
         }
 
-        const content = switch (lines.items.len) {
+        const content = switch (self.code_lines.items.len) {
             0 => "",
-            1 => lines.items[0],
-            else => try joinLines(self.allocator, lines.items),
+            1 => self.code_lines.items[0],
+            else => try joinLines(self.allocator, self.code_lines.items),
         };
 
         return .{
@@ -398,19 +399,11 @@ const Parser = struct {
         }
     }
 
-    fn ownLinkText(self: *Parser, raw: []const u8) ![]const u8 {
-        const materialized = try parse_link.materializeLinkText(self.allocator, raw);
-        if (materialized.ptr == raw.ptr and materialized.len == raw.len) {
-            return try self.allocator.dupe(u8, raw);
-        }
-        return materialized;
-    }
-
     fn parseFenceBlock(self: *Parser, cursor: *BlockCursor, fence_info: parse_block.Fence) anyerror!ast.BlockNode {
         const opener = cursor.peekLine() orelse unreachable;
         cursor.advanceLine();
 
-        var body_lines: std.ArrayListUnmanaged([]const u8) = .empty;
+        self.code_lines.clearRetainingCapacity();
         var closer: ?[]const u8 = null;
         while (cursor.peekLine()) |line| {
             if (parse_block.isClosingFence(line, fence_info)) {
@@ -419,14 +412,14 @@ const Parser = struct {
                 break;
             }
 
-            try body_lines.append(self.allocator, line);
+            try self.code_lines.append(self.allocator, line);
             cursor.advanceLine();
         }
 
-        const content = switch (body_lines.items.len) {
+        const content = switch (self.code_lines.items.len) {
             0 => "",
-            1 => body_lines.items[0],
-            else => try joinLines(self.allocator, body_lines.items),
+            1 => self.code_lines.items[0],
+            else => trySliceSource(self.code_lines.items) orelse try joinLines(self.allocator, self.code_lines.items),
         };
 
         return .{
@@ -448,9 +441,7 @@ const Parser = struct {
         }
     }
 
-    fn parseBlockQuoteBlock(self: *Parser, cursor: *BlockCursor) anyerror!ast.BlockNode {
-        const first_line = cursor.peekLine() orelse unreachable;
-        const first_bq = parse_block.blockquote(first_line) orelse unreachable;
+    fn parseBlockQuoteBlock(self: *Parser, cursor: *BlockCursor, first_bq: parse_block.BlockQuote) anyerror!ast.BlockNode {
         const base_indent = cursor.blockIndentBase();
 
         var child_ctx = BlockCursor.initBlockQuote(cursor, first_bq.indent);
@@ -465,6 +456,36 @@ const Parser = struct {
         };
     }
 
+    const AnyListItem = struct {
+        indent: usize,
+        marker: u8,
+        content: []const u8,
+        content_col: usize,
+        checked: ?bool,
+        number: ?[]const u8,
+    };
+
+    fn parseAnyListItem(line: []const u8, kind: ast.ListKind) ?AnyListItem {
+        return switch (kind) {
+            .unordered => if (parse_block.listItem(line)) |item| .{
+                .indent = item.indent,
+                .marker = item.marker,
+                .content = item.content,
+                .content_col = item.content_col,
+                .checked = item.checked,
+                .number = null,
+            } else null,
+            .ordered => if (parse_block.orderedListItem(line)) |item| .{
+                .indent = item.indent,
+                .marker = item.marker,
+                .content = item.content,
+                .content_col = item.content_col,
+                .checked = item.checked,
+                .number = item.number,
+            } else null,
+        };
+    }
+
     fn parseListBlock(self: *Parser, cursor: *BlockCursor, kind: ast.ListKind) anyerror!ast.BlockNode {
         var items: std.ArrayListUnmanaged(ast.ListItem) = .empty;
         var min_indent: ?usize = null;
@@ -473,7 +494,7 @@ const Parser = struct {
         var loose = false;
         const base_indent = cursor.blockIndentBase();
 
-        outer: while (cursor.peekLine()) |line| {
+        while (cursor.peekLine()) |line| {
             if (isBlankLine(line)) {
                 if (skipInterItemBlankLines(cursor, kind, list_marker, min_indent, prev_child_indent)) {
                     loose = true;
@@ -482,76 +503,38 @@ const Parser = struct {
                 break;
             }
 
-            switch (kind) {
-                .unordered => {
-                    const item = parse_block.listItem(line) orelse break :outer;
-                    if (list_marker) |marker| {
-                        if (item.marker != marker) break :outer;
-                    } else {
-                        list_marker = item.marker;
-                    }
-                    if (min_indent) |existing_min| {
-                        if (item.indent < existing_min) break :outer;
-                        if (item.indent >= prev_child_indent.?) break :outer;
-                    }
-
-                    cursor.advanceLine();
-                    if (min_indent == null) min_indent = item.indent;
-                    prev_child_indent = item.content_col;
-
-                    var child_ctx = BlockCursor.initListItem(
-                        cursor,
-                        item.content,
-                        item.content_col,
-                        base_indent + item.content_col,
-                    );
-                    const child_blocks = try self.parseBlocks(&child_ctx);
-                    cursor.raw_pos = child_ctx.raw_pos;
-                    if (itemBlocksMakeListLoose(child_blocks)) loose = true;
-
-                    try items.append(self.allocator, .{
-                        .indent = item.indent + base_indent,
-                        .marker = item.marker,
-                        .number = null,
-                        .checked = item.checked,
-                        .blocks = child_blocks,
-                    });
-                },
-                .ordered => {
-                    const item = parse_block.orderedListItem(line) orelse break :outer;
-                    if (list_marker) |marker| {
-                        if (item.marker != marker) break :outer;
-                    } else {
-                        list_marker = item.marker;
-                    }
-                    if (min_indent) |existing_min| {
-                        if (item.indent < existing_min) break :outer;
-                        if (item.indent >= prev_child_indent.?) break :outer;
-                    }
-
-                    cursor.advanceLine();
-                    if (min_indent == null) min_indent = item.indent;
-                    prev_child_indent = item.content_col;
-
-                    var child_ctx = BlockCursor.initListItem(
-                        cursor,
-                        item.content,
-                        item.content_col,
-                        base_indent + item.content_col,
-                    );
-                    const child_blocks = try self.parseBlocks(&child_ctx);
-                    cursor.raw_pos = child_ctx.raw_pos;
-                    if (itemBlocksMakeListLoose(child_blocks)) loose = true;
-
-                    try items.append(self.allocator, .{
-                        .indent = item.indent + base_indent,
-                        .marker = item.marker,
-                        .number = item.number,
-                        .checked = item.checked,
-                        .blocks = child_blocks,
-                    });
-                },
+            const item = parseAnyListItem(line, kind) orelse break;
+            if (list_marker) |marker| {
+                if (item.marker != marker) break;
+            } else {
+                list_marker = item.marker;
             }
+            if (min_indent) |existing_min| {
+                if (item.indent < existing_min) break;
+                if (item.indent >= prev_child_indent.?) break;
+            }
+
+            cursor.advanceLine();
+            if (min_indent == null) min_indent = item.indent;
+            prev_child_indent = item.content_col;
+
+            var child_ctx = BlockCursor.initListItem(
+                cursor,
+                item.content,
+                item.content_col,
+                base_indent + item.content_col,
+            );
+            const child_blocks = try self.parseBlocks(&child_ctx);
+            cursor.raw_pos = child_ctx.raw_pos;
+            if (itemBlocksMakeListLoose(child_blocks)) loose = true;
+
+            try items.append(self.allocator, .{
+                .indent = item.indent + base_indent,
+                .marker = item.marker,
+                .number = item.number,
+                .checked = item.checked,
+                .blocks = child_blocks,
+            });
         }
 
         return .{
@@ -567,67 +550,36 @@ const Parser = struct {
         var min_indent: ?usize = null;
         var prev_child_indent: ?usize = null;
         var list_marker: ?u8 = null;
-        const base_indent = cursor.blockIndentBase();
-        _ = base_indent;
 
-        outer: while (cursor.peekLine()) |line| {
+        while (cursor.peekLine()) |line| {
             if (isBlankLine(line)) {
                 if (skipInterItemBlankLines(cursor, kind, list_marker, min_indent, prev_child_indent)) continue;
                 break;
             }
 
-            switch (kind) {
-                .unordered => {
-                    const item = parse_block.listItem(line) orelse break :outer;
-                    if (list_marker) |marker| {
-                        if (item.marker != marker) break :outer;
-                    } else {
-                        list_marker = item.marker;
-                    }
-                    if (min_indent) |existing_min| {
-                        if (item.indent < existing_min) break :outer;
-                        if (item.indent >= prev_child_indent.?) break :outer;
-                    }
-
-                    cursor.advanceLine();
-                    if (min_indent == null) min_indent = item.indent;
-                    prev_child_indent = item.content_col;
-
-                    var child_ctx = BlockCursor.initListItem(
-                        cursor,
-                        item.content,
-                        item.content_col,
-                        cursor.blockIndentBase() + item.content_col,
-                    );
-                    try self.collectLinkDefinitions(&child_ctx);
-                    cursor.raw_pos = child_ctx.raw_pos;
-                },
-                .ordered => {
-                    const item = parse_block.orderedListItem(line) orelse break :outer;
-                    if (list_marker) |marker| {
-                        if (item.marker != marker) break :outer;
-                    } else {
-                        list_marker = item.marker;
-                    }
-                    if (min_indent) |existing_min| {
-                        if (item.indent < existing_min) break :outer;
-                        if (item.indent >= prev_child_indent.?) break :outer;
-                    }
-
-                    cursor.advanceLine();
-                    if (min_indent == null) min_indent = item.indent;
-                    prev_child_indent = item.content_col;
-
-                    var child_ctx = BlockCursor.initListItem(
-                        cursor,
-                        item.content,
-                        item.content_col,
-                        cursor.blockIndentBase() + item.content_col,
-                    );
-                    try self.collectLinkDefinitions(&child_ctx);
-                    cursor.raw_pos = child_ctx.raw_pos;
-                },
+            const item = parseAnyListItem(line, kind) orelse break;
+            if (list_marker) |marker| {
+                if (item.marker != marker) break;
+            } else {
+                list_marker = item.marker;
             }
+            if (min_indent) |existing_min| {
+                if (item.indent < existing_min) break;
+                if (item.indent >= prev_child_indent.?) break;
+            }
+
+            cursor.advanceLine();
+            if (min_indent == null) min_indent = item.indent;
+            prev_child_indent = item.content_col;
+
+            var child_ctx = BlockCursor.initListItem(
+                cursor,
+                item.content,
+                item.content_col,
+                cursor.blockIndentBase() + item.content_col,
+            );
+            try self.collectLinkDefinitions(&child_ctx);
+            cursor.raw_pos = child_ctx.raw_pos;
         }
     }
 
@@ -913,6 +865,17 @@ fn nextRawLinePos(source: []const u8, raw_pos: usize) usize {
     if (raw_pos >= source.len) return source.len;
     const newline_index = std.mem.indexOfScalarPos(u8, source, raw_pos, '\n') orelse return source.len;
     return newline_index + 1;
+}
+
+fn trySliceSource(lines: []const []const u8) ?[]const u8 {
+    if (lines.len <= 1) return null;
+    for (lines[0 .. lines.len - 1], lines[1..]) |prev, cur| {
+        if (@intFromPtr(cur.ptr) != @intFromPtr(prev.ptr) + prev.len + 1) return null;
+    }
+    const first = lines[0];
+    const last = lines[lines.len - 1];
+    const total = (@intFromPtr(last.ptr) + last.len) - @intFromPtr(first.ptr);
+    return first.ptr[0..total];
 }
 
 fn joinLines(allocator: std.mem.Allocator, lines: []const []const u8) ![]const u8 {
