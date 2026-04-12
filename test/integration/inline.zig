@@ -1,5 +1,5 @@
 const std = @import("std");
-const renderToOwnedSlice = @import("test_helpers.zig").renderToOwnedSlice;
+const renderToOwnedSlice = @import("../helpers/render_from_source.zig").renderToOwnedSlice;
 
 test "link with parentheses inside URL renders semantically" {
     const allocator = std.testing.allocator;
@@ -534,6 +534,179 @@ test "link with single-quote title" {
     try std.testing.expectEqualStrings("link(url) — My Title", rendered);
 }
 
+test "link with parenthesized title" {
+    const allocator = std.testing.allocator;
+    const source = "[link](https://example.com (My Title))";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("link(https://example.com) — My Title", rendered);
+}
+
+test "parenthesized title rejects unescaped opening parenthesis" {
+    const allocator = std.testing.allocator;
+    const source = "[x](/u (a(b)))";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("[x](/u (a(b)))", rendered);
+}
+
+test "parenthesized title accepts escaped parentheses" {
+    const allocator = std.testing.allocator;
+    const source = "[x](/u (a\\(b\\)))";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("x(/u) — a(b)", rendered);
+}
+
+test "inline link allows empty bare destination" {
+    const allocator = std.testing.allocator;
+    const source = "[link]()";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("link()", rendered);
+}
+
+test "link with angle-bracket destination strips delimiters" {
+    const allocator = std.testing.allocator;
+    const source = "[link](<https://example.com/path?q=1> \"Title\")";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("link(https://example.com/path?q=1) — Title", rendered);
+}
+
+test "angle-bracket destination may contain closing parenthesis" {
+    const allocator = std.testing.allocator;
+    const source = "[a](<b)c>)";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("a(b)c)", rendered);
+}
+
+test "link destination unescapes backslash escapes" {
+    const allocator = std.testing.allocator;
+    const source = "[x](foo\\)\\:)";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("x(foo):)", rendered);
+}
+
+test "bare destination does not allow backslash before space" {
+    const allocator = std.testing.allocator;
+    const source = "[x](foo\\ bar)";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("[x](foo\\ bar)", rendered);
+}
+
+test "bare destination does not allow backslash before line ending" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\[x](foo\
+        \\bar)
+    ;
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("[x](foo\nbar)", rendered);
+}
+
+test "pointy destination does not allow backslash before line ending" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\[x](<foo\
+        \\bar>)
+    ;
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("[x](<foo\nbar>)", rendered);
+}
+
+test "reference definition does not resolve bare destination with backslash before space" {
+    const allocator = std.testing.allocator;
+    const source = "[x][r]\n\n[r]: foo\\ bar\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, "x(foo\\"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "[x][r]"));
+}
+
+test "link title unescapes backslash escapes" {
+    const allocator = std.testing.allocator;
+    const source = "[x](/u \"ti\\\"tle\")";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("x(/u) — ti\"tle", rendered);
+}
+
+test "quoted link title may contain closing parenthesis" {
+    const allocator = std.testing.allocator;
+    const source = "[x](/u \"a)b\")";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("x(/u) — a)b", rendered);
+}
+
+test "inline link allows one line ending between destination and title" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\[link](   /uri
+        \\  "title"  )
+    ;
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("link(/uri) — title", rendered);
+}
+
+test "inline link title may span multiple lines" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\[x](/u "line1
+        \\line2")
+    ;
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("x(/u) — line1\nline2", rendered);
+}
+
+test "pointy destination rejects unescaped left angle bracket" {
+    const allocator = std.testing.allocator;
+    const source = "[x](<a<b>)";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("[x](<a<b>)", rendered);
+}
+
 test "link without title unchanged" {
     const allocator = std.testing.allocator;
     const source = "[link](https://example.com)";
@@ -671,6 +844,169 @@ test "reference link is case-insensitive" {
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "https://example.com"));
 }
 
+test "reference label matching does not parse backslash escapes" {
+    const allocator = std.testing.allocator;
+    const source = "[bar][foo\\!]\n\n[foo!]: /url\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, "/url"));
+}
+
+test "reference label matching does not parse entity references" {
+    const allocator = std.testing.allocator;
+    const source = "[bar][a&amp;b]\n\n[a&b]: /url\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, "/url"));
+}
+
+test "reference link normalizes internal and surrounding whitespace" {
+    const allocator = std.testing.allocator;
+    const source = "[Text][foo bar]\n\n[  Foo \t Bar  ]: https://example.com\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "Text"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "https://example.com"));
+}
+
+test "reference link label supports escaped closing bracket" {
+    const allocator = std.testing.allocator;
+    const source = "[Text][foo\\]]\n\n[foo\\]]: /url\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("Text(/url)\n\n", rendered);
+}
+
+test "multiline link reference definition is collected" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\[Text][r]
+        \\
+        \\[r]:
+        \\ /url
+        \\ "line1
+        \\line2"
+    ;
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("Text(/url) — line1\nline2\n", rendered);
+}
+
+test "invalid multiline link reference definition falls back to one-line definition" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\[r]: /url
+        \\"unterminated
+        \\next
+        \\[text][r]
+    ;
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("\"unterminated\nnext\ntext(/url)", rendered);
+}
+
+test "reference link resolves labels longer than 256 bytes" {
+    const allocator = std.testing.allocator;
+    const label = try allocator.alloc(u8, 300);
+    defer allocator.free(label);
+    @memset(label, 'A');
+
+    const source = try std.fmt.allocPrint(
+        allocator,
+        "[Text][{s}]\n\n[{s}]: https://example.com\n",
+        .{ label, label },
+    );
+    defer allocator.free(source);
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "Text"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "https://example.com"));
+}
+
+test "reference link label longer than 999 characters does not resolve" {
+    const allocator = std.testing.allocator;
+    const label = try allocator.alloc(u8, 1000);
+    defer allocator.free(label);
+    @memset(label, 'A');
+
+    const source = try std.fmt.allocPrint(
+        allocator,
+        "[Text][{s}]\n\n[{s}]: /url\n",
+        .{ label, label },
+    );
+    defer allocator.free(source);
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.startsWith(u8, rendered, "[Text]["));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, label));
+}
+
+test "reference link matches Unicode Latin-1 case fold" {
+    const allocator = std.testing.allocator;
+    const source = "[Text][Ä]\n\n[ä]: /url\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("Text(/url)\n\n", rendered);
+}
+
+test "reference link matches Unicode Latin Extended-A case fold" {
+    const allocator = std.testing.allocator;
+    const source = "[Text][Ā]\n\n[ā]: /url\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("Text(/url)\n\n", rendered);
+}
+
+test "reference link matches Unicode full fold sharp s" {
+    const allocator = std.testing.allocator;
+    const source = "[ẞ]\n\n[SS]: /url\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("ẞ(/url)\n\n", rendered);
+}
+
+test "reference link matches Greek case fold" {
+    const allocator = std.testing.allocator;
+    const source = "[αγω]\n\n[ΑΓΩ]: /φου\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("αγω(/φου)\n\n", rendered);
+}
+
+test "reference link definition unescapes destination and title" {
+    const allocator = std.testing.allocator;
+    const source = "[x][r]\n\n[r]: /u\\* \"ti\\\"tle\"\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("x(/u*) — ti\"tle\n\n", rendered);
+}
+
 test "undefined reference link is rendered as plain text" {
     const allocator = std.testing.allocator;
     const source = "[text][missing]";
@@ -684,6 +1020,18 @@ test "undefined reference link is rendered as plain text" {
 test "link definition with title" {
     const allocator = std.testing.allocator;
     const source = "[link][ref]\n\n[ref]: https://example.com \"My Title\"\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "link"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "https://example.com"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "My Title"));
+}
+
+test "link definition with parenthesized title" {
+    const allocator = std.testing.allocator;
+    const source = "[link][ref]\n\n[ref]: https://example.com (My Title)\n";
 
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);

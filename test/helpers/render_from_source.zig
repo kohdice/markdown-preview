@@ -1,6 +1,7 @@
 const std = @import("std");
-const parse = @import("../parse.zig");
-const render = @import("../render.zig");
+const markdown_preview = @import("markdown_preview");
+const parse = markdown_preview.parse;
+const render = markdown_preview.render;
 
 pub fn renderToOwnedSlice(
     allocator: std.mem.Allocator,
@@ -10,10 +11,12 @@ pub fn renderToOwnedSlice(
     var output: std.io.Writer.Allocating = .init(allocator);
     defer output.deinit();
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
-    try render.write(allocator, &output.writer, &doc, opts);
+    var renderer = render.Renderer.init(allocator, opts);
+    defer renderer.deinit();
+    try renderer.renderDocument(&output.writer, &doc);
     var list = output.toArrayList();
     return list.toOwnedSlice(allocator);
 }

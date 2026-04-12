@@ -61,7 +61,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe);
 
     const bench_mod = b.createModule(.{
-        .root_source_file = b.path("src/bench_inline.zig"),
+        .root_source_file = b.path("bench/bench_inline.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -71,6 +71,34 @@ pub fn build(b: *std.Build) void {
         .name = "inline-bench",
         .root_module = bench_mod,
     });
+
+    const bench_render_mod = b.createModule(.{
+        .root_source_file = b.path("bench/bench_render.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    attachTreeSitter(bench_render_mod, ts_support);
+
+    const bench_render_exe = b.addExecutable(.{
+        .name = "render-bench",
+        .root_module = bench_render_mod,
+    });
+
+    const bench_support_mod = b.createModule(.{
+        .root_source_file = b.path("bench/bench_support.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const markdown_preview_mod = b.createModule(.{
+        .root_source_file = b.path("src/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    attachTreeSitter(markdown_preview_mod, ts_support);
+
+    bench_mod.addImport("markdown_preview", markdown_preview_mod);
+    bench_render_mod.addImport("markdown_preview", markdown_preview_mod);
 
     const run_step = b.step("run", "Run the app");
     const run_cmd = b.addRunArtifact(exe);
@@ -85,6 +113,10 @@ pub fn build(b: *std.Build) void {
     const run_bench = b.addRunArtifact(bench_exe);
     bench_step.dependOn(&run_bench.step);
 
+    const bench_render_step = b.step("bench-render", "Run table render benchmarks");
+    const run_bench_render = b.addRunArtifact(bench_render_exe);
+    bench_render_step.dependOn(&run_bench_render.step);
+
     const test_step = b.step("test", "Run tests");
     const test_roots = [_]struct {
         path: []const u8,
@@ -93,6 +125,7 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/parse.zig", .needs_tree_sitter = false },
         .{ .path = "src/parse_tests.zig", .needs_tree_sitter = false },
         .{ .path = "src/render.zig", .needs_tree_sitter = true },
+        .{ .path = "test/test.zig", .needs_tree_sitter = true },
         .{ .path = "src/cli.zig", .needs_tree_sitter = true },
         .{ .path = "src/term/terminal.zig", .needs_tree_sitter = false },
         .{ .path = "src/term/highlight.zig", .needs_tree_sitter = true },
@@ -108,6 +141,10 @@ pub fn build(b: *std.Build) void {
         });
         if (test_root.needs_tree_sitter) {
             attachTreeSitter(test_mod, ts_support);
+        }
+        test_mod.addImport("bench_support", bench_support_mod);
+        if (std.mem.eql(u8, test_root.path, "test/test.zig")) {
+            test_mod.addImport("markdown_preview", markdown_preview_mod);
         }
 
         const unit_tests = b.addTest(.{

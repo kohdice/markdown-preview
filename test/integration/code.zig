@@ -1,5 +1,5 @@
 const std = @import("std");
-const renderToOwnedSlice = @import("test_helpers.zig").renderToOwnedSlice;
+const renderToOwnedSlice = @import("../helpers/render_from_source.zig").renderToOwnedSlice;
 
 test "code fence with language preserves original format" {
     const allocator = std.testing.allocator;

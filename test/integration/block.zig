@@ -1,5 +1,5 @@
 const std = @import("std");
-const renderToOwnedSlice = @import("test_helpers.zig").renderToOwnedSlice;
+const renderToOwnedSlice = @import("../helpers/render_from_source.zig").renderToOwnedSlice;
 
 test "renderMarkdown strips heading markers and preserves structure" {
     const allocator = std.testing.allocator;
@@ -23,7 +23,7 @@ test "renderMarkdown strips heading markers and preserves structure" {
         \\
         \\• item
         \\│ quoted
-        \\link(https://example.com)
+        \\│ link(https://example.com)
         \\```zig
         \\const value = 1;
         \\```
@@ -468,6 +468,16 @@ test "loose list with blank-separated paragraphs in same item" {
     defer allocator.free(rendered);
 
     try std.testing.expectEqualStrings("• foo\n\n  bar\n", rendered);
+}
+
+test "loose list with blank-separated sibling items preserves blank line" {
+    const allocator = std.testing.allocator;
+    const source = "- foo\n\n- bar\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("• foo\n\n• bar\n", rendered);
 }
 
 test "list item containing blockquote child renders with indented gutter" {

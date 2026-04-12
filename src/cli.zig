@@ -1,5 +1,6 @@
 const std = @import("std");
-const preview = @import("preview.zig");
+const parse = @import("parse.zig");
+const render = @import("render.zig");
 const term = @import("term.zig");
 const width = term.width;
 
@@ -82,14 +83,22 @@ pub fn run(opts: RunOptions) !u8 {
         try opts.stderr.print("mp: unable to read '{s}': {s}\n", .{ parsed.path, @errorName(err) });
         return exit_failure;
     };
-    defer opts.allocator.free(source);
 
-    try preview.renderSource(opts.allocator, opts.stdout, source, .{
+    var doc = try parse.parseOwned(opts.allocator, .{
+        .allocator = opts.allocator,
+        .buffer = source,
+    });
+    defer doc.deinit();
+
+    var renderer = render.Renderer.init(opts.allocator, .{
         .enable_ansi = opts.enable_ansi,
         .theme = .solarized_dark,
         .wrap_width = opts.wrap_width,
         .ambiguous_width = opts.ambiguous_width,
     });
+    defer renderer.deinit();
+
+    try renderer.renderDocument(opts.stdout, &doc);
     return exit_success;
 }
 
@@ -250,6 +259,42 @@ test "run threads ambiguous_width through to the renderer" {
         "• first line\n   continued\n",
         stdout.writer.buffered(),
     );
+}
+
+test "run frees the file buffer via parseOwned" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer {
+        const status = gpa.deinit();
+        std.testing.expect(status == .ok) catch @panic("gpa leak");
+    }
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{
+        .sub_path = "owned.md",
+        .data = "# Owned\n",
+    });
+
+    var stdout: std.io.Writer.Allocating = .init(gpa.allocator());
+    defer stdout.deinit();
+    var stderr: std.io.Writer.Allocating = .init(gpa.allocator());
+    defer stderr.deinit();
+
+    const exit_code = try run(.{
+        .allocator = gpa.allocator(),
+        .cwd = tmp.dir,
+        .args = &.{ "mp", "owned.md" },
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+        .enable_ansi = false,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    });
+
+    try std.testing.expectEqual(exit_success, exit_code);
+    try std.testing.expectEqualStrings("Owned\n", stdout.writer.buffered());
+    try std.testing.expectEqualStrings("", stderr.writer.buffered());
 }
 
 test "unwrapWriteError passes through errors other than WriteFailed" {

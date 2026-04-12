@@ -1,6 +1,7 @@
 const std = @import("std");
-const renderToOwnedSlice = @import("test_helpers.zig").renderToOwnedSlice;
-const width = @import("../term/width.zig");
+const markdown_preview = @import("markdown_preview");
+const renderToOwnedSlice = @import("../helpers/render_from_source.zig").renderToOwnedSlice;
+const width = markdown_preview.term.width;
 
 test "simple table renders with aligned columns" {
     const allocator = std.testing.allocator;
@@ -352,6 +353,73 @@ test "table inside blockquote in wide mode renders byte-exact expected output" {
         \\│ ├───┼───┤
         \\│ │ 1    │ 2    │
         \\│ └───┴───┘
+        \\
+    ,
+        rendered,
+    );
+}
+
+test "ragged table rows preserve empty trailing cells and ignore excess body cells" {
+    const allocator = std.testing.allocator;
+    const source =
+        "| A | B | C |\n" ++
+        "| --- | --- | --- |\n" ++
+        "| 1 | 2 |\n" ++
+        "| 3 | 4 | 5 | 6 |\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        \\┌─────┬─────┬─────┐
+        \\│ A   │ B   │ C   │
+        \\├─────┼─────┼─────┤
+        \\│ 1   │ 2   │     │
+        \\├─────┼─────┼─────┤
+        \\│ 3   │ 4   │ 5   │
+        \\└─────┴─────┴─────┘
+        \\
+    ,
+        rendered,
+    );
+}
+
+test "multiple tables in one document do not leak scratch state across shapes" {
+    const allocator = std.testing.allocator;
+    const source =
+        "| A | B |\n" ++
+        "| --- | --- |\n" ++
+        "| 1 | 2 |\n" ++
+        "\n" ++
+        "| C | D | E | F |\n" ++
+        "| --- | --- | --- | --- |\n" ++
+        "| 3 | 4 | 5 | 6 |\n" ++
+        "\n" ++
+        "| G | H |\n" ++
+        "| --- | --- |\n" ++
+        "| 7 | 8 |\n";
+
+    const rendered = try renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        \\┌─────┬─────┐
+        \\│ A   │ B   │
+        \\├─────┼─────┤
+        \\│ 1   │ 2   │
+        \\└─────┴─────┘
+        \\
+        \\┌─────┬─────┬─────┬─────┐
+        \\│ C   │ D   │ E   │ F   │
+        \\├─────┼─────┼─────┼─────┤
+        \\│ 3   │ 4   │ 5   │ 6   │
+        \\└─────┴─────┴─────┴─────┘
+        \\
+        \\┌─────┬─────┐
+        \\│ G   │ H   │
+        \\├─────┼─────┤
+        \\│ 7   │ 8   │
+        \\└─────┴─────┘
         \\
     ,
         rendered,

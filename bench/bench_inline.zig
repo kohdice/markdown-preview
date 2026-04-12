@@ -1,114 +1,8 @@
 const std = @import("std");
-const parse = @import("parse.zig");
-const render = @import("render.zig");
-
-const CounterSnapshot = struct {
-    alloc_count: usize,
-    resize_count: usize,
-    free_count: usize,
-    bytes_allocated: usize,
-    bytes_freed: usize,
-
-    fn diff(after: CounterSnapshot, before: CounterSnapshot) CounterSnapshot {
-        return .{
-            .alloc_count = after.alloc_count - before.alloc_count,
-            .resize_count = after.resize_count - before.resize_count,
-            .free_count = after.free_count - before.free_count,
-            .bytes_allocated = after.bytes_allocated - before.bytes_allocated,
-            .bytes_freed = after.bytes_freed - before.bytes_freed,
-        };
-    }
-};
-
-const CountingAllocator = struct {
-    child: std.mem.Allocator,
-    alloc_count: usize = 0,
-    resize_count: usize = 0,
-    free_count: usize = 0,
-    bytes_allocated: usize = 0,
-    bytes_freed: usize = 0,
-
-    const vtable: std.mem.Allocator.VTable = .{
-        .alloc = alloc,
-        .resize = resize,
-        .remap = remap,
-        .free = free,
-    };
-
-    fn init(child: std.mem.Allocator) CountingAllocator {
-        return .{ .child = child };
-    }
-
-    fn allocator(self: *CountingAllocator) std.mem.Allocator {
-        return .{
-            .ptr = self,
-            .vtable = &vtable,
-        };
-    }
-
-    fn snapshot(self: *const CountingAllocator) CounterSnapshot {
-        return .{
-            .alloc_count = self.alloc_count,
-            .resize_count = self.resize_count,
-            .free_count = self.free_count,
-            .bytes_allocated = self.bytes_allocated,
-            .bytes_freed = self.bytes_freed,
-        };
-    }
-
-    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
-        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        const ptr = self.child.rawAlloc(len, alignment, ret_addr) orelse return null;
-        self.alloc_count += 1;
-        self.bytes_allocated += len;
-        return ptr;
-    }
-
-    fn resize(
-        ctx: *anyopaque,
-        memory: []u8,
-        alignment: std.mem.Alignment,
-        new_len: usize,
-        ret_addr: usize,
-    ) bool {
-        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        const ok = self.child.rawResize(memory, alignment, new_len, ret_addr);
-        if (ok) {
-            self.resize_count += 1;
-            if (new_len > memory.len) {
-                self.bytes_allocated += new_len - memory.len;
-            } else {
-                self.bytes_freed += memory.len - new_len;
-            }
-        }
-        return ok;
-    }
-
-    fn remap(
-        ctx: *anyopaque,
-        memory: []u8,
-        alignment: std.mem.Alignment,
-        new_len: usize,
-        ret_addr: usize,
-    ) ?[*]u8 {
-        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        const ptr = self.child.rawRemap(memory, alignment, new_len, ret_addr) orelse return null;
-        self.resize_count += 1;
-        if (new_len > memory.len) {
-            self.bytes_allocated += new_len - memory.len;
-        } else {
-            self.bytes_freed += memory.len - new_len;
-        }
-        return ptr;
-    }
-
-    fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
-        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        self.free_count += 1;
-        self.bytes_freed += memory.len;
-        self.child.rawFree(memory, alignment, ret_addr);
-    }
-};
+const markdown_preview = @import("markdown_preview");
+const parse = markdown_preview.parse;
+const render = markdown_preview.render;
+const bench = @import("bench_support.zig");
 
 const Scenario = struct {
     name: []const u8,
@@ -125,6 +19,9 @@ pub fn main() !void {
         .{ .name = "paragraph-100k", .input = try makeRepeatedInlineInput(allocator, 7000, "This is **bold** and [linked](https://example.com) text. ") },
         .{ .name = "nested-inline-depth-64", .input = try makeNestedInlineInput(allocator, 64) },
         .{ .name = "reference-links-256", .input = try makeReferenceLinkInput(allocator, 256) },
+        .{ .name = "many-paragraphs-1024", .input = try makeManyParagraphsInput(allocator, 1024) },
+        .{ .name = "many-headings-1024", .input = try makeManyHeadingsInput(allocator, 1024) },
+        .{ .name = "table-cells-4096", .input = try makeTableInput(allocator, 64, 64) },
     };
 
     std.debug.print("inline benchmark\n", .{});
@@ -137,11 +34,12 @@ fn runScenario(scenario: Scenario) !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
 
-    var counting = CountingAllocator.init(gpa.allocator());
+    var counting = bench.CountingAllocator.init(gpa.allocator());
     const allocator = counting.allocator();
 
+    const before_parse = counting.snapshot();
     var timer = try std.time.Timer.start();
-    var doc = try parse.parse(allocator, scenario.input);
+    var doc = try parse.parseBorrowed(allocator, scenario.input);
     defer doc.deinit();
     const parse_elapsed_ns = timer.read();
     const after_parse = counting.snapshot();
@@ -159,8 +57,8 @@ fn runScenario(scenario: Scenario) !void {
     const render_elapsed_ns = timer.read();
     const after_render = counting.snapshot();
 
-    const parse_counts = after_parse;
-    const render_counts = CounterSnapshot.diff(after_render, after_parse);
+    const parse_counts = bench.CounterSnapshot.diff(after_parse, before_parse);
+    const render_counts = bench.CounterSnapshot.diff(after_render, after_parse);
 
     std.debug.print(
         "{s}: parse={d:.3}ms render={d:.3}ms parse_allocs={d} parse_resizes={d} parse_bytes={d} render_allocs={d} render_resizes={d} render_bytes={d} output_bytes={d}\n",
@@ -227,6 +125,63 @@ fn makeNestedInlineInput(allocator: std.mem.Allocator, depth: usize) ![]u8 {
         } else {
             try out.appendSlice(allocator, "*](https://example.com)");
         }
+    }
+
+    return out.toOwnedSlice(allocator);
+}
+
+fn makeManyParagraphsInput(allocator: std.mem.Allocator, count: usize) ![]u8 {
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(allocator);
+    var writer = out.writer(allocator);
+
+    for (0..count) |i| {
+        try writer.print("Paragraph {d} with **bold** and *italic* text.\n\n", .{i});
+    }
+
+    return out.toOwnedSlice(allocator);
+}
+
+fn makeManyHeadingsInput(allocator: std.mem.Allocator, count: usize) ![]u8 {
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(allocator);
+    var writer = out.writer(allocator);
+
+    for (0..count) |i| {
+        const level = (i % 6) + 1;
+        for (0..level) |_| try out.append(allocator, '#');
+        try writer.print(" Heading {d}\n\n", .{i});
+    }
+
+    return out.toOwnedSlice(allocator);
+}
+
+fn makeTableInput(allocator: std.mem.Allocator, rows: usize, cols: usize) ![]u8 {
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(allocator);
+    var writer = out.writer(allocator);
+
+    // Header row
+    for (0..cols) |c| {
+        if (c > 0) try out.append(allocator, '|');
+        try writer.print(" H{d} ", .{c});
+    }
+    try out.append(allocator, '\n');
+
+    // Delimiter row
+    for (0..cols) |c| {
+        if (c > 0) try out.append(allocator, '|');
+        try out.appendSlice(allocator, " --- ");
+    }
+    try out.append(allocator, '\n');
+
+    // Data rows
+    for (0..rows) |r| {
+        for (0..cols) |c| {
+            if (c > 0) try out.append(allocator, '|');
+            try writer.print(" R{d}C{d} ", .{ r, c });
+        }
+        try out.append(allocator, '\n');
     }
 
     return out.toOwnedSlice(allocator);

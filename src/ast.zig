@@ -42,20 +42,28 @@ pub const InlineNode = union(enum) {
     image: ImageInline,
 };
 
-pub const Inline = InlineNode;
-
 pub const TableCell = struct {
     children: InlineRef = no_inline,
 };
 
 pub const Document = struct {
+    pub const OwnedSource = struct {
+        allocator: std.mem.Allocator,
+        buffer: []u8,
+    };
+
+    pub const SourceStorage = union(enum) {
+        borrowed,
+        owned: OwnedSource,
+    };
+
     pub const Storage = union(enum) {
         none,
         arena: std.heap.ArenaAllocator,
-        allocator: std.mem.Allocator,
     };
 
     source: []const u8 = "",
+    source_storage: SourceStorage = .borrowed,
     inline_nodes: []const InlineNode = &.{},
     inline_next: []const InlineRef = &.{},
     blocks: []BlockNode,
@@ -67,24 +75,23 @@ pub const Document = struct {
         switch (self.storage) {
             .none => {},
             .arena => |arena| arena.deinit(),
-            .allocator => |allocator| self.deinitManual(allocator),
         }
+
+        switch (self.source_storage) {
+            .borrowed => {},
+            .owned => |owned| owned.allocator.free(owned.buffer),
+        }
+
         self.* = .{
+            .source = "",
+            .source_storage = .borrowed,
+            .inline_nodes = &.{},
+            .inline_next = &.{},
             .blocks = &.{},
             .link_defs = .{},
             .has_trailing_newline = false,
+            .storage = .none,
         };
-    }
-
-    fn deinitManual(self: *Document, allocator: std.mem.Allocator) void {
-        for (self.blocks) |*block| block.deinit(allocator);
-        allocator.free(self.blocks);
-        allocator.free(self.inline_nodes);
-        allocator.free(self.inline_next);
-
-        var it = self.link_defs.keyIterator();
-        while (it.next()) |key| allocator.free(key.*);
-        self.link_defs.deinit(allocator);
     }
 
     pub fn inlineNode(self: *const Document, ref: InlineRef) *const InlineNode {
@@ -103,6 +110,7 @@ pub const BlockNode = union(enum) {
     heading: Heading,
     blockquote: BlockQuote,
     list: List,
+    code_block: CodeBlock,
     code_fence: CodeFence,
     thematic_break: void,
     table: Table,
@@ -110,35 +118,21 @@ pub const BlockNode = union(enum) {
 
     pub fn deinit(self: *BlockNode, allocator: std.mem.Allocator) void {
         switch (self.*) {
-            .paragraph => |*p| p.deinit(allocator),
-            .heading => |*h| h.deinit(allocator),
             .blockquote => |*bq| bq.deinit(allocator),
             .list => |*l| l.deinit(allocator),
-            .code_fence => {},
-            .thematic_break => {},
             .table => |*t| t.deinit(allocator),
-            .blank_line => {},
+            .paragraph, .heading, .code_block, .code_fence, .thematic_break, .blank_line => {},
         }
     }
 };
 
 pub const Paragraph = struct {
     children: InlineRef = no_inline,
-
-    pub fn deinit(self: *Paragraph, allocator: std.mem.Allocator) void {
-        _ = self;
-        _ = allocator;
-    }
 };
 
 pub const Heading = struct {
     level: u8,
     children: InlineRef = no_inline,
-
-    pub fn deinit(self: *Heading, allocator: std.mem.Allocator) void {
-        _ = self;
-        _ = allocator;
-    }
 };
 
 pub const BlockQuote = struct {
@@ -156,6 +150,7 @@ pub const ListKind = enum { unordered, ordered };
 pub const List = struct {
     kind: ListKind,
     items: []ListItem,
+    loose: bool = false,
 
     pub fn deinit(self: *List, allocator: std.mem.Allocator) void {
         for (self.items) |*item| item.deinit(allocator);
@@ -176,6 +171,10 @@ pub const ListItem = struct {
         for (self.blocks) |*b| b.deinit(allocator);
         allocator.free(self.blocks);
     }
+};
+
+pub const CodeBlock = struct {
+    content: []const u8,
 };
 
 pub const CodeFence = struct {

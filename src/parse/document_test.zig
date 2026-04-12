@@ -30,11 +30,26 @@ fn expectInlineText(expected: []const u8, doc: *const ast.Document, first: ast.I
     try std.testing.expectEqualStrings(expected, inline_node.text);
 }
 
+fn expectLinkInlineNode(
+    expected_url: []const u8,
+    expected_title: ?[]const u8,
+    inline_node: *const ast.InlineNode,
+) !*const ast.LinkInline {
+    try std.testing.expect(inline_node.* == .link);
+    try std.testing.expectEqualStrings(expected_url, inline_node.link.url);
+    if (expected_title) |title| {
+        try std.testing.expectEqualStrings(title, inline_node.link.title.?);
+    } else {
+        try std.testing.expect(inline_node.link.title == null);
+    }
+    return &inline_node.link;
+}
+
 test "parseDocument produces a single Paragraph for plain text" {
     const allocator = std.testing.allocator;
     const input = "Hello world\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -47,7 +62,7 @@ test "parseDocument groups consecutive non-blank lines into one Paragraph" {
     const allocator = std.testing.allocator;
     const input = "First line\nSecond line\nThird line\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -64,11 +79,32 @@ test "parseDocument groups consecutive non-blank lines into one Paragraph" {
     try std.testing.expectEqualStrings("Third line", inlineNodeAt(&doc, first, 4).text);
 }
 
+test "parseDocument strips leading indentation from paragraph lines" {
+    const allocator = std.testing.allocator;
+    const input =
+        "  aaa\n" ++
+        "                 bbb\n" ++
+        "                                        ccc\n";
+
+    var doc = try parse.parseBorrowed(allocator, input);
+    defer doc.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .paragraph);
+    const first = doc.blocks[0].paragraph.children;
+    try std.testing.expectEqual(@as(usize, 5), inlineCount(&doc, first));
+    try std.testing.expectEqualStrings("aaa", inlineNodeAt(&doc, first, 0).text);
+    try std.testing.expect(inlineNodeAt(&doc, first, 1).* == .soft_break);
+    try std.testing.expectEqualStrings("bbb", inlineNodeAt(&doc, first, 2).text);
+    try std.testing.expect(inlineNodeAt(&doc, first, 3).* == .soft_break);
+    try std.testing.expectEqualStrings("ccc", inlineNodeAt(&doc, first, 4).text);
+}
+
 test "parseDocument collapses runs of blank lines into one blank_line node" {
     const allocator = std.testing.allocator;
     const input = "First\n\n\n\nSecond\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 3), doc.blocks.len);
@@ -83,7 +119,7 @@ test "parseDocument records ATX heading level and content" {
     const allocator = std.testing.allocator;
     const input = "## My Heading\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -92,16 +128,51 @@ test "parseDocument records ATX heading level and content" {
     try expectInlineText("My Heading", &doc, doc.blocks[0].heading.children);
 }
 
+test "parseDocument parses setext heading after link definition" {
+    const allocator = std.testing.allocator;
+    const input =
+        "[foo]: /url\n" ++
+        "bar\n" ++
+        "===\n" ++
+        "[foo]\n";
+
+    var doc = try parse.parseBorrowed(allocator, input);
+    defer doc.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .heading);
+    try std.testing.expectEqual(@as(u8, 1), doc.blocks[0].heading.level);
+    try expectInlineText("bar", &doc, doc.blocks[0].heading.children);
+
+    try std.testing.expect(doc.blocks[1] == .paragraph);
+    const link = try expectLinkInlineNode("/url", null, doc.inlineNode(doc.blocks[1].paragraph.children));
+    try expectInlineText("foo", &doc, link.children);
+}
+
+test "parseDocument strips leading indentation from setext heading content" {
+    const allocator = std.testing.allocator;
+    const input = "   Foo\n---\n";
+
+    var doc = try parse.parseBorrowed(allocator, input);
+    defer doc.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .heading);
+    try std.testing.expectEqual(@as(u8, 2), doc.blocks[0].heading.level);
+    try expectInlineText("Foo", &doc, doc.blocks[0].heading.children);
+}
+
 test "parseDocument groups adjacent unordered list items into one List" {
     const allocator = std.testing.allocator;
     const input = "- First\n- Second\n- Third\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
     try std.testing.expect(doc.blocks[0] == .list);
     try std.testing.expectEqual(ast.ListKind.unordered, doc.blocks[0].list.kind);
+    try std.testing.expect(!doc.blocks[0].list.loose);
     try std.testing.expectEqual(@as(usize, 3), doc.blocks[0].list.items.len);
 
     for (doc.blocks[0].list.items) |item| {
@@ -120,7 +191,7 @@ test "parseDocument stores task checkbox state on list items" {
     const allocator = std.testing.allocator;
     const input = "- [x] Done\n- [ ] Todo\n- Plain item\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -141,12 +212,13 @@ test "parseDocument groups ordered list items and records numbers" {
     const allocator = std.testing.allocator;
     const input = "1. First\n2. Second\n10. Tenth\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
     try std.testing.expect(doc.blocks[0] == .list);
     try std.testing.expectEqual(ast.ListKind.ordered, doc.blocks[0].list.kind);
+    try std.testing.expect(!doc.blocks[0].list.loose);
 
     const items = doc.blocks[0].list.items;
     try std.testing.expectEqual(@as(usize, 3), items.len);
@@ -160,7 +232,7 @@ test "parseDocument captures unordered list item continuation lines" {
     const allocator = std.testing.allocator;
     const input = "- first line\n  continued here\n  more continuation\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -180,13 +252,13 @@ test "parseDocument captures unordered list item continuation lines" {
 
 test "parseDocument collects link definitions into the document map" {
     const allocator = std.testing.allocator;
-    const input = "[Foo]: http://foo.example/ \"Title\"\n[Bar]: http://bar.example/\nbody text\n";
+    const input = "[ Foo  Bar ]: http://foo.example/ \"Title\"\n[Bar]: http://bar.example/\nbody text\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 2), doc.link_defs.count());
-    const foo = doc.link_defs.get("foo").?;
+    const foo = doc.link_defs.get("foo bar").?;
     try std.testing.expectEqualStrings("http://foo.example/", foo.url);
     try std.testing.expectEqualStrings("Title", foo.title.?);
     const bar = doc.link_defs.get("bar").?;
@@ -194,11 +266,87 @@ test "parseDocument collects link definitions into the document map" {
     try std.testing.expect(bar.title == null);
 }
 
+test "parseDocument collects link definitions with escaped closing bracket labels" {
+    const allocator = std.testing.allocator;
+    const input = "[foo\\]]: /url\n";
+
+    var doc = try parse.parseBorrowed(allocator, input);
+    defer doc.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), doc.link_defs.count());
+    const def = doc.link_defs.get("foo\\]").?;
+    try std.testing.expectEqualStrings("/url", def.url);
+    try std.testing.expect(def.title == null);
+}
+
+test "parseDocument collects multiline link definitions" {
+    const allocator = std.testing.allocator;
+    const input =
+        "[r]:\n" ++
+        " /url\n" ++
+        " \"line1\n" ++
+        "line2\"\n";
+
+    var doc = try parse.parseBorrowed(allocator, input);
+    defer doc.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), doc.link_defs.count());
+    const def = doc.link_defs.get("r").?;
+    try std.testing.expectEqualStrings("/url", def.url);
+    try std.testing.expectEqualStrings("line1\nline2", def.title.?);
+}
+
+test "parseDocument keeps shortest valid link definition when title continuation is invalid" {
+    const allocator = std.testing.allocator;
+    const input =
+        "[foo]: /url\n" ++
+        "\"title\" ok\n" ++
+        "[foo]\n";
+
+    var doc = try parse.parseBorrowed(allocator, input);
+    defer doc.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), doc.link_defs.count());
+    const def = doc.link_defs.get("foo").?;
+    try std.testing.expectEqualStrings("/url", def.url);
+    try std.testing.expect(def.title == null);
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .paragraph);
+
+    const first = doc.blocks[0].paragraph.children;
+    try std.testing.expectEqual(@as(usize, 3), inlineCount(&doc, first));
+    try std.testing.expectEqualStrings("\"title\" ok", inlineNodeAt(&doc, first, 0).text);
+    try std.testing.expect(inlineNodeAt(&doc, first, 1).* == .soft_break);
+    const link = try expectLinkInlineNode("/url", null, inlineNodeAt(&doc, first, 2));
+    try expectInlineText("foo", &doc, link.children);
+}
+
+test "parseDocument rejects link definitions with ASCII control characters in bare destination" {
+    const allocator = std.testing.allocator;
+    const input = "[r]: foo\x07bar\n";
+
+    var doc = try parse.parseBorrowed(allocator, input);
+    defer doc.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), doc.link_defs.count());
+}
+
+test "parseDocument rejects link definitions with backslash before space in bare destination" {
+    const allocator = std.testing.allocator;
+    const input = "[r]: foo\\ bar\n";
+
+    var doc = try parse.parseBorrowed(allocator, input);
+    defer doc.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), doc.link_defs.count());
+}
+
 test "parseDocument parses fenced code block content" {
     const allocator = std.testing.allocator;
     const input = "```zig\nconst x = 1;\nconst y = 2;\n```\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -214,7 +362,7 @@ test "parseDocument records unclosed fenced code as code_fence with null closer"
     const allocator = std.testing.allocator;
     const input = "```\nfoo\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -225,11 +373,43 @@ test "parseDocument records unclosed fenced code as code_fence with null closer"
     try std.testing.expectEqualStrings("foo", cf.content);
 }
 
+test "parseDocument parses indented code block content" {
+    const allocator = std.testing.allocator;
+    const input =
+        "    code\n" ++
+        "    block\n";
+
+    var doc = try parse.parseBorrowed(allocator, input);
+    defer doc.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .code_block);
+    try std.testing.expectEqualStrings("code\nblock", doc.blocks[0].code_block.content);
+}
+
+test "parseDocument keeps trailing blank line outside indented code block" {
+    const allocator = std.testing.allocator;
+    const input =
+        "    code\n" ++
+        "\n" ++
+        "next\n";
+
+    var doc = try parse.parseBorrowed(allocator, input);
+    defer doc.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .code_block);
+    try std.testing.expectEqualStrings("code", doc.blocks[0].code_block.content);
+    try std.testing.expect(doc.blocks[1] == .blank_line);
+    try std.testing.expect(doc.blocks[2] == .paragraph);
+    try expectInlineText("next", &doc, doc.blocks[2].paragraph.children);
+}
+
 test "parseDocument parses thematic break" {
     const allocator = std.testing.allocator;
     const input = "before\n\n---\n\nafter\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 5), doc.blocks.len);
@@ -244,7 +424,7 @@ test "parseDocument parses blockquote with content lines" {
     const allocator = std.testing.allocator;
     const input = "> first quoted\n> second quoted\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -260,11 +440,32 @@ test "parseDocument parses blockquote with content lines" {
     try std.testing.expectEqualStrings("second quoted", inlineNodeAt(&doc, first, 2).text);
 }
 
+test "parseDocument supports lazy continuation lines in blockquotes" {
+    const allocator = std.testing.allocator;
+    const input =
+        "> foo\n" ++
+        "bar\n";
+
+    var doc = try parse.parseBorrowed(allocator, input);
+    defer doc.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .blockquote);
+    const bq = doc.blocks[0].blockquote;
+    try std.testing.expectEqual(@as(usize, 1), bq.blocks.len);
+    try std.testing.expect(bq.blocks[0] == .paragraph);
+    const first = bq.blocks[0].paragraph.children;
+    try std.testing.expectEqual(@as(usize, 3), inlineCount(&doc, first));
+    try std.testing.expectEqualStrings("foo", inlineNodeAt(&doc, first, 0).text);
+    try std.testing.expect(inlineNodeAt(&doc, first, 1).* == .soft_break);
+    try std.testing.expectEqualStrings("bar", inlineNodeAt(&doc, first, 2).text);
+}
+
 test "parseDocument parses table with header and body rows" {
     const allocator = std.testing.allocator;
     const input = "| A | B |\n| --- | ---: |\n| 1 | 2 |\n| 3 | 4 |\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -285,12 +486,12 @@ test "parseDocument tracks has_trailing_newline correctly" {
     const allocator = std.testing.allocator;
 
     {
-        var doc = try parse.parse(allocator, "Hello\n");
+        var doc = try parse.parseBorrowed(allocator, "Hello\n");
         defer doc.deinit();
         try std.testing.expect(doc.has_trailing_newline);
     }
     {
-        var doc = try parse.parse(allocator, "Hello");
+        var doc = try parse.parseBorrowed(allocator, "Hello");
         defer doc.deinit();
         try std.testing.expect(!doc.has_trailing_newline);
     }
@@ -298,7 +499,7 @@ test "parseDocument tracks has_trailing_newline correctly" {
 
 test "parseDocument handles empty input" {
     const allocator = std.testing.allocator;
-    var doc = try parse.parse(allocator, "");
+    var doc = try parse.parseBorrowed(allocator, "");
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), doc.blocks.len);
@@ -310,7 +511,7 @@ test "parseDocument wraps blockquote table in BlockQuote with Table child" {
     const allocator = std.testing.allocator;
     const input = "> | A | B |\n> | --- | --- |\n> | 1 | 2 |\n> | 3 | 4 |\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -331,7 +532,7 @@ test "parseDocument groups blockquote table and paragraph into one BlockQuote" {
     const allocator = std.testing.allocator;
     const input = "> | A |\n> | --- |\n> | 1 |\n> normal text\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -351,7 +552,7 @@ test "parseDocument rejects blockquote with pipes but no delimiter as plain bloc
     const allocator = std.testing.allocator;
     const input = "> a | b\n> c | d\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -364,7 +565,7 @@ test "parseDocument rejects table with mismatched header and delimiter column co
     const allocator = std.testing.allocator;
     const input = "| A |\n| --- | --- |\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expect(doc.blocks.len >= 1);
@@ -377,7 +578,7 @@ test "parseDocument parses table when code span contains pipe" {
     const allocator = std.testing.allocator;
     const input = "| `a|b` | c |\n| --- | --- |\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -394,7 +595,7 @@ test "parseDocument rejects table with unclosed code span in header row" {
     const allocator = std.testing.allocator;
     const input = "| `a|b | c |\n| --- | --- |\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -406,7 +607,7 @@ test "parseDocument groups blockquote paragraph and table into one BlockQuote" {
     const allocator = std.testing.allocator;
     const input = "> intro\n> | A |\n> | --- |\n> | 1 |\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -425,7 +626,7 @@ test "parseDocument keeps paragraph continuous across invalid mid-paragraph tabl
     const allocator = std.testing.allocator;
     const input = "alpha\n| A |\n| --- | --- |\nbeta\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -445,7 +646,7 @@ test "parseDocument splits blockquote on indent change between lines" {
     const allocator = std.testing.allocator;
     const input = "> a\n  > b\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 2), doc.blocks.len);
@@ -469,7 +670,7 @@ test "parseDocument represents nested blockquote as recursive BlockQuote" {
     const allocator = std.testing.allocator;
     const input = "> > nested\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -487,7 +688,7 @@ test "parseDocument represents triple-nested blockquote" {
     const allocator = std.testing.allocator;
     const input = "> > > deep\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -505,7 +706,7 @@ test "parseDocument groups plain and nested blockquote lines as siblings" {
     const allocator = std.testing.allocator;
     const input = "> a\n> > b\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -526,7 +727,7 @@ test "parseDocument represents nested unordered list as ListItem.blocks child" {
     const allocator = std.testing.allocator;
     const input = "- parent\n  - child\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -558,7 +759,7 @@ test "parseDocument represents ordered parent containing unordered child" {
     const allocator = std.testing.allocator;
     const input = "1. outer\n   - inner\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -589,7 +790,7 @@ test "parseDocument keeps sibling list items flat when indents match" {
     const allocator = std.testing.allocator;
     const input = "- a\n- b\n- c\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -606,7 +807,7 @@ test "parseDocument promotes continuation paragraph then nested list as siblings
     const allocator = std.testing.allocator;
     const input = "- first\n  continued\n  - nested\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -632,7 +833,7 @@ test "parseDocument groups slightly indented sibling items into one list" {
     const allocator = std.testing.allocator;
     const input = "- a\n - b\n  - c\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -652,7 +853,7 @@ test "parseDocument keeps zigzag-indented siblings in one list" {
     const allocator = std.testing.allocator;
     const input = "- a\n - b\n  - c\n - d\n- e\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -670,7 +871,7 @@ test "parseDocument promotes child when next indent reaches prev content_col" {
     const allocator = std.testing.allocator;
     const input = "- outer\n  - inner\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -686,7 +887,7 @@ test "parseDocument preserves paragraph after nested list in same list item" {
     const allocator = std.testing.allocator;
     const input = "- foo\n  - bar\n  baz\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -710,7 +911,7 @@ test "parseDocument uses dynamic content_col from multi-space marker" {
     const allocator = std.testing.allocator;
     const input = "-   foo\n    continuation\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -725,7 +926,7 @@ test "parseDocument rejects under-indented continuation when marker has extra sp
     const allocator = std.testing.allocator;
     const input = "-   foo\n  sub\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 2), doc.blocks.len);
@@ -742,7 +943,7 @@ test "parseDocument represents blockquote containing unordered list" {
     const allocator = std.testing.allocator;
     const input = "> - item\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -764,7 +965,7 @@ test "parseDocument represents blockquote containing ordered list" {
     const allocator = std.testing.allocator;
     const input = "> 1. foo\n> 2. bar\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -782,11 +983,12 @@ test "parseDocument represents loose list with blank-separated paragraphs in one
     const allocator = std.testing.allocator;
     const input = "- foo\n\n  bar\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
     try std.testing.expect(doc.blocks[0] == .list);
+    try std.testing.expect(doc.blocks[0].list.loose);
     const item = doc.blocks[0].list.items[0];
     try std.testing.expectEqual(@as(usize, 3), item.blocks.len);
     try std.testing.expect(item.blocks[0] == .paragraph);
@@ -796,11 +998,58 @@ test "parseDocument represents loose list with blank-separated paragraphs in one
     try expectInlineText("bar", &doc, item.blocks[2].paragraph.children);
 }
 
+test "parseDocument keeps blank-separated sibling items in one loose list" {
+    const allocator = std.testing.allocator;
+    const input = "- foo\n\n- bar\n";
+
+    var doc = try parse.parseBorrowed(allocator, input);
+    defer doc.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .list);
+
+    const list = doc.blocks[0].list;
+    try std.testing.expectEqual(ast.ListKind.unordered, list.kind);
+    try std.testing.expect(list.loose);
+    try std.testing.expectEqual(@as(usize, 2), list.items.len);
+
+    try expectInlineText("foo", &doc, list.items[0].blocks[0].paragraph.children);
+    try expectInlineText("bar", &doc, list.items[1].blocks[0].paragraph.children);
+}
+
+test "parseDocument splits unordered lists when bullet markers differ" {
+    const allocator = std.testing.allocator;
+    const input = "- foo\n+ bar\n";
+
+    var doc = try parse.parseBorrowed(allocator, input);
+    defer doc.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .list);
+    try std.testing.expect(doc.blocks[1] == .list);
+    try std.testing.expectEqual(@as(u8, '-'), doc.blocks[0].list.items[0].marker);
+    try std.testing.expectEqual(@as(u8, '+'), doc.blocks[1].list.items[0].marker);
+}
+
+test "parseDocument splits ordered lists when delimiters differ" {
+    const allocator = std.testing.allocator;
+    const input = "1. foo\n2) bar\n";
+
+    var doc = try parse.parseBorrowed(allocator, input);
+    defer doc.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .list);
+    try std.testing.expect(doc.blocks[1] == .list);
+    try std.testing.expectEqual(@as(u8, '.'), doc.blocks[0].list.items[0].marker);
+    try std.testing.expectEqual(@as(u8, ')'), doc.blocks[1].list.items[0].marker);
+}
+
 test "parseDocument represents list item containing blockquote child" {
     const allocator = std.testing.allocator;
     const input = "- intro\n  > quoted child\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -823,7 +1072,7 @@ test "parseDocument keeps inner blockquote indent at zero inside list item" {
     const allocator = std.testing.allocator;
     const input = "- foo\n  > > quoted\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -848,7 +1097,7 @@ test "parseDocument represents list item containing fenced code child" {
     const allocator = std.testing.allocator;
     const input = "- outer\n  ```\n  body\n  ```\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -864,7 +1113,7 @@ test "parseDocument builds three-level deep unordered nesting" {
     const allocator = std.testing.allocator;
     const input = "- a\n  - b\n    - c\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -887,7 +1136,7 @@ test "parseDocument paragraph with hard break produces hard_break node" {
     const allocator = std.testing.allocator;
     const input = "foo  \nbar\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -905,7 +1154,7 @@ test "parseDocument paragraph with soft break produces soft_break node" {
     const allocator = std.testing.allocator;
     const input = "foo\nbar\n";
 
-    var doc = try parse.parse(allocator, input);
+    var doc = try parse.parseBorrowed(allocator, input);
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -917,4 +1166,37 @@ test "parseDocument paragraph with soft break produces soft_break node" {
     try std.testing.expect(inlineNodeAt(&doc, children, 1).* == .soft_break);
     try std.testing.expect(inlineNodeAt(&doc, children, 2).* == .text);
     try std.testing.expectEqualStrings("bar", inlineNodeAt(&doc, children, 2).text);
+}
+
+test "parseDocument parses table when escaped pipe appears inside a cell" {
+    const allocator = std.testing.allocator;
+    const input = "| a\\|b | c |\n| --- | --- |\n";
+
+    var doc = try parse.parseBorrowed(allocator, input);
+    defer doc.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .table);
+    const children = doc.blocks[0].table.header[0].children;
+    try std.testing.expectEqual(@as(usize, 3), inlineCount(&doc, children));
+    try std.testing.expectEqualStrings("a", inlineNodeAt(&doc, children, 0).text);
+    try std.testing.expectEqualStrings("|", inlineNodeAt(&doc, children, 1).text);
+    try std.testing.expectEqualStrings("b", inlineNodeAt(&doc, children, 2).text);
+    try expectInlineText("c", &doc, doc.blocks[0].table.header[1].children);
+}
+
+test "parseDocument parses table when multi-backtick code span contains pipe" {
+    const allocator = std.testing.allocator;
+    const input = "| ``a|b`` | c |\n| --- | --- |\n";
+
+    var doc = try parse.parseBorrowed(allocator, input);
+    defer doc.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .table);
+    const first_header_children = doc.blocks[0].table.header[0].children;
+    try std.testing.expect(ast.hasInline(first_header_children));
+    try std.testing.expect(doc.inlineNode(first_header_children).* == .code_span);
+    try std.testing.expectEqualStrings("``a|b``", doc.inlineNode(first_header_children).code_span);
+    try expectInlineText("c", &doc, doc.blocks[0].table.header[1].children);
 }
