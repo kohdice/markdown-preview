@@ -66,7 +66,6 @@ pub fn run(opts: WatchOptions) !u8 {
 
     var renderer = render.Renderer.init(state_arena.allocator(), .{
         .enable_ansi = opts.enable_ansi,
-        .theme = .solarized_dark,
         .ambiguous_width = opts.ambiguous_width,
     });
     defer renderer.deinit();
@@ -88,11 +87,11 @@ pub fn run(opts: WatchOptions) !u8 {
 
     var scroll_offset: usize = 0;
     var rendered: []const u8 = "";
-    var total_lines: usize = 0;
+    var line_index: LineIndex = .{ .line_offsets = &.{}, .total_lines = 0 };
 
     rendered = renderToSlice(opts, &renderer, &cycle_arena, &output_arena, wrap_width);
-    total_lines = countLines(rendered);
-    displayPage(opts.stdout, rendered, scroll_offset, term_size.rows, total_lines, opts.enable_ansi);
+    line_index = buildLineIndex(output_arena.allocator(), rendered);
+    displayPage(opts.stdout, rendered, line_index, scroll_offset, term_size.rows, opts.enable_ansi);
 
     var watcher = file_watcher.FileWatcher.init(dir_z, name_z) catch |err| {
         try opts.stderr.print("mp: unable to watch '{s}': {s}\n", .{ opts.path, @errorName(err) });
@@ -100,7 +99,7 @@ pub fn run(opts: WatchOptions) !u8 {
     };
     defer watcher.deinit();
 
-    const exit_reason = eventLoop(opts, &rt, &watcher, &renderer, &cycle_arena, &output_arena, &term_size, &wrap_width, &scroll_offset, &rendered, &total_lines);
+    const exit_reason = eventLoop(opts, &rt, &watcher, &renderer, &cycle_arena, &output_arena, &term_size, &wrap_width, &scroll_offset, &rendered, &line_index);
 
     return switch (exit_reason) {
         .user_quit => exit_success,
@@ -120,7 +119,7 @@ fn eventLoop(
     wrap_width: *?usize,
     scroll_offset: *usize,
     rendered: *[]const u8,
-    total_lines: *usize,
+    line_index: *LineIndex,
 ) ExitReason {
     const watcher_idx: usize = 0;
     const stdin_idx: usize = 1;
@@ -146,7 +145,7 @@ fn eventLoop(
                     wrap_width.* = if (opts.enable_ansi) term_size.cols else null;
                     scroll_offset.* = 0;
                     rendered.* = renderToSlice(opts, renderer, cycle_arena, output_arena, wrap_width.*);
-                    total_lines.* = countLines(rendered.*);
+                    line_index.* = buildLineIndex(output_arena.allocator(), rendered.*);
                     needs_redisplay = true;
                 } else {
                     return .signal_exit;
@@ -159,7 +158,7 @@ fn eventLoop(
             if (event != .none) {
                 scroll_offset.* = 0;
                 rendered.* = renderToSlice(opts, renderer, cycle_arena, output_arena, wrap_width.*);
-                total_lines.* = countLines(rendered.*);
+                line_index.* = buildLineIndex(output_arena.allocator(), rendered.*);
                 needs_redisplay = true;
             }
         }
@@ -170,14 +169,14 @@ fn eventLoop(
             for (key_buf[0..n]) |byte| {
                 const action = input.feedByte(byte);
                 if (action == .quit) return .user_quit;
-                if (applyAction(action, scroll_offset, total_lines.*, term_size.rows)) {
+                if (applyAction(action, scroll_offset, line_index.total_lines, term_size.rows)) {
                     needs_redisplay = true;
                 }
             }
         }
 
         if (needs_redisplay) {
-            displayPage(opts.stdout, rendered.*, scroll_offset.*, term_size.rows, total_lines.*, opts.enable_ansi);
+            displayPage(opts.stdout, rendered.*, line_index.*, scroll_offset.*, term_size.rows, opts.enable_ansi);
         }
     }
 }
@@ -332,35 +331,21 @@ fn flushAndGetBuffer(output: *std.io.Writer.Allocating) []const u8 {
 fn displayPage(
     stdout: *std.io.Writer,
     rendered: []const u8,
+    line_index: LineIndex,
     scroll_offset: usize,
     visible_rows: usize,
-    total_lines: usize,
     enable_ansi: bool,
 ) void {
     const content_rows = if (visible_rows > 1) visible_rows - 1 else 1;
 
     stdout.writeAll("\x1b[H\x1b[J") catch return;
 
-    var line_start: usize = 0;
-    var current_line: usize = 0;
-
-    var i: usize = 0;
-    while (i < rendered.len) : (i += 1) {
-        if (rendered[i] == '\n') {
-            if (current_line >= scroll_offset and current_line < scroll_offset + content_rows) {
-                stdout.writeAll(rendered[line_start .. i + 1]) catch return;
-            }
-            current_line += 1;
-            line_start = i + 1;
-            if (current_line >= scroll_offset + content_rows) break;
-        }
+    const range = visibleRange(line_index.line_offsets, rendered.len, scroll_offset, content_rows);
+    if (range.end > range.start) {
+        stdout.writeAll(rendered[range.start..range.end]) catch return;
     }
 
-    if (line_start < rendered.len and current_line >= scroll_offset and current_line < scroll_offset + content_rows) {
-        stdout.writeAll(rendered[line_start..]) catch return;
-    }
-
-    writeStatusLine(stdout, scroll_offset, content_rows, total_lines, enable_ansi);
+    writeStatusLine(stdout, scroll_offset, content_rows, line_index.total_lines, enable_ansi);
 
     stdout.flush() catch {};
 }
@@ -383,13 +368,48 @@ fn writeStatusLine(
     }
 }
 
-fn countLines(data: []const u8) usize {
-    var count: usize = 0;
-    for (data) |byte| {
-        if (byte == '\n') count += 1;
+const LineIndex = struct {
+    line_offsets: []const usize,
+    total_lines: usize,
+};
+
+fn buildLineIndex(allocator: std.mem.Allocator, data: []const u8) LineIndex {
+    var offsets: std.ArrayListUnmanaged(usize) = .empty;
+    offsets.append(allocator, 0) catch return .{ .line_offsets = &.{}, .total_lines = 0 };
+
+    for (data, 0..) |byte, i| {
+        if (byte == '\n' and i + 1 < data.len) {
+            offsets.append(allocator, i + 1) catch break;
+        }
     }
-    if (data.len > 0 and data[data.len - 1] != '\n') count += 1;
-    return count;
+
+    const total = offsets.items.len;
+    if (data.len == 0) return .{ .line_offsets = &.{}, .total_lines = 0 };
+
+    return .{
+        .line_offsets = offsets.items,
+        .total_lines = total,
+    };
+}
+
+const VisibleRange = struct {
+    start: usize,
+    end: usize,
+};
+
+fn visibleRange(
+    line_offsets: []const usize,
+    data_len: usize,
+    scroll_offset: usize,
+    content_rows: usize,
+) VisibleRange {
+    if (line_offsets.len == 0) return .{ .start = 0, .end = 0 };
+
+    const first = @min(scroll_offset, line_offsets.len - 1);
+    const last = @min(scroll_offset + content_rows, line_offsets.len);
+    const start = line_offsets[first];
+    const end = if (last < line_offsets.len) line_offsets[last] else data_len;
+    return .{ .start = start, .end = end };
 }
 
 fn toCString(buf: *[std.fs.max_path_bytes]u8, slice: []const u8) ?[*:0]const u8 {
@@ -469,10 +489,72 @@ test "InputState double ESC: first consumed, second starts new sequence" {
     try std.testing.expectEqual(InputPhase.esc, s.phase);
 }
 
-test "countLines" {
-    try std.testing.expectEqual(@as(usize, 0), countLines(""));
-    try std.testing.expectEqual(@as(usize, 1), countLines("hello"));
-    try std.testing.expectEqual(@as(usize, 1), countLines("hello\n"));
-    try std.testing.expectEqual(@as(usize, 2), countLines("a\nb"));
-    try std.testing.expectEqual(@as(usize, 3), countLines("a\nb\nc\n"));
+test "buildLineIndex empty input" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const idx = buildLineIndex(arena.allocator(), "");
+    try std.testing.expectEqual(@as(usize, 0), idx.total_lines);
+}
+
+test "buildLineIndex single line without newline" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const idx = buildLineIndex(arena.allocator(), "hello");
+    try std.testing.expectEqual(@as(usize, 1), idx.total_lines);
+    try std.testing.expectEqual(@as(usize, 0), idx.line_offsets[0]);
+}
+
+test "buildLineIndex single line with newline" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const idx = buildLineIndex(arena.allocator(), "hello\n");
+    try std.testing.expectEqual(@as(usize, 1), idx.total_lines);
+    try std.testing.expectEqual(@as(usize, 0), idx.line_offsets[0]);
+}
+
+test "buildLineIndex two lines" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const idx = buildLineIndex(arena.allocator(), "a\nb");
+    try std.testing.expectEqual(@as(usize, 2), idx.total_lines);
+    try std.testing.expectEqual(@as(usize, 0), idx.line_offsets[0]);
+    try std.testing.expectEqual(@as(usize, 2), idx.line_offsets[1]);
+}
+
+test "buildLineIndex three lines with trailing newline" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const idx = buildLineIndex(arena.allocator(), "a\nb\nc\n");
+    try std.testing.expectEqual(@as(usize, 3), idx.total_lines);
+    try std.testing.expectEqual(@as(usize, 0), idx.line_offsets[0]);
+    try std.testing.expectEqual(@as(usize, 2), idx.line_offsets[1]);
+    try std.testing.expectEqual(@as(usize, 4), idx.line_offsets[2]);
+}
+
+test "visibleRange selects correct byte range" {
+    const offsets = [_]usize{ 0, 4, 8, 12 };
+    const range = visibleRange(&offsets, 15, 1, 2);
+    try std.testing.expectEqual(@as(usize, 4), range.start);
+    try std.testing.expectEqual(@as(usize, 12), range.end);
+}
+
+test "visibleRange from start" {
+    const offsets = [_]usize{ 0, 4, 8 };
+    const range = visibleRange(&offsets, 10, 0, 2);
+    try std.testing.expectEqual(@as(usize, 0), range.start);
+    try std.testing.expectEqual(@as(usize, 8), range.end);
+}
+
+test "visibleRange clamps to end of data" {
+    const offsets = [_]usize{ 0, 4, 8 };
+    const range = visibleRange(&offsets, 10, 1, 5);
+    try std.testing.expectEqual(@as(usize, 4), range.start);
+    try std.testing.expectEqual(@as(usize, 10), range.end);
+}
+
+test "visibleRange empty offsets" {
+    const offsets = [_]usize{};
+    const range = visibleRange(&offsets, 0, 0, 10);
+    try std.testing.expectEqual(@as(usize, 0), range.start);
+    try std.testing.expectEqual(@as(usize, 0), range.end);
 }
