@@ -19,12 +19,14 @@ pub fn parse(allocator: std.mem.Allocator, source: []const u8) !ParseResult {
         .link_defs = .{},
     };
 
-    var defs_ctx = BlockCursor.initRoot(source);
-    try parser.collectLinkDefinitions(&defs_ctx);
+    if (std.mem.indexOf(u8, source, "]:") != null) {
+        var defs_ctx = BlockCursor.initRoot(source);
+        try parser.collectLinkDefinitions(&defs_ctx);
+    }
 
     var blocks_ctx = BlockCursor.initRoot(source);
     const blocks = try parser.parseBlocks(&blocks_ctx);
-    const inline_storage = try parser.inline_builder.finish();
+    const inline_storage = parser.inline_builder.finish();
 
     return .{
         .blocks = blocks,
