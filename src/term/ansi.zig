@@ -120,8 +120,8 @@ pub fn writeStyled(
         return;
     }
 
-    if (text.len <= 64 and !containsControlChar(text)) {
-        var buf: [128]u8 = undefined;
+    if (text.len <= 256 and !containsControlChar(text)) {
+        var buf: [512]u8 = undefined;
         var pos: usize = 0;
         pos += buildStylePrefix(buf[0..48], style);
         @memcpy(buf[pos..][0..text.len], text);
@@ -148,6 +148,8 @@ fn containsControlChar(text: []const u8) bool {
 /// terminal escape-sequence injection from untrusted Markdown input.
 /// Tab and newline are preserved because they are meaningful whitespace.
 fn writeSanitized(writer: *std.io.Writer, text: []const u8) !void {
+    if (!containsControlChar(text)) return writer.writeAll(text);
+
     var start: usize = 0;
     for (text, 0..) |byte, i| {
         if (std.ascii.isControl(byte) and byte != '\t' and byte != '\n') {
@@ -160,25 +162,25 @@ fn writeSanitized(writer: *std.io.Writer, text: []const u8) !void {
 
 const testing = std.testing;
 
-test "writeStyled fast path boundary at 64 bytes" {
+test "writeStyled fast path boundary at 256 bytes" {
     const style: TextStyle = .{ .fg = .{ .r = 0, .g = 0, .b = 0 } };
 
-    var buf64: std.io.Writer.Allocating = .init(testing.allocator);
-    defer buf64.deinit();
-    const text64 = "a" ** 64;
-    try writeStyled(&buf64.writer, true, style, text64);
-    const out64 = buf64.writer.buffered();
+    var buf256: std.io.Writer.Allocating = .init(testing.allocator);
+    defer buf256.deinit();
+    const text256 = "a" ** 256;
+    try writeStyled(&buf256.writer, true, style, text256);
+    const out256 = buf256.writer.buffered();
 
-    var buf65: std.io.Writer.Allocating = .init(testing.allocator);
-    defer buf65.deinit();
-    const text65 = "a" ** 65;
-    try writeStyled(&buf65.writer, true, style, text65);
-    const out65 = buf65.writer.buffered();
+    var buf257: std.io.Writer.Allocating = .init(testing.allocator);
+    defer buf257.deinit();
+    const text257 = "a" ** 257;
+    try writeStyled(&buf257.writer, true, style, text257);
+    const out257 = buf257.writer.buffered();
 
-    try testing.expect(std.mem.startsWith(u8, out64, "\x1b[38;2;0;0;0m"));
-    try testing.expect(std.mem.endsWith(u8, out64, reset_sequence));
-    try testing.expect(std.mem.startsWith(u8, out65, "\x1b[38;2;0;0;0m"));
-    try testing.expect(std.mem.endsWith(u8, out65, reset_sequence));
+    try testing.expect(std.mem.startsWith(u8, out256, "\x1b[38;2;0;0;0m"));
+    try testing.expect(std.mem.endsWith(u8, out256, reset_sequence));
+    try testing.expect(std.mem.startsWith(u8, out257, "\x1b[38;2;0;0;0m"));
+    try testing.expect(std.mem.endsWith(u8, out257, reset_sequence));
 
-    try testing.expectEqual(out64.len + 1, out65.len);
+    try testing.expectEqual(out256.len + 1, out257.len);
 }
