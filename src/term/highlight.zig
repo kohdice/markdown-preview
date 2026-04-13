@@ -22,7 +22,6 @@ extern fn tree_sitter_html() callconv(.c) *const anyopaque;
 extern fn tree_sitter_css() callconv(.c) *const anyopaque;
 extern fn tree_sitter_json() callconv(.c) *const anyopaque;
 
-/// Languages currently supported for syntax highlighting in code fences.
 pub const Language = enum {
     zig,
     c,
@@ -38,9 +37,6 @@ pub const Language = enum {
     css,
     json,
 
-    /// Map a code fence language string (e.g. from `Fence.language`) to a
-    /// `Language` value, returning `null` for unrecognized languages so the
-    /// caller can fall back to uniform-color rendering.
     pub fn fromString(lang: []const u8) ?Language {
         if (lang.len == 0) return null;
         if (eqIgnoreAscii(lang, "zig")) return .zig;

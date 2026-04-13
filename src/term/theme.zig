@@ -1,4 +1,3 @@
-/// CommonMark defines six heading levels (H1..H6).
 pub const heading_level_count = 6;
 
 pub const Rgb = struct {

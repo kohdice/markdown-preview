@@ -1683,7 +1683,6 @@ test "WrapWriter styled fragment boundaries" {
     var ww = WrapWriter.init(&buf.writer, 10, .narrow, allocator);
     defer ww.deinit();
 
-    // Write in fragments as ansi.writeStyled would
     try ww.writer.writeAll("\x1b[1m");
     try ww.writer.writeAll("bold");
     try ww.writer.writeAll("\x1b[0m");
