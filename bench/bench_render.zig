@@ -26,6 +26,9 @@ pub fn main() !void {
         .{ .name = "table-64x6-cjk-wide", .input = try makeCjkTableDocument(allocator, 1, 64, 6), .opts = .{ .ambiguous_width = .wide } },
         .{ .name = "table-many-small-256", .input = try makeAsciiTableDocument(allocator, 256, 2, 2) },
         .{ .name = "blockquote-table-64x4", .input = try makeAsciiTableDocumentWithPrefix(allocator, 1, 64, 4, "> ") },
+        .{ .name = "table-128x8-ansi", .input = try makeAsciiTableDocument(allocator, 1, 128, 8), .opts = .{ .enable_ansi = true } },
+        .{ .name = "table-64x6-cjk-ansi", .input = try makeCjkTableDocument(allocator, 1, 64, 6), .opts = .{ .enable_ansi = true, .ambiguous_width = .wide } },
+        .{ .name = "table-many-small-256-ansi", .input = try makeAsciiTableDocument(allocator, 256, 2, 2), .opts = .{ .enable_ansi = true } },
     };
 
     std.debug.print("render benchmark\n", .{});
