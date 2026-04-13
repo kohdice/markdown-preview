@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../ast.zig");
 const render = @import("../render.zig");
+const width = @import("../term/width.zig");
 
 pub const FixtureError = error{
     FixtureAlreadyFinished,
@@ -341,17 +342,26 @@ pub const RenderFixture = struct {
     }
 };
 
+pub const TestRenderOptions = struct {
+    enable_ansi: bool = false,
+    wrap_width: ?usize = null,
+    ambiguous_width: width.AmbiguousWidth = .narrow,
+};
+
 pub fn renderDocumentToOwnedSlice(
     allocator: std.mem.Allocator,
     doc: *const ast.Document,
-    opts: render.RenderOptions,
+    opts: TestRenderOptions,
 ) ![]u8 {
     var output: std.io.Writer.Allocating = .init(allocator);
     defer output.deinit();
 
-    var renderer = render.Renderer.init(allocator, opts);
+    var renderer = render.Renderer.init(allocator, .{
+        .enable_ansi = opts.enable_ansi,
+        .ambiguous_width = opts.ambiguous_width,
+    });
     defer renderer.deinit();
-    try renderer.renderDocument(&output.writer, doc);
+    try renderer.renderDocument(&output.writer, doc, opts.wrap_width, allocator);
     var list = output.toArrayList();
     return list.toOwnedSlice(allocator);
 }

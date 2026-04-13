@@ -47,13 +47,10 @@ pub const InlineBuilder = struct {
         next: []ast.InlineRef,
     };
 
-    pub fn finish(self: *InlineBuilder) anyerror!Storage {
-        const nodes = try self.nodes.toOwnedSlice(self.allocator);
-        errdefer self.allocator.free(nodes);
-        const next = try self.next.toOwnedSlice(self.allocator);
+    pub fn finish(self: *InlineBuilder) Storage {
         return .{
-            .nodes = nodes,
-            .next = next,
+            .nodes = self.nodes.items,
+            .next = self.next.items,
         };
     }
 

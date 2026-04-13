@@ -157,6 +157,13 @@ fn isCompleteCsi(text: []const u8, start: usize) bool {
     return i < text.len;
 }
 
+fn isAsciiPrintable(text: []const u8) bool {
+    for (text) |byte| {
+        if (byte < 0x20 or byte > 0x7e) return false;
+    }
+    return true;
+}
+
 /// Calculate the display width of a UTF-8 string in terminal columns.
 /// ASCII printable characters are width 1, CJK characters are width 2,
 /// ANSI escape sequences are width 0, control characters are width 0.
@@ -166,6 +173,8 @@ fn isCompleteCsi(text: []const u8, start: usize) bool {
 /// The `ambiguous` argument controls how East Asian Width Ambiguous
 /// characters are sized — see `AmbiguousWidth`.
 pub fn displayWidth(text: []const u8, ambiguous: AmbiguousWidth) usize {
+    if (isAsciiPrintable(text)) return text.len;
+
     var w: usize = 0;
     var i: usize = 0;
     var suppress_next_emoji = false;
@@ -205,7 +214,7 @@ pub fn displayWidth(text: []const u8, ambiguous: AmbiguousWidth) usize {
 
 /// Slice a string to fit within max_width display columns.
 /// Preserves ANSI escape sequences and respects UTF-8 byte boundaries.
-pub fn sliceToWidth(text: []const u8, max_width: usize, ambiguous: AmbiguousWidth) []const u8 {
+fn sliceToWidth(text: []const u8, max_width: usize, ambiguous: AmbiguousWidth) []const u8 {
     var width: usize = 0;
     var i: usize = 0;
     while (i < text.len) {
@@ -236,7 +245,7 @@ pub fn sliceToWidth(text: []const u8, max_width: usize, ambiguous: AmbiguousWidt
 /// Like sliceToWidth but returns an allocated slice that appends an ANSI reset
 /// sequence (\x1b[0m) if the text was truncated inside an active ANSI style.
 /// This prevents style leakage into subsequent terminal output.
-pub fn sliceToWidthAlloc(
+fn sliceToWidthAlloc(
     allocator: std.mem.Allocator,
     text: []const u8,
     max_width: usize,
@@ -301,7 +310,7 @@ pub fn sliceToWidthAlloc(
 /// Wrap text to fit within max_width display columns.
 /// Preserves ANSI escape sequences. Breaks at word boundaries (spaces) when possible.
 /// Falls back to hard-breaking at the column limit if no space is found.
-pub fn wrapText(
+fn wrapText(
     allocator: std.mem.Allocator,
     text: []const u8,
     max_width: usize,
@@ -439,6 +448,21 @@ pub const WrapWriter = struct {
                 .vtable = &wrap_vtable,
             },
         };
+    }
+
+    pub fn reset(
+        self: *WrapWriter,
+        parent: *std.io.Writer,
+        max_width: usize,
+    ) void {
+        self.parent = parent;
+        self.max_width = max_width;
+        self.col = 0;
+        self.last_space_buf = null;
+        self.col_after_last_space = 0;
+        self.suppress_next_emoji = false;
+        self.pending_len = 0;
+        self.line_buf.clearRetainingCapacity();
     }
 
     pub fn deinit(self: *WrapWriter) void {
@@ -1659,7 +1683,6 @@ test "WrapWriter styled fragment boundaries" {
     var ww = WrapWriter.init(&buf.writer, 10, .narrow, allocator);
     defer ww.deinit();
 
-    // Write in fragments as ansi.writeStyled would
     try ww.writer.writeAll("\x1b[1m");
     try ww.writer.writeAll("bold");
     try ww.writer.writeAll("\x1b[0m");

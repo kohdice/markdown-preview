@@ -5,11 +5,27 @@ Command to preview Markdown
 ## Usage
 
 ```console
-mp [--] <FILE>
+mp [--watch] [--] <FILE>
 ```
 
 Use a bare `--` to separate a file whose name starts with `--` from the
 argument list (for example, `mp -- --notes.md`).
+
+### Watch mode
+
+`--watch` enters a live-reload mode that re-renders whenever the file
+changes. The output is displayed in an interactive pager with scrolling
+support. Requires an interactive terminal (stdin and stdout must be a TTY).
+
+| Key        | Action       |
+| ---------- | ------------ |
+| `j` / `↓`  | Scroll down  |
+| `k` / `↑`  | Scroll up    |
+| `PageDown` | Page down    |
+| `PageUp`   | Page up      |
+| `g`        | Go to top    |
+| `G`        | Go to bottom |
+| `q`        | Quit         |
 
 ## Syntax highlighting
 

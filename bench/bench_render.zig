@@ -4,10 +4,13 @@ const parse = markdown_preview.parse;
 const render = markdown_preview.render;
 const bench = @import("bench_support.zig");
 
+const width = markdown_preview.term.width;
+
 const Scenario = struct {
     name: []const u8,
     input: []const u8,
-    opts: render.RenderOptions = .{},
+    enable_ansi: bool = false,
+    ambiguous_width: width.AmbiguousWidth = .narrow,
 };
 
 const RenderResult = struct {
@@ -23,12 +26,12 @@ pub fn main() !void {
 
     const scenarios = [_]Scenario{
         .{ .name = "table-128x8-ascii", .input = try makeAsciiTableDocument(allocator, 1, 128, 8) },
-        .{ .name = "table-64x6-cjk-wide", .input = try makeCjkTableDocument(allocator, 1, 64, 6), .opts = .{ .ambiguous_width = .wide } },
+        .{ .name = "table-64x6-cjk-wide", .input = try makeCjkTableDocument(allocator, 1, 64, 6), .ambiguous_width = .wide },
         .{ .name = "table-many-small-256", .input = try makeAsciiTableDocument(allocator, 256, 2, 2) },
         .{ .name = "blockquote-table-64x4", .input = try makeAsciiTableDocumentWithPrefix(allocator, 1, 64, 4, "> ") },
-        .{ .name = "table-128x8-ansi", .input = try makeAsciiTableDocument(allocator, 1, 128, 8), .opts = .{ .enable_ansi = true } },
-        .{ .name = "table-64x6-cjk-ansi", .input = try makeCjkTableDocument(allocator, 1, 64, 6), .opts = .{ .enable_ansi = true, .ambiguous_width = .wide } },
-        .{ .name = "table-many-small-256-ansi", .input = try makeAsciiTableDocument(allocator, 256, 2, 2), .opts = .{ .enable_ansi = true } },
+        .{ .name = "table-128x8-ansi", .input = try makeAsciiTableDocument(allocator, 1, 128, 8), .enable_ansi = true },
+        .{ .name = "table-64x6-cjk-ansi", .input = try makeCjkTableDocument(allocator, 1, 64, 6), .enable_ansi = true, .ambiguous_width = .wide },
+        .{ .name = "table-many-small-256-ansi", .input = try makeAsciiTableDocument(allocator, 256, 2, 2), .enable_ansi = true },
     };
 
     std.debug.print("render benchmark\n", .{});
@@ -48,7 +51,10 @@ fn runScenario(scenario: Scenario) !void {
     defer _ = render_gpa.deinit();
 
     var counting = bench.CountingAllocator.init(render_gpa.allocator());
-    var renderer = render.Renderer.init(counting.allocator(), scenario.opts);
+    var renderer = render.Renderer.init(counting.allocator(), .{
+        .enable_ansi = scenario.enable_ansi,
+        .ambiguous_width = scenario.ambiguous_width,
+    });
     defer renderer.deinit();
 
     const cold = try renderOnce(&renderer, &doc, &counting);
@@ -73,14 +79,14 @@ fn runScenario(scenario: Scenario) !void {
 
 fn renderOnce(
     renderer: *render.Renderer,
-    doc: *const parse.Document,
+    doc: *const markdown_preview.ast.Document,
     counting: *const bench.CountingAllocator,
 ) !RenderResult {
     var sink: [512]u8 = undefined;
     var discarding: std.io.Writer.Discarding = .init(&sink);
     const before = counting.snapshot();
     var timer = try std.time.Timer.start();
-    try renderer.renderDocument(&discarding.writer, doc);
+    try renderer.renderDocument(&discarding.writer, doc, null, renderer.persistent_allocator);
     const after = counting.snapshot();
     return .{
         .elapsed_ns = timer.read(),

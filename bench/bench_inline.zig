@@ -7,7 +7,8 @@ const bench = @import("bench_support.zig");
 const Scenario = struct {
     name: []const u8,
     input: []const u8,
-    opts: render.RenderOptions = .{},
+    enable_ansi: bool = false,
+    wrap_width: ?usize = null,
 };
 
 pub fn main() !void {
@@ -23,9 +24,9 @@ pub fn main() !void {
         .{ .name = "many-paragraphs-1024", .input = try makeManyParagraphsInput(allocator, 1024) },
         .{ .name = "many-headings-1024", .input = try makeManyHeadingsInput(allocator, 1024) },
         .{ .name = "table-cells-4096", .input = try makeTableInput(allocator, 64, 64) },
-        .{ .name = "paragraph-100k-ansi", .input = try makeRepeatedInlineInput(allocator, 7000, "This is **bold** and [linked](https://example.com) text. "), .opts = .{ .enable_ansi = true } },
-        .{ .name = "many-paragraphs-1024-ansi", .input = try makeManyParagraphsInput(allocator, 1024), .opts = .{ .enable_ansi = true } },
-        .{ .name = "table-cells-4096-ansi", .input = try makeTableInput(allocator, 64, 64), .opts = .{ .enable_ansi = true } },
+        .{ .name = "paragraph-100k-ansi", .input = try makeRepeatedInlineInput(allocator, 7000, "This is **bold** and [linked](https://example.com) text. "), .enable_ansi = true },
+        .{ .name = "many-paragraphs-1024-ansi", .input = try makeManyParagraphsInput(allocator, 1024), .enable_ansi = true },
+        .{ .name = "table-cells-4096-ansi", .input = try makeTableInput(allocator, 64, 64), .enable_ansi = true },
     };
 
     std.debug.print("inline benchmark\n", .{});
@@ -48,15 +49,14 @@ fn runScenario(scenario: Scenario) !void {
     const parse_elapsed_ns = timer.read();
     const after_parse = counting.snapshot();
 
-    var opts = scenario.opts;
-    if (opts.wrap_width == null) opts.wrap_width = 80;
-    var renderer = render.Renderer.init(allocator, opts);
+    const wrap_width: ?usize = scenario.wrap_width orelse 80;
+    var renderer = render.Renderer.init(allocator, .{ .enable_ansi = scenario.enable_ansi });
     defer renderer.deinit();
 
     var sink: [512]u8 = undefined;
     var discarding: std.io.Writer.Discarding = .init(&sink);
     timer.reset();
-    try renderer.renderDocument(&discarding.writer, &doc);
+    try renderer.renderDocument(&discarding.writer, &doc, wrap_width, allocator);
     const render_elapsed_ns = timer.read();
     const after_render = counting.snapshot();
 
@@ -164,21 +164,18 @@ fn makeTableInput(allocator: std.mem.Allocator, rows: usize, cols: usize) ![]u8 
     defer out.deinit(allocator);
     var writer = out.writer(allocator);
 
-    // Header row
     for (0..cols) |c| {
         if (c > 0) try out.append(allocator, '|');
         try writer.print(" H{d} ", .{c});
     }
     try out.append(allocator, '\n');
 
-    // Delimiter row
     for (0..cols) |c| {
         if (c > 0) try out.append(allocator, '|');
         try out.appendSlice(allocator, " --- ");
     }
     try out.append(allocator, '\n');
 
-    // Data rows
     for (0..rows) |r| {
         for (0..cols) |c| {
             if (c > 0) try out.append(allocator, '|');

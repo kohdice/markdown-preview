@@ -2,13 +2,23 @@ const std = @import("std");
 const builtin = @import("builtin");
 const width = @import("width.zig");
 
-pub fn getTerminalWidth(handle: std.posix.fd_t) ?usize {
+pub const TerminalSize = struct {
+    cols: usize,
+    rows: usize,
+};
+
+pub fn getTerminalSize(handle: std.posix.fd_t) ?TerminalSize {
     var winsize: std.posix.winsize = .{ .row = 0, .col = 0, .xpixel = 0, .ypixel = 0 };
     const err = std.posix.system.ioctl(handle, std.posix.T.IOCGWINSZ, @intFromPtr(&winsize));
-    if (std.posix.errno(err) == .SUCCESS and winsize.col > 0) {
-        return @intCast(winsize.col);
+    if (std.posix.errno(err) == .SUCCESS and winsize.col > 0 and winsize.row > 0) {
+        return .{ .cols = @intCast(winsize.col), .rows = @intCast(winsize.row) };
     }
     return null;
+}
+
+pub fn getTerminalWidth(handle: std.posix.fd_t) ?usize {
+    const size = getTerminalSize(handle) orelse return null;
+    return size.cols;
 }
 
 fn classifyWindowsCodePage(code_page: u32, wt_session_nonempty: bool) width.AmbiguousWidth {

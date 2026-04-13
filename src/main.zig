@@ -35,6 +35,8 @@ pub fn main() !void {
         .args = raw_args,
         .stdout = &stdout_stream.interface,
         .stderr = &stderr_stream.interface,
+        .stdout_handle = stdout_file.handle,
+        .stdin_handle = std.fs.File.stdin().handle,
         .enable_ansi = enable_ansi,
         .wrap_width = wrap_width,
         .ambiguous_width = ambiguous_default,

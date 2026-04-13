@@ -1,8 +1,3 @@
-pub const Theme = enum {
-    solarized_dark,
-};
-
-/// CommonMark defines six heading levels (H1..H6).
 pub const heading_level_count = 6;
 
 pub const Rgb = struct {
@@ -50,40 +45,32 @@ const solarized = struct {
     const green: Rgb = .{ .r = 0x85, .g = 0x99, .b = 0x00 };
 };
 
-pub fn palette(theme: Theme) Palette {
-    return switch (theme) {
-        .solarized_dark => .{
-            .body = solarized.base0,
-            .muted = solarized.base01,
-            .subtle = solarized.base02,
-            .list_marker = solarized.cyan,
-            .inline_code = solarized.cyan,
-            .code_fence = solarized.base01,
-            .link = solarized.violet,
-            .error_text = solarized.red,
-            .heading_colors = .{
-                solarized.yellow,
-                solarized.orange,
-                solarized.blue,
-                solarized.cyan,
-                solarized.violet,
-                solarized.violet, // H6 — dim attribute applied at render time
-            },
-        },
-    };
-}
+pub const default_palette: Palette = .{
+    .body = solarized.base0,
+    .muted = solarized.base01,
+    .subtle = solarized.base02,
+    .list_marker = solarized.cyan,
+    .inline_code = solarized.cyan,
+    .code_fence = solarized.base01,
+    .link = solarized.violet,
+    .error_text = solarized.red,
+    .heading_colors = .{
+        solarized.yellow,
+        solarized.orange,
+        solarized.blue,
+        solarized.cyan,
+        solarized.violet,
+        solarized.violet, // H6 — dim attribute applied at render time
+    },
+};
 
-pub fn syntaxPalette(theme: Theme) SyntaxPalette {
-    return switch (theme) {
-        .solarized_dark => .{
-            .keyword = solarized.green,
-            .type_name = solarized.yellow,
-            .string = solarized.cyan,
-            .comment = solarized.base01,
-            .number = solarized.magenta,
-            .func = solarized.blue,
-            .operator = solarized.base0,
-            .plain = solarized.base0,
-        },
-    };
-}
+pub const default_syntax_palette: SyntaxPalette = .{
+    .keyword = solarized.green,
+    .type_name = solarized.yellow,
+    .string = solarized.cyan,
+    .comment = solarized.base01,
+    .number = solarized.magenta,
+    .func = solarized.blue,
+    .operator = solarized.base0,
+    .plain = solarized.base0,
+};

@@ -32,19 +32,6 @@ const border = struct {
 
 const BorderKind = enum { top, middle, bottom };
 
-pub const RendererScratch = struct {
-    table: TableScratch = .{},
-
-    pub fn reset(self: *RendererScratch) void {
-        self.table.reset();
-    }
-
-    pub fn deinit(self: *RendererScratch, allocator: std.mem.Allocator) void {
-        self.table.deinit(allocator);
-        self.* = .{};
-    }
-};
-
 pub const TableScratch = struct {
     col_widths: std.ArrayListUnmanaged(usize) = .empty,
     header_widths: std.ArrayListUnmanaged(usize) = .empty,
@@ -84,7 +71,7 @@ pub const TablePlacement = enum {
 };
 
 pub fn writeTable(
-    ctx: RenderContext,
+    ctx: *const RenderContext,
     writer: *std.io.Writer,
     allocator: std.mem.Allocator,
     scratch: *TableScratch,
@@ -160,7 +147,7 @@ pub fn writeTable(
 }
 
 fn writeRow(
-    ctx: RenderContext,
+    ctx: *const RenderContext,
     writer: *std.io.Writer,
     cells: []const ast.TableCell,
     col_widths: []const usize,

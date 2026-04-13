@@ -48,7 +48,7 @@ pub const ContainerKind = enum {
 const WriteVisitor = struct {
     pub const Error = error{WriteFailed};
 
-    ctx: RenderContext,
+    ctx: *const RenderContext,
     writer: *std.io.Writer,
     current_style: ansi.TextStyle,
 
@@ -120,7 +120,7 @@ const WriteVisitor = struct {
 };
 
 pub fn writeInlineChain(
-    ctx: RenderContext,
+    ctx: *const RenderContext,
     writer: *std.io.Writer,
     first: ast.InlineRef,
     base_style: ansi.TextStyle,
@@ -158,6 +158,9 @@ fn writeTextWithEntities(
     style: ansi.TextStyle,
     content: []const u8,
 ) !void {
+    if (std.mem.indexOfScalar(u8, content, '&') == null)
+        return ansi.writeStyled(writer, enable_ansi, style, content);
+
     var pos: usize = 0;
     var plain_start: usize = 0;
 

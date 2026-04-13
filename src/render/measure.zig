@@ -63,6 +63,9 @@ const MeasureVisitor = struct {
 };
 
 fn textWidthWithEntities(content: []const u8, ambiguous: width.AmbiguousWidth) usize {
+    if (std.mem.indexOfScalar(u8, content, '&') == null)
+        return width.displayWidth(content, ambiguous);
+
     var total: usize = 0;
     var pos: usize = 0;
     var plain_start: usize = 0;
@@ -247,10 +250,10 @@ test "matches rendered width" {
         .doc = &doc,
         .enable_ansi = false,
         .ambiguous_width = .narrow,
-        .palette = theme.palette(.solarized_dark),
-        .syn_palette = theme.syntaxPalette(.solarized_dark),
+        .palette = theme.default_palette,
+        .syn_palette = theme.default_syntax_palette,
     };
-    try render_inline.writeInlineChain(ctx, &buf.writer, 0, .{});
+    try render_inline.writeInlineChain(&ctx, &buf.writer, 0, .{});
 
     const rendered = buf.writer.buffered();
     const rendered_width = width.displayWidth(rendered, .narrow);
