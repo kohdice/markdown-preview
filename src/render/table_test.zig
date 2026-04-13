@@ -148,7 +148,7 @@ test "wide table border near 2048-byte batch threshold produces correct output" 
 
 fn renderWithDiscarding(
     renderer: *render.Renderer,
-    doc: *const parse.Document,
+    doc: *const ast.Document,
     counting: *const bench.CountingAllocator,
 ) !bench.CounterSnapshot {
     var sink: [256]u8 = undefined;

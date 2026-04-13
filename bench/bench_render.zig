@@ -79,7 +79,7 @@ fn runScenario(scenario: Scenario) !void {
 
 fn renderOnce(
     renderer: *render.Renderer,
-    doc: *const parse.Document,
+    doc: *const markdown_preview.ast.Document,
     counting: *const bench.CountingAllocator,
 ) !RenderResult {
     var sink: [512]u8 = undefined;

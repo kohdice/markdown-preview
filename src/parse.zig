@@ -2,10 +2,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const parse_document = @import("parse/document.zig");
 
-pub const Document = ast.Document;
-pub const OwnedSource = ast.Document.OwnedSource;
-
-pub fn parseBorrowed(allocator: std.mem.Allocator, source: []const u8) !Document {
+pub fn parseBorrowed(allocator: std.mem.Allocator, source: []const u8) !ast.Document {
     const has_trailing_newline = source.len > 0 and source[source.len - 1] == '\n';
 
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -24,7 +21,7 @@ pub fn parseBorrowed(allocator: std.mem.Allocator, source: []const u8) !Document
     };
 }
 
-pub fn parseOwned(allocator: std.mem.Allocator, source: OwnedSource) !Document {
+pub fn parseOwned(allocator: std.mem.Allocator, source: ast.Document.OwnedSource) !ast.Document {
     errdefer source.allocator.free(source.buffer);
 
     const has_trailing_newline = source.buffer.len > 0 and source.buffer[source.buffer.len - 1] == '\n';
