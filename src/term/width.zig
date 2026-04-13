@@ -441,6 +441,21 @@ pub const WrapWriter = struct {
         };
     }
 
+    pub fn reset(
+        self: *WrapWriter,
+        parent: *std.io.Writer,
+        max_width: usize,
+    ) void {
+        self.parent = parent;
+        self.max_width = max_width;
+        self.col = 0;
+        self.last_space_buf = null;
+        self.col_after_last_space = 0;
+        self.suppress_next_emoji = false;
+        self.pending_len = 0;
+        self.line_buf.clearRetainingCapacity();
+    }
+
     pub fn deinit(self: *WrapWriter) void {
         self.line_buf.deinit(self.allocator);
     }
