@@ -11,7 +11,6 @@ const render_context = @import("render/context.zig");
 pub const RenderOptions = struct {
     enable_ansi: bool = false,
     theme: theme.Theme = .solarized_dark,
-    wrap_width: ?usize = null,
     ambiguous_width: width.AmbiguousWidth = .narrow,
 };
 
@@ -30,7 +29,7 @@ pub const Renderer = struct {
             .palette = theme.palette(opts.theme),
             .syn_palette = theme.syntaxPalette(opts.theme),
             .highlighter = highlight.Highlighter.init(),
-            .scratch = .{},
+            .scratch = render_table.RendererScratch.init(allocator, opts.ambiguous_width),
         };
     }
 
@@ -46,8 +45,6 @@ pub const Renderer = struct {
         wrap_width: ?usize,
         render_allocator: std.mem.Allocator,
     ) !void {
-        self.scratch.reset();
-
         var session: render_block.RenderSession = .{
             .ctx = .{
                 .doc = doc,
@@ -64,9 +61,7 @@ pub const Renderer = struct {
             .scratch = &self.scratch,
         };
 
-        try session.write(doc.blocks);
-
-        if (doc.has_trailing_newline) try writer.writeByte('\n');
+        try session.renderDocument();
     }
 };
 

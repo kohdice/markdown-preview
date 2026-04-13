@@ -34,6 +34,14 @@ const BorderKind = enum { top, middle, bottom };
 
 pub const RendererScratch = struct {
     table: TableScratch = .{},
+    wrap: width.WrapWriter,
+
+    pub fn init(allocator: std.mem.Allocator, ambiguous: width.AmbiguousWidth) RendererScratch {
+        return .{
+            .table = .{},
+            .wrap = width.WrapWriter.init(undefined, 0, ambiguous, allocator),
+        };
+    }
 
     pub fn reset(self: *RendererScratch) void {
         self.table.reset();
@@ -41,7 +49,8 @@ pub const RendererScratch = struct {
 
     pub fn deinit(self: *RendererScratch, allocator: std.mem.Allocator) void {
         self.table.deinit(allocator);
-        self.* = .{};
+        self.wrap.deinit();
+        self.* = undefined;
     }
 };
 

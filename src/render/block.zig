@@ -52,6 +52,12 @@ pub const RenderSession = struct {
     wrap_width: ?usize,
     highlighter: *highlight.Highlighter,
 
+    pub fn renderDocument(self: *RenderSession) !void {
+        self.scratch.reset();
+        try self.write(self.ctx.doc.blocks);
+        if (self.ctx.doc.has_trailing_newline) try self.writer.writeByte('\n');
+    }
+
     pub fn write(self: *RenderSession, blocks: []const ast.BlockNode) !void {
         for (blocks, 0..) |block, i| {
             if (i > 0) try self.writer.writeByte('\n');
@@ -98,10 +104,9 @@ pub const RenderSession = struct {
                 wrap_w - continuation_indent
             else
                 1;
-            var wrap = width.WrapWriter.init(target, available, self.ctx.ambiguous_width, self.allocator);
-            defer wrap.deinit();
-            try render_inline.writeInlineChain(self.ctx, &wrap.writer, first, base_style);
-            try wrap.finish();
+            self.scratch.wrap.reset(target, available);
+            try render_inline.writeInlineChain(self.ctx, &self.scratch.wrap.writer, first, base_style);
+            try self.scratch.wrap.finish();
         } else {
             try render_inline.writeInlineChain(self.ctx, target, first, base_style);
         }
@@ -349,7 +354,7 @@ test "RenderSession.write renders heading content without document trailing newl
 
     var buf: std.io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
-    var scratch: render_table.RendererScratch = .{};
+    var scratch = render_table.RendererScratch.init(allocator, .narrow);
     defer scratch.deinit(allocator);
 
     var session: RenderSession = .{
