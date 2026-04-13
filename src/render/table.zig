@@ -171,8 +171,11 @@ fn writeRow(
     const bar_style: ansi.TextStyle = .{ .fg = ctx.palette.muted };
     const empty_children: ast.InlineRef = ast.no_inline;
 
-    try ansi.writeStyled(writer, ctx.enable_ansi, bar_style, border.vertical);
-    try ansi.writeStyled(writer, ctx.enable_ansi, bar_style, border.cell_pad);
+    const row_open = border.vertical ++ border.cell_pad;
+    const cell_separator = border.cell_pad ++ border.vertical ++ border.cell_pad;
+    const row_close = border.cell_pad ++ border.vertical;
+
+    try ansi.writeStyled(writer, ctx.enable_ansi, bar_style, row_open);
     for (0..col_widths.len) |c| {
         const cell_children = if (c < cells.len) cells[c].children else empty_children;
         const cell_width = if (c < pre_cell_widths.len) pre_cell_widths[c] else 0;
@@ -197,13 +200,10 @@ fn writeRow(
         try writer.splatByteAll(' ', right_pad);
 
         if (c + 1 < col_widths.len) {
-            try ansi.writeStyled(writer, ctx.enable_ansi, bar_style, border.cell_pad);
-            try ansi.writeStyled(writer, ctx.enable_ansi, bar_style, border.vertical);
-            try ansi.writeStyled(writer, ctx.enable_ansi, bar_style, border.cell_pad);
+            try ansi.writeStyled(writer, ctx.enable_ansi, bar_style, cell_separator);
         }
     }
-    try ansi.writeStyled(writer, ctx.enable_ansi, bar_style, border.cell_pad);
-    try ansi.writeStyled(writer, ctx.enable_ansi, bar_style, border.vertical);
+    try ansi.writeStyled(writer, ctx.enable_ansi, bar_style, row_close);
 }
 
 fn writeBorder(
@@ -233,16 +233,42 @@ fn writeBorder(
 
     const glyph_w: usize = if (ambiguous_width == .wide) 2 else 1;
 
-    try ansi.writeStyled(writer, enable_ansi, style, left);
-    for (0..col_widths.len) |c| {
-        const segment_width = col_widths[c] + 2;
-        const glyph_count = segment_width / glyph_w;
-        for (0..glyph_count) |_| {
-            try ansi.writeStyled(writer, enable_ansi, style, border.horizontal);
+    var estimated: usize = left.len + right.len;
+    for (col_widths) |w| estimated += ((w + 2) / glyph_w) * border.horizontal.len;
+    if (col_widths.len > 1) estimated += (col_widths.len - 1) * join.len;
+
+    var buf: [2048]u8 = undefined;
+    if (estimated <= buf.len) {
+        var pos: usize = 0;
+        @memcpy(buf[pos..][0..left.len], left);
+        pos += left.len;
+        for (0..col_widths.len) |c| {
+            const segment_width = col_widths[c] + 2;
+            const glyph_count = segment_width / glyph_w;
+            for (0..glyph_count) |_| {
+                @memcpy(buf[pos..][0..border.horizontal.len], border.horizontal);
+                pos += border.horizontal.len;
+            }
+            if (c + 1 < col_widths.len) {
+                @memcpy(buf[pos..][0..join.len], join);
+                pos += join.len;
+            }
         }
-        if (c + 1 < col_widths.len) {
-            try ansi.writeStyled(writer, enable_ansi, style, join);
+        @memcpy(buf[pos..][0..right.len], right);
+        pos += right.len;
+        try ansi.writeStyled(writer, enable_ansi, style, buf[0..pos]);
+    } else {
+        try ansi.writeStyled(writer, enable_ansi, style, left);
+        for (0..col_widths.len) |c| {
+            const segment_width = col_widths[c] + 2;
+            const glyph_count = segment_width / glyph_w;
+            for (0..glyph_count) |_| {
+                try ansi.writeStyled(writer, enable_ansi, style, border.horizontal);
+            }
+            if (c + 1 < col_widths.len) {
+                try ansi.writeStyled(writer, enable_ansi, style, join);
+            }
         }
+        try ansi.writeStyled(writer, enable_ansi, style, right);
     }
-    try ansi.writeStyled(writer, enable_ansi, style, right);
 }
