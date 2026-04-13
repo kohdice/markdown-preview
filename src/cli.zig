@@ -117,7 +117,6 @@ pub fn run(opts: RunOptions) !u8 {
 
     var renderer = render.Renderer.init(opts.allocator, .{
         .enable_ansi = opts.enable_ansi,
-        .theme = .solarized_dark,
         .ambiguous_width = opts.ambiguous_width,
     });
     defer renderer.deinit();

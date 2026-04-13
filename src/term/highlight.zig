@@ -930,14 +930,14 @@ test "Language.fromString recognizes all supported names and aliases" {
 }
 
 test "captureToStyle: keyword prefix matches dotted captures" {
-    const sp: theme.SyntaxPalette = theme.syntaxPalette(.solarized_dark);
+    const sp: theme.SyntaxPalette = theme.default_syntax_palette;
     const s = captureToStyle("keyword.control", sp);
     try std.testing.expectEqual(sp.keyword, s.fg.?);
     try std.testing.expect(s.bold);
 }
 
 test "captureToStyle: function.builtin maps to func" {
-    const sp: theme.SyntaxPalette = theme.syntaxPalette(.solarized_dark);
+    const sp: theme.SyntaxPalette = theme.default_syntax_palette;
     const s = captureToStyle("function.builtin", sp);
     try std.testing.expectEqual(sp.func, s.fg.?);
 }
@@ -957,39 +957,39 @@ test "matchesPattern handles negated character classes" {
 }
 
 test "captureToStyle: unknown capture name falls back to plain" {
-    const sp: theme.SyntaxPalette = theme.syntaxPalette(.solarized_dark);
+    const sp: theme.SyntaxPalette = theme.default_syntax_palette;
     const s = captureToStyle("namespace", sp);
     try std.testing.expectEqual(sp.plain, s.fg.?);
 }
 
 test "captureToStyle: tag maps to keyword color without bold" {
-    const sp: theme.SyntaxPalette = theme.syntaxPalette(.solarized_dark);
+    const sp: theme.SyntaxPalette = theme.default_syntax_palette;
     const s = captureToStyle("tag", sp);
     try std.testing.expectEqual(sp.keyword, s.fg.?);
     try std.testing.expect(!s.bold);
 }
 
 test "captureToStyle: tag.delimiter inherits tag mapping via prefix match" {
-    const sp: theme.SyntaxPalette = theme.syntaxPalette(.solarized_dark);
+    const sp: theme.SyntaxPalette = theme.default_syntax_palette;
     const s = captureToStyle("tag.delimiter", sp);
     try std.testing.expectEqual(sp.keyword, s.fg.?);
     try std.testing.expect(!s.bold);
 }
 
 test "captureToStyle: attribute maps to func color" {
-    const sp: theme.SyntaxPalette = theme.syntaxPalette(.solarized_dark);
+    const sp: theme.SyntaxPalette = theme.default_syntax_palette;
     const s = captureToStyle("attribute", sp);
     try std.testing.expectEqual(sp.func, s.fg.?);
 }
 
 test "captureToStyle: property maps to type_name color" {
-    const sp: theme.SyntaxPalette = theme.syntaxPalette(.solarized_dark);
+    const sp: theme.SyntaxPalette = theme.default_syntax_palette;
     const s = captureToStyle("property", sp);
     try std.testing.expectEqual(sp.type_name, s.fg.?);
 }
 
 test "captureToStyle: comment is italic" {
-    const sp: theme.SyntaxPalette = theme.syntaxPalette(.solarized_dark);
+    const sp: theme.SyntaxPalette = theme.default_syntax_palette;
     const s = captureToStyle("comment.documentation", sp);
     try std.testing.expectEqual(sp.comment, s.fg.?);
     try std.testing.expect(s.italic);
@@ -1013,7 +1013,7 @@ test "Highlighter: writes styled zig source" {
     defer buf.deinit();
 
     const source = "const x: u32 = 42;";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.syntaxPalette(.solarized_dark));
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1049,7 +1049,7 @@ test "Highlighter: highlights every supported language end-to-end" {
         var buf: std.io.Writer.Allocating = .init(allocator);
         defer buf.deinit();
 
-        try hl.writeHighlightedBlock(allocator, &buf.writer, case.source, case.lang, theme.syntaxPalette(.solarized_dark));
+        try hl.writeHighlightedBlock(allocator, &buf.writer, case.source, case.lang, theme.default_syntax_palette);
 
         var list = buf.toArrayList();
         defer list.deinit(allocator);
@@ -1074,7 +1074,7 @@ test "Highlighter: later @function pattern overrides generic @variable on fn dec
     defer buf.deinit();
 
     const source = "fn greet() void {}";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.syntaxPalette(.solarized_dark));
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1094,7 +1094,7 @@ test "Highlighter: uncaptured whitespace renders with plain color" {
     defer buf.deinit();
 
     const source = "const x = 1;";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.syntaxPalette(.solarized_dark));
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1114,7 +1114,7 @@ test "Highlighter: @string captures survive a #set! directive on the pattern" {
     defer buf.deinit();
 
     const source = "const msg = \"hi\";";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.syntaxPalette(.solarized_dark));
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1135,7 +1135,7 @@ test "Highlighter: lua-match highlights Zig type identifiers" {
     defer buf.deinit();
 
     const source = "const value: MyType = undefined;";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.syntaxPalette(.solarized_dark));
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1155,7 +1155,7 @@ test "Highlighter: javascript require is builtin when not shadowed" {
     defer buf.deinit();
 
     const source = "require('fs');";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .javascript, theme.syntaxPalette(.solarized_dark));
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .javascript, theme.default_syntax_palette);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1174,7 +1174,7 @@ test "Highlighter: javascript local require does not use builtin styling" {
     defer buf.deinit();
 
     const source = "function demo(require) { return require; }";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .javascript, theme.syntaxPalette(.solarized_dark));
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .javascript, theme.default_syntax_palette);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1193,7 +1193,7 @@ test "Highlighter: @spell meta capture does not override @comment italic" {
     defer buf.deinit();
 
     const source = "// hello world";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.syntaxPalette(.solarized_dark));
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1217,7 +1217,7 @@ test "Highlighter: forced .failed returns QueryUnavailable" {
 
     try std.testing.expectError(
         error.QueryUnavailable,
-        hl.writeHighlightedBlock(allocator, &buf.writer, "const x = 1;", .zig, theme.syntaxPalette(.solarized_dark)),
+        hl.writeHighlightedBlock(allocator, &buf.writer, "const x = 1;", .zig, theme.default_syntax_palette),
     );
 }
 
@@ -1233,7 +1233,7 @@ test "Highlighter: .failed is sticky across repeated calls" {
     for (0..3) |_| {
         try std.testing.expectError(
             error.QueryUnavailable,
-            hl.writeHighlightedBlock(allocator, &buf.writer, "x", .zig, theme.syntaxPalette(.solarized_dark)),
+            hl.writeHighlightedBlock(allocator, &buf.writer, "x", .zig, theme.default_syntax_palette),
         );
     }
     switch (hl.languages[Language.zig.index()]) {
@@ -1271,7 +1271,7 @@ fn renderHighlightedForTest(
 ) ![]u8 {
     var buf: std.io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, lang, theme.syntaxPalette(.solarized_dark));
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, lang, theme.default_syntax_palette);
     var list = buf.toArrayList();
     defer list.deinit(allocator);
     return try list.toOwnedSlice(allocator);

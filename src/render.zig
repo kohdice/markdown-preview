@@ -5,37 +5,36 @@ const highlight = term.highlight;
 const theme = term.theme;
 const width = term.width;
 const render_block = @import("render/block.zig");
-const render_table = @import("render/table.zig");
+const render_scratch = @import("render/scratch.zig");
 const render_context = @import("render/context.zig");
 
 pub const RenderOptions = struct {
     enable_ansi: bool = false,
-    theme: theme.Theme = .solarized_dark,
     ambiguous_width: width.AmbiguousWidth = .narrow,
 };
 
 pub const Renderer = struct {
-    allocator: std.mem.Allocator,
+    persistent_allocator: std.mem.Allocator,
     opts: RenderOptions,
     palette: theme.Palette,
     syn_palette: theme.SyntaxPalette,
     highlighter: highlight.Highlighter,
-    scratch: render_table.RendererScratch,
+    scratch: render_scratch.RendererScratch,
 
-    pub fn init(allocator: std.mem.Allocator, opts: RenderOptions) Renderer {
+    pub fn init(persistent_allocator: std.mem.Allocator, opts: RenderOptions) Renderer {
         return .{
-            .allocator = allocator,
+            .persistent_allocator = persistent_allocator,
             .opts = opts,
-            .palette = theme.palette(opts.theme),
-            .syn_palette = theme.syntaxPalette(opts.theme),
+            .palette = theme.default_palette,
+            .syn_palette = theme.default_syntax_palette,
             .highlighter = highlight.Highlighter.init(),
-            .scratch = render_table.RendererScratch.init(allocator, opts.ambiguous_width),
+            .scratch = render_scratch.RendererScratch.init(persistent_allocator, opts.ambiguous_width),
         };
     }
 
     pub fn deinit(self: *Renderer) void {
         self.highlighter.deinit();
-        self.scratch.deinit(self.allocator);
+        self.scratch.deinit(self.persistent_allocator);
     }
 
     pub fn renderDocument(
@@ -43,7 +42,7 @@ pub const Renderer = struct {
         writer: *std.io.Writer,
         doc: *const ast.Document,
         wrap_width: ?usize,
-        render_allocator: std.mem.Allocator,
+        ephemeral_allocator: std.mem.Allocator,
     ) !void {
         var session: render_block.RenderSession = .{
             .ctx = .{
@@ -54,8 +53,8 @@ pub const Renderer = struct {
                 .syn_palette = self.syn_palette,
             },
             .writer = writer,
-            .allocator = render_allocator,
-            .scratch_allocator = self.allocator,
+            .ephemeral_allocator = ephemeral_allocator,
+            .persistent_allocator = self.persistent_allocator,
             .wrap_width = wrap_width,
             .highlighter = &self.highlighter,
             .scratch = &self.scratch,
