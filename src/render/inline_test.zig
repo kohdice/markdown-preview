@@ -39,6 +39,33 @@ test "nested strong and emphasis nodes render without markdown delimiters" {
     try std.testing.expectEqualStrings("This is very important", rendered);
 }
 
+test "link url batching boundary at 126/127 bytes" {
+    const allocator = std.testing.allocator;
+
+    var fixture126 = helpers.RenderFixture.init(allocator);
+    defer fixture126.deinit();
+    const url126 = "x" ** 126;
+    const label126 = try fixture126.text("a");
+    const link126 = try fixture126.link(url126, null, label126);
+    try fixture126.appendBlock(helpers.RenderFixture.paragraph(link126));
+    try fixture126.finish(false);
+    const out126 = try helpers.renderDocumentToOwnedSlice(allocator, try fixture126.document(), .{ .enable_ansi = true });
+    defer allocator.free(out126);
+
+    var fixture127 = helpers.RenderFixture.init(allocator);
+    defer fixture127.deinit();
+    const url127 = "x" ** 127;
+    const label127 = try fixture127.text("a");
+    const link127 = try fixture127.link(url127, null, label127);
+    try fixture127.appendBlock(helpers.RenderFixture.paragraph(link127));
+    try fixture127.finish(false);
+    const out127 = try helpers.renderDocumentToOwnedSlice(allocator, try fixture127.document(), .{ .enable_ansi = true });
+    defer allocator.free(out127);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, out126, 1, "(" ++ url126 ++ ")"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, out127, 1, url127));
+}
+
 test "strong node applies ANSI bold styling" {
     const allocator = std.testing.allocator;
 

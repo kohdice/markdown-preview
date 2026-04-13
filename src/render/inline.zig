@@ -17,7 +17,7 @@ pub fn traverseInlineChain(
     visitor: *Visitor,
     doc: *const ast.Document,
     first: ast.InlineRef,
-) anyerror!void {
+) Visitor.Error!void {
     var current = first;
     while (ast.hasInline(current)) {
         const node = doc.inlineNode(current).*;
@@ -46,31 +46,33 @@ pub const ContainerKind = enum {
 };
 
 const WriteVisitor = struct {
+    pub const Error = error{WriteFailed};
+
     ctx: RenderContext,
     writer: *std.io.Writer,
     current_style: ansi.TextStyle,
 
-    pub fn onText(self: *WriteVisitor, content: []const u8) anyerror!void {
+    pub fn onText(self: *WriteVisitor, content: []const u8) Error!void {
         try writeTextWithEntities(self.writer, self.ctx.enable_ansi, self.current_style, content);
     }
 
-    pub fn onCodeSpan(self: *WriteVisitor, content: []const u8) anyerror!void {
+    pub fn onCodeSpan(self: *WriteVisitor, content: []const u8) Error!void {
         try ansi.writeStyled(self.writer, self.ctx.enable_ansi, .{ .fg = self.ctx.palette.inline_code }, content);
     }
 
-    pub fn onAutolink(self: *WriteVisitor, url: []const u8) anyerror!void {
+    pub fn onAutolink(self: *WriteVisitor, url: []const u8) Error!void {
         try ansi.writeStyled(self.writer, self.ctx.enable_ansi, self.current_style.merge(.{ .fg = self.ctx.palette.link, .underline = true }), url);
     }
 
-    pub fn onSoftBreak(self: *WriteVisitor) anyerror!void {
+    pub fn onSoftBreak(self: *WriteVisitor) Error!void {
         try self.writer.writeByte('\n');
     }
 
-    pub fn onHardBreak(self: *WriteVisitor) anyerror!void {
+    pub fn onHardBreak(self: *WriteVisitor) Error!void {
         try self.writer.writeByte('\n');
     }
 
-    pub fn onContainer(self: *WriteVisitor, kind: ContainerKind, doc: *const ast.Document, children: ast.InlineRef) anyerror!void {
+    pub fn onContainer(self: *WriteVisitor, kind: ContainerKind, doc: *const ast.Document, children: ast.InlineRef) Error!void {
         const saved = self.current_style;
         self.current_style = self.current_style.merge(switch (kind) {
             .emphasis => ansi.TextStyle{ .italic = true },
@@ -82,16 +84,14 @@ const WriteVisitor = struct {
         self.current_style = saved;
     }
 
-    pub fn onLink(self: *WriteVisitor, doc: *const ast.Document, link: ast.LinkInline) anyerror!void {
+    pub fn onLink(self: *WriteVisitor, doc: *const ast.Document, link: ast.LinkInline) Error!void {
         const saved = self.current_style;
         self.current_style = self.current_style.merge(.{ .fg = self.ctx.palette.link, .underline = true });
         try traverseInlineChain(WriteVisitor, self, doc, link.children);
         self.current_style = saved;
 
         const muted_dim: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .dim = true };
-        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, muted_dim, link_url_open);
-        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, muted_dim, link.url);
-        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, muted_dim, link_url_close);
+        try writeUrlDisplay(self.writer, self.ctx.enable_ansi, muted_dim, link.url);
         if (link.title) |t| {
             const title_style: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .dim = true, .italic = true };
             try ansi.writeStyled(self.writer, self.ctx.enable_ansi, title_style, link_title_separator);
@@ -99,7 +99,7 @@ const WriteVisitor = struct {
         }
     }
 
-    pub fn onImage(self: *WriteVisitor, doc: *const ast.Document, img: ast.ImageInline) anyerror!void {
+    pub fn onImage(self: *WriteVisitor, doc: *const ast.Document, img: ast.ImageInline) Error!void {
         const img_style: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .italic = true };
         try ansi.writeStyled(self.writer, self.ctx.enable_ansi, img_style, image_alt_prefix);
 
@@ -110,9 +110,7 @@ const WriteVisitor = struct {
 
         try ansi.writeStyled(self.writer, self.ctx.enable_ansi, img_style, image_alt_suffix);
         const muted_dim: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .dim = true };
-        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, muted_dim, link_url_open);
-        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, muted_dim, img.url);
-        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, muted_dim, link_url_close);
+        try writeUrlDisplay(self.writer, self.ctx.enable_ansi, muted_dim, img.url);
         if (img.title) |t| {
             const title_style: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .dim = true, .italic = true };
             try ansi.writeStyled(self.writer, self.ctx.enable_ansi, title_style, link_title_separator);
@@ -133,6 +131,25 @@ pub fn writeInlineChain(
         .current_style = base_style,
     };
     try traverseInlineChain(WriteVisitor, &visitor, ctx.doc, first);
+}
+
+fn writeUrlDisplay(
+    writer: *std.io.Writer,
+    enable_ansi: bool,
+    style: ansi.TextStyle,
+    url: []const u8,
+) !void {
+    if (url.len <= 126) {
+        var buf: [128]u8 = undefined;
+        buf[0] = '(';
+        @memcpy(buf[1..][0..url.len], url);
+        buf[1 + url.len] = ')';
+        try ansi.writeStyled(writer, enable_ansi, style, buf[0 .. url.len + 2]);
+    } else {
+        try ansi.writeStyled(writer, enable_ansi, style, link_url_open);
+        try ansi.writeStyled(writer, enable_ansi, style, url);
+        try ansi.writeStyled(writer, enable_ansi, style, link_url_close);
+    }
 }
 
 fn writeTextWithEntities(

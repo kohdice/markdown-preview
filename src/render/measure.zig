@@ -12,30 +12,32 @@ pub fn inlineWidth(doc: *const ast.Document, first: ast.InlineRef, ambiguous: wi
 }
 
 const MeasureVisitor = struct {
+    pub const Error = error{};
+
     total: usize = 0,
     ambiguous: width.AmbiguousWidth,
 
-    pub fn onText(self: *MeasureVisitor, content: []const u8) anyerror!void {
+    pub fn onText(self: *MeasureVisitor, content: []const u8) Error!void {
         self.total += textWidthWithEntities(content, self.ambiguous);
     }
 
-    pub fn onCodeSpan(self: *MeasureVisitor, content: []const u8) anyerror!void {
+    pub fn onCodeSpan(self: *MeasureVisitor, content: []const u8) Error!void {
         self.total += width.displayWidth(content, self.ambiguous);
     }
 
-    pub fn onAutolink(self: *MeasureVisitor, url: []const u8) anyerror!void {
+    pub fn onAutolink(self: *MeasureVisitor, url: []const u8) Error!void {
         self.total += width.displayWidth(url, self.ambiguous);
     }
 
-    pub fn onSoftBreak(_: *MeasureVisitor) anyerror!void {}
+    pub fn onSoftBreak(_: *MeasureVisitor) Error!void {}
 
-    pub fn onHardBreak(_: *MeasureVisitor) anyerror!void {}
+    pub fn onHardBreak(_: *MeasureVisitor) Error!void {}
 
-    pub fn onContainer(self: *MeasureVisitor, _: render_inline.ContainerKind, doc: *const ast.Document, children: ast.InlineRef) anyerror!void {
+    pub fn onContainer(self: *MeasureVisitor, _: render_inline.ContainerKind, doc: *const ast.Document, children: ast.InlineRef) Error!void {
         try render_inline.traverseInlineChain(MeasureVisitor, self, doc, children);
     }
 
-    pub fn onLink(self: *MeasureVisitor, doc: *const ast.Document, link: ast.LinkInline) anyerror!void {
+    pub fn onLink(self: *MeasureVisitor, doc: *const ast.Document, link: ast.LinkInline) Error!void {
         try render_inline.traverseInlineChain(MeasureVisitor, self, doc, link.children);
         self.total += width.displayWidth(render_inline.link_url_open, self.ambiguous);
         self.total += width.displayWidth(link.url, self.ambiguous);
@@ -46,7 +48,7 @@ const MeasureVisitor = struct {
         }
     }
 
-    pub fn onImage(self: *MeasureVisitor, doc: *const ast.Document, img: ast.ImageInline) anyerror!void {
+    pub fn onImage(self: *MeasureVisitor, doc: *const ast.Document, img: ast.ImageInline) Error!void {
         self.total += width.displayWidth(render_inline.image_alt_prefix, self.ambiguous);
         try render_inline.traverseInlineChain(MeasureVisitor, self, doc, img.children);
         self.total += width.displayWidth(render_inline.image_alt_suffix, self.ambiguous);
