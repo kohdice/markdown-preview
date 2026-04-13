@@ -6,21 +6,6 @@ pub const Document = ast.Document;
 pub const OwnedSource = ast.Document.OwnedSource;
 
 pub fn parseBorrowed(allocator: std.mem.Allocator, source: []const u8) !Document {
-    return parseWithSourceStorage(allocator, source, .borrowed);
-}
-
-pub fn parseOwned(allocator: std.mem.Allocator, source: OwnedSource) !Document {
-    errdefer source.allocator.free(source.buffer);
-    return parseWithSourceStorage(allocator, source.buffer, .{
-        .owned = source,
-    });
-}
-
-fn parseWithSourceStorage(
-    allocator: std.mem.Allocator,
-    source: []const u8,
-    source_storage: ast.Document.SourceStorage,
-) !Document {
     const has_trailing_newline = source.len > 0 and source[source.len - 1] == '\n';
 
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -29,7 +14,28 @@ fn parseWithSourceStorage(
     const parsed = try parse_document.parse(arena.allocator(), source);
     return .{
         .source = source,
-        .source_storage = source_storage,
+        .source_storage = .borrowed,
+        .inline_nodes = parsed.inline_nodes,
+        .inline_next = parsed.inline_next,
+        .blocks = parsed.blocks,
+        .link_defs = parsed.link_defs,
+        .has_trailing_newline = has_trailing_newline,
+        .storage = .{ .arena = arena },
+    };
+}
+
+pub fn parseOwned(allocator: std.mem.Allocator, source: OwnedSource) !Document {
+    errdefer source.allocator.free(source.buffer);
+
+    const has_trailing_newline = source.buffer.len > 0 and source.buffer[source.buffer.len - 1] == '\n';
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+
+    const parsed = try parse_document.parse(arena.allocator(), source.buffer);
+    return .{
+        .source = source.buffer,
+        .source_storage = .{ .owned = source },
         .inline_nodes = parsed.inline_nodes,
         .inline_next = parsed.inline_next,
         .blocks = parsed.blocks,
