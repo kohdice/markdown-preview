@@ -140,12 +140,12 @@ const InotifyWatcher = struct {
         const inotify_fd = try std.posix.inotify_init1(std.os.linux.IN.NONBLOCK | std.os.linux.IN.CLOEXEC);
         errdefer std.posix.close(inotify_fd);
 
-        const dir_wd = try std.posix.inotify_add_watch(inotify_fd, dir_path, dir_mask);
+        const dir_wd = try std.posix.inotify_add_watchZ(inotify_fd, dir_path, dir_mask);
 
         var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
         const full_path = buildFullPath(&full_path_buf, dir_path, file_name) orelse return error.NameTooLong;
 
-        const file_wd = std.posix.inotify_add_watch(inotify_fd, full_path, file_mask) catch null;
+        const file_wd = std.posix.inotify_add_watchZ(inotify_fd, full_path, file_mask) catch null;
 
         return .{
             .inotify_fd = inotify_fd,
@@ -212,7 +212,7 @@ const InotifyWatcher = struct {
     fn tryRewatch(self: *Self) void {
         var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
         const full_path = buildFullPath(&full_path_buf, self.dir_path, self.file_name) orelse return;
-        self.file_wd = std.posix.inotify_add_watch(self.inotify_fd, full_path, file_mask) catch null;
+        self.file_wd = std.posix.inotify_add_watchZ(self.inotify_fd, full_path, file_mask) catch null;
     }
 
     fn buildFullPath(buf: *[std.fs.max_path_bytes]u8, dir: [*:0]const u8, name: [*:0]const u8) ?[*:0]const u8 {
