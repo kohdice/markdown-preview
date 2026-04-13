@@ -234,6 +234,7 @@ test "FileWatcher detects file modification" {
     defer tmp.cleanup();
 
     const dir_path = try tmp.dir.realpath(".", &dir_path_buf);
+    dir_path_buf[dir_path.len] = 0;
     const dir_z: [*:0]const u8 = @ptrCast(dir_path.ptr);
 
     try tmp.dir.writeFile(.{ .sub_path = "test.md", .data = "hello" });
@@ -261,6 +262,7 @@ test "FileWatcher detects file deletion and recreation" {
     defer tmp.cleanup();
 
     const dir_path = try tmp.dir.realpath(".", &dir_path_buf2);
+    dir_path_buf2[dir_path.len] = 0;
     const dir_z: [*:0]const u8 = @ptrCast(dir_path.ptr);
 
     try tmp.dir.writeFile(.{ .sub_path = "test2.md", .data = "original" });
@@ -292,6 +294,7 @@ test "FileWatcher getFd returns valid descriptor" {
     defer tmp.cleanup();
 
     const dir_path = try tmp.dir.realpath(".", &dir_path_buf3);
+    dir_path_buf3[dir_path.len] = 0;
     const dir_z: [*:0]const u8 = @ptrCast(dir_path.ptr);
 
     try tmp.dir.writeFile(.{ .sub_path = "test3.md", .data = "content" });
