@@ -9,21 +9,6 @@ pub const Definition = struct {
     title: ?[]const u8,
 };
 
-pub const LinkDestination = struct {
-    url: []const u8,
-    end: usize,
-};
-
-pub const LinkTitle = struct {
-    title: []const u8,
-    end: usize,
-};
-
-pub const ParsedTarget = struct {
-    url: []const u8,
-    title: ?[]const u8,
-};
-
 pub const InlineTarget = struct {
     url: []const u8,
     title: ?[]const u8,
@@ -207,17 +192,6 @@ fn appendNormalizedReferenceLabel(
     }
 }
 
-pub fn parseTarget(allocator: std.mem.Allocator, text: []const u8) !?ParsedTarget {
-    const raw_target = parseTargetRaw(text) orelse return null;
-    return .{
-        .url = try materializeLinkText(allocator, raw_target.url_raw),
-        .title = if (raw_target.title_raw) |raw_title|
-            try materializeLinkText(allocator, raw_title)
-        else
-            null,
-    };
-}
-
 pub fn parseInlineTarget(allocator: std.mem.Allocator, text: []const u8) !InlineTargetParse {
     return switch (scanInlineTargetRaw(text)) {
         .match => |raw_target| .{ .match = .{
@@ -230,30 +204,6 @@ pub fn parseInlineTarget(allocator: std.mem.Allocator, text: []const u8) !Inline
         } },
         .incomplete => .incomplete,
         .invalid => .invalid,
-    };
-}
-
-pub fn parseLinkDestination(
-    allocator: std.mem.Allocator,
-    text: []const u8,
-    start: usize,
-) !?LinkDestination {
-    const raw_destination = scanLinkDestination(text, start) orelse return null;
-    return .{
-        .url = try materializeLinkText(allocator, raw_destination.raw),
-        .end = raw_destination.end,
-    };
-}
-
-pub fn parseLinkTitle(
-    allocator: std.mem.Allocator,
-    text: []const u8,
-    start: usize,
-) !?LinkTitle {
-    const raw_title = scanLinkTitle(text, start) orelse return null;
-    return .{
-        .title = try materializeLinkText(allocator, raw_title.raw),
-        .end = raw_title.end,
     };
 }
 

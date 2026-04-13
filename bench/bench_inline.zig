@@ -7,6 +7,7 @@ const bench = @import("bench_support.zig");
 const Scenario = struct {
     name: []const u8,
     input: []const u8,
+    opts: render.RenderOptions = .{},
 };
 
 pub fn main() !void {
@@ -22,6 +23,9 @@ pub fn main() !void {
         .{ .name = "many-paragraphs-1024", .input = try makeManyParagraphsInput(allocator, 1024) },
         .{ .name = "many-headings-1024", .input = try makeManyHeadingsInput(allocator, 1024) },
         .{ .name = "table-cells-4096", .input = try makeTableInput(allocator, 64, 64) },
+        .{ .name = "paragraph-100k-ansi", .input = try makeRepeatedInlineInput(allocator, 7000, "This is **bold** and [linked](https://example.com) text. "), .opts = .{ .enable_ansi = true } },
+        .{ .name = "many-paragraphs-1024-ansi", .input = try makeManyParagraphsInput(allocator, 1024), .opts = .{ .enable_ansi = true } },
+        .{ .name = "table-cells-4096-ansi", .input = try makeTableInput(allocator, 64, 64), .opts = .{ .enable_ansi = true } },
     };
 
     std.debug.print("inline benchmark\n", .{});
@@ -44,10 +48,9 @@ fn runScenario(scenario: Scenario) !void {
     const parse_elapsed_ns = timer.read();
     const after_parse = counting.snapshot();
 
-    var renderer = render.Renderer.init(allocator, .{
-        .enable_ansi = false,
-        .wrap_width = 80,
-    });
+    var opts = scenario.opts;
+    if (opts.wrap_width == null) opts.wrap_width = 80;
+    var renderer = render.Renderer.init(allocator, opts);
     defer renderer.deinit();
 
     var sink: [512]u8 = undefined;

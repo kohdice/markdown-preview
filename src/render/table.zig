@@ -5,6 +5,9 @@ const theme = @import("../term/theme.zig");
 const width = @import("../term/width.zig");
 const measure = @import("measure.zig");
 const render_inline = @import("inline.zig");
+const render_context = @import("context.zig");
+
+const RenderContext = render_context.RenderContext;
 
 const min_col_width = 3;
 
@@ -81,15 +84,12 @@ pub const TablePlacement = enum {
 };
 
 pub fn writeTable(
+    ctx: RenderContext,
     writer: *std.io.Writer,
     allocator: std.mem.Allocator,
     scratch: *TableScratch,
-    doc: *const ast.Document,
     table: ast.Table,
     placement: TablePlacement,
-    enable_ansi: bool,
-    ambiguous_width: width.AmbiguousWidth,
-    palette: theme.Palette,
 ) !void {
     const col_count = table.alignments.len;
 
@@ -100,7 +100,7 @@ pub fn writeTable(
 
     for (0..col_count) |c| {
         if (c < table.header.len) {
-            const cw = measure.inlineWidth(doc, table.header[c].children, ambiguous_width);
+            const cw = measure.inlineWidth(ctx.doc, table.header[c].children, ctx.ambiguous_width);
             scratch.header_widths.items[c] = cw;
             scratch.col_widths.items[c] = @max(scratch.col_widths.items[c], cw);
         }
@@ -109,7 +109,7 @@ pub fn writeTable(
     for (table.rows) |row| {
         const cached_len = @min(row.len, col_count);
         for (row[0..cached_len], 0..) |cell, cell_index| {
-            const cw = measure.inlineWidth(doc, cell.children, ambiguous_width);
+            const cw = measure.inlineWidth(ctx.doc, cell.children, ctx.ambiguous_width);
             try scratch.body_widths_flat.append(allocator, cw);
             scratch.col_widths.items[cell_index] = @max(scratch.col_widths.items[cell_index], cw);
         }
@@ -120,61 +120,62 @@ pub fn writeTable(
         w.* = @max(w.*, min_col_width);
     }
 
-    if (ambiguous_width == .wide) {
+    if (ctx.ambiguous_width == .wide) {
         for (scratch.col_widths.items) |*w| {
             if (w.* % 2 != 0) w.* += 1;
         }
     }
 
-    const cell_fg = placement.cellColor(palette);
+    const cell_fg = placement.cellColor(ctx.palette);
     const col_widths = scratch.col_widths.items;
     const header_widths = scratch.header_widths.items;
 
-    try writeBorder(writer, col_widths, .top, enable_ansi, ambiguous_width, palette);
+    try writeBorder(writer, col_widths, .top, ctx.enable_ansi, ctx.ambiguous_width, ctx.palette);
     try writer.writeByte('\n');
 
-    try writeRow(writer, doc, table.header, col_widths, header_widths, table.alignments, .{
+    try writeRow(ctx, writer, table.header, col_widths, header_widths, table.alignments, .{
         .fg = cell_fg,
         .bold = true,
-    }, enable_ansi, palette);
+    });
     try writer.writeByte('\n');
 
-    try writeBorder(writer, col_widths, .middle, enable_ansi, ambiguous_width, palette);
+    try writeBorder(writer, col_widths, .middle, ctx.enable_ansi, ctx.ambiguous_width, ctx.palette);
 
     for (table.rows, 0..) |row, i| {
         const row_start = scratch.row_offsets.items[i];
         const row_end = scratch.row_offsets.items[i + 1];
         try writer.writeByte('\n');
-        try writeRow(writer, doc, row, col_widths, scratch.body_widths_flat.items[row_start..row_end], table.alignments, .{
+        try writeRow(ctx, writer, row, col_widths, scratch.body_widths_flat.items[row_start..row_end], table.alignments, .{
             .fg = cell_fg,
-        }, enable_ansi, palette);
+        });
 
         if (i + 1 < table.rows.len) {
             try writer.writeByte('\n');
-            try writeBorder(writer, col_widths, .middle, enable_ansi, ambiguous_width, palette);
+            try writeBorder(writer, col_widths, .middle, ctx.enable_ansi, ctx.ambiguous_width, ctx.palette);
         }
     }
 
     try writer.writeByte('\n');
-    try writeBorder(writer, col_widths, .bottom, enable_ansi, ambiguous_width, palette);
+    try writeBorder(writer, col_widths, .bottom, ctx.enable_ansi, ctx.ambiguous_width, ctx.palette);
 }
 
 fn writeRow(
+    ctx: RenderContext,
     writer: *std.io.Writer,
-    doc: *const ast.Document,
     cells: []const ast.TableCell,
     col_widths: []const usize,
     pre_cell_widths: []const usize,
     alignments: []const ast.Alignment,
     style: ansi.TextStyle,
-    enable_ansi: bool,
-    palette: theme.Palette,
 ) !void {
-    const bar_style: ansi.TextStyle = .{ .fg = palette.muted };
+    const bar_style: ansi.TextStyle = .{ .fg = ctx.palette.muted };
     const empty_children: ast.InlineRef = ast.no_inline;
 
-    try ansi.writeStyled(writer, enable_ansi, bar_style, border.vertical);
-    try ansi.writeStyled(writer, enable_ansi, bar_style, border.cell_pad);
+    const row_open = border.vertical ++ border.cell_pad;
+    const cell_separator = border.cell_pad ++ border.vertical ++ border.cell_pad;
+    const row_close = border.cell_pad ++ border.vertical;
+
+    try ansi.writeStyled(writer, ctx.enable_ansi, bar_style, row_open);
     for (0..col_widths.len) |c| {
         const cell_children = if (c < cells.len) cells[c].children else empty_children;
         const cell_width = if (c < pre_cell_widths.len) pre_cell_widths[c] else 0;
@@ -191,23 +192,18 @@ fn writeRow(
 
         try writer.splatByteAll(' ', left_pad);
         try render_inline.writeInlineChain(
+            ctx,
             writer,
-            doc,
             cell_children,
-            enable_ansi,
             style,
-            palette,
         );
         try writer.splatByteAll(' ', right_pad);
 
         if (c + 1 < col_widths.len) {
-            try ansi.writeStyled(writer, enable_ansi, bar_style, border.cell_pad);
-            try ansi.writeStyled(writer, enable_ansi, bar_style, border.vertical);
-            try ansi.writeStyled(writer, enable_ansi, bar_style, border.cell_pad);
+            try ansi.writeStyled(writer, ctx.enable_ansi, bar_style, cell_separator);
         }
     }
-    try ansi.writeStyled(writer, enable_ansi, bar_style, border.cell_pad);
-    try ansi.writeStyled(writer, enable_ansi, bar_style, border.vertical);
+    try ansi.writeStyled(writer, ctx.enable_ansi, bar_style, row_close);
 }
 
 fn writeBorder(
@@ -237,16 +233,42 @@ fn writeBorder(
 
     const glyph_w: usize = if (ambiguous_width == .wide) 2 else 1;
 
-    try ansi.writeStyled(writer, enable_ansi, style, left);
-    for (0..col_widths.len) |c| {
-        const segment_width = col_widths[c] + 2;
-        const glyph_count = segment_width / glyph_w;
-        for (0..glyph_count) |_| {
-            try ansi.writeStyled(writer, enable_ansi, style, border.horizontal);
+    var estimated: usize = left.len + right.len;
+    for (col_widths) |w| estimated += ((w + 2) / glyph_w) * border.horizontal.len;
+    if (col_widths.len > 1) estimated += (col_widths.len - 1) * join.len;
+
+    var buf: [2048]u8 = undefined;
+    if (estimated <= buf.len) {
+        var pos: usize = 0;
+        @memcpy(buf[pos..][0..left.len], left);
+        pos += left.len;
+        for (0..col_widths.len) |c| {
+            const segment_width = col_widths[c] + 2;
+            const glyph_count = segment_width / glyph_w;
+            for (0..glyph_count) |_| {
+                @memcpy(buf[pos..][0..border.horizontal.len], border.horizontal);
+                pos += border.horizontal.len;
+            }
+            if (c + 1 < col_widths.len) {
+                @memcpy(buf[pos..][0..join.len], join);
+                pos += join.len;
+            }
         }
-        if (c + 1 < col_widths.len) {
-            try ansi.writeStyled(writer, enable_ansi, style, join);
+        @memcpy(buf[pos..][0..right.len], right);
+        pos += right.len;
+        try ansi.writeStyled(writer, enable_ansi, style, buf[0..pos]);
+    } else {
+        try ansi.writeStyled(writer, enable_ansi, style, left);
+        for (0..col_widths.len) |c| {
+            const segment_width = col_widths[c] + 2;
+            const glyph_count = segment_width / glyph_w;
+            for (0..glyph_count) |_| {
+                try ansi.writeStyled(writer, enable_ansi, style, border.horizontal);
+            }
+            if (c + 1 < col_widths.len) {
+                try ansi.writeStyled(writer, enable_ansi, style, join);
+            }
         }
+        try ansi.writeStyled(writer, enable_ansi, style, right);
     }
-    try ansi.writeStyled(writer, enable_ansi, style, right);
 }

@@ -39,6 +39,10 @@ fn parseWithSourceStorage(
     };
 }
 
+test {
+    _ = @import("parse/document_test.zig");
+}
+
 test "parseBorrowed builds a document for a single paragraph" {
     var doc = try parseBorrowed(std.testing.allocator, "Hello\n");
     defer doc.deinit();

@@ -3,50 +3,64 @@ const ast = @import("../ast.zig");
 const text = @import("../text.zig");
 const width = @import("../term/width.zig");
 const render_inline = @import("inline.zig");
+const render_context = @import("context.zig");
 
 pub fn inlineWidth(doc: *const ast.Document, first: ast.InlineRef, ambiguous: width.AmbiguousWidth) usize {
-    var total: usize = 0;
-    var current = first;
-    while (ast.hasInline(current)) {
-        const node = doc.inlineNode(current).*;
-        total += switch (node) {
-            .text => |content| textWidthWithEntities(content, ambiguous),
-            .code_span => |content| width.displayWidth(content, ambiguous),
-            .autolink => |url| width.displayWidth(url, ambiguous),
-            .soft_break, .hard_break => 0,
-            .emphasis => |children| inlineWidth(doc, children, ambiguous),
-            .strong => |children| inlineWidth(doc, children, ambiguous),
-            .bold_italic => |children| inlineWidth(doc, children, ambiguous),
-            .strikethrough => |children| inlineWidth(doc, children, ambiguous),
-            .link => |link| blk: {
-                var w = inlineWidth(doc, link.children, ambiguous);
-                w += width.displayWidth(render_inline.link_url_open, ambiguous);
-                w += width.displayWidth(link.url, ambiguous);
-                w += width.displayWidth(render_inline.link_url_close, ambiguous);
-                if (link.title) |t| {
-                    w += width.displayWidth(render_inline.link_title_separator, ambiguous);
-                    w += width.displayWidth(t, ambiguous);
-                }
-                break :blk w;
-            },
-            .image => |img| blk: {
-                var w = width.displayWidth(render_inline.image_alt_prefix, ambiguous);
-                w += inlineWidth(doc, img.children, ambiguous);
-                w += width.displayWidth(render_inline.image_alt_suffix, ambiguous);
-                w += width.displayWidth(render_inline.link_url_open, ambiguous);
-                w += width.displayWidth(img.url, ambiguous);
-                w += width.displayWidth(render_inline.link_url_close, ambiguous);
-                if (img.title) |t| {
-                    w += width.displayWidth(render_inline.link_title_separator, ambiguous);
-                    w += width.displayWidth(t, ambiguous);
-                }
-                break :blk w;
-            },
-        };
-        current = doc.inlineNext(current);
-    }
-    return total;
+    var visitor = MeasureVisitor{ .ambiguous = ambiguous };
+    render_inline.traverseInlineChain(MeasureVisitor, &visitor, doc, first) catch unreachable;
+    return visitor.total;
 }
+
+const MeasureVisitor = struct {
+    pub const Error = error{};
+
+    total: usize = 0,
+    ambiguous: width.AmbiguousWidth,
+
+    pub fn onText(self: *MeasureVisitor, content: []const u8) Error!void {
+        self.total += textWidthWithEntities(content, self.ambiguous);
+    }
+
+    pub fn onCodeSpan(self: *MeasureVisitor, content: []const u8) Error!void {
+        self.total += width.displayWidth(content, self.ambiguous);
+    }
+
+    pub fn onAutolink(self: *MeasureVisitor, url: []const u8) Error!void {
+        self.total += width.displayWidth(url, self.ambiguous);
+    }
+
+    pub fn onSoftBreak(_: *MeasureVisitor) Error!void {}
+
+    pub fn onHardBreak(_: *MeasureVisitor) Error!void {}
+
+    pub fn onContainer(self: *MeasureVisitor, _: render_inline.ContainerKind, doc: *const ast.Document, children: ast.InlineRef) Error!void {
+        try render_inline.traverseInlineChain(MeasureVisitor, self, doc, children);
+    }
+
+    pub fn onLink(self: *MeasureVisitor, doc: *const ast.Document, link: ast.LinkInline) Error!void {
+        try render_inline.traverseInlineChain(MeasureVisitor, self, doc, link.children);
+        self.total += width.displayWidth(render_inline.link_url_open, self.ambiguous);
+        self.total += width.displayWidth(link.url, self.ambiguous);
+        self.total += width.displayWidth(render_inline.link_url_close, self.ambiguous);
+        if (link.title) |t| {
+            self.total += width.displayWidth(render_inline.link_title_separator, self.ambiguous);
+            self.total += width.displayWidth(t, self.ambiguous);
+        }
+    }
+
+    pub fn onImage(self: *MeasureVisitor, doc: *const ast.Document, img: ast.ImageInline) Error!void {
+        self.total += width.displayWidth(render_inline.image_alt_prefix, self.ambiguous);
+        try render_inline.traverseInlineChain(MeasureVisitor, self, doc, img.children);
+        self.total += width.displayWidth(render_inline.image_alt_suffix, self.ambiguous);
+        self.total += width.displayWidth(render_inline.link_url_open, self.ambiguous);
+        self.total += width.displayWidth(img.url, self.ambiguous);
+        self.total += width.displayWidth(render_inline.link_url_close, self.ambiguous);
+        if (img.title) |t| {
+            self.total += width.displayWidth(render_inline.link_title_separator, self.ambiguous);
+            self.total += width.displayWidth(t, self.ambiguous);
+        }
+    }
+};
 
 fn textWidthWithEntities(content: []const u8, ambiguous: width.AmbiguousWidth) usize {
     var total: usize = 0;
@@ -229,14 +243,14 @@ test "matches rendered width" {
     var buf: std.io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
 
-    try render_inline.writeInlineChain(
-        &buf.writer,
-        &doc,
-        0,
-        false,
-        .{},
-        theme.palette(.solarized_dark),
-    );
+    const ctx: render_context.RenderContext = .{
+        .doc = &doc,
+        .enable_ansi = false,
+        .ambiguous_width = .narrow,
+        .palette = theme.palette(.solarized_dark),
+        .syn_palette = theme.syntaxPalette(.solarized_dark),
+    };
+    try render_inline.writeInlineChain(ctx, &buf.writer, 0, .{});
 
     const rendered = buf.writer.buffered();
     const rendered_width = width.displayWidth(rendered, .narrow);

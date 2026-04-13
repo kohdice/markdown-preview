@@ -48,9 +48,7 @@ test "renderMarkdown emits Solarized Dark ANSI styling for headings and links" {
     try std.testing.expectEqualStrings(
         "\x1b[1m\x1b[4m\x1b[38;2;181;137;0mTitle\x1b[0m\n" ++
             "\x1b[4m\x1b[38;2;108;113;196mlink\x1b[0m" ++
-            "\x1b[2m\x1b[38;2;88;110;117m(\x1b[0m" ++
-            "\x1b[2m\x1b[38;2;88;110;117mhttps://example.com\x1b[0m" ++
-            "\x1b[2m\x1b[38;2;88;110;117m)\x1b[0m",
+            "\x1b[2m\x1b[38;2;88;110;117m(https://example.com)\x1b[0m",
         rendered,
     );
 }

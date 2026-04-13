@@ -3,11 +3,13 @@ const cli = @import("cli.zig");
 const term = @import("term.zig");
 const terminal = term.terminal;
 
-const stdout_buffer_size = 4096;
+const stdout_buffer_size = 64 * 1024;
 const stderr_buffer_size = 1024;
 
 pub fn main() !void {
-    const allocator = std.heap.page_allocator;
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     const raw_args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, raw_args);
 

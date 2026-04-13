@@ -102,6 +102,50 @@ test "table renderer reuses grown scratch when rendering small-large-small table
     try std.testing.expectEqual(@as(usize, 0), final_small.bytes_allocated);
 }
 
+test "wide table border near 2048-byte batch threshold produces correct output" {
+    const allocator = std.testing.allocator;
+
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer buf.deinit(allocator);
+    var writer = buf.writer(allocator);
+
+    try writer.writeAll("|");
+    for (0..60) |c| {
+        try writer.print(" col{d:0>3} |", .{c});
+    }
+    try writer.writeByte('\n');
+
+    try writer.writeAll("|");
+    for (0..60) |_| {
+        try writer.writeAll(" --- |");
+    }
+    try writer.writeByte('\n');
+
+    try writer.writeAll("|");
+    for (0..60) |c| {
+        try writer.print(" val{d:0>3} |", .{c});
+    }
+    try writer.writeByte('\n');
+
+    const source = try buf.toOwnedSlice(allocator);
+    defer allocator.free(source);
+
+    var doc = try parse.parseBorrowed(allocator, source);
+    defer doc.deinit();
+
+    const rendered = try helpers.renderDocumentToOwnedSlice(allocator, &doc, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.startsWith(u8, rendered, "\xe2\x94\x8c"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\xe2\x94\x80"));
+
+    var line_count: usize = 0;
+    for (rendered) |byte| {
+        if (byte == '\n') line_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 5), line_count);
+}
+
 fn renderWithDiscarding(
     renderer: *render.Renderer,
     doc: *const parse.Document,
