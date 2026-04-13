@@ -2,6 +2,7 @@ const std = @import("std");
 const parse = @import("parse.zig");
 const render = @import("render.zig");
 const term = @import("term.zig");
+const watch = @import("watch.zig");
 const width = term.width;
 
 const max_file_bytes = 10 * 1024 * 1024;
@@ -14,21 +15,25 @@ pub const RunOptions = struct {
     args: []const [:0]const u8,
     stdout: *std.io.Writer,
     stderr: *std.io.Writer,
+    stdout_handle: std.posix.fd_t,
+    stdin_handle: std.posix.fd_t,
     enable_ansi: bool,
     wrap_width: ?usize,
     ambiguous_width: width.AmbiguousWidth,
 };
 
 const usage_message =
-    \\Usage: mp [--] <FILE>
+    \\Usage: mp [--watch] [--] <FILE>
     \\
     \\Preview a Markdown file in the terminal.
+    \\Use --watch to live-reload on file changes.
     \\Use -- before a file whose name starts with -- to disambiguate.
     \\
 ;
 
 const ParsedArgs = struct {
     path: []const u8,
+    watch: bool,
 };
 
 const ParseError = error{
@@ -40,6 +45,7 @@ const ParseError = error{
 fn parseArgs(args: []const [:0]const u8) ParseError!ParsedArgs {
     var path: ?[]const u8 = null;
     var positional_only = false;
+    var watch_flag = false;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -47,6 +53,10 @@ fn parseArgs(args: []const [:0]const u8) ParseError!ParsedArgs {
         if (!positional_only) {
             if (std.mem.eql(u8, arg, "--")) {
                 positional_only = true;
+                continue;
+            }
+            if (std.mem.eql(u8, arg, "--watch")) {
+                watch_flag = true;
                 continue;
             }
             if (std.mem.startsWith(u8, arg, "--")) {
@@ -57,7 +67,7 @@ fn parseArgs(args: []const [:0]const u8) ParseError!ParsedArgs {
         path = arg;
     }
 
-    if (path) |p| return .{ .path = p };
+    if (path) |p| return .{ .path = p, .watch = watch_flag };
     return error.MissingPath;
 }
 
@@ -79,6 +89,21 @@ pub fn run(opts: RunOptions) !u8 {
         return exit_failure;
     };
 
+    if (parsed.watch) {
+        return watch.run(.{
+            .allocator = opts.allocator,
+            .cwd = opts.cwd,
+            .path = parsed.path,
+            .stdout = opts.stdout,
+            .stderr = opts.stderr,
+            .stdout_handle = opts.stdout_handle,
+            .stdin_handle = opts.stdin_handle,
+            .enable_ansi = opts.enable_ansi,
+            .wrap_width = opts.wrap_width,
+            .ambiguous_width = opts.ambiguous_width,
+        });
+    }
+
     const source = opts.cwd.readFileAlloc(opts.allocator, parsed.path, max_file_bytes) catch |err| {
         try opts.stderr.print("mp: unable to read '{s}': {s}\n", .{ parsed.path, @errorName(err) });
         return exit_failure;
@@ -98,7 +123,7 @@ pub fn run(opts: RunOptions) !u8 {
     });
     defer renderer.deinit();
 
-    try renderer.renderDocument(opts.stdout, &doc);
+    try renderer.renderDocument(opts.stdout, &doc, opts.wrap_width, opts.allocator);
     return exit_success;
 }
 
@@ -106,6 +131,33 @@ test "parseArgs accepts plain positional path" {
     const args = [_][:0]const u8{ "mp", "foo.md" };
     const parsed = try parseArgs(&args);
     try std.testing.expectEqualStrings("foo.md", parsed.path);
+    try std.testing.expect(!parsed.watch);
+}
+
+test "parseArgs accepts --watch before path" {
+    const args = [_][:0]const u8{ "mp", "--watch", "foo.md" };
+    const parsed = try parseArgs(&args);
+    try std.testing.expectEqualStrings("foo.md", parsed.path);
+    try std.testing.expect(parsed.watch);
+}
+
+test "parseArgs accepts --watch after path" {
+    const args = [_][:0]const u8{ "mp", "foo.md", "--watch" };
+    const parsed = try parseArgs(&args);
+    try std.testing.expectEqualStrings("foo.md", parsed.path);
+    try std.testing.expect(parsed.watch);
+}
+
+test "parseArgs accepts --watch with -- sentinel" {
+    const args = [_][:0]const u8{ "mp", "--watch", "--", "--notes.md" };
+    const parsed = try parseArgs(&args);
+    try std.testing.expectEqualStrings("--notes.md", parsed.path);
+    try std.testing.expect(parsed.watch);
+}
+
+test "parseArgs rejects --watch without path" {
+    const args = [_][:0]const u8{ "mp", "--watch" };
+    try std.testing.expectError(error.MissingPath, parseArgs(&args));
 }
 
 test "parseArgs rejects unknown flag" {
@@ -146,6 +198,8 @@ test "run reports usage errors" {
         .args = &.{"mp"},
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
+        .stdout_handle = -1,
+        .stdin_handle = -1,
         .enable_ansi = false,
         .wrap_width = null,
         .ambiguous_width = .narrow,
@@ -154,9 +208,10 @@ test "run reports usage errors" {
     try std.testing.expectEqual(exit_failure, exit_code);
     try std.testing.expectEqualStrings("", stdout.writer.buffered());
     try std.testing.expectEqualStrings(
-        \\Usage: mp [--] <FILE>
+        \\Usage: mp [--watch] [--] <FILE>
         \\
         \\Preview a Markdown file in the terminal.
+        \\Use --watch to live-reload on file changes.
         \\Use -- before a file whose name starts with -- to disambiguate.
         \\
     ,
@@ -179,6 +234,8 @@ test "run reports missing files" {
         .args = &.{ "mp", "missing.md" },
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
+        .stdout_handle = -1,
+        .stdin_handle = -1,
         .enable_ansi = false,
         .wrap_width = null,
         .ambiguous_width = .narrow,
@@ -213,6 +270,8 @@ test "run renders markdown files" {
         .args = &.{ "mp", "example.md" },
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
+        .stdout_handle = -1,
+        .stdin_handle = -1,
         .enable_ansi = false,
         .wrap_width = null,
         .ambiguous_width = .narrow,
@@ -249,6 +308,8 @@ test "run threads ambiguous_width through to the renderer" {
         .args = &.{ "mp", "cont.md" },
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
+        .stdout_handle = -1,
+        .stdin_handle = -1,
         .enable_ansi = false,
         .wrap_width = null,
         .ambiguous_width = .wide,
@@ -287,6 +348,8 @@ test "run frees the file buffer via parseOwned" {
         .args = &.{ "mp", "owned.md" },
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
+        .stdout_handle = -1,
+        .stdin_handle = -1,
         .enable_ansi = false,
         .wrap_width = null,
         .ambiguous_width = .narrow,
