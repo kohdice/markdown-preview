@@ -158,6 +158,9 @@ fn writeTextWithEntities(
     style: ansi.TextStyle,
     content: []const u8,
 ) !void {
+    if (std.mem.indexOfScalar(u8, content, '&') == null)
+        return ansi.writeStyled(writer, enable_ansi, style, content);
+
     var pos: usize = 0;
     var plain_start: usize = 0;
 
