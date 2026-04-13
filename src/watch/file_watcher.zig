@@ -137,7 +137,7 @@ const InotifyWatcher = struct {
     const dir_mask = std.os.linux.IN.CREATE | std.os.linux.IN.MOVED_TO;
 
     pub fn init(dir_path: [*:0]const u8, file_name: [*:0]const u8) !Self {
-        const inotify_fd = try std.posix.inotify_init1(.{ .NONBLOCK = true, .CLOEXEC = true });
+        const inotify_fd = try std.posix.inotify_init1(std.os.linux.IN.NONBLOCK | std.os.linux.IN.CLOEXEC);
         errdefer std.posix.close(inotify_fd);
 
         const dir_wd = try std.posix.inotify_add_watch(inotify_fd, dir_path, dir_mask);
