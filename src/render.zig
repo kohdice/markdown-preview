@@ -39,7 +39,13 @@ pub const Renderer = struct {
         self.scratch.deinit(self.allocator);
     }
 
-    pub fn renderDocument(self: *Renderer, writer: *std.io.Writer, doc: *const ast.Document) !void {
+    pub fn renderDocument(
+        self: *Renderer,
+        writer: *std.io.Writer,
+        doc: *const ast.Document,
+        wrap_width: ?usize,
+        render_allocator: std.mem.Allocator,
+    ) !void {
         self.scratch.reset();
 
         var session: render_block.RenderSession = .{
@@ -51,8 +57,9 @@ pub const Renderer = struct {
                 .syn_palette = self.syn_palette,
             },
             .writer = writer,
-            .allocator = self.allocator,
-            .wrap_width = self.opts.wrap_width,
+            .allocator = render_allocator,
+            .scratch_allocator = self.allocator,
+            .wrap_width = wrap_width,
             .highlighter = &self.highlighter,
             .scratch = &self.scratch,
         };

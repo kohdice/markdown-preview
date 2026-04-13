@@ -80,7 +80,7 @@ fn renderOnce(
     var discarding: std.io.Writer.Discarding = .init(&sink);
     const before = counting.snapshot();
     var timer = try std.time.Timer.start();
-    try renderer.renderDocument(&discarding.writer, doc);
+    try renderer.renderDocument(&discarding.writer, doc, renderer.opts.wrap_width, renderer.allocator);
     const after = counting.snapshot();
     return .{
         .elapsed_ns = timer.read(),

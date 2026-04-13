@@ -47,6 +47,7 @@ pub const RenderSession = struct {
     ctx: RenderContext,
     writer: *std.io.Writer,
     allocator: std.mem.Allocator,
+    scratch_allocator: std.mem.Allocator,
     scratch: *render_table.RendererScratch,
     wrap_width: ?usize,
     highlighter: *highlight.Highlighter,
@@ -67,7 +68,7 @@ pub const RenderSession = struct {
             .code_block => |code_block| try self.writeCodeBlock(code_block),
             .code_fence => |code_fence| try self.writeCodeFence(code_fence),
             .thematic_break => try self.writeThematicBreak(),
-            .table => |table| try render_table.writeTable(self.ctx, self.writer, self.allocator, &self.scratch.table, table, .top_level),
+            .table => |table| try render_table.writeTable(self.ctx, self.writer, self.scratch_allocator, &self.scratch.table, table, .top_level),
             .blank_line => {},
         }
     }
@@ -150,7 +151,7 @@ pub const RenderSession = struct {
             switch (block) {
                 .paragraph => |paragraph| try self.writeBlockQuoteParagraph(paragraph),
                 .blockquote => |blockquote| try self.writeBlockQuote(blockquote, depth),
-                .table => |table| try render_table.writeTable(self.ctx, self.writer, self.allocator, &self.scratch.table, table, .blockquote),
+                .table => |table| try render_table.writeTable(self.ctx, self.writer, self.scratch_allocator, &self.scratch.table, table, .blockquote),
                 else => try self.writeBlock(block, depth),
             }
         }
@@ -361,6 +362,7 @@ test "RenderSession.write renders heading content without document trailing newl
         },
         .writer = &buf.writer,
         .allocator = allocator,
+        .scratch_allocator = allocator,
         .scratch = &scratch,
         .wrap_width = null,
         .highlighter = &highlighter,

@@ -154,7 +154,7 @@ fn renderWithDiscarding(
     var sink: [256]u8 = undefined;
     var discarding: std.io.Writer.Discarding = .init(&sink);
     const before = counting.snapshot();
-    try renderer.renderDocument(&discarding.writer, doc);
+    try renderer.renderDocument(&discarding.writer, doc, renderer.opts.wrap_width, renderer.allocator);
     const after = counting.snapshot();
     return bench.CounterSnapshot.diff(after, before);
 }

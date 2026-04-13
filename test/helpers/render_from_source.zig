@@ -16,7 +16,7 @@ pub fn renderToOwnedSlice(
 
     var renderer = render.Renderer.init(allocator, opts);
     defer renderer.deinit();
-    try renderer.renderDocument(&output.writer, &doc);
+    try renderer.renderDocument(&output.writer, &doc, opts.wrap_width, allocator);
     var list = output.toArrayList();
     return list.toOwnedSlice(allocator);
 }

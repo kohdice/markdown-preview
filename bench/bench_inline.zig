@@ -56,7 +56,7 @@ fn runScenario(scenario: Scenario) !void {
     var sink: [512]u8 = undefined;
     var discarding: std.io.Writer.Discarding = .init(&sink);
     timer.reset();
-    try renderer.renderDocument(&discarding.writer, &doc);
+    try renderer.renderDocument(&discarding.writer, &doc, renderer.opts.wrap_width, allocator);
     const render_elapsed_ns = timer.read();
     const after_render = counting.snapshot();
 
@@ -164,21 +164,18 @@ fn makeTableInput(allocator: std.mem.Allocator, rows: usize, cols: usize) ![]u8 
     defer out.deinit(allocator);
     var writer = out.writer(allocator);
 
-    // Header row
     for (0..cols) |c| {
         if (c > 0) try out.append(allocator, '|');
         try writer.print(" H{d} ", .{c});
     }
     try out.append(allocator, '\n');
 
-    // Delimiter row
     for (0..cols) |c| {
         if (c > 0) try out.append(allocator, '|');
         try out.appendSlice(allocator, " --- ");
     }
     try out.append(allocator, '\n');
 
-    // Data rows
     for (0..rows) |r| {
         for (0..cols) |c| {
             if (c > 0) try out.append(allocator, '|');
