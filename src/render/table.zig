@@ -71,7 +71,7 @@ pub const TablePlacement = enum {
 };
 
 pub fn writeTable(
-    ctx: RenderContext,
+    ctx: *const RenderContext,
     writer: *std.io.Writer,
     allocator: std.mem.Allocator,
     scratch: *TableScratch,
@@ -147,7 +147,7 @@ pub fn writeTable(
 }
 
 fn writeRow(
-    ctx: RenderContext,
+    ctx: *const RenderContext,
     writer: *std.io.Writer,
     cells: []const ast.TableCell,
     col_widths: []const usize,

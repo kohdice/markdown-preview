@@ -253,7 +253,7 @@ test "matches rendered width" {
         .palette = theme.default_palette,
         .syn_palette = theme.default_syntax_palette,
     };
-    try render_inline.writeInlineChain(ctx, &buf.writer, 0, .{});
+    try render_inline.writeInlineChain(&ctx, &buf.writer, 0, .{});
 
     const rendered = buf.writer.buffered();
     const rendered_width = width.displayWidth(rendered, .narrow);

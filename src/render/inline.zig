@@ -48,7 +48,7 @@ pub const ContainerKind = enum {
 const WriteVisitor = struct {
     pub const Error = error{WriteFailed};
 
-    ctx: RenderContext,
+    ctx: *const RenderContext,
     writer: *std.io.Writer,
     current_style: ansi.TextStyle,
 
@@ -120,7 +120,7 @@ const WriteVisitor = struct {
 };
 
 pub fn writeInlineChain(
-    ctx: RenderContext,
+    ctx: *const RenderContext,
     writer: *std.io.Writer,
     first: ast.InlineRef,
     base_style: ansi.TextStyle,

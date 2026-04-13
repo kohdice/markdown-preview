@@ -5,7 +5,7 @@ const highlight = term.highlight;
 const theme = term.theme;
 const width = term.width;
 const render_block = @import("render/block.zig");
-const render_scratch = @import("render/scratch.zig");
+const render_table = @import("render/table.zig");
 const render_context = @import("render/context.zig");
 
 pub const RenderOptions = struct {
@@ -19,7 +19,8 @@ pub const Renderer = struct {
     palette: theme.Palette,
     syn_palette: theme.SyntaxPalette,
     highlighter: highlight.Highlighter,
-    scratch: render_scratch.RendererScratch,
+    table_scratch: render_table.TableScratch = .{},
+    wrap_writer: width.WrapWriter,
 
     pub fn init(persistent_allocator: std.mem.Allocator, opts: RenderOptions) Renderer {
         return .{
@@ -28,13 +29,14 @@ pub const Renderer = struct {
             .palette = theme.default_palette,
             .syn_palette = theme.default_syntax_palette,
             .highlighter = highlight.Highlighter.init(),
-            .scratch = render_scratch.RendererScratch.init(persistent_allocator, opts.ambiguous_width),
+            .wrap_writer = width.WrapWriter.init(undefined, 0, opts.ambiguous_width, persistent_allocator),
         };
     }
 
     pub fn deinit(self: *Renderer) void {
         self.highlighter.deinit();
-        self.scratch.deinit(self.persistent_allocator);
+        self.table_scratch.deinit(self.persistent_allocator);
+        self.wrap_writer.deinit();
     }
 
     pub fn renderDocument(
@@ -44,20 +46,22 @@ pub const Renderer = struct {
         wrap_width: ?usize,
         ephemeral_allocator: std.mem.Allocator,
     ) !void {
+        const ctx: render_context.RenderContext = .{
+            .doc = doc,
+            .enable_ansi = self.opts.enable_ansi,
+            .ambiguous_width = self.opts.ambiguous_width,
+            .palette = self.palette,
+            .syn_palette = self.syn_palette,
+        };
         var session: render_block.RenderSession = .{
-            .ctx = .{
-                .doc = doc,
-                .enable_ansi = self.opts.enable_ansi,
-                .ambiguous_width = self.opts.ambiguous_width,
-                .palette = self.palette,
-                .syn_palette = self.syn_palette,
-            },
+            .ctx = &ctx,
             .writer = writer,
             .ephemeral_allocator = ephemeral_allocator,
             .persistent_allocator = self.persistent_allocator,
             .wrap_width = wrap_width,
             .highlighter = &self.highlighter,
-            .scratch = &self.scratch,
+            .table_scratch = &self.table_scratch,
+            .wrap_writer = &self.wrap_writer,
         };
 
         try session.renderDocument();

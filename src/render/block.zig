@@ -6,7 +6,6 @@ const ast = @import("../ast.zig");
 const render_inline = @import("inline.zig");
 const prefix_writer = @import("prefix_writer.zig");
 const render_table = @import("table.zig");
-const render_scratch = @import("scratch.zig");
 const highlight = @import("../term/highlight.zig");
 const render_context = @import("context.zig");
 
@@ -45,16 +44,17 @@ fn headingStyle(level: u8, p: theme.Palette) ansi.TextStyle {
 }
 
 pub const RenderSession = struct {
-    ctx: RenderContext,
+    ctx: *const RenderContext,
     writer: *std.io.Writer,
     ephemeral_allocator: std.mem.Allocator,
     persistent_allocator: std.mem.Allocator,
-    scratch: *render_scratch.RendererScratch,
+    table_scratch: *render_table.TableScratch,
+    wrap_writer: *width.WrapWriter,
     wrap_width: ?usize,
     highlighter: *highlight.Highlighter,
 
     pub fn renderDocument(self: *RenderSession) !void {
-        self.scratch.reset();
+        self.table_scratch.reset();
         try self.write(self.ctx.doc.blocks);
         if (self.ctx.doc.has_trailing_newline) try self.writer.writeByte('\n');
     }
@@ -75,7 +75,7 @@ pub const RenderSession = struct {
             .code_block => |code_block| try self.writeCodeBlock(code_block),
             .code_fence => |code_fence| try self.writeCodeFence(code_fence),
             .thematic_break => try self.writeThematicBreak(),
-            .table => |table| try render_table.writeTable(self.ctx, self.writer, self.persistent_allocator, &self.scratch.table, table, .top_level),
+            .table => |table| try render_table.writeTable(self.ctx, self.writer, self.persistent_allocator, self.table_scratch, table, .top_level),
             .blank_line => {},
         }
     }
@@ -105,9 +105,9 @@ pub const RenderSession = struct {
                 wrap_w - continuation_indent
             else
                 1;
-            self.scratch.wrap.reset(target, available);
-            try render_inline.writeInlineChain(self.ctx, &self.scratch.wrap.writer, first, base_style);
-            try self.scratch.wrap.finish();
+            self.wrap_writer.reset(target, available);
+            try render_inline.writeInlineChain(self.ctx, &self.wrap_writer.writer, first, base_style);
+            try self.wrap_writer.finish();
         } else {
             try render_inline.writeInlineChain(self.ctx, target, first, base_style);
         }
@@ -141,13 +141,19 @@ pub const RenderSession = struct {
             .enable_ansi = self.ctx.enable_ansi,
         });
 
-        var child = self.*;
-        child.writer = &prefix.writer;
-        if (self.wrap_width) |ww| {
-            child.wrap_width = if (ww > gutter_width) ww - gutter_width else null;
+        const saved_writer = self.writer;
+        const saved_wrap = self.wrap_width;
+        defer {
+            self.writer = saved_writer;
+            self.wrap_width = saved_wrap;
         }
 
-        try child.writeBlocksInBlockQuote(blockquote.blocks, depth);
+        self.writer = &prefix.writer;
+        if (saved_wrap) |ww| {
+            self.wrap_width = if (ww > gutter_width) ww - gutter_width else null;
+        }
+
+        try self.writeBlocksInBlockQuote(blockquote.blocks, depth);
         try prefix.finish();
     }
 
@@ -157,7 +163,7 @@ pub const RenderSession = struct {
             switch (block) {
                 .paragraph => |paragraph| try self.writeBlockQuoteParagraph(paragraph),
                 .blockquote => |blockquote| try self.writeBlockQuote(blockquote, depth),
-                .table => |table| try render_table.writeTable(self.ctx, self.writer, self.persistent_allocator, &self.scratch.table, table, .blockquote),
+                .table => |table| try render_table.writeTable(self.ctx, self.writer, self.persistent_allocator, self.table_scratch, table, .blockquote),
                 else => try self.writeBlock(block, depth),
             }
         }
@@ -231,13 +237,19 @@ pub const RenderSession = struct {
 
         var prefix = prefix_writer.PrefixWriter.init(self.writer, .{ .indent = indent });
 
-        var child = self.*;
-        child.writer = &prefix.writer;
-        if (self.wrap_width) |ww| {
-            child.wrap_width = if (ww > indent) ww - indent else null;
+        const saved_writer = self.writer;
+        const saved_wrap = self.wrap_width;
+        defer {
+            self.writer = saved_writer;
+            self.wrap_width = saved_wrap;
         }
 
-        try child.writeBlock(child_block, depth);
+        self.writer = &prefix.writer;
+        if (saved_wrap) |ww| {
+            self.wrap_width = if (ww > indent) ww - indent else null;
+        }
+
+        try self.writeBlock(child_block, depth);
         try prefix.finish();
     }
 
@@ -355,21 +367,25 @@ test "RenderSession.write renders heading content without document trailing newl
 
     var buf: std.io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
-    var scratch = render_scratch.RendererScratch.init(allocator, .narrow);
-    defer scratch.deinit(allocator);
+    var table_scratch: render_table.TableScratch = .{};
+    defer table_scratch.deinit(allocator);
+    var wrap = width.WrapWriter.init(undefined, 0, .narrow, allocator);
+    defer wrap.deinit();
 
+    const ctx: RenderContext = .{
+        .doc = &doc,
+        .enable_ansi = false,
+        .ambiguous_width = .narrow,
+        .palette = theme.default_palette,
+        .syn_palette = theme.default_syntax_palette,
+    };
     var session: RenderSession = .{
-        .ctx = .{
-            .doc = &doc,
-            .enable_ansi = false,
-            .ambiguous_width = .narrow,
-            .palette = theme.default_palette,
-            .syn_palette = theme.default_syntax_palette,
-        },
+        .ctx = &ctx,
         .writer = &buf.writer,
         .ephemeral_allocator = allocator,
         .persistent_allocator = allocator,
-        .scratch = &scratch,
+        .table_scratch = &table_scratch,
+        .wrap_writer = &wrap,
         .wrap_width = null,
         .highlighter = &highlighter,
     };
