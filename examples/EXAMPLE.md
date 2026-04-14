@@ -199,6 +199,60 @@ Line 3 with indentation:
     plain text stays as-is.
 ```
 
+## Mermaid Diagrams
+
+`flowchart` / `graph`, `sequenceDiagram`, `classDiagram`, and
+`stateDiagram(-v2)` are rendered as ASCII art in place. Other Mermaid
+diagram types (`erDiagram`, `gantt`, `pie`, `journey`, …) are recognised
+but not yet rendered; they fall through to the original source with a
+notice so the content is never lost.
+
+```mermaid
+graph TD
+    Commit --> Build --> Test{Pass?}
+    Test --> Deploy
+    Test --> Rollback
+```
+
+```mermaid
+graph LR
+    Input --> Parse --> Render --> Output
+```
+
+```mermaid
+sequenceDiagram
+    Client->>Server: Request
+    Server-->>Client: Response
+    Client->>Server: Close
+```
+
+```mermaid
+classDiagram
+    Shape <|-- Circle
+    Shape <|-- Rectangle
+    Shape : +color str
+    Shape : +area() float
+    Circle : +radius float
+    Circle : +area() float
+    Rectangle : +width float
+    Rectangle : +height float
+    Rectangle : +area() float
+```
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Running
+    Running --> Done
+    Done --> [*]
+```
+
+```mermaid
+erDiagram
+    CUSTOMER ||--o{ ORDER : places
+    ORDER ||--|{ LINE-ITEM : contains
+```
+
 ## Horizontal Rule
 
 ---

@@ -199,6 +199,60 @@ fi
     plain text stays as-is.
 ```
 
+## Mermaid 図
+
+`flowchart` / `graph`、`sequenceDiagram`、`classDiagram`、
+`stateDiagram(-v2)` は ASCII アートとしてその場で描画されます。
+それ以外の Mermaid 図種別 (`erDiagram`, `gantt`, `pie`, `journey`, …)
+は認識されますが未実装のため、元のソースをそのまま残す形で
+フォールバック表示され、内容は失われません。
+
+```mermaid
+graph TD
+    Commit[コミット] --> Build[ビルド] --> Test{合格?}
+    Test --> Deploy[デプロイ]
+    Test --> Rollback[戻す]
+```
+
+```mermaid
+graph LR
+    Input[入力] --> Parse[解析] --> Render[描画] --> Output[出力]
+```
+
+```mermaid
+sequenceDiagram
+    Client->>Server: Request
+    Server-->>Client: Response
+    Client->>Server: Close
+```
+
+```mermaid
+classDiagram
+    Shape <|-- Circle
+    Shape <|-- Rectangle
+    Shape : +color str
+    Shape : +area() float
+    Circle : +radius float
+    Circle : +area() float
+    Rectangle : +width float
+    Rectangle : +height float
+    Rectangle : +area() float
+```
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Running
+    Running --> Done
+    Done --> [*]
+```
+
+```mermaid
+erDiagram
+    CUSTOMER ||--o{ ORDER : places
+    ORDER ||--|{ LINE-ITEM : contains
+```
+
 ## 水平線
 
 ---

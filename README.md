@@ -52,3 +52,12 @@ language tag. Supported tags (case-insensitive):
 Unrecognized language tags fall back to a single-color inline code style.
 Highlighting is disabled automatically when the output is not a TTY or
 when `NO_COLOR` is set.
+
+## Mermaid diagrams
+
+Supported diagrams:
+
+- `flowchart` / `graph TD|TB|BT|LR|RL`
+- `sequenceDiagram`
+- `classDiagram` / `classDiagram-v2`
+- `stateDiagram` / `stateDiagram-v2`
