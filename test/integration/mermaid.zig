@@ -87,6 +87,26 @@ test "unsupported diagram type emits diagnostic inside the fence followed by raw
     const allocator = std.testing.allocator;
     const source =
         \\```mermaid
+        \\gantt
+        \\    title demo
+        \\    section s
+        \\    task :a, 0, 3d
+        \\```
+        \\
+    ;
+    const rendered = try helpers.renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.startsWith(u8, rendered, "```mermaid"));
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid: diagram type not yet supported by mp]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "gantt") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "task :a, 0, 3d") != null);
+}
+
+test "erDiagram is rendered as ASCII art" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\```mermaid
         \\erDiagram
         \\    CUSTOMER ||--o{ ORDER : places
         \\```
@@ -96,9 +116,118 @@ test "unsupported diagram type emits diagnostic inside the fence followed by raw
     defer allocator.free(rendered);
 
     try std.testing.expect(std.mem.startsWith(u8, rendered, "```mermaid"));
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid: diagram type not yet supported by mp]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "erDiagram") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "CUSTOMER ||--o{ ORDER : places") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "CUSTOMER") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "ORDER") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "places") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid:") == null);
+}
+
+test "erDiagram standalone entity renders the box" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\```mermaid
+        \\erDiagram
+        \\    CUSTOMER
+        \\    ORDER {}
+        \\```
+        \\
+    ;
+    const rendered = try helpers.renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "CUSTOMER") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "ORDER") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid:") == null);
+}
+
+test "gitGraph is rendered as ASCII art" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\```mermaid
+        \\gitGraph
+        \\    commit
+        \\    branch develop
+        \\    commit
+        \\    checkout main
+        \\    commit
+        \\    merge develop
+        \\```
+        \\
+    ;
+    const rendered = try helpers.renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.startsWith(u8, rendered, "```mermaid"));
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "●") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[main]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[develop]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid:") == null);
+}
+
+test "gitGraph cherry-pick falls back to feature-not-supported diagnostic" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\```mermaid
+        \\gitGraph
+        \\    commit
+        \\    cherry-pick id: "a1"
+        \\```
+        \\
+    ;
+    const rendered = try helpers.renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid: feature not yet supported by mp]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "cherry-pick") != null);
+}
+
+test "erDiagram direction falls back to feature-not-supported diagnostic" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\```mermaid
+        \\erDiagram
+        \\    direction LR
+        \\    A ||--|| B : r
+        \\```
+        \\
+    ;
+    const rendered = try helpers.renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid: feature not yet supported by mp]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "direction LR") != null);
+}
+
+test "gitGraph TB orientation falls back to feature-not-supported diagnostic" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\```mermaid
+        \\gitGraph TB:
+        \\    commit
+        \\```
+        \\
+    ;
+    const rendered = try helpers.renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid: feature not yet supported by mp]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "gitGraph TB:") != null);
+}
+
+test "init directive in gitGraph falls back to feature-not-supported diagnostic" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\```mermaid
+        \\%%{init: { "gitGraph": { "mainBranchName": "trunk" } }}%%
+        \\gitGraph
+        \\    commit
+        \\```
+        \\
+    ;
+    const rendered = try helpers.renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid: feature not yet supported by mp]") != null);
 }
 
 test "sequenceDiagram is rendered as ASCII art" {
@@ -170,8 +299,6 @@ test "ambiguous_width wide keeps Unicode glyphs matching tables" {
 
 test "ambiguous_width shifts box width for EAW=A labels (Greek)" {
     const allocator = std.testing.allocator;
-    // "αβγ" is East Asian Width Ambiguous (1 col narrow, 2 col wide).
-    // The box width must track the mode so the label fits without overflow.
     const source =
         \\```mermaid
         \\graph TD
@@ -184,12 +311,9 @@ test "ambiguous_width shifts box width for EAW=A labels (Greek)" {
     const wide = try helpers.renderToOwnedSlice(allocator, source, .{ .ambiguous_width = .wide });
     defer allocator.free(wide);
 
-    // Both outputs must preserve the full label unbroken.
     try std.testing.expect(std.mem.indexOf(u8, narrow, "αβγ") != null);
     try std.testing.expect(std.mem.indexOf(u8, wide, "αβγ") != null);
 
-    // The longest line in the wide rendering must exceed the narrow one,
-    // reflecting the wider box drawn to hold the ambiguous-width label.
     try std.testing.expect(maxLineWidth(wide) > maxLineWidth(narrow));
 }
 
