@@ -285,7 +285,7 @@ pub const RenderSession = struct {
             if (code_fence.content.len > 0) {
                 try self.writer.writeByte('\n');
                 self.writeMermaidBody(code_fence.content) catch |err| switch (err) {
-                    error.InvalidMermaid, error.UnsupportedDiagram => try self.writeMermaidFallback(code_fence.content, err),
+                    error.InvalidMermaid, error.UnsupportedDiagram, error.UnsupportedFeature => try self.writeMermaidFallback(code_fence.content, err),
                     else => return err,
                 };
             }
@@ -321,6 +321,7 @@ pub const RenderSession = struct {
     fn writeMermaidFallback(self: *RenderSession, content: []const u8, err: mermaid.RenderError) !void {
         const label = switch (err) {
             error.UnsupportedDiagram => "[mermaid: diagram type not yet supported by mp]\n",
+            error.UnsupportedFeature => "[mermaid: feature not yet supported by mp]\n",
             error.InvalidMermaid => "[mermaid: parse error]\n",
             else => "[mermaid: render error]\n",
         };

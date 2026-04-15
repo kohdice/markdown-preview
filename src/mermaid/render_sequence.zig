@@ -7,6 +7,7 @@ const width_mod = @import("../term/width.zig");
 
 pub const RenderError = error{
     InvalidMermaid,
+    UnsupportedFeature,
     OutOfMemory,
     WriteFailed,
 };
@@ -28,6 +29,7 @@ pub fn writeSequence(
 ) RenderError!void {
     var diagram = parse.parseSource(allocator, source) catch |err| switch (err) {
         error.InvalidMermaid, error.TooManyParticipants => return error.InvalidMermaid,
+        error.UnsupportedFeature => return error.UnsupportedFeature,
         error.OutOfMemory => return error.OutOfMemory,
     };
     defer diagram.deinit();

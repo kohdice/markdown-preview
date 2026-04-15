@@ -12,6 +12,20 @@ pub const gutter_h: usize = 2;
 
 pub const Dir4 = enum { up, down, left, right };
 
+pub const Axis = enum { horizontal, vertical };
+
+pub fn axisOf(dir: Dir4) Axis {
+    return switch (dir) {
+        .up, .down => .vertical,
+        .left, .right => .horizontal,
+    };
+}
+
+pub const EdgeEndpoints = struct {
+    start_dir: Dir4,
+    end_dir: Dir4,
+};
+
 pub const SearchKey = struct { row: u32, col: u32, dir: Dir4 };
 
 pub fn cellStepW(layout: *const types.Layout) usize {
@@ -97,7 +111,7 @@ pub fn routeEdgeWithPorts(
     edge_style: types.EdgeStyle,
     glyphs: *const canvas_mod.GlyphSet,
     ambiguous: width_mod.AmbiguousWidth,
-) RouteError!void {
+) RouteError!EdgeEndpoints {
     const maybe_path = aStarPath(
         allocator,
         layout,
@@ -123,7 +137,9 @@ pub fn routeEdgeWithPorts(
         if (edge_label) |label| {
             placeEdgeLabelOnPath(canvas, label, path.items, ambiguous);
         }
-        return;
+
+        const end_dir = if (path.items.len == 0) start_dir else path.items[path.items.len - 1].dir;
+        return .{ .start_dir = start_dir, .end_dir = end_dir };
     }
 
     try drawPortFallback(
@@ -139,6 +155,8 @@ pub fn routeEdgeWithPorts(
         glyphs,
         ambiguous,
     );
+
+    return .{ .start_dir = start_dir, .end_dir = .up };
 }
 
 fn drawPortFallback(
@@ -415,7 +433,7 @@ fn drawAStarPath(
     while (i + 1 < path.len) : (i += 1) {
         const incoming = path[i].dir;
         const outgoing = path[i + 1].dir;
-        const glyph = glyphForStep(incoming, outgoing, glyphs);
+        const glyph = glyphForStep(incoming, outgoing, glyphs, edge_style);
         canvas.setGlyph(path[i].row, path[i].col, glyph);
     }
 
@@ -426,9 +444,13 @@ fn drawAStarPath(
 fn endGlyphFor(style: types.EdgeStyle, dir: Dir4, glyphs: *const canvas_mod.GlyphSet) u21 {
     return switch (style) {
         .arrow, .dotted, .thick => arrowFor(dir, glyphs),
-        .line => switch (dir) {
+        .line, .thick_line => switch (dir) {
             .up, .down => glyphs.v_line,
             .left, .right => glyphs.h_line,
+        },
+        .dotted_line => switch (dir) {
+            .up, .down => glyphs.v_line_dashed,
+            .left, .right => glyphs.h_line_dashed,
         },
     };
 }
@@ -451,33 +473,64 @@ fn arrowFor(dir: Dir4, glyphs: *const canvas_mod.GlyphSet) u21 {
     };
 }
 
-fn glyphForStep(incoming: Dir4, outgoing: Dir4, glyphs: *const canvas_mod.GlyphSet) u21 {
+pub fn paintSourceArrowHead(
+    canvas: *canvas_mod.Canvas,
+    direction: types.Direction,
+    src_top: usize,
+    src_left: usize,
+    src_cx: usize,
+    src_cy: usize,
+    layout: types.Layout,
+    glyphs: *const canvas_mod.GlyphSet,
+) void {
+    switch (direction) {
+        .top_down => {
+            if (src_top == 0) return;
+            canvas.setGlyph(src_top - 1, src_cx, glyphs.arrow_up);
+        },
+        .bottom_up => {
+            canvas.setGlyph(src_top + layout.cell_h, src_cx, glyphs.arrow_down);
+        },
+        .left_right => {
+            if (src_left == 0) return;
+            canvas.setGlyph(src_cy, src_left - 1, glyphs.arrow_left);
+        },
+        .right_left => {
+            canvas.setGlyph(src_cy, src_left + layout.cell_w, glyphs.arrow_right);
+        },
+    }
+}
+
+fn glyphForStep(incoming: Dir4, outgoing: Dir4, glyphs: *const canvas_mod.GlyphSet, edge_style: types.EdgeStyle) u21 {
+    const dashed = edge_style == .dotted or edge_style == .dotted_line;
+    const h_line = if (dashed) glyphs.h_line_dashed else glyphs.h_line;
+    const v_line = if (dashed) glyphs.v_line_dashed else glyphs.v_line;
     if (incoming == outgoing) {
         return switch (incoming) {
-            .up, .down => glyphs.v_line,
-            .left, .right => glyphs.h_line,
+            .up, .down => v_line,
+            .left, .right => h_line,
         };
     }
     return switch (incoming) {
         .down => switch (outgoing) {
             .right => glyphs.corner_bl,
             .left => glyphs.corner_br,
-            else => glyphs.v_line,
+            else => v_line,
         },
         .up => switch (outgoing) {
             .right => glyphs.corner_tl,
             .left => glyphs.corner_tr,
-            else => glyphs.v_line,
+            else => v_line,
         },
         .right => switch (outgoing) {
             .up => glyphs.corner_br,
             .down => glyphs.corner_tr,
-            else => glyphs.h_line,
+            else => h_line,
         },
         .left => switch (outgoing) {
             .up => glyphs.corner_bl,
             .down => glyphs.corner_tl,
-            else => glyphs.h_line,
+            else => h_line,
         },
     };
 }
@@ -1071,10 +1124,6 @@ test "aStarPath routes around a blocking node" {
 test "routeEdgeWithPorts fallback draws a visible edge when A* is blocked" {
     const alloc = std.testing.allocator;
 
-    // Place three stacked boxes on a 1-column canvas. from_id and to_id are the
-    // outer boxes; the middle box is a non-exempt obstacle that spans the only
-    // column. aStarPath has nowhere to bypass it, yet routeEdgeWithPorts must
-    // still emit a visible edge instead of silently dropping the relation.
     var positions = [_]types.GridPos{
         .{ .row = 0, .col = 0 },
         .{ .row = 1, .col = 0 },
@@ -1096,8 +1145,6 @@ test "routeEdgeWithPorts fallback draws a visible edge when A* is blocked" {
     var canvas = try canvas_mod.Canvas.init(alloc, canvas_rows, canvas_cols);
     defer canvas.deinit();
 
-    // Sanity check: confirm aStarPath really fails for this geometry so the
-    // test exercises the fallback rather than the happy path.
     const bottom_center_row = boxTop(&layout, 2);
     const top_center_row = boxTop(&layout, 0) + layout.cell_h - 1;
     try std.testing.expectEqual(
@@ -1105,7 +1152,7 @@ test "routeEdgeWithPorts fallback draws a visible edge when A* is blocked" {
         try aStarPath(alloc, &layout, canvas_rows, canvas_cols, 2, 0, bottom_center_row, 0, .up, top_center_row, 0),
     );
 
-    try routeEdgeWithPorts(
+    _ = try routeEdgeWithPorts(
         alloc,
         &canvas,
         &layout,
@@ -1131,10 +1178,6 @@ test "routeEdgeWithPorts fallback draws a visible edge when A* is blocked" {
 test "routeEdgeWithPorts fallback bends horizontally when ports differ in column" {
     const alloc = std.testing.allocator;
 
-    // Same stacked-box blocker as above, but now with a wider canvas and
-    // ports at opposite columns. The fallback must bridge the column gap
-    // with at least one horizontal glyph while still landing the tee and
-    // arrow at the intended endpoints.
     var positions = [_]types.GridPos{
         .{ .row = 0, .col = 0 },
         .{ .row = 1, .col = 0 },
@@ -1159,7 +1202,7 @@ test "routeEdgeWithPorts fallback bends horizontally when ports differ in column
     const start_row = boxTop(&layout, 2);
     const top_row = boxTop(&layout, 0) + layout.cell_h - 1;
 
-    try routeEdgeWithPorts(
+    _ = try routeEdgeWithPorts(
         alloc,
         &canvas,
         &layout,

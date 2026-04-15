@@ -4,6 +4,7 @@ const width_mod = @import("../term/width.zig");
 
 pub const ParseError = error{
     InvalidMermaid,
+    UnsupportedFeature,
     TooManyNodes,
     OutOfMemory,
 };
@@ -113,8 +114,34 @@ fn parseHeader(line: []const u8) ParseError!types.Direction {
     return direction;
 }
 
+fn isUnsupportedStatement(line: []const u8) bool {
+    _ = line;
+    return false;
+}
+
+fn isSilentlySkipped(line: []const u8) bool {
+    const prefixes = [_][]const u8{
+        "subgraph",
+        "classDef",
+        "class ",
+        "style ",
+        "linkStyle",
+        "direction",
+        "click",
+    };
+    for (prefixes) |kw| {
+        if (std.ascii.startsWithIgnoreCase(line, kw)) return true;
+    }
+    if (std.ascii.eqlIgnoreCase(line, "end")) return true;
+    return false;
+}
+
 fn parseContentLine(parser: *Parser, trimmed: []const u8) ParseError!void {
-    const first_arrow = findArrow(trimmed) orelse {
+    if (isSilentlySkipped(trimmed)) return;
+
+    if (isUnsupportedStatement(trimmed)) return error.UnsupportedFeature;
+
+    const first_arrow = (try findArrow(trimmed)) orelse {
         const ids = try parseNodeSpecList(parser, trimmed);
         parser.allocator.free(ids);
         return;
@@ -132,7 +159,7 @@ fn parseContentLine(parser: *Parser, trimmed: []const u8) ParseError!void {
     while (true) {
         if (current_arrow.label) |l| try validateLabel(l);
 
-        const next_arrow = findArrow(after_arrow);
+        const next_arrow = try findArrow(after_arrow);
         const rhs_text = if (next_arrow) |na|
             std.mem.trim(u8, after_arrow[0..na.start], " \t")
         else
@@ -149,6 +176,7 @@ fn parseContentLine(parser: *Parser, trimmed: []const u8) ParseError!void {
                     .to = to,
                     .label = current_arrow.label,
                     .style = current_arrow.style,
+                    .bidirectional = current_arrow.bidirectional,
                 });
             }
         }
@@ -169,53 +197,285 @@ const ArrowInfo = struct {
     len: usize,
     style: types.EdgeStyle,
     label: ?[]const u8,
+    bidirectional: bool = false,
 };
 
-fn findArrow(text: []const u8) ?ArrowInfo {
+fn findArrowAfter(text: []const u8, from: usize) ArrowFindError!?struct {
+    len: usize,
+    style: types.EdgeStyle,
+    label: ?[]const u8,
+} {
+    if (from >= text.len) return null;
+    const info = (try findArrow(text[from..])) orelse return null;
+    if (info.start != 0) return null;
+    return .{ .len = info.len, .style = info.style, .label = info.label };
+}
+
+const ArrowFindError = ParseError;
+
+fn findTextLabelArrow(text: []const u8) ArrowFindError!?ArrowInfo {
     var i: usize = 0;
     while (i < text.len) : (i += 1) {
-        if (text[i] != '-') continue;
-        if (i > 0 and text[i - 1] == '-') continue;
-
-        var dash_end = i;
-        while (dash_end < text.len and text[dash_end] == '-') : (dash_end += 1) {}
-        const dash_count = dash_end - i;
-        const has_gt = dash_end < text.len and text[dash_end] == '>';
-        const op_end = if (has_gt) dash_end + 1 else dash_end;
-
-        const style: types.EdgeStyle = if (has_gt and dash_count == 2)
+        const c = text[i];
+        const style: types.EdgeStyle = if (c == '-' and i + 1 < text.len and text[i + 1] == '-')
             .arrow
-        else if (!has_gt and dash_count == 3)
-            .line
+        else if (c == '-' and i + 1 < text.len and text[i + 1] == '.')
+            .dotted
+        else if (c == '=' and i + 1 < text.len and text[i + 1] == '=')
+            .thick
         else
             continue;
+        if (i > 0 and (text[i - 1] == c or text[i - 1] == '.' or text[i - 1] == '-' or text[i - 1] == '=')) continue;
 
-        var scan = op_end;
-        while (scan < text.len and (text[scan] == ' ' or text[scan] == '\t')) : (scan += 1) {}
+        const open_len: usize = 2;
+        if (i + open_len >= text.len or (text[i + open_len] != ' ' and text[i + open_len] != '\t')) continue;
 
-        if (scan < text.len and text[scan] == '|') {
-            scan += 1;
-            const label_start = scan;
-            while (scan < text.len and text[scan] != '|') : (scan += 1) {}
-            if (scan >= text.len) return null;
-            const label = text[label_start..scan];
-            scan += 1;
-            return .{
-                .start = i,
-                .len = scan - i,
-                .style = style,
-                .label = label,
-            };
+        const label_start = i + open_len;
+        var j = label_start;
+        while (j < text.len and (text[j] == ' ' or text[j] == '\t')) : (j += 1) {}
+        const closer_left: u8 = switch (style) {
+            .arrow => '-',
+            .dotted => '.',
+            .thick => '=',
+            else => unreachable,
+        };
+        var label_end: ?usize = null;
+        var closer_end: ?usize = null;
+        var scan = j;
+        while (scan + 3 < text.len) : (scan += 1) {
+            if (text[scan] != ' ') continue;
+            if (text[scan + 1] != closer_left) continue;
+            const mid_expected: u8 = if (style == .dotted) '-' else closer_left;
+            if (text[scan + 2] != mid_expected) continue;
+            if (text[scan + 3] != '>') continue;
+            label_end = scan;
+            closer_end = scan + 4;
+            break;
         }
+        const le = label_end orelse continue;
+        const ce = closer_end orelse continue;
+        const label = std.mem.trim(u8, text[j..le], " \t");
+        if (label.len == 0) continue;
 
         return .{
             .start = i,
-            .len = op_end - i,
+            .len = ce - i,
             .style = style,
-            .label = null,
+            .label = label,
         };
     }
     return null;
+}
+
+fn findArrow(text: []const u8) ArrowFindError!?ArrowInfo {
+    if (try findTextLabelArrow(text)) |info| return info;
+
+    var i: usize = 0;
+    while (i < text.len) : (i += 1) {
+        const c = text[i];
+
+        if (c == '<' and i + 1 < text.len and (text[i + 1] == '-' or text[i + 1] == '=')) {
+            if (try findArrowAfter(text, i + 1)) |inner| {
+                return .{
+                    .start = i,
+                    .len = inner.len + 1,
+                    .style = inner.style,
+                    .label = inner.label,
+                    .bidirectional = true,
+                };
+            }
+            continue;
+        }
+
+        if (c == '-') {
+            if (i > 0 and (text[i - 1] == '-' or text[i - 1] == '.')) continue;
+
+            var scan = i;
+            if (scan + 2 <= text.len and text[scan + 1] == '.') {
+                scan += 2;
+                if (scan < text.len and text[scan] == '-') {
+                    scan += 1;
+                    if (scan < text.len and text[scan] == '>') {
+                        return try maybeAttachLabel(text, i, scan + 1, .dotted);
+                    }
+                    return try maybeAttachLabel(text, i, scan, .dotted_line);
+                }
+                continue;
+            }
+
+            var dash_end = scan;
+            while (dash_end < text.len and text[dash_end] == '-') : (dash_end += 1) {}
+            const dash_count = dash_end - scan;
+            const has_gt = dash_end < text.len and text[dash_end] == '>';
+
+            if (has_gt and dash_count == 2) {
+                return try maybeAttachLabel(text, i, dash_end + 1, .arrow);
+            }
+            if (!has_gt and dash_count == 3) {
+                return try maybeAttachLabel(text, i, dash_end, .line);
+            }
+            continue;
+        }
+
+        if (c == '=') {
+            if (i > 0 and text[i - 1] == '=') continue;
+
+            var eq_end = i;
+            while (eq_end < text.len and text[eq_end] == '=') : (eq_end += 1) {}
+            const eq_count = eq_end - i;
+            const has_gt = eq_end < text.len and text[eq_end] == '>';
+
+            if (has_gt and eq_count == 2) {
+                return try maybeAttachLabel(text, i, eq_end + 1, .thick);
+            }
+            if (!has_gt and eq_count == 3) {
+                return try maybeAttachLabel(text, i, eq_end, .thick_line);
+            }
+            continue;
+        }
+    }
+    return null;
+}
+
+fn maybeAttachLabel(text: []const u8, start: usize, op_end: usize, style: types.EdgeStyle) ArrowFindError!ArrowInfo {
+    var scan = op_end;
+    while (scan < text.len and (text[scan] == ' ' or text[scan] == '\t')) : (scan += 1) {}
+
+    if (scan < text.len and text[scan] == '|') {
+        scan += 1;
+        const label_start = scan;
+        while (scan < text.len and text[scan] != '|') : (scan += 1) {}
+        if (scan >= text.len) return error.InvalidMermaid;
+        const label = text[label_start..scan];
+        scan += 1;
+        return .{
+            .start = start,
+            .len = scan - start,
+            .style = style,
+            .label = label,
+        };
+    }
+
+    return .{
+        .start = start,
+        .len = op_end - start,
+        .style = style,
+        .label = null,
+    };
+}
+
+const ShapeMatch = struct { shape: types.NodeShape, label: []const u8, end: usize };
+
+fn tryParseShape(text: []const u8, start: usize) ParseError!?ShapeMatch {
+    if (start >= text.len) return null;
+    const c = text[start];
+
+    if (c == '[') {
+        if (start + 1 < text.len) {
+            const next = text[start + 1];
+            if (next == '[') {
+                const body = try matchBracketed(text, start + 1, '[', ']', .subroutine) orelse return null;
+                if (body.end >= text.len or text[body.end] != ']') return error.InvalidMermaid;
+                return .{ .shape = .subroutine, .label = body.label, .end = body.end + 1 };
+            }
+            if (next == '(') {
+                const body = try matchBracketed(text, start + 1, '(', ')', .cylinder) orelse return null;
+                if (body.end >= text.len or text[body.end] != ']') return error.InvalidMermaid;
+                return .{ .shape = .cylinder, .label = body.label, .end = body.end + 1 };
+            }
+            if (next == '/') {
+                return try matchUntilPair(text, start + 2, '\\', ']', .trapezoid);
+            }
+            if (next == '\\') {
+                return try matchUntilPair(text, start + 2, '/', ']', .inv_trapezoid);
+            }
+        }
+        return try matchBracketed(text, start, '[', ']', .rect);
+    }
+
+    if (c == '(') {
+        if (start + 1 < text.len) {
+            const next = text[start + 1];
+            if (next == '[') {
+                const body = try matchBracketed(text, start + 1, '[', ']', .stadium) orelse return null;
+                if (body.end >= text.len or text[body.end] != ')') return error.InvalidMermaid;
+                return .{ .shape = .stadium, .label = body.label, .end = body.end + 1 };
+            }
+            if (next == '(') {
+                if (start + 2 < text.len and text[start + 2] == '(') {
+                    return try matchTripleParens(text, start + 3);
+                }
+                return try matchCircle(text, start + 2);
+            }
+        }
+        return try matchBracketed(text, start, '(', ')', .round);
+    }
+
+    if (c == '{') {
+        if (start + 1 < text.len and text[start + 1] == '{') {
+            return try matchHexagon(text, start + 2);
+        }
+        return try matchBracketed(text, start, '{', '}', .diamond);
+    }
+
+    if (c == '>') {
+        var j = start + 1;
+        const label_start = j;
+        while (j < text.len and text[j] != ']') : (j += 1) {}
+        if (j >= text.len) return error.InvalidMermaid;
+        return .{ .shape = .asymmetric, .label = text[label_start..j], .end = j + 1 };
+    }
+
+    return null;
+}
+
+fn matchTripleParens(text: []const u8, label_start_arg: usize) ParseError!?ShapeMatch {
+    var j = label_start_arg;
+    while (j + 2 < text.len) : (j += 1) {
+        if (text[j] == ')' and text[j + 1] == ')' and text[j + 2] == ')') {
+            return .{ .shape = .double_circle, .label = text[label_start_arg..j], .end = j + 3 };
+        }
+    }
+    return error.InvalidMermaid;
+}
+
+fn matchHexagon(text: []const u8, label_start_arg: usize) ParseError!?ShapeMatch {
+    var j = label_start_arg;
+    while (j + 1 < text.len) : (j += 1) {
+        if (text[j] == '}' and text[j + 1] == '}') {
+            return .{ .shape = .hexagon, .label = text[label_start_arg..j], .end = j + 2 };
+        }
+    }
+    return error.InvalidMermaid;
+}
+
+fn matchUntilPair(text: []const u8, label_start_arg: usize, first: u8, second: u8, shape: types.NodeShape) ParseError!?ShapeMatch {
+    var j = label_start_arg;
+    while (j + 1 < text.len) : (j += 1) {
+        if (text[j] == first and text[j + 1] == second) {
+            return .{ .shape = shape, .label = text[label_start_arg..j], .end = j + 2 };
+        }
+    }
+    return error.InvalidMermaid;
+}
+
+fn matchBracketed(text: []const u8, start: usize, open: u8, close: u8, shape: types.NodeShape) ParseError!?ShapeMatch {
+    if (start >= text.len or text[start] != open) return null;
+    var j = start + 1;
+    const label_start = j;
+    while (j < text.len and text[j] != close) : (j += 1) {}
+    if (j >= text.len) return error.InvalidMermaid;
+    return .{ .shape = shape, .label = text[label_start..j], .end = j + 1 };
+}
+
+fn matchCircle(text: []const u8, start: usize) ParseError!?ShapeMatch {
+    var j = start;
+    while (j + 1 < text.len) : (j += 1) {
+        if (text[j] == ')' and text[j + 1] == ')') {
+            return .{ .shape = .round, .label = text[start..j], .end = j + 2 };
+        }
+    }
+    return error.InvalidMermaid;
 }
 
 fn parseNodeSpecList(parser: *Parser, text: []const u8) ParseError![]types.NodeId {
@@ -233,35 +493,42 @@ fn parseNodeSpecList(parser: *Parser, text: []const u8) ParseError![]types.NodeI
             const is_alpha = (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z');
             const is_digit = b >= '0' and b <= '9';
             const is_underscore = b == '_';
+            const is_hyphen = blk: {
+                if (b != '-' or i == ident_start) break :blk false;
+                if (i + 1 >= text.len) break :blk false;
+                const nb = text[i + 1];
+                const nb_alpha = (nb >= 'a' and nb <= 'z') or (nb >= 'A' and nb <= 'Z');
+                const nb_digit = nb >= '0' and nb <= '9';
+                break :blk nb_alpha or nb_digit or nb == '_';
+            };
             if (i == ident_start) {
                 if (!is_alpha) return error.InvalidMermaid;
                 continue;
             }
-            if (!is_alpha and !is_digit and !is_underscore) break;
+            if (!is_alpha and !is_digit and !is_underscore and !is_hyphen) break;
         }
         if (i == ident_start) return error.InvalidMermaid;
         const id_text = text[ident_start..i];
 
         var shape: types.NodeShape = .implicit;
         var label: []const u8 = id_text;
-        if (i < text.len and (text[i] == '[' or text[i] == '{')) {
-            const open = text[i];
-            const close: u8 = if (open == '[') ']' else '}';
-            const s: types.NodeShape = if (open == '[') .rect else .diamond;
-            i += 1;
-            const label_start = i;
-            while (i < text.len and text[i] != close) : (i += 1) {}
-            if (i >= text.len) return error.InvalidMermaid;
-            const label_text = text[label_start..i];
-            i += 1;
-            try validateLabel(label_text);
-            shape = s;
-            label = label_text;
+        if (i < text.len) {
+            if (try tryParseShape(text, i)) |sh| {
+                try validateLabel(sh.label);
+                shape = sh.shape;
+                label = sh.label;
+                i = sh.end;
+            }
         }
 
         const id = try parser.internNode(id_text);
         if (shape != .implicit) parser.updateNode(id, shape, label);
         try ids.append(parser.allocator, id);
+
+        if (i + 2 < text.len and text[i] == ':' and text[i + 1] == ':' and text[i + 2] == ':') {
+            i += 3;
+            while (i < text.len and text[i] != ' ' and text[i] != '\t' and text[i] != '&') : (i += 1) {}
+        }
 
         while (i < text.len and (text[i] == ' ' or text[i] == '\t')) : (i += 1) {}
 
@@ -275,6 +542,171 @@ fn parseNodeSpecList(parser: *Parser, text: []const u8) ParseError![]types.NodeI
 
     if (ids.items.len == 0) return error.InvalidMermaid;
     return try ids.toOwnedSlice(parser.allocator);
+}
+
+test "parses round node A(Start)" {
+    var graph = try parseSource(std.testing.allocator, "graph TD\n    A(Start) --> B\n");
+    defer graph.deinit();
+    try std.testing.expectEqual(@as(usize, 2), graph.nodes.len);
+    try std.testing.expectEqual(types.NodeShape.round, graph.nodes[0].shape);
+    try std.testing.expectEqualStrings("Start", graph.nodes[0].label);
+}
+
+test "parses stadium node A([Start])" {
+    var graph = try parseSource(std.testing.allocator, "graph TD\n    A([Start]) --> B\n");
+    defer graph.deinit();
+    try std.testing.expectEqual(types.NodeShape.stadium, graph.nodes[0].shape);
+    try std.testing.expectEqualStrings("Start", graph.nodes[0].label);
+}
+
+test "parses circle node A((Start))" {
+    var graph = try parseSource(std.testing.allocator, "graph TD\n    A((Start)) --> B\n");
+    defer graph.deinit();
+    try std.testing.expectEqual(types.NodeShape.round, graph.nodes[0].shape);
+    try std.testing.expectEqualStrings("Start", graph.nodes[0].label);
+}
+
+test "parses dotted arrow -.->" {
+    var graph = try parseSource(std.testing.allocator, "graph TD\n    A -.-> B\n");
+    defer graph.deinit();
+    try std.testing.expectEqual(types.EdgeStyle.dotted, graph.edges[0].style);
+}
+
+test "parses thick arrow ==>" {
+    var graph = try parseSource(std.testing.allocator, "graph TD\n    A ==> B\n");
+    defer graph.deinit();
+    try std.testing.expectEqual(types.EdgeStyle.thick, graph.edges[0].style);
+}
+
+test "parses subroutine shape A[[sub]]" {
+    var graph = try parseSource(std.testing.allocator, "graph TD\n    A[[sub]] --> B\n");
+    defer graph.deinit();
+    try std.testing.expectEqual(types.NodeShape.subroutine, graph.nodes[0].shape);
+    try std.testing.expectEqualStrings("sub", graph.nodes[0].label);
+}
+
+test "parses hexagon shape A{{hex}}" {
+    var graph = try parseSource(std.testing.allocator, "graph TD\n    A{{hex}} --> B\n");
+    defer graph.deinit();
+    try std.testing.expectEqual(types.NodeShape.hexagon, graph.nodes[0].shape);
+    try std.testing.expectEqualStrings("hex", graph.nodes[0].label);
+}
+
+test "parses cylinder shape A[(db)]" {
+    var graph = try parseSource(std.testing.allocator, "graph TD\n    A[(db)] --> B\n");
+    defer graph.deinit();
+    try std.testing.expectEqual(types.NodeShape.cylinder, graph.nodes[0].shape);
+    try std.testing.expectEqualStrings("db", graph.nodes[0].label);
+}
+
+test "parses asymmetric shape A>asym]" {
+    var graph = try parseSource(std.testing.allocator, "graph TD\n    A>asym] --> B\n");
+    defer graph.deinit();
+    try std.testing.expectEqual(types.NodeShape.asymmetric, graph.nodes[0].shape);
+    try std.testing.expectEqualStrings("asym", graph.nodes[0].label);
+}
+
+test "parses trapezoid shape A[/trap\\]" {
+    var graph = try parseSource(std.testing.allocator, "graph TD\n    A[/trap\\] --> B\n");
+    defer graph.deinit();
+    try std.testing.expectEqual(types.NodeShape.trapezoid, graph.nodes[0].shape);
+}
+
+test "parses text-embedded label -- Yes -->" {
+    var graph = try parseSource(std.testing.allocator, "graph TD\n    A -- Yes --> B\n");
+    defer graph.deinit();
+    try std.testing.expectEqual(@as(usize, 1), graph.edges.len);
+    try std.testing.expectEqualStrings("Yes", graph.edges[0].label.?);
+    try std.testing.expectEqual(types.EdgeStyle.arrow, graph.edges[0].style);
+}
+
+test "parses text-embedded label -. Maybe .->" {
+    var graph = try parseSource(std.testing.allocator, "graph TD\n    A -. Maybe .-> B\n");
+    defer graph.deinit();
+    try std.testing.expectEqualStrings("Maybe", graph.edges[0].label.?);
+    try std.testing.expectEqual(types.EdgeStyle.dotted, graph.edges[0].style);
+}
+
+test "parses text-embedded label == Sure ==>" {
+    var graph = try parseSource(std.testing.allocator, "graph TD\n    A == Sure ==> B\n");
+    defer graph.deinit();
+    try std.testing.expectEqualStrings("Sure", graph.edges[0].label.?);
+    try std.testing.expectEqual(types.EdgeStyle.thick, graph.edges[0].style);
+}
+
+test "parses double-circle shape A(((X)))" {
+    var graph = try parseSource(std.testing.allocator, "graph TD\n    A(((X))) --> B\n");
+    defer graph.deinit();
+    try std.testing.expectEqual(types.NodeShape.double_circle, graph.nodes[0].shape);
+    try std.testing.expectEqualStrings("X", graph.nodes[0].label);
+}
+
+test "parses bidirectional arrow <-->" {
+    var graph = try parseSource(std.testing.allocator, "graph TD\n    A <--> B\n");
+    defer graph.deinit();
+    try std.testing.expectEqual(@as(usize, 1), graph.edges.len);
+    try std.testing.expect(graph.edges[0].bidirectional);
+    try std.testing.expectEqual(types.EdgeStyle.arrow, graph.edges[0].style);
+}
+
+test "parses bidirectional dotted <-.->" {
+    var graph = try parseSource(std.testing.allocator, "graph TD\n    A <-.-> B\n");
+    defer graph.deinit();
+    try std.testing.expect(graph.edges[0].bidirectional);
+    try std.testing.expectEqual(types.EdgeStyle.dotted, graph.edges[0].style);
+}
+
+test "parses bidirectional thick <==>" {
+    var graph = try parseSource(std.testing.allocator, "graph TD\n    A <==> B\n");
+    defer graph.deinit();
+    try std.testing.expect(graph.edges[0].bidirectional);
+    try std.testing.expectEqual(types.EdgeStyle.thick, graph.edges[0].style);
+}
+
+test "parses no-arrow dotted (-.-) as dotted_line" {
+    var graph = try parseSource(std.testing.allocator, "graph TD\n    A -.- B\n");
+    defer graph.deinit();
+    try std.testing.expectEqual(types.EdgeStyle.dotted_line, graph.edges[0].style);
+}
+
+test "parses no-arrow thick (===) as thick_line" {
+    var graph = try parseSource(std.testing.allocator, "graph TD\n    A === B\n");
+    defer graph.deinit();
+    try std.testing.expectEqual(types.EdgeStyle.thick_line, graph.edges[0].style);
+}
+
+test "silently skips click statements" {
+    var graph = try parseSource(std.testing.allocator,
+        \\graph TD
+        \\    A --> B
+        \\    click A "https://example.com"
+    );
+    defer graph.deinit();
+    try std.testing.expectEqual(@as(usize, 1), graph.edges.len);
+}
+
+test "silently skips subgraph / end" {
+    var graph = try parseSource(std.testing.allocator,
+        \\graph TD
+        \\    subgraph outer
+        \\        A --> B
+        \\    end
+        \\    B --> C
+    );
+    defer graph.deinit();
+    try std.testing.expectEqual(@as(usize, 2), graph.edges.len);
+}
+
+test "silently skips classDef / style / :::className" {
+    var graph = try parseSource(std.testing.allocator,
+        \\graph TD
+        \\    classDef warn fill:#f00
+        \\    A[Alert]:::warn --> B
+        \\    style B fill:#0f0
+    );
+    defer graph.deinit();
+    try std.testing.expectEqual(@as(usize, 1), graph.edges.len);
+    try std.testing.expectEqualStrings("Alert", graph.nodes[0].label);
 }
 
 test "parses graph TD header" {

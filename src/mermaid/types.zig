@@ -28,6 +28,14 @@ pub const NodeShape = enum {
     diamond,
     round,
     stadium,
+    circle,
+    subroutine,
+    double_circle,
+    cylinder,
+    hexagon,
+    asymmetric,
+    trapezoid,
+    inv_trapezoid,
     implicit,
 };
 
@@ -36,6 +44,8 @@ pub const EdgeStyle = enum {
     line,
     dotted,
     thick,
+    dotted_line,
+    thick_line,
 };
 
 pub const Node = struct {
@@ -50,6 +60,7 @@ pub const Edge = struct {
     to: NodeId,
     label: ?[]const u8 = null,
     style: EdgeStyle = .arrow,
+    bidirectional: bool = false,
 };
 
 pub const FlowGraph = struct {
@@ -57,10 +68,13 @@ pub const FlowGraph = struct {
     direction: Direction,
     nodes: []Node,
     edges: []Edge,
+    owned_strings: [][]u8 = &.{},
 
     pub fn deinit(self: *FlowGraph) void {
         self.allocator.free(self.nodes);
         self.allocator.free(self.edges);
+        for (self.owned_strings) |s| self.allocator.free(s);
+        if (self.owned_strings.len > 0) self.allocator.free(self.owned_strings);
     }
 };
 
@@ -90,10 +104,13 @@ pub const SequenceDiagram = struct {
     allocator: std.mem.Allocator,
     participants: []Participant,
     messages: []SequenceMessage,
+    owned_strings: [][]u8 = &.{},
 
     pub fn deinit(self: *SequenceDiagram) void {
         self.allocator.free(self.participants);
         self.allocator.free(self.messages);
+        for (self.owned_strings) |s| self.allocator.free(s);
+        if (self.owned_strings.len > 0) self.allocator.free(self.owned_strings);
     }
 };
 
@@ -121,6 +138,7 @@ pub const ClassNode = struct {
     id: NodeId,
     id_text: []const u8,
     label: []const u8,
+    stereotype: ?[]const u8 = null,
     members: []ClassMember,
 };
 
@@ -129,19 +147,66 @@ pub const ClassRelation = struct {
     to: NodeId,
     kind: ClassRelationKind,
     label: ?[]const u8 = null,
+    from_cardinality: ?[]const u8 = null,
+    to_cardinality: ?[]const u8 = null,
 };
 
 pub const ClassDiagram = struct {
     allocator: std.mem.Allocator,
     classes: []ClassNode,
     relations: []ClassRelation,
+    owned_labels: [][]u8 = &.{},
 
     pub fn deinit(self: *ClassDiagram) void {
         for (self.classes) |c| self.allocator.free(c.members);
         self.allocator.free(self.classes);
         self.allocator.free(self.relations);
+        for (self.owned_labels) |s| self.allocator.free(s);
+        if (self.owned_labels.len > 0) self.allocator.free(self.owned_labels);
     }
 };
+
+pub fn normalizeBrTags(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+    var needs_alloc = false;
+    var i: usize = 0;
+    while (i < text.len) : (i += 1) {
+        if (text[i] == '<' and brTagLen(text, i) != null) {
+            needs_alloc = true;
+            break;
+        }
+    }
+    if (!needs_alloc) return text;
+
+    var out = try std.ArrayListUnmanaged(u8).initCapacity(allocator, text.len);
+    errdefer out.deinit(allocator);
+    var j: usize = 0;
+    while (j < text.len) {
+        if (text[j] == '<') {
+            if (brTagLen(text, j)) |n| {
+                try out.append(allocator, ' ');
+                j += n;
+                continue;
+            }
+        }
+        try out.append(allocator, text[j]);
+        j += 1;
+    }
+    return try out.toOwnedSlice(allocator);
+}
+
+fn brTagLen(text: []const u8, i: usize) ?usize {
+    if (i + 4 > text.len) return null;
+    if (text[i] != '<') return null;
+    const b1 = text[i + 1];
+    const b2 = text[i + 2];
+    if (!((b1 == 'b' or b1 == 'B') and (b2 == 'r' or b2 == 'R'))) return null;
+    var j = i + 3;
+    while (j < text.len and (text[j] == ' ' or text[j] == '\t')) : (j += 1) {}
+    if (j < text.len and text[j] == '/') j += 1;
+    while (j < text.len and (text[j] == ' ' or text[j] == '\t')) : (j += 1) {}
+    if (j >= text.len or text[j] != '>') return null;
+    return j + 1 - i;
+}
 
 pub const GridPos = struct { row: usize, col: usize };
 

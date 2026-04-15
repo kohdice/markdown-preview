@@ -8,6 +8,7 @@ const width_mod = @import("../term/width.zig");
 
 pub const RenderError = error{
     InvalidMermaid,
+    UnsupportedFeature,
     OutOfMemory,
     WriteFailed,
 };
@@ -25,6 +26,7 @@ pub fn writeClass(
 ) RenderError!void {
     var diagram = parse.parseSource(allocator, source) catch |err| switch (err) {
         error.InvalidMermaid, error.TooManyClasses => return error.InvalidMermaid,
+        error.UnsupportedFeature => return error.UnsupportedFeature,
         error.OutOfMemory => return error.OutOfMemory,
     };
     defer diagram.deinit();
@@ -139,6 +141,9 @@ fn computeRequiredBoxWidth(diagram: *const types.ClassDiagram, ambiguous: width_
     var max_w: usize = 0;
     for (diagram.classes) |c| {
         max_w = @max(max_w, width_mod.displayWidth(c.label, ambiguous));
+        if (c.stereotype) |st| {
+            max_w = @max(max_w, width_mod.displayWidth(st, ambiguous) + 2);
+        }
         for (c.members) |m| {
             const prefix_w: usize = if (m.visibility == .unknown) 0 else 1;
             max_w = @max(max_w, width_mod.displayWidth(m.text, ambiguous) + prefix_w + 1);
@@ -160,9 +165,20 @@ fn drawClassBox(
     canvas.drawRect(top, left, height, width, glyphs);
 
     const inner_w = width - 2;
+    var name_row = top + 1;
+
+    if (cls.stereotype) |st| {
+        var buf: [96]u8 = undefined;
+        const wrapped = std.fmt.bufPrint(&buf, "«{s}»", .{st}) catch st;
+        const stereo_w = width_mod.displayWidth(wrapped, ambiguous);
+        const stereo_off = if (inner_w > stereo_w) (inner_w - stereo_w) / 2 else 0;
+        canvas.drawLabel(name_row, left + 1 + stereo_off, wrapped, ambiguous);
+        name_row += 1;
+    }
+
     const label_w = width_mod.displayWidth(cls.label, ambiguous);
     const name_col_off = if (inner_w > label_w) (inner_w - label_w) / 2 else 0;
-    canvas.drawLabel(top + 1, left + 1 + name_col_off, cls.label, ambiguous);
+    canvas.drawLabel(name_row, left + 1 + name_col_off, cls.label, ambiguous);
 
     if (cls.members.len == 0) return;
 
@@ -170,9 +186,10 @@ fn drawClassBox(
     const has_fields = counts.fields > 0;
     const has_methods = counts.methods > 0;
 
-    drawDivider(canvas, top + 2, left, width, glyphs);
+    const divider_row = name_row + 1;
+    drawDivider(canvas, divider_row, left, width, glyphs);
 
-    var row = top + 3;
+    var row = divider_row + 1;
     if (has_fields) {
         for (cls.members) |m| {
             if (m.kind != .field) continue;
@@ -242,10 +259,11 @@ fn countByKind(cls: *const types.ClassNode) MemberCounts {
 }
 
 fn actualBoxHeight(cls: *const types.ClassNode) usize {
-    if (cls.members.len == 0) return 3;
+    const stereotype_rows: usize = if (cls.stereotype != null) 1 else 0;
+    if (cls.members.len == 0) return 3 + stereotype_rows;
     const counts = countByKind(cls);
     const extra_divider: usize = if (counts.fields > 0 and counts.methods > 0) 1 else 0;
-    return 4 + counts.fields + counts.methods + extra_divider;
+    return 4 + stereotype_rows + counts.fields + counts.methods + extra_divider;
 }
 
 fn drawRelation(
@@ -272,7 +290,7 @@ fn drawRelation(
     const goal_row = tgt_top + tgt_box_h;
     const goal_col = tgt_left + layout.cell_w / 2;
 
-    try route_mod.routeEdgeWithPorts(
+    _ = try route_mod.routeEdgeWithPorts(
         allocator,
         canvas,
         layout,
@@ -290,6 +308,33 @@ fn drawRelation(
     );
 
     replaceArrowHead(canvas, tgt_top, tgt_left, tgt_box_h, layout.cell_w, rel, glyphs);
+
+    if (rel.from_cardinality) |c| drawCardinalityLabel(canvas, start_row, start_col, c, ambiguous, .source);
+    if (rel.to_cardinality) |c| drawCardinalityLabel(canvas, goal_row, goal_col, c, ambiguous, .target);
+}
+
+const CardinalitySide = enum { source, target };
+
+fn drawCardinalityLabel(
+    canvas: *canvas_mod.Canvas,
+    endpoint_row: usize,
+    endpoint_col: usize,
+    text: []const u8,
+    ambiguous: width_mod.AmbiguousWidth,
+    side: CardinalitySide,
+) void {
+    if (text.len == 0) return;
+    const text_w = width_mod.displayWidth(text, ambiguous);
+    const col = endpoint_col + 2;
+    if (col + text_w > canvas.cols) return;
+
+    const row = switch (side) {
+        .source => if (endpoint_row == 0) return else endpoint_row - 1,
+        .target => endpoint_row + 1,
+    };
+    if (row >= canvas.rows) return;
+
+    canvas.drawLabel(row, col, text, ambiguous);
 }
 
 fn replaceArrowHead(

@@ -13,6 +13,7 @@ const width_mod = @import("../term/width.zig");
 pub const RenderError = error{
     InvalidMermaid,
     UnsupportedDiagram,
+    UnsupportedFeature,
     OutOfMemory,
     WriteFailed,
 };
@@ -107,6 +108,7 @@ fn writeClass(
         .ambiguous_width = opts.ambiguous_width,
     }) catch |err| switch (err) {
         error.InvalidMermaid => return error.InvalidMermaid,
+        error.UnsupportedFeature => return error.UnsupportedFeature,
         error.OutOfMemory => return error.OutOfMemory,
         error.WriteFailed => return error.WriteFailed,
     };
@@ -123,6 +125,7 @@ fn writeSequence(
         .ambiguous_width = opts.ambiguous_width,
     }) catch |err| switch (err) {
         error.InvalidMermaid => return error.InvalidMermaid,
+        error.UnsupportedFeature => return error.UnsupportedFeature,
         error.OutOfMemory => return error.OutOfMemory,
         error.WriteFailed => return error.WriteFailed,
     };
@@ -136,6 +139,7 @@ fn writeState(
 ) RenderError!void {
     var graph = parse_state.parseSource(allocator, source) catch |err| switch (err) {
         error.InvalidMermaid => return error.InvalidMermaid,
+        error.UnsupportedFeature => return error.UnsupportedFeature,
         error.TooManyNodes => return error.InvalidMermaid,
         error.OutOfMemory => return error.OutOfMemory,
     };
@@ -151,6 +155,7 @@ fn writeFlowchart(
 ) RenderError!void {
     var graph = parse_flowchart.parseSource(allocator, source) catch |err| switch (err) {
         error.InvalidMermaid => return error.InvalidMermaid,
+        error.UnsupportedFeature => return error.UnsupportedFeature,
         error.TooManyNodes => return error.InvalidMermaid,
         error.OutOfMemory => return error.OutOfMemory,
     };
@@ -188,7 +193,12 @@ fn renderFlowGraph(
         const left = route_mod.boxLeft(&layout, pos.col);
         switch (node.shape) {
             .diamond => canvas.drawDiamondBox(top, left, layout.cell_h, layout.cell_w, &glyphs),
-            .round, .stadium => canvas.drawRoundBox(top, left, layout.cell_h, layout.cell_w, &glyphs),
+            .round, .stadium, .circle => canvas.drawRoundBox(top, left, layout.cell_h, layout.cell_w, &glyphs),
+            .subroutine, .double_circle => canvas.drawDoubleBox(top, left, layout.cell_h, layout.cell_w, &glyphs),
+            .cylinder => canvas.drawCylinderBox(top, left, layout.cell_h, layout.cell_w, &glyphs),
+            .hexagon => canvas.drawHexagonBox(top, left, layout.cell_h, layout.cell_w, &glyphs),
+            .asymmetric => canvas.drawAsymmetricBox(top, left, layout.cell_h, layout.cell_w, &glyphs),
+            .trapezoid, .inv_trapezoid => canvas.drawRect(top, left, layout.cell_h, layout.cell_w, &glyphs),
             .rect, .implicit => canvas.drawRect(top, left, layout.cell_h, layout.cell_w, &glyphs),
         }
         const label = layout.truncated_labels[i];
@@ -203,6 +213,14 @@ fn renderFlowGraph(
         route_mod.routeEdge(allocator, &canvas, &layout, edge, graph.direction, &glyphs, opts.ambiguous_width) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
         };
+        if (edge.bidirectional) {
+            const src_pos = layout.positions[edge.from];
+            const src_top = route_mod.boxTop(&layout, src_pos.row);
+            const src_left = route_mod.boxLeft(&layout, src_pos.col);
+            const src_cx = src_left + layout.cell_w / 2;
+            const src_cy = src_top + layout.cell_h / 2;
+            route_mod.paintSourceArrowHead(&canvas, graph.direction, src_top, src_left, src_cx, src_cy, layout, &glyphs);
+        }
     }
 
     route_mod.mergeJunctions(allocator, &canvas, &glyphs) catch |err| switch (err) {

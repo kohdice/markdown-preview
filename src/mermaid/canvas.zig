@@ -11,6 +11,8 @@ pub const Cell = struct {
 pub const GlyphSet = struct {
     h_line: u21,
     v_line: u21,
+    h_line_dashed: u21,
+    v_line_dashed: u21,
     corner_tl: u21,
     corner_tr: u21,
     corner_bl: u21,
@@ -32,10 +34,18 @@ pub const GlyphSet = struct {
     round_tr: u21,
     round_bl: u21,
     round_br: u21,
+    h_line_double: u21,
+    v_line_double: u21,
+    corner_tl_double: u21,
+    corner_tr_double: u21,
+    corner_bl_double: u21,
+    corner_br_double: u21,
 
     pub const unicode: GlyphSet = .{
         .h_line = '─',
         .v_line = '│',
+        .h_line_dashed = '╌',
+        .v_line_dashed = '╎',
         .corner_tl = '┌',
         .corner_tr = '┐',
         .corner_bl = '└',
@@ -57,6 +67,12 @@ pub const GlyphSet = struct {
         .round_tr = '╮',
         .round_bl = '╰',
         .round_br = '╯',
+        .h_line_double = '═',
+        .v_line_double = '║',
+        .corner_tl_double = '╔',
+        .corner_tr_double = '╗',
+        .corner_bl_double = '╚',
+        .corner_br_double = '╝',
     };
 };
 
@@ -153,6 +169,55 @@ pub const Canvas = struct {
         while (r + 1 < top + h) : (r += 1) {
             self.setGlyph(r, left, glyphs.v_line);
             self.setGlyph(r, left + w - 1, glyphs.v_line);
+        }
+    }
+
+    pub fn drawDoubleBox(self: *Canvas, top: usize, left: usize, h: usize, w: usize, glyphs: *const GlyphSet) void {
+        if (h < 2 or w < 2) return;
+        self.setGlyph(top, left, glyphs.corner_tl_double);
+        self.setGlyph(top, left + w - 1, glyphs.corner_tr_double);
+        self.setGlyph(top + h - 1, left, glyphs.corner_bl_double);
+        self.setGlyph(top + h - 1, left + w - 1, glyphs.corner_br_double);
+
+        var c = left + 1;
+        while (c + 1 < left + w) : (c += 1) {
+            self.setGlyph(top, c, glyphs.h_line_double);
+            self.setGlyph(top + h - 1, c, glyphs.h_line_double);
+        }
+        var r = top + 1;
+        while (r + 1 < top + h) : (r += 1) {
+            self.setGlyph(r, left, glyphs.v_line_double);
+            self.setGlyph(r, left + w - 1, glyphs.v_line_double);
+        }
+    }
+
+    pub fn drawCylinderBox(self: *Canvas, top: usize, left: usize, h: usize, w: usize, glyphs: *const GlyphSet) void {
+        self.drawRect(top, left, h, w, glyphs);
+        if (h < 4) return;
+        const divider_row = top + 1;
+        var c = left + 1;
+        while (c + 1 < left + w) : (c += 1) {
+            self.setGlyph(divider_row, c, glyphs.h_line);
+        }
+        self.setGlyph(divider_row, left, glyphs.tee_l);
+        self.setGlyph(divider_row, left + w - 1, glyphs.tee_r);
+    }
+
+    pub fn drawHexagonBox(self: *Canvas, top: usize, left: usize, h: usize, w: usize, glyphs: *const GlyphSet) void {
+        self.drawRect(top, left, h, w, glyphs);
+        if (h < 2 or w < 2) return;
+        self.setGlyph(top, left, glyphs.diamond_tl);
+        self.setGlyph(top, left + w - 1, glyphs.diamond_tr);
+        self.setGlyph(top + h - 1, left, glyphs.diamond_bl);
+        self.setGlyph(top + h - 1, left + w - 1, glyphs.diamond_br);
+    }
+
+    pub fn drawAsymmetricBox(self: *Canvas, top: usize, left: usize, h: usize, w: usize, glyphs: *const GlyphSet) void {
+        self.drawRect(top, left, h, w, glyphs);
+        if (h < 2 or w < 2) return;
+        var r = top;
+        while (r < top + h) : (r += 1) {
+            self.setGlyph(r, left, '>');
         }
     }
 
