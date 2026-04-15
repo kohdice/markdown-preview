@@ -55,9 +55,56 @@ when `NO_COLOR` is set.
 
 ## Mermaid diagrams
 
-Supported diagrams:
+The following diagram types are rendered as ASCII art.
 
-- `flowchart` / `graph TD|TB|BT|LR|RL`
-- `sequenceDiagram`
-- `classDiagram` / `classDiagram-v2`
-- `stateDiagram` / `stateDiagram-v2`
+### `flowchart` / `graph`
+
+- Directions: `TD`, `TB`, `BT`, `LR`, `RL`
+- Node shapes: `[rect]`, `(round)`, `([stadium])`, `((circle))`, `{diamond}`,
+  `[[subroutine]]`, `{{hexagon}}`, `[(cylinder)]`, `>asym]`, `[/trap\]`,
+  `[\trap/]`, `(((double-circle)))`
+- Edges: `-->`, `---`, `-.->`, `==>`, `-.-`, `===`,
+  bidirectional `<-->`, `<-.->`, `<==>`
+- Labelled arrows: `-->|label|`, `-- label -->`
+- `&` fan-out, hyphenated identifiers (`feature-login`)
+
+### `sequenceDiagram`
+
+- `participant A` / `actor U` with `as` aliases
+- Message arrows: `->>`, `-->>`, `->`, `-->`, `-x`, `--x`, `-)`, `--)`
+- Activation shortcuts: `->>+`, `->>-`
+- `<br>` / `<BR>` / `<br/>` normalisation in labels
+
+### `classDiagram` / `classDiagram-v2`
+
+- Relations: `<|--`, `*--`, `o--`, `-->`, `..>`, `--` (and reverses)
+- Visibility: `+`, `-`, `#`, `~`
+- Fields and methods (methods accept return types: `+get(k) V`)
+- Block form: `class X { ... }`
+- Stereotypes: `<<interface>>`, `<<abstract>>` — inside a block body,
+  inline `class Foo { <<interface>> }`, or trailing `class Foo <<interface>>`
+- Multiplicity: `"1" --> "*"`
+- Generics: `class List~T~` (rendered as `List<T>`)
+- `namespace Foo { ... }`
+
+### `stateDiagram` / `stateDiagram-v2`
+
+- `[*]` initial / final
+- Transitions with labels: `s1 --> s2 : event`
+- Alias: `state "Description" as S`
+- Inline description: `S : text`
+- `<br>` normalisation in labels
+
+### `erDiagram`
+
+- Relations: `A CARD--CARD B : label`
+- Entities: `E { TYPE NAME [PK|FK|UK] }`, standalone `E`, `E {}`
+- Cardinality: `||`, `|o`, `o|`, `o{`, `}o`, `|{`, `}|`
+- Identifying `--` and non-identifying `..`
+
+### `gitGraph`
+
+- `commit`, `branch`, `checkout` / `switch`, `merge`
+- `commit` / `merge` options: `id:"..."`, `tag:"..."`,
+  `type: NORMAL|REVERSE|HIGHLIGHT`
+- Headers: `gitGraph`, `gitGraph:`, `gitGraph LR:`

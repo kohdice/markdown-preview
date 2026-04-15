@@ -201,56 +201,126 @@ fi
 
 ## Mermaid 図
 
-`flowchart` / `graph`、`sequenceDiagram`、`classDiagram`、
-`stateDiagram(-v2)` は ASCII アートとしてその場で描画されます。
-それ以外の Mermaid 図種別 (`erDiagram`, `gantt`, `pie`, `journey`, …)
-は認識されますが未実装のため、元のソースをそのまま残す形で
-フォールバック表示され、内容は失われません。
+以下の Mermaid 図は ASCII アートとしてその場で描画されます。
 
 ```mermaid
-graph TD
-    Commit[コミット] --> Build[ビルド] --> Test{合格?}
-    Test --> Deploy[デプロイ]
-    Test --> Rollback[戻す]
+flowchart TD
+    A(Input) --> B[Lexer]
+    B --> C[Parser]
+    C --> D{Valid?}
+    D -->|yes| E[Render]
+    D -->|no| F[Report error]
+    E --> G([Done])
+    F --> G
 ```
 
 ```mermaid
-graph LR
-    Input[入力] --> Parse[解析] --> Render[描画] --> Output[出力]
+flowchart LR
+    Src(Markdown) --> Lex[Lexer]
+    Lex --> AST[AST Builder]
+    AST --> Render[Renderer]
+    Render --> Out([ANSI output])
 ```
 
 ```mermaid
 sequenceDiagram
-    Client->>Server: Request
-    Server-->>Client: Response
-    Client->>Server: Close
+    participant U as User
+    participant B as Browser
+    participant API
+    participant DB
+
+    U->>B: Open /login
+    B->>API: POST /login
+    API->>DB: SELECT user
+    DB-->>API: user row
+    API-->>B: 200 OK + token
+    B-->>U: render dashboard
 ```
 
 ```mermaid
 classDiagram
-    Shape <|-- Circle
-    Shape <|-- Rectangle
-    Shape : +color str
-    Shape : +area() float
-    Circle : +radius float
-    Circle : +area() float
-    Rectangle : +width float
-    Rectangle : +height float
-    Rectangle : +area() float
+    class Repository {
+        <<interface>>
+        +findById(id) Entity
+        +save(entity) void
+        +delete(id) void
+    }
+    class UserRepository {
+        -db Database
+        +findById(id) User
+        +save(user) void
+        +delete(id) void
+        +findByEmail(email) User
+    }
+    class User {
+        +id int
+        +email str
+        +name str
+        +hashedPassword str
+        +verify(password) bool
+    }
+    Repository <|.. UserRepository
+    UserRepository o-- User
 ```
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Idle
-    Idle --> Running
-    Running --> Done
-    Done --> [*]
+    state "Waiting for payment" as Pending
+    state "Payment confirmed" as Confirmed
+    state "Being shipped" as Shipped
+
+    [*] --> Pending
+    Pending --> Confirmed : payment_received
+    Confirmed --> Shipped : dispatched
+    Shipped --> Delivered : arrived
+    Delivered --> [*]
 ```
 
 ```mermaid
 erDiagram
-    CUSTOMER ||--o{ ORDER : places
-    ORDER ||--|{ LINE-ITEM : contains
+    authors ||--o{ books : writes
+    categories ||--o{ book_categories : tags
+    books ||--o{ book_categories : classified_as
+
+    authors {
+        INT id PK
+        VARCHAR name
+        VARCHAR email
+        DATETIME created_at
+    }
+    books {
+        INT id PK
+        INT author_id FK
+        VARCHAR title
+        INT price
+        DATE published_at
+    }
+    categories {
+        INT id PK
+        VARCHAR name
+        VARCHAR slug
+    }
+    book_categories {
+        INT book_id FK
+        INT category_id FK
+    }
+```
+
+```mermaid
+gitGraph
+    commit id: "init"
+    commit tag: "v0.9"
+    branch develop
+    commit
+    branch feature
+    commit
+    commit
+    checkout develop
+    merge feature
+    commit
+    checkout main
+    merge develop tag: "v1.0" type: HIGHLIGHT
+    commit
 ```
 
 ## 水平線

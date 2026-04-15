@@ -201,56 +201,126 @@ Line 3 with indentation:
 
 ## Mermaid Diagrams
 
-`flowchart` / `graph`, `sequenceDiagram`, `classDiagram`, and
-`stateDiagram(-v2)` are rendered as ASCII art in place. Other Mermaid
-diagram types (`erDiagram`, `gantt`, `pie`, `journey`, …) are recognised
-but not yet rendered; they fall through to the original source with a
-notice so the content is never lost.
+The following Mermaid diagrams are rendered as ASCII art in place.
 
 ```mermaid
-graph TD
-    Commit --> Build --> Test{Pass?}
-    Test --> Deploy
-    Test --> Rollback
+flowchart TD
+    A(Input) --> B[Lexer]
+    B --> C[Parser]
+    C --> D{Valid?}
+    D -->|yes| E[Render]
+    D -->|no| F[Report error]
+    E --> G([Done])
+    F --> G
 ```
 
 ```mermaid
-graph LR
-    Input --> Parse --> Render --> Output
+flowchart LR
+    Src(Markdown) --> Lex[Lexer]
+    Lex --> AST[AST Builder]
+    AST --> Render[Renderer]
+    Render --> Out([ANSI output])
 ```
 
 ```mermaid
 sequenceDiagram
-    Client->>Server: Request
-    Server-->>Client: Response
-    Client->>Server: Close
+    participant U as User
+    participant B as Browser
+    participant API
+    participant DB
+
+    U->>B: Open /login
+    B->>API: POST /login
+    API->>DB: SELECT user
+    DB-->>API: user row
+    API-->>B: 200 OK + token
+    B-->>U: render dashboard
 ```
 
 ```mermaid
 classDiagram
-    Shape <|-- Circle
-    Shape <|-- Rectangle
-    Shape : +color str
-    Shape : +area() float
-    Circle : +radius float
-    Circle : +area() float
-    Rectangle : +width float
-    Rectangle : +height float
-    Rectangle : +area() float
+    class Repository {
+        <<interface>>
+        +findById(id) Entity
+        +save(entity) void
+        +delete(id) void
+    }
+    class UserRepository {
+        -db Database
+        +findById(id) User
+        +save(user) void
+        +delete(id) void
+        +findByEmail(email) User
+    }
+    class User {
+        +id int
+        +email str
+        +name str
+        +hashedPassword str
+        +verify(password) bool
+    }
+    Repository <|.. UserRepository
+    UserRepository o-- User
 ```
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Idle
-    Idle --> Running
-    Running --> Done
-    Done --> [*]
+    state "Waiting for payment" as Pending
+    state "Payment confirmed" as Confirmed
+    state "Being shipped" as Shipped
+
+    [*] --> Pending
+    Pending --> Confirmed : payment_received
+    Confirmed --> Shipped : dispatched
+    Shipped --> Delivered : arrived
+    Delivered --> [*]
 ```
 
 ```mermaid
 erDiagram
-    CUSTOMER ||--o{ ORDER : places
-    ORDER ||--|{ LINE-ITEM : contains
+    authors ||--o{ books : writes
+    categories ||--o{ book_categories : tags
+    books ||--o{ book_categories : classified_as
+
+    authors {
+        INT id PK
+        VARCHAR name
+        VARCHAR email
+        DATETIME created_at
+    }
+    books {
+        INT id PK
+        INT author_id FK
+        VARCHAR title
+        INT price
+        DATE published_at
+    }
+    categories {
+        INT id PK
+        VARCHAR name
+        VARCHAR slug
+    }
+    book_categories {
+        INT book_id FK
+        INT category_id FK
+    }
+```
+
+```mermaid
+gitGraph
+    commit id: "init"
+    commit tag: "v0.9"
+    branch develop
+    commit
+    branch feature
+    commit
+    commit
+    checkout develop
+    merge feature
+    commit
+    checkout main
+    merge develop tag: "v1.0" type: HIGHLIGHT
+    commit
 ```
 
 ## Horizontal Rule
