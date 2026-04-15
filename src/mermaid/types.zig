@@ -166,6 +166,97 @@ pub const ClassDiagram = struct {
     }
 };
 
+pub const ErCardinality = enum {
+    zero_or_one,
+    exactly_one,
+    zero_or_many,
+    one_or_many,
+};
+
+pub const ErAttributeMark = packed struct(u3) {
+    pk: bool = false,
+    fk: bool = false,
+    uk: bool = false,
+
+    pub const none: ErAttributeMark = .{};
+
+    pub fn isEmpty(self: ErAttributeMark) bool {
+        return !(self.pk or self.fk or self.uk);
+    }
+
+    pub fn eql(a: ErAttributeMark, b: ErAttributeMark) bool {
+        return a.pk == b.pk and a.fk == b.fk and a.uk == b.uk;
+    }
+};
+
+pub const ErAttribute = struct {
+    type_text: []const u8,
+    name: []const u8,
+    mark: ErAttributeMark = .{},
+    comment: ?[]const u8 = null,
+};
+
+pub const ErEntity = struct {
+    id: NodeId,
+    id_text: []const u8,
+    attributes: []ErAttribute,
+};
+
+pub const ErRelation = struct {
+    from: NodeId,
+    to: NodeId,
+    left: ErCardinality,
+    right: ErCardinality,
+    identifying: bool,
+    label: []const u8,
+};
+
+pub const ErDiagram = struct {
+    allocator: std.mem.Allocator,
+    entities: []ErEntity,
+    relations: []ErRelation,
+    owned_strings: [][]u8 = &.{},
+
+    pub fn deinit(self: *ErDiagram) void {
+        for (self.entities) |e| self.allocator.free(e.attributes);
+        self.allocator.free(self.entities);
+        self.allocator.free(self.relations);
+        for (self.owned_strings) |s| self.allocator.free(s);
+        if (self.owned_strings.len > 0) self.allocator.free(self.owned_strings);
+    }
+};
+
+pub const GitCommitType = enum { normal, reverse, highlight };
+
+pub const GitCommit = struct {
+    index: u16,
+    lane: u16,
+    id_text: ?[]const u8,
+    tag: ?[]const u8,
+    commit_type: GitCommitType = .normal,
+    merge_from_lane: ?u16 = null,
+    merge_from_index: ?u16 = null,
+};
+
+pub const GitBranch = struct {
+    name: []const u8,
+    lane: u16,
+    created_at: u16,
+    parent_lane: ?u16,
+    fork_commit_index: ?u16 = null,
+};
+
+pub const GitGraph = struct {
+    allocator: std.mem.Allocator,
+    branches: []GitBranch,
+    commits: []GitCommit,
+
+    pub fn deinit(self: *GitGraph) void {
+        self.allocator.free(self.branches);
+        self.allocator.free(self.commits);
+    }
+};
+
 pub fn normalizeBrTags(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     var needs_alloc = false;
     var i: usize = 0;

@@ -8,6 +8,10 @@ pub const render_sequence = @import("mermaid/render_sequence.zig");
 pub const parse_class = @import("mermaid/parse_class.zig");
 pub const render_class = @import("mermaid/render_class.zig");
 pub const parse_state = @import("mermaid/parse_state.zig");
+pub const parse_er = @import("mermaid/parse_er.zig");
+pub const render_er = @import("mermaid/render_er.zig");
+pub const parse_git = @import("mermaid/parse_git.zig");
+pub const render_git = @import("mermaid/render_git.zig");
 pub const render = @import("mermaid/render.zig");
 
 pub const RenderError = render.RenderError;
@@ -25,5 +29,9 @@ test {
     _ = @import("mermaid/parse_class.zig");
     _ = @import("mermaid/render_class.zig");
     _ = @import("mermaid/parse_state.zig");
+    _ = @import("mermaid/parse_er.zig");
+    _ = @import("mermaid/render_er.zig");
+    _ = @import("mermaid/parse_git.zig");
+    _ = @import("mermaid/render_git.zig");
     _ = @import("mermaid/render.zig");
 }

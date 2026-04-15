@@ -6,6 +6,8 @@ const route_mod = @import("route.zig");
 const canvas_mod = @import("canvas.zig");
 const render_sequence = @import("render_sequence.zig");
 const render_class = @import("render_class.zig");
+const render_er = @import("render_er.zig");
+const render_git = @import("render_git.zig");
 const parse_state = @import("parse_state.zig");
 const theme = @import("../term/theme.zig");
 const width_mod = @import("../term/width.zig");
@@ -46,7 +48,8 @@ const DiagramKind = enum {
 
 pub fn classifyHeader(source: []const u8) DiagramKind {
     const line = firstMeaningfulLine(source) orelse return .unknown;
-    const token = leadingToken(line);
+    const raw_token = leadingToken(line);
+    const token = std.mem.trimRight(u8, raw_token, ":");
 
     if (std.ascii.eqlIgnoreCase(token, "graph")) return .flowchart;
     if (std.ascii.eqlIgnoreCase(token, "flowchart")) return .flowchart;
@@ -81,13 +84,13 @@ pub fn writeMermaid(
         .sequence => writeSequence(writer, allocator, source, opts),
         .class_ => writeClass(writer, allocator, source, opts),
         .state => writeState(writer, allocator, source, opts),
-        .er,
+        .er => writeEr(writer, allocator, source, opts),
+        .git_graph => writeGit(writer, allocator, source, opts),
         .journey,
         .gantt,
         .pie,
         .mindmap,
         .timeline,
-        .git_graph,
         .quadrant,
         .xychart,
         .sankey,
@@ -104,6 +107,40 @@ fn writeClass(
     opts: Options,
 ) RenderError!void {
     render_class.writeClass(writer, allocator, source, .{
+        .wrap_width = opts.wrap_width,
+        .ambiguous_width = opts.ambiguous_width,
+    }) catch |err| switch (err) {
+        error.InvalidMermaid => return error.InvalidMermaid,
+        error.UnsupportedFeature => return error.UnsupportedFeature,
+        error.OutOfMemory => return error.OutOfMemory,
+        error.WriteFailed => return error.WriteFailed,
+    };
+}
+
+fn writeEr(
+    writer: *std.io.Writer,
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    opts: Options,
+) RenderError!void {
+    render_er.writeEr(writer, allocator, source, .{
+        .wrap_width = opts.wrap_width,
+        .ambiguous_width = opts.ambiguous_width,
+    }) catch |err| switch (err) {
+        error.InvalidMermaid => return error.InvalidMermaid,
+        error.UnsupportedFeature => return error.UnsupportedFeature,
+        error.OutOfMemory => return error.OutOfMemory,
+        error.WriteFailed => return error.WriteFailed,
+    };
+}
+
+fn writeGit(
+    writer: *std.io.Writer,
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    opts: Options,
+) RenderError!void {
+    render_git.writeGit(writer, allocator, source, .{
         .wrap_width = opts.wrap_width,
         .ambiguous_width = opts.ambiguous_width,
     }) catch |err| switch (err) {
@@ -276,7 +313,7 @@ test "classifyHeader skips leading comments and blank lines" {
     try std.testing.expectEqual(DiagramKind.flowchart, classifyHeader(source));
 }
 
-test "writeMermaid returns UnsupportedDiagram for erDiagram" {
+test "writeMermaid returns UnsupportedDiagram for gantt" {
     var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
 
@@ -287,7 +324,87 @@ test "writeMermaid returns UnsupportedDiagram for erDiagram" {
         .ambiguous_width = .narrow,
     };
 
-    try std.testing.expectError(error.UnsupportedDiagram, writeMermaid(&sink.writer, std.testing.allocator, "erDiagram\n    CUSTOMER ||--o{ ORDER : places\n", opts));
+    try std.testing.expectError(error.UnsupportedDiagram, writeMermaid(&sink.writer, std.testing.allocator, "gantt\n    title demo\n", opts));
+}
+
+test "writeMermaid renders erDiagram" {
+    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+
+    const opts: Options = .{
+        .enable_ansi = false,
+        .palette = theme.default_palette,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    };
+
+    try writeMermaid(&sink.writer, std.testing.allocator, "erDiagram\n    CUSTOMER ||--o{ ORDER : places\n", opts);
+    const out = sink.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "CUSTOMER") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "ORDER") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "places") != null);
+}
+
+test "writeMermaid renders gitGraph with LR colon header" {
+    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+
+    const opts: Options = .{
+        .enable_ansi = false,
+        .palette = theme.default_palette,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    };
+
+    try writeMermaid(&sink.writer, std.testing.allocator, "gitGraph LR:\n    commit\n    commit\n", opts);
+    const out = sink.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "●") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "[main]") != null);
+}
+
+test "writeMermaid returns UnsupportedFeature for cherry-pick" {
+    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+
+    const opts: Options = .{
+        .enable_ansi = false,
+        .palette = theme.default_palette,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    };
+
+    try std.testing.expectError(error.UnsupportedFeature, writeMermaid(
+        &sink.writer,
+        std.testing.allocator,
+        "gitGraph\n    commit\n    cherry-pick id: \"a1\"\n",
+        opts,
+    ));
+}
+
+test "writeMermaid returns UnsupportedFeature for erDiagram direction" {
+    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+
+    const opts: Options = .{
+        .enable_ansi = false,
+        .palette = theme.default_palette,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    };
+
+    try std.testing.expectError(error.UnsupportedFeature, writeMermaid(
+        &sink.writer,
+        std.testing.allocator,
+        "erDiagram\n    direction LR\n    A ||--|| B : r\n",
+        opts,
+    ));
+}
+
+test "classifyHeader accepts gitGraph with trailing colon forms" {
+    try std.testing.expectEqual(DiagramKind.git_graph, classifyHeader("gitGraph\n"));
+    try std.testing.expectEqual(DiagramKind.git_graph, classifyHeader("gitGraph:\n"));
+    try std.testing.expectEqual(DiagramKind.git_graph, classifyHeader("gitGraph LR:\n"));
+    try std.testing.expectEqual(DiagramKind.git_graph, classifyHeader("GITGRAPH\n"));
 }
 
 test "writeMermaid renders stateDiagram-v2" {
