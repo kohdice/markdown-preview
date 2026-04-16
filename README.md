@@ -67,6 +67,17 @@ The following diagram types are rendered as ASCII art.
   bidirectional `<-->`, `<-.->`, `<==>`
 - Labelled arrows: `-->|label|`, `-- label -->`
 - `&` fan-out, hyphenated identifiers (`feature-login`)
+- `subgraph NAME [title] ... end` with nesting; members occupy a reserved
+  column band so the frame never engulfs external nodes. Label-only form
+  slugifies the id using upstream's `\s+ → _`, drop `[^\w]` rule
+- `classDef NAME style`, `class ids NAME`, `style id prop:val`,
+  `:::className` assignments are preserved in the AST (not rendered visually)
+- `linkStyle default ...` and `linkStyle idx,... ...` preserved in the AST
+- Top-level `direction X` lines after the header are accepted but ignored
+  (intentional deviation; upstream would bare-node the token)
+- Subgraph-internal `direction X` swaps the layout axis for that group's
+  members (e.g. `direction LR` inside a TD diagram arranges nodes
+  horizontally). RL is normalised to LR and BT to TD
 
 ### `sequenceDiagram`
 
@@ -94,6 +105,16 @@ The following diagram types are rendered as ASCII art.
 - Alias: `state "Description" as S`
 - Inline description: `S : text`
 - `<br>` normalisation in labels
+- Composite states `state S { ... }` (and aliased `state "Label" as S { ... }`)
+  render as a subgraph frame with external transitions terminating on the
+  frame boundary. Empty composites (no interior members) still drop their
+  external transitions because no frame is produced.
+- `direction TD|TB|BT|LR|RL` at top level updates the diagram direction;
+  inside a composite it swaps the layout axis for that group's members.
+  RL is normalised to LR and BT to TD
+- `linkStyle default ...` and `linkStyle idx,... ...` are accepted (AST only)
+- Unicode letter ids are accepted for transitions (Latin extended, Greek,
+  Cyrillic, CJK, etc.); emoji and symbol codepoints are rejected
 
 ### `erDiagram`
 
