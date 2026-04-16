@@ -76,6 +76,34 @@ pub const GlyphSet = struct {
     };
 };
 
+fn flipGlyph(cp: u21) u21 {
+    return switch (cp) {
+        '┌' => '└',
+        '└' => '┌',
+        '┐' => '┘',
+        '┘' => '┐',
+        '┬' => '┴',
+        '┴' => '┬',
+        '▲' => '▼',
+        '▼' => '▲',
+        '╭' => '╰',
+        '╰' => '╭',
+        '╮' => '╯',
+        '╯' => '╮',
+        '╔' => '╚',
+        '╚' => '╔',
+        '╗' => '╝',
+        '╝' => '╗',
+        '╱' => '╲',
+        '╲' => '╱',
+        '^' => 'v',
+        'v' => '^',
+        '/' => '\\',
+        '\\' => '/',
+        else => cp,
+    };
+}
+
 pub const Canvas = struct {
     allocator: std.mem.Allocator,
     cells: []Cell,
@@ -99,6 +127,28 @@ pub const Canvas = struct {
 
     pub fn at(self: *Canvas, r: usize, c: usize) *Cell {
         return &self.cells[r * self.cols + c];
+    }
+
+    /// Mirror the canvas top-to-bottom and remap vertically-directional glyphs
+    /// so arrowheads and corners keep their meaning. Multi-column continuation
+    /// cells stay paired with their glyph since the reversal operates on whole
+    /// rows.
+    pub fn flipVertical(self: *Canvas) void {
+        var r: usize = 0;
+        while (r < self.rows / 2) : (r += 1) {
+            const other = self.rows - 1 - r;
+            const top = self.cells[r * self.cols .. r * self.cols + self.cols];
+            const bot = self.cells[other * self.cols .. other * self.cols + self.cols];
+            for (top, bot) |*t, *b| {
+                const tmp = t.*;
+                t.* = b.*;
+                b.* = tmp;
+            }
+        }
+        for (self.cells) |*cell| {
+            if (cell.kind != .glyph) continue;
+            cell.cp = flipGlyph(cell.cp);
+        }
     }
 
     pub fn setGlyph(self: *Canvas, r: usize, c: usize, cp: u21) void {
@@ -306,6 +356,43 @@ fn expectCanvasOutput(canvas: *const Canvas, expected: []const u8) !void {
     defer sink.deinit();
     try writeCanvas(&sink.writer, canvas, null, .narrow);
     try std.testing.expectEqualStrings(expected, sink.writer.buffered());
+}
+
+test "flipVertical reverses rows and remaps directional glyphs" {
+    var canvas = try Canvas.init(std.testing.allocator, 3, 3);
+    defer canvas.deinit();
+    canvas.setGlyph(0, 0, '┌');
+    canvas.setGlyph(0, 1, '┬');
+    canvas.setGlyph(0, 2, '┐');
+    canvas.setGlyph(1, 1, '▼');
+    canvas.setGlyph(2, 0, '└');
+    canvas.setGlyph(2, 2, '┘');
+
+    canvas.flipVertical();
+
+    try std.testing.expectEqual(@as(u21, '┌'), canvas.at(0, 0).cp);
+    try std.testing.expectEqual(@as(u21, '┐'), canvas.at(0, 2).cp);
+    try std.testing.expectEqual(@as(u21, '▲'), canvas.at(1, 1).cp);
+    try std.testing.expectEqual(@as(u21, '└'), canvas.at(2, 0).cp);
+    try std.testing.expectEqual(@as(u21, '┴'), canvas.at(2, 1).cp);
+    try std.testing.expectEqual(@as(u21, '┘'), canvas.at(2, 2).cp);
+}
+
+test "flipVertical roundtrip restores original canvas" {
+    var canvas = try Canvas.init(std.testing.allocator, 2, 2);
+    defer canvas.deinit();
+    canvas.setGlyph(0, 0, '╭');
+    canvas.setGlyph(0, 1, '╮');
+    canvas.setGlyph(1, 0, '╰');
+    canvas.setGlyph(1, 1, '╯');
+
+    canvas.flipVertical();
+    canvas.flipVertical();
+
+    try std.testing.expectEqual(@as(u21, '╭'), canvas.at(0, 0).cp);
+    try std.testing.expectEqual(@as(u21, '╮'), canvas.at(0, 1).cp);
+    try std.testing.expectEqual(@as(u21, '╰'), canvas.at(1, 0).cp);
+    try std.testing.expectEqual(@as(u21, '╯'), canvas.at(1, 1).cp);
 }
 
 test "Canvas initializes cells to blank glyphs" {

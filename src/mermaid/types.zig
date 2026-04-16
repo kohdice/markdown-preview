@@ -21,6 +21,17 @@ pub const Direction = enum {
     pub fn isHorizontal(self: Direction) bool {
         return self == .left_right or self == .right_left;
     }
+
+    /// Normalises for layout: RL → LR (upstream parity). BT normalisation to
+    /// TD + canvas flipVertical is done by renderMermaidGraph before calling
+    /// computeLayout, not here, because render_class / render_er pass
+    /// .bottom_up directly and hard-code `.up` routing direction.
+    pub fn layoutDir(self: Direction) Direction {
+        return switch (self) {
+            .right_left => .left_right,
+            else => self,
+        };
+    }
 };
 
 pub const NodeShape = enum {
@@ -53,6 +64,9 @@ pub const Node = struct {
     id_text: []const u8,
     label: []const u8,
     shape: NodeShape,
+    /// Marks a stateDiagram composite state without removing the node, so
+    /// existing NodeId indices in `edges` stay valid.
+    is_composite: bool = false,
 };
 
 pub const Edge = struct {
@@ -63,20 +77,98 @@ pub const Edge = struct {
     bidirectional: bool = false,
 };
 
-pub const FlowGraph = struct {
+pub const LinkStyleKey = union(enum) {
+    default,
+    index: u32,
+
+    pub fn eql(a: LinkStyleKey, b: LinkStyleKey) bool {
+        return switch (a) {
+            .default => b == .default,
+            .index => |ai| switch (b) {
+                .default => false,
+                .index => |bi| ai == bi,
+            },
+        };
+    }
+};
+
+pub const LinkStyle = struct {
+    key: LinkStyleKey,
+    style_text: []const u8,
+};
+
+pub const ClassDef = struct {
+    name: []const u8,
+    style_text: []const u8,
+};
+
+pub const ClassAssignment = struct {
+    node: NodeId,
+    class_name: []const u8,
+};
+
+pub const NodeStyle = struct {
+    node: NodeId,
+    style_text: []const u8,
+};
+
+pub const Subgraph = struct {
+    /// Explicit id from `subgraph id [title]`, or the slugified id for the
+    /// label-only form.
+    id_text: []const u8,
+    title: ?[]const u8 = null,
+    direction: ?Direction = null,
+    /// Direct members only; nodes owned by `children` are not listed here.
+    node_ids: []NodeId = &.{},
+    edge_indices: []u32 = &.{},
+    children: []Subgraph = &.{},
+    /// For a stateDiagram composite state, the NodeId of the ordinary node
+    /// sharing the same identifier, so layout can resolve edges to this
+    /// frame's boundary. Always null for flowchart subgraphs.
+    representative_node: ?NodeId = null,
+};
+
+pub const MermaidGraph = struct {
     allocator: std.mem.Allocator,
+    /// `direction X` updates this only for stateDiagram. Flowchart accepts
+    /// but ignores the line (intentional deviation from upstream).
     direction: Direction,
     nodes: []Node,
     edges: []Edge,
+    subgraphs: []Subgraph = &.{},
+    class_defs: []ClassDef = &.{},
+    class_assignments: []ClassAssignment = &.{},
+    node_styles: []NodeStyle = &.{},
+    /// Repeated keys are kept in source order.
+    /// TODO: add a per-property later-wins resolver matching upstream.
+    link_styles: []LinkStyle = &.{},
     owned_strings: [][]u8 = &.{},
 
-    pub fn deinit(self: *FlowGraph) void {
+    pub fn deinit(self: *MermaidGraph) void {
         self.allocator.free(self.nodes);
         self.allocator.free(self.edges);
+        freeSubgraphs(self.allocator, self.subgraphs);
+        self.allocator.free(self.class_defs);
+        self.allocator.free(self.class_assignments);
+        self.allocator.free(self.node_styles);
+        self.allocator.free(self.link_styles);
         for (self.owned_strings) |s| self.allocator.free(s);
         if (self.owned_strings.len > 0) self.allocator.free(self.owned_strings);
     }
 };
+
+fn freeSubgraphs(allocator: std.mem.Allocator, subgraphs: []Subgraph) void {
+    for (subgraphs) |sg| {
+        allocator.free(sg.node_ids);
+        allocator.free(sg.edge_indices);
+        freeSubgraphs(allocator, sg.children);
+    }
+    if (subgraphs.len > 0) allocator.free(subgraphs);
+}
+
+pub fn freeSubgraphsPublic(allocator: std.mem.Allocator, subgraphs: []Subgraph) void {
+    freeSubgraphs(allocator, subgraphs);
+}
 
 pub const ParticipantId = u16;
 
@@ -301,6 +393,27 @@ fn brTagLen(text: []const u8, i: usize) ?usize {
 
 pub const GridPos = struct { row: usize, col: usize };
 
+/// Bounding box on the grid for a subgraph, used by the renderer to draw a
+/// surrounding frame. Coordinates are inclusive cell indices in `Layout`.
+pub const SubgraphFrame = struct {
+    row_start: usize,
+    col_start: usize,
+    row_end: usize,
+    col_end: usize,
+    /// 0 for top-level subgraphs; +1 per nesting level.
+    depth: usize,
+    title: ?[]const u8,
+    /// Mirrors `Subgraph.representative_node` so the renderer can look up the
+    /// frame that belongs to a given composite NodeId without re-walking the
+    /// subgraph tree.
+    representative_node: ?NodeId = null,
+};
+
+pub const EndpointTarget = union(enum) {
+    node: NodeId,
+    frame: SubgraphFrame,
+};
+
 pub const Layout = struct {
     allocator: std.mem.Allocator,
     positions: []GridPos,
@@ -310,11 +423,31 @@ pub const Layout = struct {
     cols: usize,
     cell_w: usize,
     cell_h: usize,
+    subgraph_frames: []SubgraphFrame = &.{},
+    /// Extra rows/columns reserved on every side so subgraph frames and titles
+    /// have space outside node boxes. Set to (max subgraph depth + 1) when
+    /// frames exist, 0 otherwise.
+    outer_pad: usize = 0,
+
+    /// Returns `.frame` when the node is a composite with a rendered frame,
+    /// `.node` for ordinary nodes, or `null` for a composite that has no
+    /// frame (empty body) — the caller should skip routing to avoid drawing
+    /// an arrow into an invisible cell.
+    pub fn resolveEdgeEndpoint(self: *const Layout, nodes: []const Node, id: NodeId) ?EndpointTarget {
+        if (!nodes[id].is_composite) return .{ .node = id };
+        for (self.subgraph_frames) |f| {
+            if (f.representative_node) |rep| {
+                if (rep == id) return .{ .frame = f };
+            }
+        }
+        return null;
+    }
 
     pub fn deinit(self: *Layout) void {
         self.allocator.free(self.positions);
         self.allocator.free(self.truncated_labels);
         if (self.truncation_buf) |buf| self.allocator.free(buf);
+        self.allocator.free(self.subgraph_frames);
     }
 };
 

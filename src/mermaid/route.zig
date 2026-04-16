@@ -38,20 +38,20 @@ pub fn cellStepH(layout: *const types.Layout) usize {
 
 pub fn canvasRows(layout: *const types.Layout) usize {
     if (layout.rows == 0) return 0;
-    return layout.rows * layout.cell_h + (layout.rows - 1) * gutter_h;
+    return layout.rows * layout.cell_h + (layout.rows - 1) * gutter_h + 2 * layout.outer_pad;
 }
 
 pub fn canvasCols(layout: *const types.Layout) usize {
     if (layout.cols == 0) return 0;
-    return layout.cols * layout.cell_w + (layout.cols - 1) * gutter_w;
+    return layout.cols * layout.cell_w + (layout.cols - 1) * gutter_w + 2 * layout.outer_pad;
 }
 
 pub fn boxTop(layout: *const types.Layout, grid_row: usize) usize {
-    return grid_row * cellStepH(layout);
+    return layout.outer_pad + grid_row * cellStepH(layout);
 }
 
 pub fn boxLeft(layout: *const types.Layout, grid_col: usize) usize {
-    return grid_col * cellStepW(layout);
+    return layout.outer_pad + grid_col * cellStepW(layout);
 }
 
 pub fn routeEdge(

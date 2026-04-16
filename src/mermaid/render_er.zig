@@ -107,7 +107,7 @@ fn computeLayout(
         };
     }
 
-    var flow_graph = types.FlowGraph{
+    var flow_graph = types.MermaidGraph{
         .allocator = allocator,
         .direction = .bottom_up,
         .nodes = nodes,

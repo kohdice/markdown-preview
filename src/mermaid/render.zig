@@ -181,7 +181,7 @@ fn writeState(
         error.OutOfMemory => return error.OutOfMemory,
     };
     defer graph.deinit();
-    try renderFlowGraph(writer, allocator, &graph, opts);
+    try renderMermaidGraph(writer, allocator, &graph, opts);
 }
 
 fn writeFlowchart(
@@ -197,16 +197,23 @@ fn writeFlowchart(
         error.OutOfMemory => return error.OutOfMemory,
     };
     defer graph.deinit();
-    try renderFlowGraph(writer, allocator, &graph, opts);
+    try renderMermaidGraph(writer, allocator, &graph, opts);
 }
 
-fn renderFlowGraph(
+fn renderMermaidGraph(
     writer: *std.io.Writer,
     allocator: std.mem.Allocator,
-    graph: *const @import("types.zig").FlowGraph,
+    graph: *const @import("types.zig").MermaidGraph,
     opts: Options,
 ) RenderError!void {
-    var layout = layout_flowchart.computeLayout(allocator, graph, opts.ambiguous_width) catch |err| switch (err) {
+    // BT is laid out as TD and flipped at the canvas level. Keeping this
+    // substitution local to the flowchart/state path leaves render_class and
+    // render_er free to use .bottom_up with the existing row-swap semantics.
+    const needs_vflip = graph.direction == .bottom_up;
+    var effective = graph.*;
+    effective.direction = if (needs_vflip) .top_down else graph.direction;
+
+    var layout = layout_flowchart.computeLayout(allocator, &effective, opts.ambiguous_width) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
     };
     defer layout.deinit();
@@ -224,7 +231,12 @@ fn renderFlowGraph(
 
     const glyphs = canvas_mod.GlyphSet.unicode;
 
+    for (layout.subgraph_frames) |frame| {
+        drawSubgraphFrame(&canvas, &layout, frame, &glyphs);
+    }
+
     for (graph.nodes, 0..) |node, i| {
+        if (node.is_composite) continue;
         const pos = layout.positions[i];
         const top = route_mod.boxTop(&layout, pos.row);
         const left = route_mod.boxLeft(&layout, pos.col);
@@ -246,8 +258,19 @@ fn renderFlowGraph(
         canvas.drawLabel(label_row, label_col, label, opts.ambiguous_width);
     }
 
+    const layout_dir = effective.direction.layoutDir();
     for (graph.edges) |edge| {
-        route_mod.routeEdge(allocator, &canvas, &layout, edge, graph.direction, &glyphs, opts.ambiguous_width) catch |err| switch (err) {
+        const from_ep = layout.resolveEdgeEndpoint(graph.nodes, edge.from);
+        const to_ep = layout.resolveEdgeEndpoint(graph.nodes, edge.to);
+        if (from_ep == null or to_ep == null) continue;
+        const has_frame = from_ep.? == .frame or to_ep.? == .frame;
+        if (has_frame) {
+            routeCompositeEdge(allocator, &canvas, &layout, from_ep.?, to_ep.?, edge, &glyphs, opts.ambiguous_width) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+            };
+            continue;
+        }
+        route_mod.routeEdge(allocator, &canvas, &layout, edge, layout_dir, &glyphs, opts.ambiguous_width) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
         };
         if (edge.bidirectional) {
@@ -256,7 +279,7 @@ fn renderFlowGraph(
             const src_left = route_mod.boxLeft(&layout, src_pos.col);
             const src_cx = src_left + layout.cell_w / 2;
             const src_cy = src_top + layout.cell_h / 2;
-            route_mod.paintSourceArrowHead(&canvas, graph.direction, src_top, src_left, src_cx, src_cy, layout, &glyphs);
+            route_mod.paintSourceArrowHead(&canvas, layout_dir, src_top, src_left, src_cx, src_cy, layout, &glyphs);
         }
     }
 
@@ -264,7 +287,164 @@ fn renderFlowGraph(
         error.OutOfMemory => return error.OutOfMemory,
     };
 
+    for (layout.subgraph_frames) |frame| {
+        drawSubgraphTitle(&canvas, &layout, frame, opts.ambiguous_width);
+    }
+
+    if (needs_vflip) canvas.flipVertical();
+
     canvas_mod.writeCanvas(writer, &canvas, opts.wrap_width, opts.ambiguous_width) catch return error.WriteFailed;
+}
+
+fn routeCompositeEdge(
+    allocator: std.mem.Allocator,
+    canvas: *canvas_mod.Canvas,
+    layout: *const @import("types.zig").Layout,
+    from_ep: @import("types.zig").EndpointTarget,
+    to_ep: @import("types.zig").EndpointTarget,
+    edge: @import("types.zig").Edge,
+    glyphs: *const canvas_mod.GlyphSet,
+    ambiguous: width_mod.AmbiguousWidth,
+) route_mod.RouteError!void {
+    const start_center = epCenter(layout, from_ep) orelse return;
+    const goal_center = epCenter(layout, to_ep) orelse return;
+
+    const start_port = epFacingPort(layout, from_ep, goal_center) orelse return;
+    const goal_port = epFacingPort(layout, to_ep, start_center) orelse return;
+
+    _ = try route_mod.routeEdgeWithPorts(
+        allocator,
+        canvas,
+        layout,
+        edge.from,
+        edge.to,
+        start_port.row,
+        start_port.col,
+        start_port.dir,
+        goal_port.row,
+        goal_port.col,
+        edge.label,
+        edge.style,
+        glyphs,
+        ambiguous,
+    );
+}
+
+const PortXY = struct { row: usize, col: usize, dir: route_mod.Dir4 };
+const Center = struct { row: usize, col: usize };
+
+fn epCenter(layout: *const @import("types.zig").Layout, ep: @import("types.zig").EndpointTarget) ?Center {
+    switch (ep) {
+        .node => |id| {
+            const pos = layout.positions[id];
+            const top = route_mod.boxTop(layout, pos.row);
+            const left = route_mod.boxLeft(layout, pos.col);
+            return .{ .row = top + layout.cell_h / 2, .col = left + layout.cell_w / 2 };
+        },
+        .frame => |frame| {
+            const cr = route_mod.canvasRows(layout);
+            const cc = route_mod.canvasCols(layout);
+            if (frameBox(layout, cr, cc, frame)) |fb| {
+                return .{ .row = fb.top + fb.h / 2, .col = fb.left + fb.w / 2 };
+            }
+            return null;
+        },
+    }
+}
+
+fn epFacingPort(layout: *const @import("types.zig").Layout, ep: @import("types.zig").EndpointTarget, toward: Center) ?PortXY {
+    switch (ep) {
+        .node => |id| {
+            const pos = layout.positions[id];
+            const top = route_mod.boxTop(layout, pos.row);
+            const left = route_mod.boxLeft(layout, pos.col);
+            return pickSide(top, left, top + layout.cell_h - 1, left + layout.cell_w - 1, toward);
+        },
+        .frame => |frame| {
+            const cr = route_mod.canvasRows(layout);
+            const cc = route_mod.canvasCols(layout);
+            const fb = frameBox(layout, cr, cc, frame) orelse return null;
+            return pickSide(fb.top, fb.left, fb.top + fb.h - 1, fb.left + fb.w - 1, toward);
+        },
+    }
+}
+
+fn pickSide(top: usize, left: usize, bottom: usize, right: usize, toward: Center) PortXY {
+    const cx = (left + right) / 2;
+    const cy = (top + bottom) / 2;
+    const dy = @as(isize, @intCast(toward.row)) - @as(isize, @intCast(cy));
+    const dx = @as(isize, @intCast(toward.col)) - @as(isize, @intCast(cx));
+    if (@abs(dy) >= @abs(dx)) {
+        if (dy >= 0) return .{ .row = bottom, .col = cx, .dir = .down };
+        return .{ .row = top, .col = cx, .dir = .up };
+    } else {
+        if (dx >= 0) return .{ .row = cy, .col = right, .dir = .right };
+        return .{ .row = cy, .col = left, .dir = .left };
+    }
+}
+
+const FrameBox = struct { top: usize, left: usize, h: usize, w: usize };
+
+fn frameBox(
+    layout: *const @import("types.zig").Layout,
+    canvas_rows: usize,
+    canvas_cols: usize,
+    frame: @import("types.zig").SubgraphFrame,
+) ?FrameBox {
+    const inner_top = route_mod.boxTop(layout, frame.row_start);
+    const inner_left = route_mod.boxLeft(layout, frame.col_start);
+    const inner_bottom = route_mod.boxTop(layout, frame.row_end) + layout.cell_h;
+    const inner_right = route_mod.boxLeft(layout, frame.col_end) + layout.cell_w;
+
+    // Outer frames sit further from nodes so nested frames do not collide.
+    const pad = if (layout.outer_pad > frame.depth) layout.outer_pad - frame.depth else 1;
+    const top = if (inner_top >= pad) inner_top - pad else 0;
+    const left = if (inner_left >= pad) inner_left - pad else 0;
+    const bottom_raw = inner_bottom + pad - 1;
+    const right_raw = inner_right + pad - 1;
+    const bottom = if (bottom_raw >= canvas_rows) canvas_rows - 1 else bottom_raw;
+    const right = if (right_raw >= canvas_cols) canvas_cols - 1 else right_raw;
+    if (bottom <= top or right <= left) return null;
+
+    return .{ .top = top, .left = left, .h = bottom - top + 1, .w = right - left + 1 };
+}
+
+fn drawSubgraphFrame(
+    canvas: *canvas_mod.Canvas,
+    layout: *const @import("types.zig").Layout,
+    frame: @import("types.zig").SubgraphFrame,
+    glyphs: *const canvas_mod.GlyphSet,
+) void {
+    const box = frameBox(layout, canvas.rows, canvas.cols, frame) orelse return;
+    canvas.drawRect(box.top, box.left, box.h, box.w, glyphs);
+}
+
+fn drawSubgraphTitle(
+    canvas: *canvas_mod.Canvas,
+    layout: *const @import("types.zig").Layout,
+    frame: @import("types.zig").SubgraphFrame,
+    ambiguous: width_mod.AmbiguousWidth,
+) void {
+    const title = frame.title orelse return;
+    if (title.len == 0) return;
+    const box = frameBox(layout, canvas.rows, canvas.cols, frame) orelse return;
+    if (box.w <= 4) return;
+    const budget = box.w - 4;
+    const clipped = clipToWidth(title, budget, ambiguous);
+    if (clipped.len == 0) return;
+    canvas.drawLabel(box.top, box.left + 2, clipped, ambiguous);
+}
+
+fn clipToWidth(text: []const u8, budget: usize, ambiguous: width_mod.AmbiguousWidth) []const u8 {
+    var view = std.unicode.Utf8View.init(text) catch return "";
+    var it = view.iterator();
+    var kept: usize = 0;
+    while (it.nextCodepointSlice()) |cp| {
+        const next = kept + cp.len;
+        if (width_mod.displayWidth(text[0..next], ambiguous) > budget) break;
+        kept = next;
+    }
+    return text[0..kept];
 }
 
 fn firstMeaningfulLine(source: []const u8) ?[]const u8 {
@@ -325,6 +505,179 @@ test "writeMermaid returns UnsupportedDiagram for gantt" {
     };
 
     try std.testing.expectError(error.UnsupportedDiagram, writeMermaid(&sink.writer, std.testing.allocator, "gantt\n    title demo\n", opts));
+}
+
+test "writeMermaid renders graph BT as canvas vertical flip of graph TD" {
+    const alloc = std.testing.allocator;
+    var sink_td: std.io.Writer.Allocating = .init(alloc);
+    defer sink_td.deinit();
+    var sink_bt: std.io.Writer.Allocating = .init(alloc);
+    defer sink_bt.deinit();
+
+    const opts: Options = .{
+        .enable_ansi = false,
+        .palette = theme.default_palette,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    };
+
+    try writeMermaid(&sink_td.writer, alloc, "graph TD\n    A --> B --> C\n", opts);
+    try writeMermaid(&sink_bt.writer, alloc, "graph BT\n    A --> B --> C\n", opts);
+
+    const td_out = sink_td.writer.buffered();
+    const bt_out = sink_bt.writer.buffered();
+
+    // BT output must be byte-for-byte the canvas-level vertical flip of TD:
+    // lines reversed plus directional glyph remap.
+    const td_flipped = try flipOutputForTest(alloc, td_out);
+    defer alloc.free(td_flipped);
+    try std.testing.expectEqualStrings(td_flipped, bt_out);
+}
+
+fn flipOutputForTest(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
+    var lines: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer lines.deinit(alloc);
+    var it = std.mem.splitScalar(u8, input, '\n');
+    while (it.next()) |l| try lines.append(alloc, l);
+    std.mem.reverse([]const u8, lines.items);
+
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer buf.deinit(alloc);
+    for (lines.items, 0..) |line, i| {
+        var view = std.unicode.Utf8View.init(line) catch return error.InvalidUtf8;
+        var lit = view.iterator();
+        while (lit.nextCodepoint()) |cp| {
+            const mapped = testFlipGlyph(cp);
+            var enc: [4]u8 = undefined;
+            const n = std.unicode.utf8Encode(mapped, &enc) catch continue;
+            try buf.appendSlice(alloc, enc[0..n]);
+        }
+        if (i + 1 < lines.items.len) try buf.append(alloc, '\n');
+    }
+    return try buf.toOwnedSlice(alloc);
+}
+
+fn testFlipGlyph(cp: u21) u21 {
+    return switch (cp) {
+        '┌' => '└',
+        '└' => '┌',
+        '┐' => '┘',
+        '┘' => '┐',
+        '┬' => '┴',
+        '┴' => '┬',
+        '▲' => '▼',
+        '▼' => '▲',
+        '╭' => '╰',
+        '╰' => '╭',
+        '╮' => '╯',
+        '╯' => '╮',
+        '╔' => '╚',
+        '╚' => '╔',
+        '╗' => '╝',
+        '╝' => '╗',
+        '╱' => '╲',
+        '╲' => '╱',
+        '^' => 'v',
+        'v' => '^',
+        '/' => '\\',
+        '\\' => '/',
+        else => cp,
+    };
+}
+
+test "writeMermaid produces identical output for graph RL and graph LR" {
+    var sink_lr: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink_lr.deinit();
+    var sink_rl: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink_rl.deinit();
+
+    const opts: Options = .{
+        .enable_ansi = false,
+        .palette = theme.default_palette,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    };
+
+    try writeMermaid(&sink_lr.writer, std.testing.allocator, "graph LR\n    A --> B --> C\n", opts);
+    try writeMermaid(&sink_rl.writer, std.testing.allocator, "graph RL\n    A --> B --> C\n", opts);
+
+    try std.testing.expectEqualStrings(sink_lr.writer.buffered(), sink_rl.writer.buffered());
+}
+
+test "writeMermaid draws frame and title around flowchart subgraph" {
+    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+
+    const opts: Options = .{
+        .enable_ansi = false,
+        .palette = theme.default_palette,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    };
+
+    try writeMermaid(&sink.writer, std.testing.allocator,
+        \\graph TD
+        \\    subgraph inner
+        \\        A --> B
+        \\    end
+    , opts);
+    const out = sink.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "┌") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "└") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "in") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "A") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "B") != null);
+}
+
+test "writeMermaid drops edges to empty composite state" {
+    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+
+    const opts: Options = .{
+        .enable_ansi = false,
+        .palette = theme.default_palette,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    };
+
+    try writeMermaid(&sink.writer, std.testing.allocator,
+        \\stateDiagram-v2
+        \\    [*] --> Empty
+        \\    state Empty {
+        \\    }
+    , opts);
+    const out = sink.writer.buffered();
+    try std.testing.expect(out.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, out, "├") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "┤") == null);
+}
+
+test "writeMermaid draws composite state frame without routing to invisible node" {
+    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+
+    const opts: Options = .{
+        .enable_ansi = false,
+        .palette = theme.default_palette,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    };
+
+    try writeMermaid(&sink.writer, std.testing.allocator,
+        \\stateDiagram-v2
+        \\    [*] --> Outer
+        \\    state Outer {
+        \\        [*] --> Inner
+        \\    }
+        \\    Outer --> [*]
+    , opts);
+    const out = sink.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "Outer") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "Inner") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "┌") != null);
+    // External transitions attach to the frame boundary via a tee glyph rather
+    // than the invisible composite node.
+    try std.testing.expect(std.mem.indexOf(u8, out, "├") != null or std.mem.indexOf(u8, out, "┤") != null);
 }
 
 test "writeMermaid renders erDiagram" {

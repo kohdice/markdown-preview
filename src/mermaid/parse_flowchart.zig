@@ -9,26 +9,50 @@ pub const ParseError = error{
     OutOfMemory,
 };
 
+const BuildingSubgraph = struct {
+    id_text: []const u8,
+    title: ?[]const u8 = null,
+    direction: ?types.Direction = null,
+    node_ids: std.ArrayListUnmanaged(types.NodeId) = .empty,
+    edge_indices: std.ArrayListUnmanaged(u32) = .empty,
+    children: std.ArrayListUnmanaged(BuildingSubgraph) = .empty,
+};
+
 const Parser = struct {
     allocator: std.mem.Allocator,
     nodes: std.ArrayListUnmanaged(types.Node) = .empty,
     edges: std.ArrayListUnmanaged(types.Edge) = .empty,
     interned: std.StringHashMapUnmanaged(types.NodeId) = .empty,
 
+    root_subgraphs: std.ArrayListUnmanaged(BuildingSubgraph) = .empty,
+    ctx_stack: std.ArrayListUnmanaged(BuildingSubgraph) = .empty,
+    class_defs: std.ArrayListUnmanaged(types.ClassDef) = .empty,
+    class_assignments: std.ArrayListUnmanaged(types.ClassAssignment) = .empty,
+    node_styles: std.ArrayListUnmanaged(types.NodeStyle) = .empty,
+    link_styles: std.ArrayListUnmanaged(types.LinkStyle) = .empty,
+    owned_strings: std.ArrayListUnmanaged([]u8) = .empty,
+    touched: std.ArrayListUnmanaged(types.NodeId) = .empty,
+    /// Tracks which nodes have already been claimed by a subgraph so the same
+    /// node is not registered in multiple subgraphs' node_ids. Implements the
+    /// upstream "first-defined subgraph wins" deduplication rule.
+    globally_owned: std.AutoHashMapUnmanaged(types.NodeId, void) = .empty,
+
     fn internNode(self: *Parser, id_text: []const u8) ParseError!types.NodeId {
         const gop = try self.interned.getOrPut(self.allocator, id_text);
-        if (gop.found_existing) return gop.value_ptr.*;
-
-        if (self.nodes.items.len >= types.max_nodes) return error.TooManyNodes;
-        const new_id: types.NodeId = @intCast(self.nodes.items.len);
-        try self.nodes.append(self.allocator, .{
-            .id = new_id,
-            .id_text = id_text,
-            .label = id_text,
-            .shape = .implicit,
-        });
-        gop.value_ptr.* = new_id;
-        return new_id;
+        const id = if (gop.found_existing) gop.value_ptr.* else blk: {
+            if (self.nodes.items.len >= types.max_nodes) return error.TooManyNodes;
+            const new_id: types.NodeId = @intCast(self.nodes.items.len);
+            try self.nodes.append(self.allocator, .{
+                .id = new_id,
+                .id_text = id_text,
+                .label = id_text,
+                .shape = .implicit,
+            });
+            gop.value_ptr.* = new_id;
+            break :blk new_id;
+        };
+        try self.touched.append(self.allocator, id);
+        return id;
     }
 
     fn updateNode(self: *Parser, id: types.NodeId, shape: types.NodeShape, label: []const u8) void {
@@ -36,7 +60,31 @@ const Parser = struct {
         node.shape = shape;
         node.label = label;
     }
+
+    fn resetTouched(self: *Parser) void {
+        self.touched.clearRetainingCapacity();
+    }
+
+    fn recordEntities(self: *Parser, old_e: usize) ParseError!void {
+        if (self.ctx_stack.items.len == 0) return;
+        const top = &self.ctx_stack.items[self.ctx_stack.items.len - 1];
+        for (self.touched.items) |id| {
+            if (self.globally_owned.contains(id)) continue;
+            if (containsNodeId(top.node_ids.items, id)) continue;
+            try top.node_ids.append(self.allocator, id);
+            try self.globally_owned.put(self.allocator, id, {});
+        }
+        var m: usize = old_e;
+        while (m < self.edges.items.len) : (m += 1) {
+            try top.edge_indices.append(self.allocator, @intCast(m));
+        }
+    }
 };
+
+fn containsNodeId(slice: []const types.NodeId, id: types.NodeId) bool {
+    for (slice) |v| if (v == id) return true;
+    return false;
+}
 
 pub fn isDisplayDependent(cp: u21) bool {
     var buf: [4]u8 = undefined;
@@ -52,11 +100,25 @@ fn validateLabel(label: []const u8) ParseError!void {
     }
 }
 
-pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!types.FlowGraph {
+pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!types.MermaidGraph {
     var parser: Parser = .{ .allocator = allocator };
     defer parser.interned.deinit(allocator);
+    defer parser.ctx_stack.deinit(allocator);
+    defer parser.touched.deinit(allocator);
+    defer parser.globally_owned.deinit(allocator);
     errdefer parser.nodes.deinit(allocator);
     errdefer parser.edges.deinit(allocator);
+    errdefer {
+        for (parser.ctx_stack.items) |*bs| freeBuildingSubgraph(allocator, bs);
+        for (parser.root_subgraphs.items) |*bs| freeBuildingSubgraph(allocator, bs);
+        parser.root_subgraphs.deinit(allocator);
+        parser.class_defs.deinit(allocator);
+        parser.class_assignments.deinit(allocator);
+        parser.node_styles.deinit(allocator);
+        parser.link_styles.deinit(allocator);
+        for (parser.owned_strings.items) |s| allocator.free(s);
+        parser.owned_strings.deinit(allocator);
+    }
 
     var direction: ?types.Direction = null;
     var it = std.mem.splitScalar(u8, source, '\n');
@@ -71,21 +133,260 @@ pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!
             continue;
         }
 
-        try parseContentLine(&parser, trimmed);
+        try dispatchLine(&parser, trimmed);
     }
+
+    if (parser.ctx_stack.items.len != 0) return error.InvalidMermaid;
 
     const dir = direction orelse return error.InvalidMermaid;
 
     const nodes = try parser.nodes.toOwnedSlice(allocator);
     errdefer allocator.free(nodes);
     const edges = try parser.edges.toOwnedSlice(allocator);
+    errdefer allocator.free(edges);
+
+    const subgraphs = try finalizeSubgraphs(allocator, &parser.root_subgraphs);
+    errdefer types.freeSubgraphsPublic(allocator, subgraphs);
+
+    const class_defs = try parser.class_defs.toOwnedSlice(allocator);
+    errdefer allocator.free(class_defs);
+    const class_assignments = try parser.class_assignments.toOwnedSlice(allocator);
+    errdefer allocator.free(class_assignments);
+    const node_styles = try parser.node_styles.toOwnedSlice(allocator);
+    errdefer allocator.free(node_styles);
+    const link_styles = try parser.link_styles.toOwnedSlice(allocator);
+    errdefer allocator.free(link_styles);
+    const owned_strings = try parser.owned_strings.toOwnedSlice(allocator);
 
     return .{
         .allocator = allocator,
         .direction = dir,
         .nodes = nodes,
         .edges = edges,
+        .subgraphs = subgraphs,
+        .class_defs = class_defs,
+        .class_assignments = class_assignments,
+        .node_styles = node_styles,
+        .link_styles = link_styles,
+        .owned_strings = owned_strings,
     };
+}
+
+fn freeBuildingSubgraph(allocator: std.mem.Allocator, bs: *BuildingSubgraph) void {
+    bs.node_ids.deinit(allocator);
+    bs.edge_indices.deinit(allocator);
+    for (bs.children.items) |*c| freeBuildingSubgraph(allocator, c);
+    bs.children.deinit(allocator);
+}
+
+fn finalizeSubgraphs(
+    allocator: std.mem.Allocator,
+    list: *std.ArrayListUnmanaged(BuildingSubgraph),
+) ParseError![]types.Subgraph {
+    if (list.items.len == 0) {
+        list.deinit(allocator);
+        return &.{};
+    }
+    const out = try allocator.alloc(types.Subgraph, list.items.len);
+    for (out) |*slot| slot.* = .{ .id_text = "" };
+    errdefer types.freeSubgraphsPublic(allocator, out);
+
+    for (list.items, 0..) |*bs, i| {
+        const node_ids = try bs.node_ids.toOwnedSlice(allocator);
+        errdefer allocator.free(node_ids);
+        const edge_indices = try bs.edge_indices.toOwnedSlice(allocator);
+        errdefer allocator.free(edge_indices);
+        const children = try finalizeSubgraphs(allocator, &bs.children);
+        out[i] = .{
+            .id_text = bs.id_text,
+            .title = bs.title,
+            .direction = bs.direction,
+            .node_ids = node_ids,
+            .edge_indices = edge_indices,
+            .children = children,
+        };
+    }
+    list.deinit(allocator);
+    return out;
+}
+
+fn dispatchLine(parser: *Parser, trimmed: []const u8) ParseError!void {
+    if (std.ascii.eqlIgnoreCase(trimmed, "end")) {
+        return popSubgraph(parser);
+    }
+    if (std.ascii.startsWithIgnoreCase(trimmed, "subgraph ") or
+        std.ascii.eqlIgnoreCase(trimmed, "subgraph"))
+    {
+        return pushSubgraph(parser, trimmed);
+    }
+
+    if (startsWithKeyword(trimmed, "classDef")) |rest| return parseClassDef(parser, rest);
+    if (startsWithKeyword(trimmed, "class")) |rest| return parseClassAssignment(parser, rest);
+    if (startsWithKeyword(trimmed, "style")) |rest| return parseStyleLine(parser, rest);
+    if (startsWithKeyword(trimmed, "linkStyle")) |rest| return parseLinkStyleLine(parser, rest);
+    if (startsWithKeyword(trimmed, "direction")) |rest| return parseDirectionLine(parser, rest);
+    if (startsWithKeyword(trimmed, "click")) |_| return;
+
+    parser.resetTouched();
+    const old_e = parser.edges.items.len;
+    try parseContentLine(parser, trimmed);
+    try parser.recordEntities(old_e);
+}
+
+fn startsWithKeyword(line: []const u8, kw: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, line, kw)) return null;
+    if (line.len == kw.len) return null;
+    const c = line[kw.len];
+    if (c != ' ' and c != '\t') return null;
+    return std.mem.trimLeft(u8, line[kw.len..], " \t");
+}
+
+fn pushSubgraph(parser: *Parser, line: []const u8) ParseError!void {
+    var rest: []const u8 = "";
+    if (line.len > "subgraph".len) {
+        rest = std.mem.trim(u8, line["subgraph".len..], " \t");
+    }
+    var id_text: []const u8 = "";
+    var title: ?[]const u8 = null;
+
+    if (rest.len > 0 and std.mem.indexOf(u8, rest, "[") != null and
+        std.mem.endsWith(u8, rest, "]"))
+    {
+        const lb = std.mem.indexOf(u8, rest, "[").?;
+        const id_candidate = std.mem.trim(u8, rest[0..lb], " \t");
+        const inner = std.mem.trim(u8, rest[lb + 1 .. rest.len - 1], " \t");
+        if (id_candidate.len > 0 and inner.len > 0) {
+            id_text = id_candidate;
+            title = inner;
+            try validateLabel(inner);
+        }
+    }
+
+    if (id_text.len == 0 and rest.len > 0) {
+        const slug = try slugify(parser.allocator, rest);
+        try parser.owned_strings.append(parser.allocator, slug);
+        id_text = slug;
+        title = rest;
+        try validateLabel(rest);
+    }
+
+    try parser.ctx_stack.append(parser.allocator, .{
+        .id_text = id_text,
+        .title = title,
+    });
+}
+
+fn popSubgraph(parser: *Parser) ParseError!void {
+    if (parser.ctx_stack.items.len == 0) return;
+    const completed = parser.ctx_stack.pop().?;
+    if (parser.ctx_stack.items.len > 0) {
+        const top = &parser.ctx_stack.items[parser.ctx_stack.items.len - 1];
+        try top.children.append(parser.allocator, completed);
+    } else {
+        try parser.root_subgraphs.append(parser.allocator, completed);
+    }
+}
+
+/// Mirrors upstream `rest.replace(/\s+/g, '_').replace(/[^\w]/g, '')`;
+/// case is preserved.
+fn slugify(allocator: std.mem.Allocator, label: []const u8) ParseError![]u8 {
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer out.deinit(allocator);
+    var i: usize = 0;
+    var in_ws = false;
+    while (i < label.len) : (i += 1) {
+        const c = label[i];
+        if (c == ' ' or c == '\t') {
+            if (!in_ws) {
+                try out.append(allocator, '_');
+                in_ws = true;
+            }
+            continue;
+        }
+        in_ws = false;
+        const is_word = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or
+            (c >= '0' and c <= '9') or c == '_';
+        if (is_word) try out.append(allocator, c);
+    }
+    return try out.toOwnedSlice(allocator);
+}
+
+fn parseClassDef(parser: *Parser, rest: []const u8) ParseError!void {
+    const sp = std.mem.indexOfAny(u8, rest, " \t") orelse return;
+    const name = std.mem.trim(u8, rest[0..sp], " \t");
+    const style = std.mem.trim(u8, rest[sp..], " \t");
+    if (name.len == 0 or style.len == 0) return;
+    try parser.class_defs.append(parser.allocator, .{
+        .name = name,
+        .style_text = style,
+    });
+}
+
+fn parseClassAssignment(parser: *Parser, rest: []const u8) ParseError!void {
+    const sp = std.mem.indexOfAny(u8, rest, " \t") orelse return;
+    const ids_text = std.mem.trim(u8, rest[0..sp], " \t");
+    const class_name = std.mem.trim(u8, rest[sp..], " \t");
+    if (ids_text.len == 0 or class_name.len == 0) return;
+
+    var it = std.mem.splitScalar(u8, ids_text, ',');
+    while (it.next()) |tok| {
+        const id_text = std.mem.trim(u8, tok, " \t");
+        if (id_text.len == 0) continue;
+        const id = try parser.internNode(id_text);
+        try parser.class_assignments.append(parser.allocator, .{
+            .node = id,
+            .class_name = class_name,
+        });
+    }
+}
+
+fn parseStyleLine(parser: *Parser, rest: []const u8) ParseError!void {
+    const sp = std.mem.indexOfAny(u8, rest, " \t") orelse return;
+    const id_text = std.mem.trim(u8, rest[0..sp], " \t");
+    const style_text = std.mem.trim(u8, rest[sp..], " \t");
+    if (id_text.len == 0 or style_text.len == 0) return;
+    const id = try parser.internNode(id_text);
+    try parser.node_styles.append(parser.allocator, .{
+        .node = id,
+        .style_text = style_text,
+    });
+}
+
+fn parseLinkStyleLine(parser: *Parser, rest: []const u8) ParseError!void {
+    const sp = std.mem.indexOfAny(u8, rest, " \t") orelse return;
+    const target = std.mem.trim(u8, rest[0..sp], " \t");
+    const style_text = std.mem.trim(u8, rest[sp..], " \t");
+    if (target.len == 0 or style_text.len == 0) return;
+
+    if (std.mem.eql(u8, target, "default")) {
+        try parser.link_styles.append(parser.allocator, .{
+            .key = .default,
+            .style_text = style_text,
+        });
+        return;
+    }
+
+    var it = std.mem.splitScalar(u8, target, ',');
+    while (it.next()) |tok| {
+        const t = std.mem.trim(u8, tok, " \t");
+        if (t.len == 0) continue;
+        const idx = std.fmt.parseInt(u32, t, 10) catch continue;
+        try parser.link_styles.append(parser.allocator, .{
+            .key = .{ .index = idx },
+            .style_text = style_text,
+        });
+    }
+}
+
+/// Accepted only inside a subgraph; top-level direction lines are a silent
+/// no-op (intentional deviation from upstream).
+fn parseDirectionLine(parser: *Parser, rest: []const u8) ParseError!void {
+    const token = std.mem.trim(u8, rest, " \t");
+    if (token.len == 0) return;
+    const dir = types.Direction.fromString(token) orelse return;
+    if (parser.ctx_stack.items.len == 0) return;
+    const top = &parser.ctx_stack.items[parser.ctx_stack.items.len - 1];
+    top.direction = dir;
 }
 
 fn parseHeader(line: []const u8) ParseError!types.Direction {
@@ -114,33 +415,7 @@ fn parseHeader(line: []const u8) ParseError!types.Direction {
     return direction;
 }
 
-fn isUnsupportedStatement(line: []const u8) bool {
-    _ = line;
-    return false;
-}
-
-fn isSilentlySkipped(line: []const u8) bool {
-    const prefixes = [_][]const u8{
-        "subgraph",
-        "classDef",
-        "class ",
-        "style ",
-        "linkStyle",
-        "direction",
-        "click",
-    };
-    for (prefixes) |kw| {
-        if (std.ascii.startsWithIgnoreCase(line, kw)) return true;
-    }
-    if (std.ascii.eqlIgnoreCase(line, "end")) return true;
-    return false;
-}
-
 fn parseContentLine(parser: *Parser, trimmed: []const u8) ParseError!void {
-    if (isSilentlySkipped(trimmed)) return;
-
-    if (isUnsupportedStatement(trimmed)) return error.UnsupportedFeature;
-
     const first_arrow = (try findArrow(trimmed)) orelse {
         const ids = try parseNodeSpecList(parser, trimmed);
         parser.allocator.free(ids);
@@ -502,7 +777,10 @@ fn parseNodeSpecList(parser: *Parser, text: []const u8) ParseError![]types.NodeI
                 break :blk nb_alpha or nb_digit or nb == '_';
             };
             if (i == ident_start) {
-                if (!is_alpha) return error.InvalidMermaid;
+                // Upstream accepts `[\w-]+` at any position; digits and
+                // underscores may start an id (e.g. `1 --> 2`). Hyphen start
+                // stays disallowed so arrow tokens are not misread.
+                if (!is_alpha and !is_digit and !is_underscore) return error.InvalidMermaid;
                 continue;
             }
             if (!is_alpha and !is_digit and !is_underscore and !is_hyphen) break;
@@ -527,7 +805,15 @@ fn parseNodeSpecList(parser: *Parser, text: []const u8) ParseError![]types.NodeI
 
         if (i + 2 < text.len and text[i] == ':' and text[i + 1] == ':' and text[i + 2] == ':') {
             i += 3;
+            const class_start = i;
             while (i < text.len and text[i] != ' ' and text[i] != '\t' and text[i] != '&') : (i += 1) {}
+            const class_name = text[class_start..i];
+            if (class_name.len > 0) {
+                try parser.class_assignments.append(parser.allocator, .{
+                    .node = id,
+                    .class_name = class_name,
+                });
+            }
         }
 
         while (i < text.len and (text[i] == ' ' or text[i] == '\t')) : (i += 1) {}
@@ -685,7 +971,7 @@ test "silently skips click statements" {
     try std.testing.expectEqual(@as(usize, 1), graph.edges.len);
 }
 
-test "silently skips subgraph / end" {
+test "preserves subgraph as AST entry while keeping edges flat" {
     var graph = try parseSource(std.testing.allocator,
         \\graph TD
         \\    subgraph outer
@@ -695,9 +981,13 @@ test "silently skips subgraph / end" {
     );
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 2), graph.edges.len);
+    try std.testing.expectEqual(@as(usize, 1), graph.subgraphs.len);
+    try std.testing.expectEqualStrings("outer", graph.subgraphs[0].id_text);
+    try std.testing.expectEqual(@as(usize, 1), graph.subgraphs[0].edge_indices.len);
+    try std.testing.expectEqual(@as(usize, 2), graph.subgraphs[0].node_ids.len);
 }
 
-test "silently skips classDef / style / :::className" {
+test "preserves classDef / class assignment / style and :::className" {
     var graph = try parseSource(std.testing.allocator,
         \\graph TD
         \\    classDef warn fill:#f00
@@ -707,6 +997,184 @@ test "silently skips classDef / style / :::className" {
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 1), graph.edges.len);
     try std.testing.expectEqualStrings("Alert", graph.nodes[0].label);
+    try std.testing.expectEqual(@as(usize, 1), graph.class_defs.len);
+    try std.testing.expectEqualStrings("warn", graph.class_defs[0].name);
+    try std.testing.expectEqualStrings("fill:#f00", graph.class_defs[0].style_text);
+    try std.testing.expectEqual(@as(usize, 1), graph.class_assignments.len);
+    try std.testing.expectEqualStrings("warn", graph.class_assignments[0].class_name);
+    try std.testing.expectEqual(@as(usize, 1), graph.node_styles.len);
+    try std.testing.expectEqualStrings("fill:#0f0", graph.node_styles[0].style_text);
+}
+
+test "parses nested subgraphs into tree" {
+    var graph = try parseSource(std.testing.allocator,
+        \\graph TD
+        \\    subgraph A
+        \\        subgraph B
+        \\            X --> Y
+        \\        end
+        \\    end
+    );
+    defer graph.deinit();
+    try std.testing.expectEqual(@as(usize, 1), graph.subgraphs.len);
+    try std.testing.expectEqualStrings("A", graph.subgraphs[0].id_text);
+    try std.testing.expectEqual(@as(usize, 1), graph.subgraphs[0].children.len);
+    try std.testing.expectEqualStrings("B", graph.subgraphs[0].children[0].id_text);
+    try std.testing.expectEqual(@as(usize, 2), graph.subgraphs[0].children[0].node_ids.len);
+}
+
+test "slugifies label-only subgraph (upstream rule: spaces->_, non-word removed, case preserved)" {
+    var graph = try parseSource(std.testing.allocator,
+        \\graph TD
+        \\    subgraph My Flow
+        \\        A --> B
+        \\    end
+    );
+    defer graph.deinit();
+    try std.testing.expectEqual(@as(usize, 1), graph.subgraphs.len);
+    try std.testing.expectEqualStrings("My_Flow", graph.subgraphs[0].id_text);
+    try std.testing.expectEqualStrings("My Flow", graph.subgraphs[0].title.?);
+}
+
+test "slugifies subgraph label drops non-word chars" {
+    var graph = try parseSource(std.testing.allocator,
+        \\graph TD
+        \\    subgraph Hello, World!
+        \\    end
+    );
+    defer graph.deinit();
+    try std.testing.expectEqualStrings("Hello_World", graph.subgraphs[0].id_text);
+}
+
+test "subgraph id [title] form preserves both separately" {
+    var graph = try parseSource(std.testing.allocator,
+        \\graph TD
+        \\    subgraph us-east [US East]
+        \\        A --> B
+        \\    end
+    );
+    defer graph.deinit();
+    try std.testing.expectEqualStrings("us-east", graph.subgraphs[0].id_text);
+    try std.testing.expectEqualStrings("US East", graph.subgraphs[0].title.?);
+}
+
+test "linkStyle default is stored with .default key" {
+    var graph = try parseSource(std.testing.allocator,
+        \\graph TD
+        \\    A --> B
+        \\    linkStyle default stroke:red
+    );
+    defer graph.deinit();
+    try std.testing.expectEqual(@as(usize, 1), graph.link_styles.len);
+    try std.testing.expect(graph.link_styles[0].key == .default);
+    try std.testing.expectEqualStrings("stroke:red", graph.link_styles[0].style_text);
+}
+
+test "linkStyle with multiple indices produces multiple entries" {
+    var graph = try parseSource(std.testing.allocator,
+        \\graph TD
+        \\    A --> B
+        \\    A --> C
+        \\    A --> D
+        \\    linkStyle 0,2 stroke:blue
+    );
+    defer graph.deinit();
+    try std.testing.expectEqual(@as(usize, 2), graph.link_styles.len);
+    try std.testing.expectEqual(@as(u32, 0), graph.link_styles[0].key.index);
+    try std.testing.expectEqual(@as(u32, 2), graph.link_styles[1].key.index);
+}
+
+test "layout exposes subgraph frame bounding box with title" {
+    var graph = try parseSource(std.testing.allocator,
+        \\graph TD
+        \\    subgraph inner
+        \\        A --> B
+        \\    end
+        \\    B --> C
+    );
+    defer graph.deinit();
+
+    var layout = try @import("layout_flowchart.zig").computeLayout(std.testing.allocator, &graph, .narrow);
+    defer layout.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), layout.subgraph_frames.len);
+    const frame = layout.subgraph_frames[0];
+    try std.testing.expectEqualStrings("inner", frame.title.?);
+    try std.testing.expectEqual(@as(usize, 0), frame.depth);
+    try std.testing.expectEqual(@as(usize, 0), frame.row_start);
+    try std.testing.expectEqual(@as(usize, 1), frame.row_end);
+}
+
+test "subgraph direction LR arranges members horizontally in a TD diagram" {
+    var graph = try parseSource(std.testing.allocator,
+        \\graph TD
+        \\    subgraph inner
+        \\        direction LR
+        \\        A --> B --> C
+        \\    end
+    );
+    defer graph.deinit();
+
+    var layout = try @import("layout_flowchart.zig").computeLayout(std.testing.allocator, &graph, .narrow);
+    defer layout.deinit();
+
+    // LR direction: A, B, C should share the same row but occupy different
+    // columns (level axis swapped to column axis within the band).
+    const row_a = layout.positions[0].row;
+    const row_b = layout.positions[1].row;
+    const row_c = layout.positions[2].row;
+    try std.testing.expectEqual(row_a, row_b);
+    try std.testing.expectEqual(row_b, row_c);
+
+    const col_a = layout.positions[0].col;
+    const col_b = layout.positions[1].col;
+    const col_c = layout.positions[2].col;
+    try std.testing.expect(col_a < col_b);
+    try std.testing.expect(col_b < col_c);
+}
+
+test "direction inside subgraph overrides subgraph direction" {
+    var graph = try parseSource(std.testing.allocator,
+        \\graph TD
+        \\    subgraph inner
+        \\        direction LR
+        \\        A --> B
+        \\    end
+    );
+    defer graph.deinit();
+    try std.testing.expectEqual(types.Direction.top_down, graph.direction);
+    try std.testing.expectEqual(types.Direction.left_right, graph.subgraphs[0].direction.?);
+}
+
+test "accepts numeric flowchart identifiers" {
+    var graph = try parseSource(std.testing.allocator, "graph TD\n    1 --> 2\n");
+    defer graph.deinit();
+    try std.testing.expectEqual(@as(usize, 2), graph.nodes.len);
+    try std.testing.expectEqualStrings("1", graph.nodes[0].id_text);
+    try std.testing.expectEqualStrings("2", graph.nodes[1].id_text);
+    try std.testing.expectEqual(@as(usize, 1), graph.edges.len);
+}
+
+test "flowchart identifier starting with click prefix is not skipped" {
+    var graph = try parseSource(std.testing.allocator,
+        \\graph TD
+        \\    clickbait --> B
+    );
+    defer graph.deinit();
+    try std.testing.expectEqual(@as(usize, 2), graph.nodes.len);
+    try std.testing.expectEqualStrings("clickbait", graph.nodes[0].id_text);
+    try std.testing.expectEqual(@as(usize, 1), graph.edges.len);
+}
+
+test "top-level direction is accepted but does not mutate graph.direction" {
+    var graph = try parseSource(std.testing.allocator,
+        \\graph TD
+        \\    direction LR
+        \\    A --> B
+    );
+    defer graph.deinit();
+    try std.testing.expectEqual(types.Direction.top_down, graph.direction);
+    try std.testing.expectEqual(@as(usize, 1), graph.edges.len);
 }
 
 test "parses graph TD header" {
