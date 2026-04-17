@@ -405,10 +405,12 @@ pub const GitGraph = struct {
     allocator: std.mem.Allocator,
     branches: []GitBranch,
     commits: []GitCommit,
+    source_buf: ?[]u8 = null,
 
     pub fn deinit(self: *GitGraph) void {
         self.allocator.free(self.branches);
         self.allocator.free(self.commits);
+        if (self.source_buf) |b| self.allocator.free(b);
     }
 };
 

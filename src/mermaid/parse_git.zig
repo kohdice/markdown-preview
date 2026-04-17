@@ -1,5 +1,6 @@
 const std = @import("std");
 const types = @import("types.zig");
+const directive = @import("directive.zig");
 
 pub const ParseError = error{
     InvalidMermaid,
@@ -58,6 +59,12 @@ const Parser = struct {
 };
 
 pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!types.GitGraph {
+    const stripped = directive.stripInitDirectives(allocator, source, &.{"\"gitGraph\""}) catch |err| switch (err) {
+        error.UnsupportedFeature => return error.UnsupportedFeature,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    errdefer allocator.free(stripped);
+
     var parser: Parser = .{ .allocator = allocator };
     defer parser.branch_index.deinit(allocator);
     errdefer {
@@ -67,7 +74,7 @@ pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!
 
     var header_seen = false;
 
-    var it = std.mem.splitScalar(u8, source, '\n');
+    var it = std.mem.splitScalar(u8, stripped, '\n');
     while (it.next()) |raw| {
         const stripped_cr = std.mem.trimRight(u8, raw, "\r");
         const trimmed = std.mem.trim(u8, stripped_cr, " \t");
@@ -94,6 +101,7 @@ pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!
         .allocator = allocator,
         .branches = branches,
         .commits = commits,
+        .source_buf = stripped,
     };
 }
 
@@ -376,9 +384,17 @@ test "rejects branch order: suffix" {
     ));
 }
 
-test "silently skips init directive" {
-    var g = try parseSource(std.testing.allocator,
+test "rejects init directive carrying gitGraph config" {
+    try std.testing.expectError(error.UnsupportedFeature, parseSource(std.testing.allocator,
         \\%%{init: { "gitGraph": { "mainBranchName": "trunk" } }}%%
+        \\gitGraph
+        \\    commit
+    ));
+}
+
+test "silently skips theme-only init directive" {
+    var g = try parseSource(std.testing.allocator,
+        \\%%{init: { "theme": "dark" }}%%
         \\gitGraph
         \\    commit
     );
