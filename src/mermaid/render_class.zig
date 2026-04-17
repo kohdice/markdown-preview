@@ -374,14 +374,14 @@ test "writeClass renders class box with name and members" {
     try writeClass(&sink.writer, alloc,
         \\classDiagram
         \\    class Animal
-        \\    Animal : +name str
+        \\    Animal : +str name
         \\    Animal : +eat()
     , .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "Animal") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "+ name str") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "+ eat()") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "+ name") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "+ eat") != null);
 }
 
 test "writeClass renders inheritance with triangle head" {

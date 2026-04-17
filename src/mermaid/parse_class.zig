@@ -254,43 +254,42 @@ fn parseClassDeclaration(parser: *Parser, rest: []const u8) ParseError!void {
     const opens_block = trimmed.len > 0 and trimmed[trimmed.len - 1] == '{';
     if (opens_block) body = std.mem.trimRight(u8, trimmed[0 .. trimmed.len - 1], " \t");
 
-    var end: usize = 0;
-    while (end < body.len) : (end += 1) {
-        const b = body[end];
-        const is_alpha = (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z');
-        const is_digit = b >= '0' and b <= '9';
-        const is_underscore = b == '_';
-        if (end == 0) {
-            if (!is_alpha) return error.InvalidMermaid;
-        } else {
-            if (!is_alpha and !is_digit and !is_underscore) break;
+    const match = matchClassNameAndGeneric(body) orelse return;
+    const name = body[0..match.name_end];
+
+    var inline_annotation: ?[]const u8 = null;
+    if (!opens_block) {
+        const after_name = std.mem.trim(u8, body[match.tail_start..], " \t");
+        if (after_name.len != 0) {
+            if (tryBracedStereotype(after_name)) |stereo| {
+                try validateLabel(stereo);
+                inline_annotation = stereo;
+            } else {
+                return;
+            }
         }
     }
-    if (end == 0) return error.InvalidMermaid;
-    const name = body[0..end];
+
     const id = try parser.intern(name);
     try parser.recordClassId(id);
 
-    var cursor = end;
-    while (cursor < body.len and (body[cursor] == ' ' or body[cursor] == '\t')) : (cursor += 1) {}
-    if (cursor < body.len and body[cursor] == '~') {
-        cursor += 1;
-        const param_start = cursor;
-        while (cursor < body.len and body[cursor] != '~') : (cursor += 1) {}
-        if (cursor >= body.len) return error.InvalidMermaid;
-        const param = body[param_start..cursor];
-        cursor += 1;
-        try validateLabel(param);
-        const label = try std.fmt.allocPrint(parser.allocator, "{s}<{s}>", .{ name, param });
+    if (match.generic) |gen| {
+        try validateLabel(gen);
+        const label = try std.fmt.allocPrint(parser.allocator, "{s}<{s}>", .{ name, gen });
         parser.classes.items[id].label = label;
         try parser.owned_labels.append(parser.allocator, label);
+    }
+
+    if (inline_annotation) |stereo| {
+        parser.classes.items[id].annotation = stereo;
+        return;
     }
 
     if (opens_block) {
         parser.in_block = true;
         parser.block_class = id;
 
-        const after_open = std.mem.trim(u8, body[cursor..], " \t");
+        const after_open = std.mem.trim(u8, body[match.tail_start..], " \t");
         if (after_open.len > 0 and std.mem.endsWith(u8, after_open, "}")) {
             const inner = std.mem.trim(u8, after_open[0 .. after_open.len - 1], " \t");
             if (tryInlineStereotype(inner)) |stereo| {
@@ -299,31 +298,76 @@ fn parseClassDeclaration(parser: *Parser, rest: []const u8) ParseError!void {
             }
             parser.in_block = false;
         }
-        return;
     }
+}
 
-    const after_name = std.mem.trim(u8, body[cursor..], " \t");
-    if (after_name.len == 0) return;
+const ClassNameMatch = struct {
+    /// Index into body where the class name ends.
+    name_end: usize,
+    /// Inner text of the `~...~` generic parameter, if any.
+    generic: ?[]const u8,
+    /// Index into body where trailing content (annotation/block) starts.
+    tail_start: usize,
+};
 
-    if (tryInlineStereotype(after_name)) |stereo| {
-        try validateLabel(stereo);
-        parser.classes.items[id].annotation = stereo;
-        return;
+/// Emulates upstream `^class\s+(\S+?)(?:\s*~(\w+)~)?` with non-greedy `\S+?`:
+/// pick the shortest prefix for which `~(\w+)~` matches or the suffix is empty
+/// or starts with whitespace. Fall back to the full `\S+` run as a bare ID.
+fn matchClassNameAndGeneric(body: []const u8) ?ClassNameMatch {
+    if (body.len == 0 or std.ascii.isWhitespace(body[0])) return null;
+
+    var i: usize = 1;
+    while (i <= body.len) : (i += 1) {
+        if (i < body.len) {
+            const c = body[i];
+            if (std.ascii.isWhitespace(c)) {
+                return .{ .name_end = i, .generic = null, .tail_start = i };
+            }
+            if (c == '~') {
+                if (matchTildeWordTilde(body, i)) |gen_end| {
+                    return .{
+                        .name_end = i,
+                        .generic = body[i + 1 .. gen_end],
+                        .tail_start = gen_end + 1,
+                    };
+                }
+            }
+        } else {
+            return .{ .name_end = body.len, .generic = null, .tail_start = body.len };
+        }
     }
-    return error.InvalidMermaid;
+    return null;
+}
+
+fn matchTildeWordTilde(body: []const u8, start: usize) ?usize {
+    if (start >= body.len or body[start] != '~') return null;
+    var i: usize = start + 1;
+    if (i >= body.len) return null;
+    while (i < body.len) : (i += 1) {
+        const c = body[i];
+        if (c == '~') {
+            if (i == start + 1) return null;
+            return i;
+        }
+        const is_word = std.ascii.isAlphanumeric(c) or c == '_';
+        if (!is_word) return null;
+    }
+    return null;
 }
 
 fn tryInlineStereotype(text: []const u8) ?[]const u8 {
-    var inner = text;
-    if (inner.len >= 2 and inner[0] == '{' and inner[inner.len - 1] == '}') {
-        inner = std.mem.trim(u8, inner[1 .. inner.len - 1], " \t");
-    }
-    if (inner.len < 4) return null;
-    if (!std.mem.startsWith(u8, inner, "<<")) return null;
-    if (!std.mem.endsWith(u8, inner, ">>")) return null;
-    const name = std.mem.trim(u8, inner[2 .. inner.len - 2], " \t");
+    if (text.len < 4) return null;
+    if (!std.mem.startsWith(u8, text, "<<")) return null;
+    if (!std.mem.endsWith(u8, text, ">>")) return null;
+    const name = std.mem.trim(u8, text[2 .. text.len - 2], " \t");
     if (name.len == 0) return null;
     return name;
+}
+
+fn tryBracedStereotype(text: []const u8) ?[]const u8 {
+    if (text.len < 2 or text[0] != '{' or text[text.len - 1] != '}') return null;
+    const inner = std.mem.trim(u8, text[1 .. text.len - 1], " \t");
+    return tryInlineStereotype(inner);
 }
 
 fn parseBlockBodyLine(parser: *Parser, line: []const u8) ParseError!void {
@@ -336,32 +380,101 @@ fn parseBlockBodyLine(parser: *Parser, line: []const u8) ParseError!void {
     }
 
     try validateLabel(line);
+    const member = try parseMemberExpr(line);
+    if (member.is_method) {
+        try parser.classes.items[parser.block_class].methods.append(parser.allocator, member.value);
+    } else {
+        try parser.classes.items[parser.block_class].attributes.append(parser.allocator, member.value);
+    }
+}
 
+const ParsedMember = struct {
+    value: types.ClassMember,
+    is_method: bool,
+};
+
+/// Parses `visibility? rest` where `rest` is either a method
+/// `name(params) ReturnType` or an attribute `Type name` (whitespace-split).
+/// Upstream equivalent: `src/class/parser.ts parseMember`.
+fn parseMemberExpr(line: []const u8) ParseError!ParsedMember {
     var visibility: types.Visibility = .unknown;
-    var body = line;
-    if (body.len > 0) {
-        visibility = switch (body[0]) {
+    var rest = line;
+    if (rest.len > 0) {
+        visibility = switch (rest[0]) {
             '+' => .public,
             '-' => .private,
             '#' => .protected,
             '~' => .package,
             else => .unknown,
         };
-        if (visibility != .unknown) body = std.mem.trimLeft(u8, body[1..], " \t");
+        if (visibility != .unknown) rest = std.mem.trimLeft(u8, rest[1..], " \t");
     }
-    if (body.len == 0) return error.InvalidMermaid;
+    if (rest.len == 0) return error.InvalidMermaid;
 
-    const is_method = std.mem.indexOfScalar(u8, body, '(') != null;
-    const member: types.ClassMember = .{
-        .visibility = visibility,
-        .name = body,
+    if (std.mem.indexOfScalar(u8, rest, '(')) |open_idx| {
+        if (std.mem.indexOfScalarPos(u8, rest, open_idx + 1, ')')) |close_idx| {
+            const name_raw = rest[0..open_idx];
+            const params = rest[open_idx + 1 .. close_idx];
+            const type_raw = std.mem.trimLeft(u8, rest[close_idx + 1 ..], " \t");
+
+            var name = name_raw;
+            var is_static = false;
+            var is_abstract = false;
+            if (name.len > 0 and name[name.len - 1] == '$') {
+                is_static = true;
+                name = name[0 .. name.len - 1];
+            }
+            if (name.len > 0 and name[name.len - 1] == '*') {
+                is_abstract = true;
+                name = name[0 .. name.len - 1];
+            }
+            if (std.mem.indexOfScalar(u8, rest, '$') != null) is_static = true;
+            if (std.mem.indexOfScalar(u8, rest, '*') != null) is_abstract = true;
+            const type_text: ?[]const u8 = if (type_raw.len == 0) null else type_raw;
+
+            return .{
+                .value = .{
+                    .visibility = visibility,
+                    .name = name,
+                    .type_text = type_text,
+                    .is_static = is_static,
+                    .is_abstract = is_abstract,
+                    .params = params,
+                },
+                .is_method = true,
+            };
+        }
+    }
+
+    var it = std.mem.tokenizeAny(u8, rest, " \t");
+    const first = it.next() orelse return error.InvalidMermaid;
+    var last: []const u8 = first;
+    while (it.next()) |tok| last = tok;
+
+    var name = last;
+    var type_text: ?[]const u8 = if (last.ptr == first.ptr) null else first;
+    var is_static = false;
+    var is_abstract = false;
+    if (name.len > 0 and name[name.len - 1] == '$') {
+        is_static = true;
+        name = name[0 .. name.len - 1];
+    }
+    if (name.len > 0 and name[name.len - 1] == '*') {
+        is_abstract = true;
+        name = name[0 .. name.len - 1];
+    }
+    _ = &type_text;
+
+    return .{
+        .value = .{
+            .visibility = visibility,
+            .name = name,
+            .type_text = type_text,
+            .is_static = is_static,
+            .is_abstract = is_abstract,
+        },
+        .is_method = false,
     };
-
-    if (is_method) {
-        try parser.classes.items[parser.block_class].methods.append(parser.allocator, member);
-    } else {
-        try parser.classes.items[parser.block_class].attributes.append(parser.allocator, member);
-    }
 }
 
 const MemberError = ParseError || error{NotMember};
@@ -375,32 +488,14 @@ fn parseMemberLine(parser: *Parser, line: []const u8) MemberError!void {
     validateIdent(name_part) catch return error.NotMember;
     try validateLabel(member_text);
 
-    var visibility: types.Visibility = .unknown;
-    var body = member_text;
-    if (member_text.len > 0) {
-        visibility = switch (member_text[0]) {
-            '+' => .public,
-            '-' => .private,
-            '#' => .protected,
-            '~' => .package,
-            else => .unknown,
-        };
-        if (visibility != .unknown) body = std.mem.trimLeft(u8, member_text[1..], " \t");
-    }
-    if (body.len == 0) return error.InvalidMermaid;
-
-    const is_method = std.mem.indexOfScalar(u8, body, '(') != null;
-    const member: types.ClassMember = .{
-        .visibility = visibility,
-        .name = body,
-    };
+    const parsed = try parseMemberExpr(member_text);
 
     const id = try parser.intern(name_part);
     try parser.recordClassId(id);
-    if (is_method) {
-        try parser.classes.items[id].methods.append(parser.allocator, member);
+    if (parsed.is_method) {
+        try parser.classes.items[id].methods.append(parser.allocator, parsed.value);
     } else {
-        try parser.classes.items[id].attributes.append(parser.allocator, member);
+        try parser.classes.items[id].attributes.append(parser.allocator, parsed.value);
     }
 }
 
@@ -562,18 +657,26 @@ test "parses composition and aggregation relations" {
     try std.testing.expectEqual(types.ClassMarkerAt.from, d.relations[1].marker_at);
 }
 
-test "parses member fields and methods" {
+test "parses member fields and methods (upstream Type name split)" {
     var d = try parseSource(std.testing.allocator,
         \\classDiagram
-        \\    Animal : +name str
+        \\    Animal : +str name
         \\    Animal : +eat()
     );
     defer d.deinit();
     try std.testing.expectEqual(@as(usize, 1), d.classes.len);
     try std.testing.expectEqual(@as(usize, 1), d.classes[0].attributes.len);
     try std.testing.expectEqual(@as(usize, 1), d.classes[0].methods.len);
-    try std.testing.expectEqual(types.Visibility.public, d.classes[0].attributes[0].visibility);
-    try std.testing.expectEqual(types.Visibility.public, d.classes[0].methods[0].visibility);
+
+    const attr = d.classes[0].attributes[0];
+    try std.testing.expectEqual(types.Visibility.public, attr.visibility);
+    try std.testing.expectEqualStrings("name", attr.name);
+    try std.testing.expectEqualStrings("str", attr.type_text.?);
+
+    const meth = d.classes[0].methods[0];
+    try std.testing.expectEqual(types.Visibility.public, meth.visibility);
+    try std.testing.expectEqualStrings("eat", meth.name);
+    try std.testing.expectEqualStrings("", meth.params.?);
 }
 
 test "parses relation with label" {
@@ -617,7 +720,7 @@ test "parses generic class declaration with tilde parameter" {
     try std.testing.expectEqualStrings("List<T>", d.classes[0].label);
 }
 
-test "parses generic class declaration in block form" {
+test "parses multi-param tilde generic as raw ID (upstream non-greedy)" {
     var d = try parseSource(std.testing.allocator,
         \\classDiagram
         \\    class Map~K,V~ {
@@ -625,8 +728,21 @@ test "parses generic class declaration in block form" {
         \\    }
     );
     defer d.deinit();
-    try std.testing.expectEqualStrings("Map<K,V>", d.classes[0].label);
+    try std.testing.expectEqual(@as(usize, 1), d.classes.len);
+    try std.testing.expectEqualStrings("Map~K,V~", d.classes[0].id_text);
+    try std.testing.expectEqualStrings("Map~K,V~", d.classes[0].label);
     try std.testing.expectEqual(@as(usize, 1), d.classes[0].methods.len);
+}
+
+test "parses multi-param tilde standalone class" {
+    var d = try parseSource(std.testing.allocator,
+        \\classDiagram
+        \\    class Map~K,V~
+    );
+    defer d.deinit();
+    try std.testing.expectEqual(@as(usize, 1), d.classes.len);
+    try std.testing.expectEqualStrings("Map~K,V~", d.classes[0].id_text);
+    try std.testing.expectEqualStrings("Map~K,V~", d.classes[0].label);
 }
 
 test "parses multiplicity and retains cardinality strings" {
@@ -701,15 +817,13 @@ test "parses inline annotation class Foo { <<interface>> }" {
     try std.testing.expectEqualStrings("interface", d.classes[0].annotation.?);
 }
 
-test "parses trailing annotation class Foo <<interface>>" {
+test "silently ignores trailing annotation class Foo <<interface>>" {
     var d = try parseSource(std.testing.allocator,
         \\classDiagram
         \\    class Repository <<interface>>
     );
     defer d.deinit();
-    try std.testing.expectEqual(@as(usize, 1), d.classes.len);
-    try std.testing.expectEqualStrings("Repository", d.classes[0].id_text);
-    try std.testing.expectEqualStrings("interface", d.classes[0].annotation.?);
+    try std.testing.expectEqual(@as(usize, 0), d.classes.len);
 }
 
 test "silently skips separate-line <<annotation>> shorthand" {
