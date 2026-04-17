@@ -78,17 +78,11 @@ fn validateLabel(label: []const u8) ParseError!void {
     }
 }
 
+/// Upstream `\S+?` — any non-empty, non-whitespace sequence.
 fn validateIdent(text: []const u8) ParseError!void {
     if (text.len == 0) return error.InvalidMermaid;
-    for (text, 0..) |b, i| {
-        const is_alpha = (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z');
-        const is_digit = b >= '0' and b <= '9';
-        const is_underscore = b == '_';
-        if (i == 0) {
-            if (!is_alpha) return error.InvalidMermaid;
-        } else {
-            if (!is_alpha and !is_digit and !is_underscore) return error.InvalidMermaid;
-        }
+    for (text) |b| {
+        if (std.ascii.isWhitespace(b)) return error.InvalidMermaid;
     }
 }
 
@@ -824,6 +818,112 @@ test "silently ignores trailing annotation class Foo <<interface>>" {
     );
     defer d.deinit();
     try std.testing.expectEqual(@as(usize, 0), d.classes.len);
+}
+
+test "parses class attribute Type name split" {
+    var d = try parseSource(std.testing.allocator,
+        \\classDiagram
+        \\    class C {
+        \\        +int count
+        \\    }
+    );
+    defer d.deinit();
+    try std.testing.expectEqual(@as(usize, 1), d.classes[0].attributes.len);
+    const a = d.classes[0].attributes[0];
+    try std.testing.expectEqualStrings("count", a.name);
+    try std.testing.expectEqualStrings("int", a.type_text.?);
+    try std.testing.expect(!a.is_static);
+    try std.testing.expect(!a.is_abstract);
+}
+
+test "parses class static attribute" {
+    var d = try parseSource(std.testing.allocator,
+        \\classDiagram
+        \\    class C {
+        \\        +count$
+        \\    }
+    );
+    defer d.deinit();
+    const a = d.classes[0].attributes[0];
+    try std.testing.expectEqualStrings("count", a.name);
+    try std.testing.expect(a.is_static);
+}
+
+test "parses class method with return type" {
+    var d = try parseSource(std.testing.allocator,
+        \\classDiagram
+        \\    class C {
+        \\        +save(entity) Result
+        \\    }
+    );
+    defer d.deinit();
+    const m = d.classes[0].methods[0];
+    try std.testing.expectEqualStrings("save", m.name);
+    try std.testing.expectEqualStrings("entity", m.params.?);
+    try std.testing.expectEqualStrings("Result", m.type_text.?);
+}
+
+test "parses class abstract method with star after paren" {
+    var d = try parseSource(std.testing.allocator,
+        \\classDiagram
+        \\    class C {
+        \\        +run()*
+        \\    }
+    );
+    defer d.deinit();
+    const m = d.classes[0].methods[0];
+    try std.testing.expectEqualStrings("run", m.name);
+    try std.testing.expect(m.is_abstract);
+    try std.testing.expectEqualStrings("*", m.type_text.?);
+}
+
+test "parses class abstract method with star in name" {
+    var d = try parseSource(std.testing.allocator,
+        \\classDiagram
+        \\    class C {
+        \\        +run*()
+        \\    }
+    );
+    defer d.deinit();
+    const m = d.classes[0].methods[0];
+    try std.testing.expectEqualStrings("run", m.name);
+    try std.testing.expect(m.is_abstract);
+}
+
+test "accepts dotted class IDs in relations" {
+    var d = try parseSource(std.testing.allocator,
+        \\classDiagram
+        \\    com.example.Foo --> com.example.Bar
+    );
+    defer d.deinit();
+    try std.testing.expectEqual(@as(usize, 2), d.classes.len);
+    try std.testing.expectEqualStrings("com.example.Foo", d.classes[0].id_text);
+    try std.testing.expectEqualStrings("com.example.Bar", d.classes[1].id_text);
+    try std.testing.expectEqual(@as(usize, 1), d.relations.len);
+}
+
+test "inheritance right-side marker places marker_at on to" {
+    var d = try parseSource(std.testing.allocator,
+        \\classDiagram
+        \\    Dog --|> Cat
+    );
+    defer d.deinit();
+    try std.testing.expectEqual(@as(usize, 1), d.relations.len);
+    try std.testing.expectEqual(types.ClassRelationKind.inheritance, d.relations[0].kind);
+    try std.testing.expectEqual(types.ClassMarkerAt.to, d.relations[0].marker_at);
+    try std.testing.expectEqualStrings("Dog", d.classes[d.relations[0].from].id_text);
+    try std.testing.expectEqualStrings("Cat", d.classes[d.relations[0].to].id_text);
+}
+
+test "bare -- is association with marker_at to" {
+    var d = try parseSource(std.testing.allocator,
+        \\classDiagram
+        \\    A -- B
+    );
+    defer d.deinit();
+    try std.testing.expectEqual(@as(usize, 1), d.relations.len);
+    try std.testing.expectEqual(types.ClassRelationKind.association, d.relations[0].kind);
+    try std.testing.expectEqual(types.ClassMarkerAt.to, d.relations[0].marker_at);
 }
 
 test "silently skips separate-line <<annotation>> shorthand" {
