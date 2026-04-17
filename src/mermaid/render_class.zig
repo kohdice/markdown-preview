@@ -16,6 +16,16 @@ pub const RenderError = error{
 pub const Options = struct {
     wrap_width: ?usize,
     ambiguous_width: width_mod.AmbiguousWidth,
+    enable_ansi: bool = false,
+};
+
+const StyleKind = enum { static_, abstract_ };
+
+const StyledSpan = struct {
+    row: usize,
+    col_start: usize,
+    col_end: usize,
+    kind: StyleKind,
 };
 
 pub fn writeClass(
@@ -57,11 +67,14 @@ pub fn writeClass(
         drawNamespaceFrame(&canvas, &flow_layout, &diagram, ns, &glyphs, opts.ambiguous_width);
     }
 
+    var spans: std.ArrayListUnmanaged(StyledSpan) = .empty;
+    defer spans.deinit(allocator);
+
     for (diagram.classes, 0..) |cls, i| {
         const pos = flow_layout.positions[i];
         const top = route_mod.boxTop(&flow_layout, pos.row);
         const left = route_mod.boxLeft(&flow_layout, pos.col);
-        drawClassBox(&canvas, top, left, actualBoxHeight(&cls), flow_layout.cell_w, &cls, &glyphs, opts.ambiguous_width);
+        try drawClassBox(allocator, &canvas, top, left, actualBoxHeight(&cls), flow_layout.cell_w, &cls, &glyphs, opts.ambiguous_width, if (opts.enable_ansi) &spans else null);
     }
 
     for (diagram.relations) |rel| {
@@ -74,7 +87,105 @@ pub fn writeClass(
         error.OutOfMemory => return error.OutOfMemory,
     };
 
-    canvas_mod.writeCanvas(writer, &canvas, opts.wrap_width, opts.ambiguous_width) catch return error.WriteFailed;
+    if (opts.enable_ansi and spans.items.len > 0) {
+        try writeCanvasWithSpans(writer, allocator, &canvas, spans.items, opts);
+    } else {
+        canvas_mod.writeCanvas(writer, &canvas, opts.wrap_width, opts.ambiguous_width) catch return error.WriteFailed;
+    }
+}
+
+fn writeCanvasWithSpans(
+    writer: *std.io.Writer,
+    allocator: std.mem.Allocator,
+    canvas: *const canvas_mod.Canvas,
+    spans: []const StyledSpan,
+    opts: Options,
+) RenderError!void {
+    var sink: std.io.Writer.Allocating = .init(allocator);
+    defer sink.deinit();
+    canvas_mod.writeCanvas(&sink.writer, canvas, opts.wrap_width, opts.ambiguous_width) catch return error.WriteFailed;
+
+    const plain = sink.writer.buffered();
+
+    var row: usize = 0;
+    var line_it = std.mem.splitScalar(u8, plain, '\n');
+    var first = true;
+    while (line_it.next()) |line| : (row += 1) {
+        if (!first) writer.writeByte('\n') catch return error.WriteFailed;
+        first = false;
+        try writeLineWithSpans(writer, line, row, spans, opts.ambiguous_width);
+    }
+}
+
+fn writeLineWithSpans(
+    writer: *std.io.Writer,
+    line: []const u8,
+    row: usize,
+    spans: []const StyledSpan,
+    ambiguous: width_mod.AmbiguousWidth,
+) RenderError!void {
+    var col: usize = 0;
+    var i: usize = 0;
+    var open_span: ?StyleKind = null;
+    while (i < line.len) {
+        const cp_len = std.unicode.utf8ByteSequenceLength(line[i]) catch 1;
+        const cp_end = @min(i + cp_len, line.len);
+        const cp_bytes = line[i..cp_end];
+        const cp_w: usize = if (cp_bytes.len == 1 and (cp_bytes[0] == ' ' or cp_bytes[0] == '\t'))
+            1
+        else
+            width_mod.displayWidth(cp_bytes, ambiguous);
+
+        if (open_span == null) {
+            if (findSpanStart(spans, row, col)) |kind| {
+                try writeStyleOpen(writer, kind);
+                open_span = kind;
+            }
+        }
+
+        writer.writeAll(cp_bytes) catch return error.WriteFailed;
+
+        if (open_span) |kind| {
+            if (spanEndsAt(spans, row, col + cp_w, kind)) {
+                try writeStyleClose(writer, kind);
+                open_span = null;
+            }
+        }
+
+        col += cp_w;
+        i = cp_end;
+    }
+    if (open_span) |kind| try writeStyleClose(writer, kind);
+}
+
+fn findSpanStart(spans: []const StyledSpan, row: usize, col: usize) ?StyleKind {
+    for (spans) |s| {
+        if (s.row == row and s.col_start == col) return s.kind;
+    }
+    return null;
+}
+
+fn spanEndsAt(spans: []const StyledSpan, row: usize, col: usize, kind: StyleKind) bool {
+    for (spans) |s| {
+        if (s.row == row and s.kind == kind and s.col_end == col) return true;
+    }
+    return false;
+}
+
+fn writeStyleOpen(writer: *std.io.Writer, kind: StyleKind) RenderError!void {
+    const seq: []const u8 = switch (kind) {
+        .static_ => "\x1b[4m",
+        .abstract_ => "\x1b[3m",
+    };
+    writer.writeAll(seq) catch return error.WriteFailed;
+}
+
+fn writeStyleClose(writer: *std.io.Writer, kind: StyleKind) RenderError!void {
+    const seq: []const u8 = switch (kind) {
+        .static_ => "\x1b[24m",
+        .abstract_ => "\x1b[23m",
+    };
+    writer.writeAll(seq) catch return error.WriteFailed;
 }
 
 const LayoutInfo = struct {
@@ -225,6 +336,7 @@ fn drawNamespaceFrame(
 }
 
 fn drawClassBox(
+    allocator: std.mem.Allocator,
     canvas: *canvas_mod.Canvas,
     top: usize,
     left: usize,
@@ -233,7 +345,8 @@ fn drawClassBox(
     cls: *const types.ClassNode,
     glyphs: *const canvas_mod.GlyphSet,
     ambiguous: width_mod.AmbiguousWidth,
-) void {
+    spans: ?*std.ArrayListUnmanaged(StyledSpan),
+) RenderError!void {
     canvas.drawRect(top, left, height, width, glyphs);
 
     const inner_w = width - 2;
@@ -263,7 +376,7 @@ fn drawClassBox(
     if (has_fields) {
         for (cls.attributes) |m| {
             if (row + 1 >= top + height) break;
-            drawMember(canvas, row, left, &m, false, ambiguous);
+            try drawMember(allocator, canvas, row, left, &m, false, ambiguous, spans);
             row += 1;
         }
     }
@@ -276,7 +389,7 @@ fn drawClassBox(
     if (has_methods) {
         for (cls.methods) |m| {
             if (row + 1 >= top + height) break;
-            drawMember(canvas, row, left, &m, true, ambiguous);
+            try drawMember(allocator, canvas, row, left, &m, true, ambiguous, spans);
             row += 1;
         }
     }
@@ -292,13 +405,15 @@ fn drawDivider(canvas: *canvas_mod.Canvas, row: usize, left: usize, width: usize
 }
 
 fn drawMember(
+    allocator: std.mem.Allocator,
     canvas: *canvas_mod.Canvas,
     row: usize,
     left: usize,
     member: *const types.ClassMember,
     is_method: bool,
     ambiguous: width_mod.AmbiguousWidth,
-) void {
+    spans: ?*std.ArrayListUnmanaged(StyledSpan),
+) RenderError!void {
     var col = left + 2;
     if (visibilitySigil(member.visibility)) |s| {
         canvas.setGlyph(row, col, s);
@@ -306,6 +421,7 @@ fn drawMember(
         canvas.setGlyph(row, col, ' ');
         col += 1;
     }
+    const label_start = col;
     canvas.drawLabel(row, col, member.name, ambiguous);
     col += width_mod.displayWidth(member.name, ambiguous);
     if (is_method) {
@@ -324,6 +440,16 @@ fn drawMember(
         canvas.setGlyph(row, col, ' ');
         col += 1;
         canvas.drawLabel(row, col, t, ambiguous);
+        col += width_mod.displayWidth(t, ambiguous);
+    }
+
+    if (spans) |list| {
+        if (member.is_static) {
+            list.append(allocator, .{ .row = row, .col_start = label_start, .col_end = col, .kind = .static_ }) catch return error.OutOfMemory;
+        }
+        if (member.is_abstract) {
+            list.append(allocator, .{ .row = row, .col_start = label_start, .col_end = col, .kind = .abstract_ }) catch return error.OutOfMemory;
+        }
     }
 }
 
@@ -572,6 +698,57 @@ test "writeClass shows literal star in abstract method type label" {
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "run(): *") != null);
+}
+
+test "writeClass wraps static member with SGR underline when enable_ansi" {
+    const alloc = std.testing.allocator;
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+
+    try writeClass(&sink.writer, alloc,
+        \\classDiagram
+        \\    class C {
+        \\        +count$
+        \\    }
+    , .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = true });
+
+    const out = sink.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[4m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[24m") != null);
+}
+
+test "writeClass wraps abstract method with SGR italic when enable_ansi" {
+    const alloc = std.testing.allocator;
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+
+    try writeClass(&sink.writer, alloc,
+        \\classDiagram
+        \\    class C {
+        \\        +run()*
+        \\    }
+    , .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = true });
+
+    const out = sink.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[3m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[23m") != null);
+}
+
+test "writeClass emits no SGR when enable_ansi is false" {
+    const alloc = std.testing.allocator;
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+
+    try writeClass(&sink.writer, alloc,
+        \\classDiagram
+        \\    class C {
+        \\        +count$
+        \\        +run()*
+        \\    }
+    , .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = false });
+
+    const out = sink.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[") == null);
 }
 
 test "writeClass hides stripped dollar on static attribute" {

@@ -441,13 +441,16 @@ fn parseMemberExpr(line: []const u8) ParseError!ParsedMember {
         }
     }
 
-    var it = std.mem.tokenizeAny(u8, rest, " \t");
-    const first = it.next() orelse return error.InvalidMermaid;
-    var last: []const u8 = first;
-    while (it.next()) |tok| last = tok;
+    var name: []const u8 = "";
+    var type_text: ?[]const u8 = null;
+    if (std.mem.indexOfAny(u8, rest, " \t")) |ws_idx| {
+        type_text = rest[0..ws_idx];
+        name = std.mem.trim(u8, rest[ws_idx..], " \t");
+    } else {
+        name = rest;
+    }
+    if (name.len == 0) return error.InvalidMermaid;
 
-    var name = last;
-    var type_text: ?[]const u8 = if (last.ptr == first.ptr) null else first;
     var is_static = false;
     var is_abstract = false;
     if (name.len > 0 and name[name.len - 1] == '$') {
@@ -458,7 +461,6 @@ fn parseMemberExpr(line: []const u8) ParseError!ParsedMember {
         is_abstract = true;
         name = name[0 .. name.len - 1];
     }
-    _ = &type_text;
 
     return .{
         .value = .{
@@ -827,6 +829,19 @@ test "silently ignores trailing annotation class Foo <<interface>>" {
     );
     defer d.deinit();
     try std.testing.expectEqual(@as(usize, 0), d.classes.len);
+}
+
+test "parses class attribute keeps middle tokens in name" {
+    var d = try parseSource(std.testing.allocator,
+        \\classDiagram
+        \\    class C {
+        \\        +int retry count
+        \\    }
+    );
+    defer d.deinit();
+    const a = d.classes[0].attributes[0];
+    try std.testing.expectEqualStrings("int", a.type_text.?);
+    try std.testing.expectEqualStrings("retry count", a.name);
 }
 
 test "parses class attribute Type name split" {
