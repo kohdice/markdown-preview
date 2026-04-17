@@ -125,6 +125,7 @@ pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!
     if (!header_seen) return error.InvalidMermaid;
 
     if (parser.in_block) return error.InvalidMermaid;
+    if (parser.ctx_stack.items.len != 0) return error.InvalidMermaid;
 
     const classes = try allocator.alloc(types.ClassNode, parser.classes.items.len);
     errdefer allocator.free(classes);
@@ -761,6 +762,14 @@ test "silently skips note / namespace lines" {
     defer d.deinit();
     try std.testing.expectEqual(@as(usize, 1), d.classes.len);
     try std.testing.expectEqualStrings("Circle", d.classes[0].id_text);
+}
+
+test "rejects unterminated namespace block" {
+    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+        \\classDiagram
+        \\    namespace Shapes {
+        \\        class Circle
+    ));
 }
 
 test "parses namespace block and inner class" {

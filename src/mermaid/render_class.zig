@@ -150,16 +150,25 @@ fn computeRequiredBoxWidth(diagram: *const types.ClassDiagram, ambiguous: width_
         if (c.annotation) |st| {
             max_w = @max(max_w, width_mod.displayWidth(st, ambiguous) + 2);
         }
-        for (c.attributes) |m| {
-            const prefix_w: usize = if (m.visibility == .unknown) 0 else 1;
-            max_w = @max(max_w, width_mod.displayWidth(m.name, ambiguous) + prefix_w + 1);
-        }
-        for (c.methods) |m| {
-            const prefix_w: usize = if (m.visibility == .unknown) 0 else 1;
-            max_w = @max(max_w, width_mod.displayWidth(m.name, ambiguous) + prefix_w + 1);
-        }
+        for (c.attributes) |m| max_w = @max(max_w, memberDisplayWidth(&m, false, ambiguous));
+        for (c.methods) |m| max_w = @max(max_w, memberDisplayWidth(&m, true, ambiguous));
     }
     return @max(max_w + 4, 6);
+}
+
+fn memberDisplayWidth(member: *const types.ClassMember, is_method: bool, ambiguous: width_mod.AmbiguousWidth) usize {
+    var w: usize = 0;
+    if (member.visibility != .unknown) w += 2;
+    w += width_mod.displayWidth(member.name, ambiguous);
+    if (is_method) {
+        w += 2;
+        if (member.params) |p| w += width_mod.displayWidth(p, ambiguous);
+    }
+    if (member.type_text) |t| {
+        w += 2;
+        w += width_mod.displayWidth(t, ambiguous);
+    }
+    return w;
 }
 
 fn drawNamespaceFrame(
@@ -254,7 +263,7 @@ fn drawClassBox(
     if (has_fields) {
         for (cls.attributes) |m| {
             if (row + 1 >= top + height) break;
-            drawMember(canvas, row, left, &m, ambiguous);
+            drawMember(canvas, row, left, &m, false, ambiguous);
             row += 1;
         }
     }
@@ -267,7 +276,7 @@ fn drawClassBox(
     if (has_methods) {
         for (cls.methods) |m| {
             if (row + 1 >= top + height) break;
-            drawMember(canvas, row, left, &m, ambiguous);
+            drawMember(canvas, row, left, &m, true, ambiguous);
             row += 1;
         }
     }
@@ -282,7 +291,14 @@ fn drawDivider(canvas: *canvas_mod.Canvas, row: usize, left: usize, width: usize
     canvas.setGlyph(row, left + width - 1, glyphs.tee_r);
 }
 
-fn drawMember(canvas: *canvas_mod.Canvas, row: usize, left: usize, member: *const types.ClassMember, ambiguous: width_mod.AmbiguousWidth) void {
+fn drawMember(
+    canvas: *canvas_mod.Canvas,
+    row: usize,
+    left: usize,
+    member: *const types.ClassMember,
+    is_method: bool,
+    ambiguous: width_mod.AmbiguousWidth,
+) void {
     var col = left + 2;
     if (visibilitySigil(member.visibility)) |s| {
         canvas.setGlyph(row, col, s);
@@ -291,6 +307,24 @@ fn drawMember(canvas: *canvas_mod.Canvas, row: usize, left: usize, member: *cons
         col += 1;
     }
     canvas.drawLabel(row, col, member.name, ambiguous);
+    col += width_mod.displayWidth(member.name, ambiguous);
+    if (is_method) {
+        canvas.setGlyph(row, col, '(');
+        col += 1;
+        if (member.params) |p| {
+            canvas.drawLabel(row, col, p, ambiguous);
+            col += width_mod.displayWidth(p, ambiguous);
+        }
+        canvas.setGlyph(row, col, ')');
+        col += 1;
+    }
+    if (member.type_text) |t| {
+        canvas.setGlyph(row, col, ':');
+        col += 1;
+        canvas.setGlyph(row, col, ' ');
+        col += 1;
+        canvas.drawLabel(row, col, t, ambiguous);
+    }
 }
 
 fn visibilitySigil(v: types.Visibility) ?u21 {
@@ -449,7 +483,7 @@ fn relationHead(kind: types.ClassRelationKind, glyphs: *const canvas_mod.GlyphSe
     };
 }
 
-test "writeClass renders class box with name and members" {
+test "writeClass renders class box with attribute type and method params" {
     const alloc = std.testing.allocator;
     var sink: std.io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
@@ -458,13 +492,13 @@ test "writeClass renders class box with name and members" {
         \\classDiagram
         \\    class Animal
         \\    Animal : +str name
-        \\    Animal : +eat()
+        \\    Animal : +save(entity) Result
     , .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "Animal") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "+ name") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "+ eat") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "+ name: str") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "+ save(entity): Result") != null);
 }
 
 test "writeClass renders inheritance with triangle head" {
@@ -522,6 +556,39 @@ test "writeClass association arrow head points toward target (upward)" {
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "▲") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "▼") == null);
+}
+
+test "writeClass shows literal star in abstract method type label" {
+    const alloc = std.testing.allocator;
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+
+    try writeClass(&sink.writer, alloc,
+        \\classDiagram
+        \\    class C {
+        \\        +run()*
+        \\    }
+    , .{ .wrap_width = null, .ambiguous_width = .narrow });
+
+    const out = sink.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "run(): *") != null);
+}
+
+test "writeClass hides stripped dollar on static attribute" {
+    const alloc = std.testing.allocator;
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+
+    try writeClass(&sink.writer, alloc,
+        \\classDiagram
+        \\    class C {
+        \\        +count$
+        \\    }
+    , .{ .wrap_width = null, .ambiguous_width = .narrow });
+
+    const out = sink.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "count") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "$") == null);
 }
 
 test "writeClass separates attributes and methods with a divider" {
