@@ -73,7 +73,6 @@ pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!
         const trimmed = std.mem.trim(u8, stripped_cr, " \t");
         if (trimmed.len == 0) continue;
 
-        if (std.mem.startsWith(u8, trimmed, "%%{")) return error.UnsupportedFeature;
         if (std.mem.startsWith(u8, trimmed, "%%")) continue;
 
         if (!header_seen) {
@@ -377,12 +376,15 @@ test "rejects branch order: suffix" {
     ));
 }
 
-test "rejects init directive with gitGraph config" {
-    try std.testing.expectError(error.UnsupportedFeature, parseSource(std.testing.allocator,
+test "silently skips init directive" {
+    var g = try parseSource(std.testing.allocator,
         \\%%{init: { "gitGraph": { "mainBranchName": "trunk" } }}%%
         \\gitGraph
         \\    commit
-    ));
+    );
+    defer g.deinit();
+    try std.testing.expectEqual(@as(usize, 1), g.commits.len);
+    try std.testing.expectEqual(@as(usize, 1), g.branches.len);
 }
 
 test "rejects unknown commit key as invalid" {
