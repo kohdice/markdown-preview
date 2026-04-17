@@ -203,6 +203,10 @@ Line 3 with indentation:
 
 The following Mermaid diagrams are rendered as ASCII art in place.
 
+### Flowchart
+
+#### Basic TD direction
+
 ```mermaid
 flowchart TD
     A(Input) --> B[Lexer]
@@ -214,6 +218,8 @@ flowchart TD
     F --> G
 ```
 
+#### Basic LR direction
+
 ```mermaid
 flowchart LR
     Src(Markdown) --> Lex[Lexer]
@@ -221,6 +227,24 @@ flowchart LR
     AST --> Render[Renderer]
     Render --> Out([ANSI output])
 ```
+
+#### Nested subgraph
+
+```mermaid
+flowchart TD
+    subgraph services [ServicesLayer]
+        Svc1[Receive request] --> Svc2[Validate payload]
+        subgraph adapters [AdaptersLayer]
+            A1[DB adapter] --> A2[Cache adapter]
+        end
+        Svc2 --> A1
+    end
+    A2 --> Out([Done])
+```
+
+### Sequence diagram
+
+#### Basic
 
 ```mermaid
 sequenceDiagram
@@ -236,6 +260,33 @@ sequenceDiagram
     API-->>B: 200 OK + token
     B-->>U: render dashboard
 ```
+
+#### With `alt` / `else` / `par` and a note
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API
+    participant DB
+    Client->>API: GET /resource
+    alt cached
+        API-->>Client: 200 OK (cached)
+    else miss
+        API->>DB: SELECT resource
+        DB-->>API: row
+        API-->>Client: 200 OK
+    end
+    par warm cache
+        API->>DB: touch resource
+    and record metrics
+        API->>DB: insert metric
+    end
+    Note over Client,API: request completed
+```
+
+### Class diagram
+
+#### Basic
 
 ```mermaid
 classDiagram
@@ -263,6 +314,31 @@ classDiagram
     UserRepository o-- User
 ```
 
+#### With namespace, annotation, and static/abstract members
+
+```mermaid
+classDiagram
+    namespace Billing {
+        class Account {
+            <<abstract>>
+            +String ownerId
+            +int balance$
+            +apply(Transaction) void
+            +settle()*
+        }
+        class Transaction {
+            +String id
+            +int amount
+            +describe() String
+        }
+    }
+    Account o-- Transaction : records
+```
+
+### State diagram
+
+#### Basic
+
 ```mermaid
 stateDiagram-v2
     state "Waiting for payment" as Pending
@@ -275,6 +351,23 @@ stateDiagram-v2
     Shipped --> Delivered : arrived
     Delivered --> [*]
 ```
+
+#### Composite state
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    state Active {
+        [*] --> Waiting
+        Waiting --> Working : request
+        Working --> Waiting : finished
+    }
+    Idle --> Active : start
+    Active --> Idle : stop
+    Idle --> [*]
+```
+
+### ER diagram
 
 ```mermaid
 erDiagram
@@ -305,6 +398,8 @@ erDiagram
         INT category_id FK
     }
 ```
+
+### gitGraph
 
 ```mermaid
 gitGraph

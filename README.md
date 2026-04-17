@@ -85,6 +85,11 @@ The following diagram types are rendered as ASCII art.
 - Message arrows: `->>`, `-->>`, `->`, `-->`, `-x`, `--x`, `-)`, `--)`
 - Activation shortcuts: `->>+`, `->>-`
 - `<br>` / `<BR>` / `<br/>` normalisation in labels
+- Block frames for `loop`, `alt` / `else`, `opt`, `par` / `and`,
+  `critical` / `option`, `rect`, `break`; each branch keyword renders
+  as a dotted divider on the block frame
+- `Note left of`, `Note right of`, `Note over A[,B]` render as a small
+  rectangle spanning the referenced participant column(s)
 
 ### `classDiagram` / `classDiagram-v2`
 
@@ -141,3 +146,4 @@ The following diagram types are rendered as ASCII art.
 - `commit` / `merge` options: `id:"..."`, `tag:"..."`,
   `type: NORMAL|REVERSE|HIGHLIGHT`
 - Headers: `gitGraph`, `gitGraph:`, `gitGraph LR:`
+
