@@ -699,11 +699,11 @@ fn assignLevels(allocator: std.mem.Allocator, graph: *const types.MermaidGraph, 
 }
 
 fn gridPosFor(direction: types.Direction, level: usize, column: usize, max_level: usize) types.GridPos {
+    _ = max_level;
     return switch (direction) {
         .top_down => .{ .row = level, .col = column },
-        .bottom_up => .{ .row = max_level - level, .col = column },
         .left_right => .{ .row = column, .col = level },
-        .right_left => .{ .row = column, .col = max_level - level },
+        else => unreachable,
     };
 }
 
@@ -874,25 +874,6 @@ test "layout LR assigns level as column" {
     try std.testing.expectEqual(@as(usize, 2), layout.positions[2].col);
     try std.testing.expectEqual(@as(usize, 1), layout.rows);
     try std.testing.expectEqual(@as(usize, 3), layout.cols);
-}
-
-test "layout BT flips rows relative to TD" {
-    const alloc = std.testing.allocator;
-    const nodes = [_]types.Node{
-        makeNode(0, "A", "A", .rect),
-        makeNode(1, "B", "B", .rect),
-        makeNode(2, "C", "C", .rect),
-    };
-    const edges = [_]types.Edge{ makeEdge(0, 1), makeEdge(1, 2) };
-    var graph = try graphFor(alloc, .bottom_up, &nodes, &edges);
-    defer graph.deinit();
-
-    var layout = try computeLayout(alloc, &graph, .narrow);
-    defer layout.deinit();
-
-    try std.testing.expectEqual(@as(usize, 2), layout.positions[0].row);
-    try std.testing.expectEqual(@as(usize, 1), layout.positions[1].row);
-    try std.testing.expectEqual(@as(usize, 0), layout.positions[2].row);
 }
 
 test "layout groups siblings in same level" {
