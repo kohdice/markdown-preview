@@ -53,6 +53,10 @@ pub fn writeClass(
     };
     defer canvas.deinit();
 
+    for (diagram.namespaces) |ns| {
+        drawNamespaceFrame(&canvas, &flow_layout, &diagram, ns, &glyphs, opts.ambiguous_width);
+    }
+
     for (diagram.classes, 0..) |cls, i| {
         const pos = flow_layout.positions[i];
         const top = route_mod.boxTop(&flow_layout, pos.row);
@@ -124,6 +128,8 @@ fn computeLayout(
     if (required_box_h > layout.cell_h) layout.cell_h = required_box_h;
     if (required_box_w > layout.cell_w) layout.cell_w = required_box_w;
 
+    if (diagram.namespaces.len > 0 and layout.outer_pad < 2) layout.outer_pad = 2;
+
     return .{
         .flow_layout = layout,
         .flow_graph_nodes = nodes,
@@ -154,6 +160,59 @@ fn computeRequiredBoxWidth(diagram: *const types.ClassDiagram, ambiguous: width_
         }
     }
     return @max(max_w + 4, 6);
+}
+
+fn drawNamespaceFrame(
+    canvas: *canvas_mod.Canvas,
+    layout: *const types.Layout,
+    diagram: *const types.ClassDiagram,
+    ns: types.ClassNamespace,
+    glyphs: *const canvas_mod.GlyphSet,
+    ambiguous: width_mod.AmbiguousWidth,
+) void {
+    if (ns.class_ids.len == 0) return;
+
+    var min_row: usize = std.math.maxInt(usize);
+    var max_row: usize = 0;
+    var min_col: usize = std.math.maxInt(usize);
+    var max_col: usize = 0;
+    var max_h_in_row: usize = 3;
+
+    for (ns.class_ids) |id| {
+        if (id >= diagram.classes.len) continue;
+        const pos = layout.positions[id];
+        const h = actualBoxHeight(&diagram.classes[id]);
+        min_row = @min(min_row, pos.row);
+        max_row = @max(max_row, pos.row);
+        min_col = @min(min_col, pos.col);
+        max_col = @max(max_col, pos.col);
+        max_h_in_row = @max(max_h_in_row, h);
+    }
+    if (min_row == std.math.maxInt(usize)) return;
+
+    const inner_top = route_mod.boxTop(layout, min_row);
+    const inner_left = route_mod.boxLeft(layout, min_col);
+    const inner_bottom = route_mod.boxTop(layout, max_row) + max_h_in_row;
+    const inner_right = route_mod.boxLeft(layout, max_col) + layout.cell_w;
+
+    const pad: usize = 1;
+    const top = if (inner_top >= pad + 1) inner_top - pad - 1 else 0;
+    const left = if (inner_left >= pad + 1) inner_left - pad - 1 else 0;
+    const bottom_raw = inner_bottom + pad;
+    const right_raw = inner_right + pad;
+    const bottom = if (bottom_raw >= canvas.rows) canvas.rows - 1 else bottom_raw;
+    const right = if (right_raw >= canvas.cols) canvas.cols - 1 else right_raw;
+    if (bottom <= top or right <= left) return;
+
+    const h = bottom - top + 1;
+    const w = right - left + 1;
+    canvas.drawRect(top, left, h, w, glyphs);
+
+    const name_w = width_mod.displayWidth(ns.name, ambiguous);
+    if (w > name_w + 4) {
+        const title_col = left + 2;
+        canvas.drawLabel(top, title_col, ns.name, ambiguous);
+    }
 }
 
 fn drawClassBox(
@@ -463,6 +522,49 @@ test "writeClass association arrow head points toward target (upward)" {
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "▲") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "▼") == null);
+}
+
+test "writeClass separates attributes and methods with a divider" {
+    const alloc = std.testing.allocator;
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+
+    try writeClass(&sink.writer, alloc,
+        \\classDiagram
+        \\    class Animal {
+        \\        +str name
+        \\        +eat()
+        \\    }
+    , .{ .wrap_width = null, .ambiguous_width = .narrow });
+
+    const out = sink.writer.buffered();
+
+    var tee_l_count: usize = 0;
+    var idx: usize = 0;
+    while (std.mem.indexOfPos(u8, out, idx, "├")) |found| {
+        tee_l_count += 1;
+        idx = found + "├".len;
+    }
+    try std.testing.expect(tee_l_count >= 2);
+}
+
+test "writeClass renders namespace frame with name" {
+    const alloc = std.testing.allocator;
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+
+    try writeClass(&sink.writer, alloc,
+        \\classDiagram
+        \\    namespace Shapes {
+        \\        class Circle
+        \\        class Square
+        \\    }
+    , .{ .wrap_width = null, .ambiguous_width = .narrow });
+
+    const out = sink.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "Shapes") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "Circle") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "Square") != null);
 }
 
 test "writeClass marker_at from places triangle at source end" {
