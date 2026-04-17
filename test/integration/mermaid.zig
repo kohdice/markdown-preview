@@ -214,7 +214,7 @@ test "gitGraph TB orientation falls back to feature-not-supported diagnostic" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "gitGraph TB:") != null);
 }
 
-test "init directive in gitGraph falls back to feature-not-supported diagnostic" {
+test "init directive in gitGraph is stripped before rendering" {
     const allocator = std.testing.allocator;
     const source =
         \\```mermaid
@@ -227,7 +227,9 @@ test "init directive in gitGraph falls back to feature-not-supported diagnostic"
     const rendered = try helpers.renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid: feature not yet supported by mp]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid:") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "●") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[main]") != null);
 }
 
 test "sequenceDiagram is rendered as ASCII art" {
