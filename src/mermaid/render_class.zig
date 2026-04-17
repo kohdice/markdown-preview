@@ -141,12 +141,16 @@ fn computeRequiredBoxWidth(diagram: *const types.ClassDiagram, ambiguous: width_
     var max_w: usize = 0;
     for (diagram.classes) |c| {
         max_w = @max(max_w, width_mod.displayWidth(c.label, ambiguous));
-        if (c.stereotype) |st| {
+        if (c.annotation) |st| {
             max_w = @max(max_w, width_mod.displayWidth(st, ambiguous) + 2);
         }
-        for (c.members) |m| {
+        for (c.attributes) |m| {
             const prefix_w: usize = if (m.visibility == .unknown) 0 else 1;
-            max_w = @max(max_w, width_mod.displayWidth(m.text, ambiguous) + prefix_w + 1);
+            max_w = @max(max_w, width_mod.displayWidth(m.name, ambiguous) + prefix_w + 1);
+        }
+        for (c.methods) |m| {
+            const prefix_w: usize = if (m.visibility == .unknown) 0 else 1;
+            max_w = @max(max_w, width_mod.displayWidth(m.name, ambiguous) + prefix_w + 1);
         }
     }
     return @max(max_w + 4, 6);
@@ -167,7 +171,7 @@ fn drawClassBox(
     const inner_w = width - 2;
     var name_row = top + 1;
 
-    if (cls.stereotype) |st| {
+    if (cls.annotation) |st| {
         var buf: [96]u8 = undefined;
         const wrapped = std.fmt.bufPrint(&buf, "«{s}»", .{st}) catch st;
         const stereo_w = width_mod.displayWidth(wrapped, ambiguous);
@@ -180,19 +184,16 @@ fn drawClassBox(
     const name_col_off = if (inner_w > label_w) (inner_w - label_w) / 2 else 0;
     canvas.drawLabel(name_row, left + 1 + name_col_off, cls.label, ambiguous);
 
-    if (cls.members.len == 0) return;
-
-    const counts = countByKind(cls);
-    const has_fields = counts.fields > 0;
-    const has_methods = counts.methods > 0;
+    const has_fields = cls.attributes.len > 0;
+    const has_methods = cls.methods.len > 0;
+    if (!has_fields and !has_methods) return;
 
     const divider_row = name_row + 1;
     drawDivider(canvas, divider_row, left, width, glyphs);
 
     var row = divider_row + 1;
     if (has_fields) {
-        for (cls.members) |m| {
-            if (m.kind != .field) continue;
+        for (cls.attributes) |m| {
             if (row + 1 >= top + height) break;
             drawMember(canvas, row, left, &m, ambiguous);
             row += 1;
@@ -205,8 +206,7 @@ fn drawClassBox(
     }
 
     if (has_methods) {
-        for (cls.members) |m| {
-            if (m.kind != .method) continue;
+        for (cls.methods) |m| {
             if (row + 1 >= top + height) break;
             drawMember(canvas, row, left, &m, ambiguous);
             row += 1;
@@ -231,7 +231,7 @@ fn drawMember(canvas: *canvas_mod.Canvas, row: usize, left: usize, member: *cons
         canvas.setGlyph(row, col, ' ');
         col += 1;
     }
-    canvas.drawLabel(row, col, member.text, ambiguous);
+    canvas.drawLabel(row, col, member.name, ambiguous);
 }
 
 fn visibilitySigil(v: types.Visibility) ?u21 {
@@ -244,26 +244,11 @@ fn visibilitySigil(v: types.Visibility) ?u21 {
     };
 }
 
-const MemberCounts = struct { fields: usize, methods: usize };
-
-fn countByKind(cls: *const types.ClassNode) MemberCounts {
-    var fields: usize = 0;
-    var methods: usize = 0;
-    for (cls.members) |m| {
-        switch (m.kind) {
-            .field => fields += 1,
-            .method => methods += 1,
-        }
-    }
-    return .{ .fields = fields, .methods = methods };
-}
-
 fn actualBoxHeight(cls: *const types.ClassNode) usize {
-    const stereotype_rows: usize = if (cls.stereotype != null) 1 else 0;
-    if (cls.members.len == 0) return 3 + stereotype_rows;
-    const counts = countByKind(cls);
-    const extra_divider: usize = if (counts.fields > 0 and counts.methods > 0) 1 else 0;
-    return 4 + stereotype_rows + counts.fields + counts.methods + extra_divider;
+    const annotation_rows: usize = if (cls.annotation != null) 1 else 0;
+    if (cls.attributes.len == 0 and cls.methods.len == 0) return 3 + annotation_rows;
+    const extra_divider: usize = if (cls.attributes.len > 0 and cls.methods.len > 0) 1 else 0;
+    return 4 + annotation_rows + cls.attributes.len + cls.methods.len + extra_divider;
 }
 
 fn drawRelation(
@@ -362,7 +347,6 @@ fn replaceArrowHead(
 
 fn edgeStyleFor(kind: types.ClassRelationKind) types.EdgeStyle {
     return switch (kind) {
-        .link => .line,
         .inheritance,
         .realization,
         .composition,
@@ -379,7 +363,6 @@ fn relationHead(kind: types.ClassRelationKind, glyphs: *const canvas_mod.GlyphSe
         .composition => '◆',
         .aggregation => '◇',
         .association, .dependency => glyphs.arrow_up,
-        .link => glyphs.v_line,
     };
 }
 
@@ -458,7 +441,7 @@ test "writeClass association arrow head points toward target (upward)" {
     try std.testing.expect(std.mem.indexOf(u8, out, "▼") == null);
 }
 
-test "writeClass link relation has no arrow head" {
+test "writeClass bare -- renders as association with arrow" {
     const alloc = std.testing.allocator;
     var sink: std.io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
@@ -469,9 +452,5 @@ test "writeClass link relation has no arrow head" {
     , .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "▲") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "▼") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "△") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "◆") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "│") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "▲") != null);
 }

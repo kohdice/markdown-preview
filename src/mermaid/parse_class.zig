@@ -13,17 +13,31 @@ const Parser = struct {
     allocator: std.mem.Allocator,
     classes: std.ArrayListUnmanaged(BuildingClass) = .empty,
     relations: std.ArrayListUnmanaged(types.ClassRelation) = .empty,
+    namespaces: std.ArrayListUnmanaged(BuildingNamespace) = .empty,
     interned: std.StringHashMapUnmanaged(types.NodeId) = .empty,
     owned_labels: std.ArrayListUnmanaged([]u8) = .empty,
+    ctx_stack: std.ArrayListUnmanaged(Ctx) = .empty,
     in_block: bool = false,
     block_class: types.NodeId = 0,
-    in_namespace: bool = false,
 
     const BuildingClass = struct {
         id_text: []const u8,
         label: []const u8,
-        stereotype: ?[]const u8 = null,
-        members: std.ArrayListUnmanaged(types.ClassMember) = .empty,
+        annotation: ?[]const u8 = null,
+        attributes: std.ArrayListUnmanaged(types.ClassMember) = .empty,
+        methods: std.ArrayListUnmanaged(types.ClassMember) = .empty,
+    };
+
+    const BuildingNamespace = struct {
+        name: []const u8,
+        class_ids: std.ArrayListUnmanaged(types.NodeId) = .empty,
+    };
+
+    const CtxKind = enum { namespace };
+
+    const Ctx = struct {
+        kind: CtxKind,
+        ns_index: u32,
     };
 
     fn intern(self: *Parser, id_text: []const u8) ParseError!types.NodeId {
@@ -39,8 +53,14 @@ const Parser = struct {
         return new_id;
     }
 
-    fn addMember(self: *Parser, id: types.NodeId, member: types.ClassMember) ParseError!void {
-        try self.classes.items[id].members.append(self.allocator, member);
+    fn recordClassId(self: *Parser, id: types.NodeId) ParseError!void {
+        if (self.ctx_stack.items.len == 0) return;
+        const top = self.ctx_stack.items[self.ctx_stack.items.len - 1];
+        switch (top.kind) {
+            .namespace => {
+                try self.namespaces.items[top.ns_index].class_ids.append(self.allocator, id);
+            },
+        }
     }
 };
 
@@ -75,10 +95,16 @@ fn validateIdent(text: []const u8) ParseError!void {
 pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!types.ClassDiagram {
     var parser: Parser = .{ .allocator = allocator };
     defer parser.interned.deinit(allocator);
+    defer parser.ctx_stack.deinit(allocator);
     errdefer {
-        for (parser.classes.items) |*c| c.members.deinit(allocator);
+        for (parser.classes.items) |*c| {
+            c.attributes.deinit(allocator);
+            c.methods.deinit(allocator);
+        }
         parser.classes.deinit(allocator);
         parser.relations.deinit(allocator);
+        for (parser.namespaces.items) |*ns| ns.class_ids.deinit(allocator);
+        parser.namespaces.deinit(allocator);
         for (parser.owned_labels.items) |s| allocator.free(s);
         parser.owned_labels.deinit(allocator);
     }
@@ -109,13 +135,16 @@ pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!
     const classes = try allocator.alloc(types.ClassNode, parser.classes.items.len);
     errdefer allocator.free(classes);
     for (parser.classes.items, 0..) |*b, i| {
-        const members = try b.members.toOwnedSlice(allocator);
+        const attrs = try b.attributes.toOwnedSlice(allocator);
+        errdefer allocator.free(attrs);
+        const meths = try b.methods.toOwnedSlice(allocator);
         classes[i] = .{
             .id = @intCast(i),
             .id_text = b.id_text,
             .label = b.label,
-            .stereotype = b.stereotype,
-            .members = members,
+            .annotation = b.annotation,
+            .attributes = attrs,
+            .methods = meths,
         };
     }
     parser.classes.deinit(allocator);
@@ -123,10 +152,22 @@ pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!
     const relations = try parser.relations.toOwnedSlice(allocator);
     const owned_labels = try parser.owned_labels.toOwnedSlice(allocator);
 
+    var namespaces = try allocator.alloc(types.ClassNamespace, parser.namespaces.items.len);
+    errdefer allocator.free(namespaces);
+    for (parser.namespaces.items, 0..) |*ns, i| {
+        const ids = try ns.class_ids.toOwnedSlice(allocator);
+        namespaces[i] = .{
+            .name = ns.name,
+            .class_ids = ids,
+        };
+    }
+    parser.namespaces.deinit(allocator);
+
     return .{
         .allocator = allocator,
         .classes = classes,
         .relations = relations,
+        .namespaces = namespaces,
         .owned_labels = owned_labels,
     };
 }
@@ -140,13 +181,12 @@ fn parseLine(parser: *Parser, line: []const u8) ParseError!void {
         return parseBlockBodyLine(parser, line);
     }
 
-    if (parser.in_namespace and std.mem.eql(u8, line, "}")) {
-        parser.in_namespace = false;
+    if (parser.ctx_stack.items.len > 0 and std.mem.eql(u8, line, "}")) {
+        _ = parser.ctx_stack.pop();
         return;
     }
 
-    if (tryOpenNamespace(line)) |_| {
-        parser.in_namespace = true;
+    if (tryOpenNamespace(parser, line) catch |err| return err) |_| {
         return;
     }
 
@@ -167,7 +207,7 @@ fn parseLine(parser: *Parser, line: []const u8) ParseError!void {
     try parseRelation(parser, line);
 }
 
-fn tryOpenNamespace(line: []const u8) ?void {
+fn tryOpenNamespace(parser: *Parser, line: []const u8) ParseError!?void {
     if (!std.ascii.startsWithIgnoreCase(line, "namespace")) return null;
     if (line.len <= "namespace".len) return null;
     const after_kw = line["namespace".len];
@@ -177,6 +217,10 @@ fn tryOpenNamespace(line: []const u8) ?void {
     if (rest.len == 0 or rest[rest.len - 1] != '{') return null;
     const name = std.mem.trim(u8, rest[0 .. rest.len - 1], " \t");
     if (name.len == 0) return null;
+
+    const ns_index: u32 = @intCast(parser.namespaces.items.len);
+    try parser.namespaces.append(parser.allocator, .{ .name = name });
+    try parser.ctx_stack.append(parser.allocator, .{ .kind = .namespace, .ns_index = ns_index });
     return {};
 }
 
@@ -225,6 +269,7 @@ fn parseClassDeclaration(parser: *Parser, rest: []const u8) ParseError!void {
     if (end == 0) return error.InvalidMermaid;
     const name = body[0..end];
     const id = try parser.intern(name);
+    try parser.recordClassId(id);
 
     var cursor = end;
     while (cursor < body.len and (body[cursor] == ' ' or body[cursor] == '\t')) : (cursor += 1) {}
@@ -244,6 +289,16 @@ fn parseClassDeclaration(parser: *Parser, rest: []const u8) ParseError!void {
     if (opens_block) {
         parser.in_block = true;
         parser.block_class = id;
+
+        const after_open = std.mem.trim(u8, body[cursor..], " \t");
+        if (after_open.len > 0 and std.mem.endsWith(u8, after_open, "}")) {
+            const inner = std.mem.trim(u8, after_open[0 .. after_open.len - 1], " \t");
+            if (tryInlineStereotype(inner)) |stereo| {
+                try validateLabel(stereo);
+                parser.classes.items[id].annotation = stereo;
+            }
+            parser.in_block = false;
+        }
         return;
     }
 
@@ -252,7 +307,7 @@ fn parseClassDeclaration(parser: *Parser, rest: []const u8) ParseError!void {
 
     if (tryInlineStereotype(after_name)) |stereo| {
         try validateLabel(stereo);
-        parser.classes.items[id].stereotype = stereo;
+        parser.classes.items[id].annotation = stereo;
         return;
     }
     return error.InvalidMermaid;
@@ -276,7 +331,7 @@ fn parseBlockBodyLine(parser: *Parser, line: []const u8) ParseError!void {
         const inner = std.mem.trim(u8, line[2 .. line.len - 2], " \t");
         if (inner.len == 0) return error.InvalidMermaid;
         try validateLabel(inner);
-        parser.classes.items[parser.block_class].stereotype = inner;
+        parser.classes.items[parser.block_class].annotation = inner;
         return;
     }
 
@@ -296,13 +351,17 @@ fn parseBlockBodyLine(parser: *Parser, line: []const u8) ParseError!void {
     }
     if (body.len == 0) return error.InvalidMermaid;
 
-    const kind: types.ClassMemberKind = if (std.mem.indexOfScalar(u8, body, '(') != null) .method else .field;
-
-    try parser.addMember(parser.block_class, .{
-        .kind = kind,
+    const is_method = std.mem.indexOfScalar(u8, body, '(') != null;
+    const member: types.ClassMember = .{
         .visibility = visibility,
-        .text = body,
-    });
+        .name = body,
+    };
+
+    if (is_method) {
+        try parser.classes.items[parser.block_class].methods.append(parser.allocator, member);
+    } else {
+        try parser.classes.items[parser.block_class].attributes.append(parser.allocator, member);
+    }
 }
 
 const MemberError = ParseError || error{NotMember};
@@ -330,44 +389,49 @@ fn parseMemberLine(parser: *Parser, line: []const u8) MemberError!void {
     }
     if (body.len == 0) return error.InvalidMermaid;
 
-    const kind: types.ClassMemberKind = if (std.mem.indexOfScalar(u8, body, '(') != null) .method else .field;
+    const is_method = std.mem.indexOfScalar(u8, body, '(') != null;
+    const member: types.ClassMember = .{
+        .visibility = visibility,
+        .name = body,
+    };
 
     const id = try parser.intern(name_part);
-    try parser.addMember(id, .{
-        .kind = kind,
-        .visibility = visibility,
-        .text = body,
-    });
+    try parser.recordClassId(id);
+    if (is_method) {
+        try parser.classes.items[id].methods.append(parser.allocator, member);
+    } else {
+        try parser.classes.items[id].attributes.append(parser.allocator, member);
+    }
 }
 
 const RelationOp = struct {
     op: []const u8,
     kind: types.ClassRelationKind,
-    reverse: bool,
+    marker_at: types.ClassMarkerAt,
 };
 
 const relation_ops = [_]RelationOp{
-    .{ .op = "<|--", .kind = .inheritance, .reverse = true },
-    .{ .op = "--|>", .kind = .inheritance, .reverse = false },
-    .{ .op = "<|..", .kind = .realization, .reverse = true },
-    .{ .op = "..|>", .kind = .realization, .reverse = false },
-    .{ .op = "*--", .kind = .composition, .reverse = false },
-    .{ .op = "--*", .kind = .composition, .reverse = true },
-    .{ .op = "o--", .kind = .aggregation, .reverse = false },
-    .{ .op = "--o", .kind = .aggregation, .reverse = true },
-    .{ .op = "..>", .kind = .dependency, .reverse = false },
-    .{ .op = "<..", .kind = .dependency, .reverse = true },
-    .{ .op = "-->", .kind = .association, .reverse = false },
-    .{ .op = "<--", .kind = .association, .reverse = true },
-    .{ .op = "--", .kind = .link, .reverse = false },
-    .{ .op = "..", .kind = .link, .reverse = false },
+    .{ .op = "<|--", .kind = .inheritance, .marker_at = .from },
+    .{ .op = "--|>", .kind = .inheritance, .marker_at = .to },
+    .{ .op = "<|..", .kind = .realization, .marker_at = .from },
+    .{ .op = "..|>", .kind = .realization, .marker_at = .to },
+    .{ .op = "*--", .kind = .composition, .marker_at = .from },
+    .{ .op = "--*", .kind = .composition, .marker_at = .to },
+    .{ .op = "o--", .kind = .aggregation, .marker_at = .from },
+    .{ .op = "--o", .kind = .aggregation, .marker_at = .to },
+    .{ .op = "..>", .kind = .dependency, .marker_at = .to },
+    .{ .op = "<..", .kind = .dependency, .marker_at = .from },
+    .{ .op = "-->", .kind = .association, .marker_at = .to },
+    .{ .op = "<--", .kind = .association, .marker_at = .from },
+    .{ .op = "--", .kind = .association, .marker_at = .to },
+    .{ .op = "..", .kind = .association, .marker_at = .to },
 };
 
 const RelationMatch = struct {
     start: usize,
     len: usize,
     kind: types.ClassRelationKind,
-    reverse: bool,
+    marker_at: types.ClassMarkerAt,
 };
 
 fn findRelation(text: []const u8) ?RelationMatch {
@@ -383,7 +447,7 @@ fn findRelation(text: []const u8) ?RelationMatch {
                 .start = i,
                 .len = candidate.op.len,
                 .kind = candidate.kind,
-                .reverse = candidate.reverse,
+                .marker_at = candidate.marker_at,
             };
         }
     }
@@ -417,20 +481,18 @@ fn parseRelation(parser: *Parser, line: []const u8) ParseError!void {
     try validateIdent(rhs_ident);
 
     const lhs_id = try parser.intern(lhs_ident);
+    try parser.recordClassId(lhs_id);
     const rhs_id = try parser.intern(rhs_ident);
-
-    const from = if (match.reverse) rhs_id else lhs_id;
-    const to = if (match.reverse) lhs_id else rhs_id;
-    const from_card = if (match.reverse) rhs_card else lhs_card;
-    const to_card = if (match.reverse) lhs_card else rhs_card;
+    try parser.recordClassId(rhs_id);
 
     try parser.relations.append(parser.allocator, .{
-        .from = from,
-        .to = to,
+        .from = lhs_id,
+        .to = rhs_id,
         .kind = match.kind,
+        .marker_at = match.marker_at,
         .label = label,
-        .from_cardinality = from_card,
-        .to_cardinality = to_card,
+        .from_cardinality = lhs_card,
+        .to_cardinality = rhs_card,
     });
 }
 
@@ -472,7 +534,7 @@ test "parses class declaration" {
     try std.testing.expectEqualStrings("Animal", d.classes[0].label);
 }
 
-test "parses inheritance relation with reversed direction" {
+test "parses inheritance relation keeps text order and marker_at from" {
     var d = try parseSource(std.testing.allocator,
         \\classDiagram
         \\    Animal <|-- Dog
@@ -481,8 +543,9 @@ test "parses inheritance relation with reversed direction" {
     try std.testing.expectEqual(@as(usize, 2), d.classes.len);
     try std.testing.expectEqual(@as(usize, 1), d.relations.len);
     try std.testing.expectEqual(types.ClassRelationKind.inheritance, d.relations[0].kind);
-    try std.testing.expectEqualStrings("Dog", d.classes[d.relations[0].from].id_text);
-    try std.testing.expectEqualStrings("Animal", d.classes[d.relations[0].to].id_text);
+    try std.testing.expectEqual(types.ClassMarkerAt.from, d.relations[0].marker_at);
+    try std.testing.expectEqualStrings("Animal", d.classes[d.relations[0].from].id_text);
+    try std.testing.expectEqualStrings("Dog", d.classes[d.relations[0].to].id_text);
 }
 
 test "parses composition and aggregation relations" {
@@ -494,7 +557,9 @@ test "parses composition and aggregation relations" {
     defer d.deinit();
     try std.testing.expectEqual(@as(usize, 2), d.relations.len);
     try std.testing.expectEqual(types.ClassRelationKind.composition, d.relations[0].kind);
+    try std.testing.expectEqual(types.ClassMarkerAt.from, d.relations[0].marker_at);
     try std.testing.expectEqual(types.ClassRelationKind.aggregation, d.relations[1].kind);
+    try std.testing.expectEqual(types.ClassMarkerAt.from, d.relations[1].marker_at);
 }
 
 test "parses member fields and methods" {
@@ -505,11 +570,10 @@ test "parses member fields and methods" {
     );
     defer d.deinit();
     try std.testing.expectEqual(@as(usize, 1), d.classes.len);
-    try std.testing.expectEqual(@as(usize, 2), d.classes[0].members.len);
-    try std.testing.expectEqual(types.ClassMemberKind.field, d.classes[0].members[0].kind);
-    try std.testing.expectEqual(types.Visibility.public, d.classes[0].members[0].visibility);
-    try std.testing.expectEqualStrings("name str", d.classes[0].members[0].text);
-    try std.testing.expectEqual(types.ClassMemberKind.method, d.classes[0].members[1].kind);
+    try std.testing.expectEqual(@as(usize, 1), d.classes[0].attributes.len);
+    try std.testing.expectEqual(@as(usize, 1), d.classes[0].methods.len);
+    try std.testing.expectEqual(types.Visibility.public, d.classes[0].attributes[0].visibility);
+    try std.testing.expectEqual(types.Visibility.public, d.classes[0].methods[0].visibility);
 }
 
 test "parses relation with label" {
@@ -526,7 +590,7 @@ test "rejects missing classDiagram header" {
     try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator, "Animal <|-- Dog\n"));
 }
 
-test "parses class block with members and stereotype" {
+test "parses class block with members and annotation" {
     var d = try parseSource(std.testing.allocator,
         \\classDiagram
         \\    class Repository {
@@ -537,10 +601,9 @@ test "parses class block with members and stereotype" {
     );
     defer d.deinit();
     try std.testing.expectEqual(@as(usize, 1), d.classes.len);
-    try std.testing.expectEqualStrings("interface", d.classes[0].stereotype.?);
-    try std.testing.expectEqual(@as(usize, 2), d.classes[0].members.len);
-    try std.testing.expectEqual(types.ClassMemberKind.method, d.classes[0].members[0].kind);
-    try std.testing.expectEqual(types.Visibility.public, d.classes[0].members[0].visibility);
+    try std.testing.expectEqualStrings("interface", d.classes[0].annotation.?);
+    try std.testing.expectEqual(@as(usize, 2), d.classes[0].methods.len);
+    try std.testing.expectEqual(@as(usize, 0), d.classes[0].attributes.len);
 }
 
 test "parses generic class declaration with tilde parameter" {
@@ -563,7 +626,7 @@ test "parses generic class declaration in block form" {
     );
     defer d.deinit();
     try std.testing.expectEqualStrings("Map<K,V>", d.classes[0].label);
-    try std.testing.expectEqual(@as(usize, 1), d.classes[0].members.len);
+    try std.testing.expectEqual(@as(usize, 1), d.classes[0].methods.len);
 }
 
 test "parses multiplicity and retains cardinality strings" {
@@ -602,9 +665,14 @@ test "parses namespace block and inner class" {
     try std.testing.expectEqual(@as(usize, 2), d.classes.len);
     try std.testing.expectEqualStrings("Circle", d.classes[0].id_text);
     try std.testing.expectEqualStrings("Square", d.classes[1].id_text);
+    try std.testing.expectEqual(@as(usize, 1), d.namespaces.len);
+    try std.testing.expectEqualStrings("Shapes", d.namespaces[0].name);
+    try std.testing.expectEqual(@as(usize, 2), d.namespaces[0].class_ids.len);
+    try std.testing.expectEqual(@as(types.NodeId, 0), d.namespaces[0].class_ids[0]);
+    try std.testing.expectEqual(@as(types.NodeId, 1), d.namespaces[0].class_ids[1]);
 }
 
-test "parses namespace with inner class block and stereotype" {
+test "parses namespace with inner class block and annotation" {
     var d = try parseSource(std.testing.allocator,
         \\classDiagram
         \\    namespace Service {
@@ -616,11 +684,13 @@ test "parses namespace with inner class block and stereotype" {
     );
     defer d.deinit();
     try std.testing.expectEqual(@as(usize, 1), d.classes.len);
-    try std.testing.expectEqualStrings("interface", d.classes[0].stereotype.?);
-    try std.testing.expectEqual(@as(usize, 1), d.classes[0].members.len);
+    try std.testing.expectEqualStrings("interface", d.classes[0].annotation.?);
+    try std.testing.expectEqual(@as(usize, 1), d.classes[0].methods.len);
+    try std.testing.expectEqual(@as(usize, 1), d.namespaces.len);
+    try std.testing.expectEqualStrings("Service", d.namespaces[0].name);
 }
 
-test "parses inline stereotype class Foo { <<interface>> }" {
+test "parses inline annotation class Foo { <<interface>> }" {
     var d = try parseSource(std.testing.allocator,
         \\classDiagram
         \\    class Repository { <<interface>> }
@@ -628,10 +698,10 @@ test "parses inline stereotype class Foo { <<interface>> }" {
     defer d.deinit();
     try std.testing.expectEqual(@as(usize, 1), d.classes.len);
     try std.testing.expectEqualStrings("Repository", d.classes[0].id_text);
-    try std.testing.expectEqualStrings("interface", d.classes[0].stereotype.?);
+    try std.testing.expectEqualStrings("interface", d.classes[0].annotation.?);
 }
 
-test "parses trailing stereotype class Foo <<interface>>" {
+test "parses trailing annotation class Foo <<interface>>" {
     var d = try parseSource(std.testing.allocator,
         \\classDiagram
         \\    class Repository <<interface>>
@@ -639,10 +709,10 @@ test "parses trailing stereotype class Foo <<interface>>" {
     defer d.deinit();
     try std.testing.expectEqual(@as(usize, 1), d.classes.len);
     try std.testing.expectEqualStrings("Repository", d.classes[0].id_text);
-    try std.testing.expectEqualStrings("interface", d.classes[0].stereotype.?);
+    try std.testing.expectEqualStrings("interface", d.classes[0].annotation.?);
 }
 
-test "silently skips separate-line <<stereotype>> shorthand" {
+test "silently skips separate-line <<annotation>> shorthand" {
     var d = try parseSource(std.testing.allocator,
         \\classDiagram
         \\    <<interface>> Repository
@@ -650,5 +720,5 @@ test "silently skips separate-line <<stereotype>> shorthand" {
     );
     defer d.deinit();
     try std.testing.expectEqual(@as(usize, 1), d.classes.len);
-    try std.testing.expect(d.classes[0].stereotype == null);
+    try std.testing.expect(d.classes[0].annotation == null);
 }

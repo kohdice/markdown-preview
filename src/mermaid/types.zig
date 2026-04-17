@@ -252,14 +252,15 @@ pub const SequenceDiagram = struct {
     }
 };
 
-pub const ClassMemberKind = enum { field, method };
-
 pub const Visibility = enum { public, private, protected, package, unknown };
 
 pub const ClassMember = struct {
-    kind: ClassMemberKind,
     visibility: Visibility,
-    text: []const u8,
+    name: []const u8,
+    type_text: ?[]const u8 = null,
+    is_static: bool = false,
+    is_abstract: bool = false,
+    params: ?[]const u8 = null,
 };
 
 pub const ClassRelationKind = enum {
@@ -269,36 +270,52 @@ pub const ClassRelationKind = enum {
     association,
     dependency,
     realization,
-    link,
 };
+
+pub const ClassMarkerAt = enum { from, to };
 
 pub const ClassNode = struct {
     id: NodeId,
     id_text: []const u8,
     label: []const u8,
-    stereotype: ?[]const u8 = null,
-    members: []ClassMember,
+    annotation: ?[]const u8 = null,
+    attributes: []ClassMember,
+    methods: []ClassMember,
 };
 
 pub const ClassRelation = struct {
     from: NodeId,
     to: NodeId,
     kind: ClassRelationKind,
+    marker_at: ClassMarkerAt,
     label: ?[]const u8 = null,
     from_cardinality: ?[]const u8 = null,
     to_cardinality: ?[]const u8 = null,
+};
+
+pub const ClassNamespace = struct {
+    name: []const u8,
+    class_ids: []NodeId,
 };
 
 pub const ClassDiagram = struct {
     allocator: std.mem.Allocator,
     classes: []ClassNode,
     relations: []ClassRelation,
+    namespaces: []ClassNamespace = &.{},
     owned_labels: [][]u8 = &.{},
 
     pub fn deinit(self: *ClassDiagram) void {
-        for (self.classes) |c| self.allocator.free(c.members);
+        for (self.classes) |c| {
+            self.allocator.free(c.attributes);
+            self.allocator.free(c.methods);
+        }
         self.allocator.free(self.classes);
         self.allocator.free(self.relations);
+        for (self.namespaces) |ns| {
+            if (ns.class_ids.len > 0) self.allocator.free(ns.class_ids);
+        }
+        if (self.namespaces.len > 0) self.allocator.free(self.namespaces);
         for (self.owned_labels) |s| self.allocator.free(s);
         if (self.owned_labels.len > 0) self.allocator.free(self.owned_labels);
     }
