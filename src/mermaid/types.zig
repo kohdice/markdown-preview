@@ -22,10 +22,9 @@ pub const Direction = enum {
         return self == .left_right or self == .right_left;
     }
 
-    /// Normalises for layout: RL → LR (upstream parity). BT normalisation to
-    /// TD + canvas flipVertical is done by renderMermaidGraph before calling
-    /// computeLayout, not here, because render_class / render_er pass
-    /// .bottom_up directly and hard-code `.up` routing direction.
+    /// Normalises for layout: RL → LR (upstream parity). BT is intentionally
+    /// not normalised here because it requires a paired canvas flipVertical;
+    /// renderMermaidGraph owns that coupling before calling computeLayout.
     pub fn layoutDir(self: Direction) Direction {
         return switch (self) {
             .right_left => .left_right,
