@@ -107,26 +107,21 @@ pub fn writeSequence(
     canvas_mod.writeCanvas(writer, &canvas, opts.wrap_width, ambig) catch return error.WriteFailed;
 }
 
-// ── Layout calculation ─────────────────────────────────────────────────────
-
 fn calculateBodyRows(diagram: *const types.SequenceDiagram) usize {
     const n_msg = diagram.messages.len;
     if (n_msg == 0 and diagram.notes.len == 0 and diagram.blocks.len == 0) return 1;
 
     var rows: usize = 0;
 
-    // Each message takes message_spacing rows
     rows += n_msg * message_spacing;
 
-    // Notes with after_index >= 0 take note_height rows each
     for (diagram.notes) |n| {
         if (n.after_index >= 0) rows += note_height;
     }
 
-    // Blocks: each block contributes top + bottom border rows + dividers
     for (diagram.blocks) |b| {
-        rows += 2; // top + bottom border
-        rows += b.dividers.len; // each else/and divider
+        rows += 2;
+        rows += b.dividers.len;
     }
 
     return if (rows == 0) 1 else rows + 2;
@@ -153,7 +148,6 @@ fn computeGap(diagram: *const types.SequenceDiagram, cell_w: usize, ambig: width
         max_needed = @max(max_needed, w);
     }
     for (diagram.blocks, 0..) |b, bi| {
-        // Estimate nesting depth: count blocks that fully contain this one
         var depth: usize = 0;
         for (diagram.blocks, 0..) |other, oi| {
             if (oi == bi) continue;
@@ -182,8 +176,6 @@ fn columnSpan(a: types.ParticipantId, b: types.ParticipantId) usize {
 fn participantCenter(index: types.ParticipantId, cell_w: usize, step_w: usize) usize {
     return @as(usize, @intCast(index)) * step_w + cell_w / 2;
 }
-
-// ── Drawing primitives ─────────────────────────────────────────────────────
 
 fn drawParticipantBoxes(
     canvas: *canvas_mod.Canvas,
@@ -222,8 +214,6 @@ fn drawLifelines(
         }
     }
 }
-
-// ── Messages-loop body renderer ────────────────────────────────────────────
 
 const ActiveBlock = struct { block_idx: usize };
 
@@ -325,7 +315,6 @@ fn drawBody(
             const b = diagram.blocks[ab.block_idx];
             for (b.dividers) |div| {
                 if (div.message_index == msg_idx) {
-                    // Draw outer frames' side borders on this divider row
                     {
                         var d: usize = 0;
                         while (d < ai) : (d += 1) {
@@ -375,7 +364,6 @@ fn drawBody(
                 ci -= 1;
                 const b = diagram.blocks[active_blocks.items[ci].block_idx];
                 if (b.end_index == msg_idx) {
-                    // Draw outer frames' side borders on this close row
                     {
                         var d: usize = 0;
                         while (d < ci) : (d += 1) {
@@ -460,7 +448,6 @@ fn drawBlockStartRow(
         canvas.setGlyph(row, c, glyphs.h_line);
     }
 
-    // Format: "kind [label]" or just "kind" when label is empty (F5)
     const kind_text = blockKindName(kind);
     const kind_w = width_mod.displayWidth(kind_text, ambig);
     if (left + 2 + kind_w < right) {
@@ -570,8 +557,6 @@ fn drawNoteAtRow(
     }
 }
 
-// ── Arrow drawing (F1: filled/open heads) ──────────────────────────────────
-
 fn drawMessageArrow(
     canvas: *canvas_mod.Canvas,
     label_row: usize,
@@ -600,7 +585,6 @@ fn drawMessageArrow(
         canvas.setGlyph(arrow_row, c, line_glyph);
     }
 
-    // Arrow head glyph: filled (▶◀) vs open (▷◁)
     const head_glyph: u21 = if (going_right)
         (if (msg.arrow_head == .filled) glyphs.arrow_right else '▷')
     else
@@ -646,8 +630,6 @@ fn drawSelfMessage(
     }
 }
 
-// ── Tests ──────────────────────────────────────────────────────────────────
-
 test "writeSequence renders participant boxes and arrow" {
     const alloc = std.testing.allocator;
     var sink: std.io.Writer.Allocating = .init(alloc);
@@ -664,7 +646,6 @@ test "writeSequence renders participant boxes and arrow" {
     try std.testing.expect(std.mem.indexOf(u8, out, "Bob") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Hello") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Hi") != null);
-    // Filled arrow heads
     try std.testing.expect(std.mem.indexOf(u8, out, "►") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "◄") != null);
 }
@@ -696,8 +677,8 @@ test "renderer draws filled and open arrow heads" {
     , .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "►") != null); // filled right
-    try std.testing.expect(std.mem.indexOf(u8, out, "◁") != null); // open left
+    try std.testing.expect(std.mem.indexOf(u8, out, "►") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "◁") != null);
 }
 
 test "note with after_index=-1 is NOT rendered" {
@@ -714,7 +695,6 @@ test "note with after_index=-1 is NOT rendered" {
     , .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    // The note "early" has after_index=-1 so should not appear in output
     try std.testing.expect(std.mem.indexOf(u8, out, "early") == null);
     try std.testing.expect(std.mem.indexOf(u8, out, "msg") != null);
 }
@@ -781,7 +761,6 @@ test "label-less block renders kind only without brackets" {
     , .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    // Should have "loop" but NOT "loop ["
     try std.testing.expect(std.mem.indexOf(u8, out, "loop") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "loop [") == null);
 }
@@ -801,27 +780,15 @@ test "nested blocks render outer before inner" {
     , .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    // "loop" header must appear before "alt" header in the output (open order)
     const loop_pos = std.mem.indexOf(u8, out, "loop [outer]") orelse return error.WriteFailed;
     const alt_pos = std.mem.indexOf(u8, out, "alt [inner]") orelse return error.WriteFailed;
     try std.testing.expect(loop_pos < alt_pos);
 
-    // Inner block (alt, depth=1) must close before outer block (loop, depth=0).
-    // Count '└' characters: the first '└' should be at depth 1 (indented),
-    // and the second at depth 0 (leftmost). We verify by checking that
-    // the output contains inner close corner '┘' before outer close corner.
-    // Simpler check: find the two bottom-left corners after the message area.
-    // The inner close line (alt) should appear before the outer close line (loop).
     const msg_end = std.mem.indexOf(u8, out, "yes") orelse return error.WriteFailed;
     const rest = out[msg_end..];
-    // After the arrow row, we expect inner alt closing line first (with indent),
-    // then outer loop closing line (at column 0).
-    // Inner close starts with " └" (indented), outer with "└" (column 0).
-    // Find first "└" in rest — that should be the inner one (depth 1).
+    // The first closing corner after the message should belong to the indented inner block.
     const first_bl = std.mem.indexOf(u8, rest, "└") orelse return error.WriteFailed;
-    // The inner close should be indented (preceded by space or another border char)
     if (first_bl > 0) {
-        // Character before └ should NOT be newline (i.e. it's indented)
         try std.testing.expect(rest[first_bl - 1] != '\n');
     }
 }
@@ -875,20 +842,11 @@ test "Note over two participants spans both lifelines" {
     , .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    // Find the note top border line (┌...┐ after the arrow)
-    // The note box must span from Alice's lifeline area to Bob's lifeline area.
-    // Look for the note border row: it should have ┌ near Alice and ┐ near Bob.
-    // The header row with "Alice" tells us Alice's box starts at col 0.
-    // The note top ┌ should be at or before Alice's center (col ~3),
-    // and ┐ should be at or after Bob's center.
     const arrow_pos = std.mem.indexOf(u8, out, "Hello") orelse return error.WriteFailed;
     const rest = out[arrow_pos..];
-    // Find ┌ in the rest (note top border)
     const tl = std.mem.indexOf(u8, rest, "┌") orelse return error.WriteFailed;
     const tr = std.mem.indexOf(u8, rest, "┐") orelse return error.WriteFailed;
-    // ┐ must be significantly after ┌ (spanning both lifelines, not just text width)
-    // With "ok" text (2 chars), text-only box would be 6 chars wide.
-    // With two participants, the span should be much wider (at least 20 chars).
+    // A two-participant note should span far wider than a text-only "ok" box.
     try std.testing.expect(tr > tl + 20);
 }
 
@@ -995,10 +953,8 @@ test "nested block outer frame has no gaps on inner block rows" {
     , .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    // The inner block header line should have outer │ on both sides: │┌ alt ...┐│
-    // Check that "│┌" appears (outer left border + inner top-left corner)
+    // Inner frame rows should preserve the outer border on the left edge.
     try std.testing.expect(std.mem.indexOf(u8, out, "│┌") != null);
-    // The inner block close line should also have outer │: │└...┘│
     try std.testing.expect(std.mem.indexOf(u8, out, "│└") != null);
 }
 
@@ -1019,7 +975,6 @@ test "final flush of nested empty blocks has outer frame borders" {
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "loop [outer]") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "alt [inner]") != null);
-    // Inner close must have outer │ on left side
     try std.testing.expect(std.mem.indexOf(u8, out, "│└") != null);
 }
 
@@ -1043,6 +998,6 @@ test "sequential blocks at same index are not nested" {
     const a_pos = std.mem.indexOf(u8, out, "loop [a]").?;
     const b_pos = std.mem.indexOf(u8, out, "loop [b]").?;
     try std.testing.expect(a_pos < b_pos);
-    // They must NOT be nested
+    // Nested rendering would add an outer border before the second header.
     try std.testing.expect(std.mem.indexOf(u8, out, "│┌ loop") == null);
 }

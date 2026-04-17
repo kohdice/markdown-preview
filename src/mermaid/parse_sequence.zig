@@ -149,10 +149,8 @@ fn normalizeLabel(parser: *Parser, text: []const u8) ParseError![]const u8 {
 fn parseLine(parser: *Parser, line: []const u8) ParseError!void {
     if (isSilentlySkipped(line)) return;
 
-    // Divider: == text ==
     if (parseDivider(line)) |_| return;
 
-    // Block end: case-sensitive "end"
     if (std.mem.eql(u8, line, "end")) {
         if (parser.ctx_stack.items.len > 0) {
             var ctx = parser.ctx_stack.pop().?;
@@ -176,10 +174,8 @@ fn parseLine(parser: *Parser, line: []const u8) ParseError!void {
         return;
     }
 
-    // Else / and separator: case-sensitive, requires non-empty stack
     if (try tryParseElseAnd(parser, line)) return;
 
-    // Block start: case-sensitive keywords
     if (parseBlockKeyword(line)) |bk| {
         const order = parser.block_counter;
         parser.block_counter += 1;
@@ -193,13 +189,10 @@ fn parseLine(parser: *Parser, line: []const u8) ParseError!void {
         return;
     }
 
-    // Note: case-insensitive (upstream /i flag)
     if (try tryParseNote(parser, line)) return;
 
-    // Standalone activate/deactivate: silently accepted and ignored
     if (isActivationLine(line)) return;
 
-    // Participant / actor declaration
     if (tryParseParticipant(parser, line)) |_| return else |err| switch (err) {
         error.NotParticipant => {},
         error.InvalidMermaid => return error.InvalidMermaid,
@@ -208,7 +201,6 @@ fn parseLine(parser: *Parser, line: []const u8) ParseError!void {
         error.OutOfMemory => return error.OutOfMemory,
     }
 
-    // Message (final fallback — silent ignore on syntax mismatch)
     parseMessage(parser, line) catch |err| switch (err) {
         error.InvalidMermaid => {},
         error.UnsupportedFeature => {},
@@ -267,7 +259,6 @@ fn parseBlockKeyword(line: []const u8) ?BlockMatch {
 }
 
 fn tryParseElseAnd(parser: *Parser, line: []const u8) ParseError!bool {
-    // Case-sensitive; requires non-empty stack
     if (parser.ctx_stack.items.len == 0) return false;
 
     var label: []const u8 = undefined;
@@ -497,8 +488,6 @@ fn parseMessage(parser: *Parser, line: []const u8) ParseError!void {
     });
 }
 
-// ── Tests ──────────────────────────────────────────────────────────────────
-
 test "parses bare sequenceDiagram header" {
     var d = try parseSource(std.testing.allocator, "sequenceDiagram\n");
     defer d.deinit();
@@ -618,8 +607,6 @@ test "silently accepts create/destroy lines" {
     try std.testing.expect(d.messages.len >= 1);
 }
 
-// ── F1: LineStyle + ArrowHead ──────────────────────────────────────────────
-
 test "->> produces line_style=.solid, arrow_head=.filled" {
     var d = try parseSource(std.testing.allocator,
         \\sequenceDiagram
@@ -672,8 +659,6 @@ test "activate/deactivate shortcut sets message flags" {
     try std.testing.expect(!d.messages[1].activate);
     try std.testing.expect(d.messages[1].deactivate);
 }
-
-// ── F2: notes[]/blocks[] AST ───────────────────────────────────────────────
 
 test "note after 1 message gets after_index=0" {
     var d = try parseSource(std.testing.allocator,
@@ -792,7 +777,6 @@ test "nested blocks produce separate block entries" {
     );
     defer d.deinit();
     try std.testing.expectEqual(@as(usize, 2), d.blocks.len);
-    // Inner block ends first
     try std.testing.expectEqual(types.SequenceBlockKind.alt, d.blocks[0].kind);
     try std.testing.expectEqual(types.SequenceBlockKind.loop, d.blocks[1].kind);
 }
@@ -822,8 +806,6 @@ test "Note over two participants" {
     try std.testing.expectEqual(@as(types.ParticipantId, 0), d.notes[0].actor_ids[0]);
     try std.testing.expectEqual(@as(types.ParticipantId, 1), d.notes[0].actor_ids[1]);
 }
-
-// ── F4: case-sensitive block keywords ──────────────────────────────────────
 
 test "LOOP x is silent-ignored (case-sensitive block keywords)" {
     var d = try parseSource(std.testing.allocator,
@@ -945,23 +927,19 @@ test "note auto-intern after message adds new participant" {
 }
 
 test "Note keyword is case-insensitive" {
-    // lowercase
     var d1 = try parseSource(std.testing.allocator, "sequenceDiagram\nnote over A: n\n");
     defer d1.deinit();
     try std.testing.expectEqual(@as(usize, 1), d1.notes.len);
 
-    // uppercase
     var d2 = try parseSource(std.testing.allocator, "sequenceDiagram\nNOTE OVER A: n\n");
     defer d2.deinit();
     try std.testing.expectEqual(@as(usize, 1), d2.notes.len);
 
-    // mixed case placement
     var d3 = try parseSource(std.testing.allocator, "sequenceDiagram\nNote LEFT OF A: n\n");
     defer d3.deinit();
     try std.testing.expectEqual(@as(usize, 1), d3.notes.len);
     try std.testing.expectEqual(types.NotePlacement.left_of, d3.notes[0].placement);
 
-    // mixed: keyword lowercase + placement uppercase
     var d4 = try parseSource(std.testing.allocator, "sequenceDiagram\nNOTE right of A: n\n");
     defer d4.deinit();
     try std.testing.expectEqual(@as(usize, 1), d4.notes.len);

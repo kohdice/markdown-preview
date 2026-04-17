@@ -400,7 +400,6 @@ fn reassignLocalLevels(
     const n = graph.nodes.len;
     if (n == 0) return;
 
-    // Collect groups: consecutive ranges of sorted node ids with same path
     var sorted: std.ArrayListUnmanaged(types.NodeId) = .empty;
     defer sorted.deinit(allocator);
     try sorted.resize(allocator, n);
@@ -497,18 +496,14 @@ fn composeVirtualNodeLevels(
     const n = graph.nodes.len;
     if (n == 0) return;
 
-    // Identify subgraph groups and their spans.
     const GroupInfo = struct { base: usize, span: usize, path: []const u32 };
     var groups: std.ArrayListUnmanaged(GroupInfo) = .empty;
     defer groups.deinit(allocator);
 
-    // Assign each node a "virtual id": external nodes keep their id,
-    // subgraph members map to a virtual node starting at index n.
     const virtual_id = try allocator.alloc(usize, n);
     defer allocator.free(virtual_id);
     for (0..n) |i| virtual_id[i] = i;
 
-    // Group nodes by path (sorted scan)
     const sorted = try allocator.alloc(types.NodeId, n);
     defer allocator.free(sorted);
     for (0..n) |i| sorted[i] = @intCast(i);
@@ -539,7 +534,6 @@ fn composeVirtualNodeLevels(
 
     if (groups.items.len == 0) return;
 
-    // Build virtual graph and run size-aware level assignment.
     const vn = n + groups.items.len;
     const v_levels = try allocator.alloc(usize, vn);
     defer allocator.free(v_levels);
@@ -551,7 +545,6 @@ fn composeVirtualNodeLevels(
         v_sizes[n + gi] = g.span;
     }
 
-    // Compute incoming counts for virtual nodes.
     const remaining = try allocator.alloc(u32, vn);
     defer allocator.free(remaining);
     @memset(remaining, 0);
@@ -575,36 +568,19 @@ fn composeVirtualNodeLevels(
     var qi: usize = 0;
     while (qi < queue.items.len) : (qi += 1) {
         const u = queue.items[qi];
-        // Find edges from u (need to map real edges to virtual edges)
-        if (u < n) {
-            for (graph.edges) |edge| {
-                if (virtual_id[edge.from] != u) continue;
-                const vto = virtual_id[edge.to];
-                if (vto == u) continue;
-                const candidate = v_levels[u] + v_sizes[u];
-                if (candidate > v_levels[vto]) v_levels[vto] = candidate;
-                if (remaining[vto] > 0) {
-                    remaining[vto] -= 1;
-                    if (remaining[vto] == 0) try queue.append(allocator, vto);
-                }
-            }
-        } else {
-            // Virtual node u = subgraph. Scan all edges from any member.
-            for (graph.edges) |edge| {
-                if (virtual_id[edge.from] != u) continue;
-                const vto = virtual_id[edge.to];
-                if (vto == u) continue;
-                const candidate = v_levels[u] + v_sizes[u];
-                if (candidate > v_levels[vto]) v_levels[vto] = candidate;
-                if (remaining[vto] > 0) {
-                    remaining[vto] -= 1;
-                    if (remaining[vto] == 0) try queue.append(allocator, vto);
-                }
+        for (graph.edges) |edge| {
+            if (virtual_id[edge.from] != u) continue;
+            const vto = virtual_id[edge.to];
+            if (vto == u) continue;
+            const candidate = v_levels[u] + v_sizes[u];
+            if (candidate > v_levels[vto]) v_levels[vto] = candidate;
+            if (remaining[vto] > 0) {
+                remaining[vto] -= 1;
+                if (remaining[vto] == 0) try queue.append(allocator, vto);
             }
         }
     }
 
-    // Map virtual levels back to real nodes.
     for (0..n) |i| {
         const vid = virtual_id[i];
         if (vid == i) {
@@ -764,7 +740,6 @@ test "subgraph members occupy a contiguous column band separate from external no
     var layout = try computeLayout(alloc, &graph, .narrow);
     defer layout.deinit();
 
-    // Find node ids by textual lookup.
     var id_start: ?types.NodeId = null;
     var id_a: ?types.NodeId = null;
     var id_c: ?types.NodeId = null;
@@ -775,14 +750,12 @@ test "subgraph members occupy a contiguous column band separate from external no
         if (std.mem.eql(u8, node.id_text, "C")) id_c = nid;
     }
 
-    // Subgraph members A and C must share a column distinct from Start.
     const col_a = layout.positions[id_a.?].col;
     const col_c = layout.positions[id_c.?].col;
     const col_start = layout.positions[id_start.?].col;
     try std.testing.expectEqual(col_a, col_c);
     try std.testing.expect(col_a != col_start);
 
-    // The frame bbox must not enclose the Start column.
     try std.testing.expectEqual(@as(usize, 1), layout.subgraph_frames.len);
     const frame = layout.subgraph_frames[0];
     try std.testing.expect(col_start < frame.col_start or col_start > frame.col_end);
@@ -804,8 +777,6 @@ test "virtual node composition places external node after subgraph span" {
     var layout = try computeLayout(alloc, &graph, .narrow);
     defer layout.deinit();
 
-    // Y must be placed AFTER the subgraph's last member (C), not at the same
-    // level as any subgraph member.
     var id_c: ?types.NodeId = null;
     var id_y: ?types.NodeId = null;
     for (graph.nodes, 0..) |node, i| {

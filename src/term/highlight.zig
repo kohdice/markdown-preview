@@ -696,7 +696,6 @@ fn predicatesPass(
         i = j + 1;
 
         if (pred.len == 0) continue;
-        // The first step of a predicate must be a string — the predicate name.
         if (pred[0].type != .string) return false;
         const name = query.stringValueForId(pred[0].value_id) orelse return false;
         const args = pred[1..];

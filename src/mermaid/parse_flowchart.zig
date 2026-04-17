@@ -1118,8 +1118,6 @@ test "subgraph direction LR arranges members horizontally in a TD diagram" {
     var layout = try @import("layout_flowchart.zig").computeLayout(std.testing.allocator, &graph, .narrow);
     defer layout.deinit();
 
-    // LR direction: A, B, C should share the same row but occupy different
-    // columns (level axis swapped to column axis within the band).
     const row_a = layout.positions[0].row;
     const row_b = layout.positions[1].row;
     const row_c = layout.positions[2].row;
