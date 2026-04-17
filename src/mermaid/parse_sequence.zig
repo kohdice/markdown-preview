@@ -279,6 +279,10 @@ fn tryParseElseAnd(parser: *Parser, line: []const u8) ParseError!bool {
         label = "";
     } else if (std.mem.startsWith(u8, line, "and ")) {
         label = std.mem.trim(u8, line["and ".len..], " \t");
+    } else if (std.mem.eql(u8, line, "option")) {
+        label = "";
+    } else if (std.mem.startsWith(u8, line, "option ")) {
+        label = std.mem.trim(u8, line["option ".len..], " \t");
     } else {
         return false;
     }
@@ -744,6 +748,23 @@ test "loop block records start_index and end_index" {
     try std.testing.expectEqual(@as(u32, 0), d.blocks[0].end_index);
 }
 
+test "critical block with option separator records divider" {
+    var d = try parseSource(std.testing.allocator,
+        \\sequenceDiagram
+        \\    critical establish connection
+        \\        A->>B: connect
+        \\    option network failure
+        \\        B-->>A: retry
+        \\    end
+    );
+    defer d.deinit();
+    try std.testing.expectEqual(@as(usize, 1), d.blocks.len);
+    try std.testing.expectEqual(types.SequenceBlockKind.critical, d.blocks[0].kind);
+    try std.testing.expectEqualStrings("establish connection", d.blocks[0].label);
+    try std.testing.expectEqual(@as(usize, 1), d.blocks[0].dividers.len);
+    try std.testing.expectEqualStrings("network failure", d.blocks[0].dividers[0].label);
+}
+
 test "par block with and separator records divider" {
     var d = try parseSource(std.testing.allocator,
         \\sequenceDiagram
@@ -840,6 +861,39 @@ test "loop internal else records as divider (upstream parity)" {
     try std.testing.expectEqual(types.SequenceBlockKind.loop, d.blocks[0].kind);
     try std.testing.expectEqual(@as(usize, 1), d.blocks[0].dividers.len);
     try std.testing.expectEqualStrings("y", d.blocks[0].dividers[0].label);
+}
+
+test "loop internal option records as divider (upstream parity)" {
+    // Upstream mermaid treats `else`, `and`, and `option` as a generic
+    // divider keyword inside any non-empty block context rather than
+    // pairing them with a specific block kind. This test pins that
+    // stance — `option` inside a `loop` is accepted as a divider, not
+    // silently ignored, matching the sibling `else`-in-`loop` test.
+    var d = try parseSource(std.testing.allocator,
+        \\sequenceDiagram
+        \\    loop x
+        \\    option y
+        \\    A->>B: m
+        \\    end
+    );
+    defer d.deinit();
+    try std.testing.expectEqual(@as(usize, 1), d.blocks.len);
+    try std.testing.expectEqual(types.SequenceBlockKind.loop, d.blocks[0].kind);
+    try std.testing.expectEqual(@as(usize, 1), d.blocks[0].dividers.len);
+    try std.testing.expectEqualStrings("y", d.blocks[0].dividers[0].label);
+}
+
+test "top-level option with empty stack is silent-ignored" {
+    // Upstream parity: branch keywords outside any block fall through to
+    // message parsing, which silently ignores syntactically invalid lines.
+    var d = try parseSource(std.testing.allocator,
+        \\sequenceDiagram
+        \\    option orphan
+        \\    A->>B: m
+    );
+    defer d.deinit();
+    try std.testing.expectEqual(@as(usize, 0), d.blocks.len);
+    try std.testing.expectEqual(@as(usize, 1), d.messages.len);
 }
 
 test "Note left of participant" {
