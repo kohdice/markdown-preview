@@ -241,9 +241,7 @@ fn renderMermaidGraph(
     graph: *const @import("types.zig").MermaidGraph,
     opts: Options,
 ) RenderError!void {
-    // BT is laid out as TD and flipped at the canvas level. Keeping this
-    // substitution local to the flowchart/state path leaves render_class and
-    // render_er free to use .bottom_up with the existing row-swap semantics.
+    // BT is laid out as TD and flipped at the canvas level.
     const needs_vflip = graph.direction == .bottom_up;
     var effective = graph.*;
     effective.direction = if (needs_vflip) .top_down else graph.direction;

@@ -3,7 +3,6 @@ const types = @import("types.zig");
 const parse = @import("parse_er.zig");
 const canvas_mod = @import("canvas.zig");
 const route_mod = @import("route.zig");
-const layout_flowchart = @import("layout_flowchart.zig");
 const width_mod = @import("../term/width.zig");
 
 pub const RenderError = error{
@@ -33,35 +32,31 @@ pub fn writeEr(
 
     if (diagram.entities.len == 0) return;
 
-    const layout_info = try computeLayout(allocator, &diagram, opts.ambiguous_width);
-    defer {
-        var mutable_layout = layout_info.flow_layout;
-        mutable_layout.deinit();
-        allocator.free(layout_info.flow_graph_nodes);
-        allocator.free(layout_info.flow_graph_edges);
-    }
+    var layout = computeErLayout(allocator, &diagram, opts.ambiguous_width) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    defer layout.deinit();
 
-    const flow_layout = layout_info.flow_layout;
-    if (flow_layout.rows == 0 or flow_layout.cols == 0) return;
+    if (layout.rows == 0 or layout.cols == 0) return;
 
     const glyphs = canvas_mod.GlyphSet.unicode;
 
-    const canvas_rows = route_mod.canvasRows(&flow_layout);
-    const canvas_cols = route_mod.canvasCols(&flow_layout);
+    const canvas_rows = route_mod.canvasRows(&layout);
+    const canvas_cols = route_mod.canvasCols(&layout);
     var canvas = canvas_mod.Canvas.init(allocator, canvas_rows, canvas_cols) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
     };
     defer canvas.deinit();
 
     for (diagram.entities, 0..) |entity, i| {
-        const pos = flow_layout.positions[i];
-        const top = route_mod.boxTop(&flow_layout, pos.row);
-        const left = route_mod.boxLeft(&flow_layout, pos.col);
-        drawEntityBox(&canvas, top, left, actualBoxHeight(&entity), flow_layout.cell_w, &entity, &glyphs, opts.ambiguous_width);
+        const pos = layout.positions[i];
+        const top = route_mod.boxTop(&layout, pos.row);
+        const left = route_mod.boxLeft(&layout, pos.col);
+        drawEntityBox(&canvas, top, left, actualBoxHeight(&entity), layout.cell_w, &entity, &glyphs, opts.ambiguous_width);
     }
 
     for (diagram.relations) |rel| {
-        drawRelation(allocator, &canvas, &flow_layout, &diagram, rel, &glyphs, opts.ambiguous_width) catch |err| switch (err) {
+        drawRelation(allocator, &canvas, &layout, &diagram, rel, &glyphs, opts.ambiguous_width) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
         };
     }
@@ -72,12 +67,6 @@ pub fn writeEr(
 
     canvas_mod.writeCanvas(writer, &canvas, opts.wrap_width, opts.ambiguous_width) catch return error.WriteFailed;
 }
-
-const LayoutInfo = struct {
-    flow_layout: types.Layout,
-    flow_graph_nodes: []types.Node,
-    flow_graph_edges: []types.Edge,
-};
 
 pub const ErLayoutError = error{OutOfMemory};
 
@@ -187,58 +176,6 @@ fn assignErLevels(
             }
         }
     }
-}
-
-fn computeLayout(
-    allocator: std.mem.Allocator,
-    diagram: *const types.ErDiagram,
-    ambiguous: width_mod.AmbiguousWidth,
-) RenderError!LayoutInfo {
-    const nodes = allocator.alloc(types.Node, diagram.entities.len) catch return error.OutOfMemory;
-    errdefer allocator.free(nodes);
-
-    for (diagram.entities, 0..) |entity, i| {
-        nodes[i] = .{
-            .id = @intCast(i),
-            .id_text = entity.id_text,
-            .label = entity.id_text,
-            .shape = .rect,
-        };
-    }
-
-    const edges = allocator.alloc(types.Edge, diagram.relations.len) catch return error.OutOfMemory;
-    errdefer allocator.free(edges);
-    for (diagram.relations, 0..) |rel, i| {
-        edges[i] = .{
-            .from = rel.from,
-            .to = rel.to,
-            .label = rel.label,
-            .style = if (rel.identifying) .arrow else .dotted,
-        };
-    }
-
-    var flow_graph = types.MermaidGraph{
-        .allocator = allocator,
-        .direction = .bottom_up,
-        .nodes = nodes,
-        .edges = edges,
-    };
-
-    var layout = layout_flowchart.computeLayout(allocator, &flow_graph, ambiguous) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-    };
-    errdefer layout.deinit();
-
-    const required_box_h = computeRequiredBoxHeight(diagram);
-    const required_box_w = computeRequiredBoxWidth(diagram, ambiguous);
-    if (required_box_h > layout.cell_h) layout.cell_h = required_box_h;
-    if (required_box_w > layout.cell_w) layout.cell_w = required_box_w;
-
-    return .{
-        .flow_layout = layout,
-        .flow_graph_nodes = nodes,
-        .flow_graph_edges = edges,
-    };
 }
 
 fn computeRequiredBoxHeight(diagram: *const types.ErDiagram) usize {
