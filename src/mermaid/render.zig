@@ -312,7 +312,7 @@ fn renderMermaidGraph(
             const src_left = route_mod.boxLeft(&layout, src_pos.col);
             const src_cx = src_left + layout.cell_w / 2;
             const src_cy = src_top + layout.cell_h / 2;
-            route_mod.paintSourceArrowHead(&canvas, layout_dir, src_top, src_left, src_cx, src_cy, layout, &glyphs);
+            route_mod.paintSourceArrowHead(&canvas, layout_dir, src_top, src_left, src_cx, src_cy, &glyphs);
         }
     }
 

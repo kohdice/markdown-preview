@@ -256,13 +256,6 @@ fn computePorts(layout: *const types.Layout, edge: types.Edge, direction: types.
             .goal_row = if (tgt_top == 0) 0 else tgt_top - 1,
             .goal_col = tgt_w_center,
         },
-        .bottom_up => .{
-            .start_row = src_top,
-            .start_col = src_w_center,
-            .initial_dir = .up,
-            .goal_row = tgt_top + layout.cell_h,
-            .goal_col = tgt_w_center,
-        },
         .left_right => .{
             .start_row = src_h_center,
             .start_col = src_left + layout.cell_w - 1,
@@ -270,13 +263,7 @@ fn computePorts(layout: *const types.Layout, edge: types.Edge, direction: types.
             .goal_row = tgt_h_center,
             .goal_col = if (tgt_left == 0) 0 else tgt_left - 1,
         },
-        .right_left => .{
-            .start_row = src_h_center,
-            .start_col = src_left,
-            .initial_dir = .left,
-            .goal_row = tgt_h_center,
-            .goal_col = tgt_left + layout.cell_w,
-        },
+        else => unreachable,
     };
 }
 
@@ -480,7 +467,6 @@ pub fn paintSourceArrowHead(
     src_left: usize,
     src_cx: usize,
     src_cy: usize,
-    layout: types.Layout,
     glyphs: *const canvas_mod.GlyphSet,
 ) void {
     switch (direction) {
@@ -488,16 +474,11 @@ pub fn paintSourceArrowHead(
             if (src_top == 0) return;
             canvas.setGlyph(src_top - 1, src_cx, glyphs.arrow_up);
         },
-        .bottom_up => {
-            canvas.setGlyph(src_top + layout.cell_h, src_cx, glyphs.arrow_down);
-        },
         .left_right => {
             if (src_left == 0) return;
             canvas.setGlyph(src_cy, src_left - 1, glyphs.arrow_left);
         },
-        .right_left => {
-            canvas.setGlyph(src_cy, src_left + layout.cell_w, glyphs.arrow_right);
-        },
+        else => unreachable,
     }
 }
 
@@ -604,9 +585,8 @@ fn routeFallback(
 ) RouteError!void {
     switch (direction) {
         .top_down => try routeVertical(canvas, layout, edge, glyphs, ambiguous, .down, edge_style),
-        .bottom_up => try routeVertical(canvas, layout, edge, glyphs, ambiguous, .up, edge_style),
         .left_right => try routeHorizontal(canvas, layout, edge, glyphs, ambiguous, .right, edge_style),
-        .right_left => try routeHorizontal(canvas, layout, edge, glyphs, ambiguous, .left, edge_style),
+        else => unreachable,
     }
 }
 
