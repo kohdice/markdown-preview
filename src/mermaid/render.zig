@@ -79,13 +79,15 @@ pub fn writeMermaid(
     source: []const u8,
     opts: Options,
 ) RenderError!void {
-    return switch (classifyHeader(source)) {
-        .flowchart => writeFlowchart(writer, allocator, source, opts),
-        .sequence => writeSequence(writer, allocator, source, opts),
-        .class_ => writeClass(writer, allocator, source, opts),
-        .state => writeState(writer, allocator, source, opts),
-        .er => writeEr(writer, allocator, source, opts),
-        .git_graph => writeGit(writer, allocator, source, opts),
+    const stripped = try stripInitDirectives(allocator, source);
+    defer allocator.free(stripped);
+    return switch (classifyHeader(stripped)) {
+        .flowchart => writeFlowchart(writer, allocator, stripped, opts),
+        .sequence => writeSequence(writer, allocator, stripped, opts),
+        .class_ => writeClass(writer, allocator, stripped, opts),
+        .state => writeState(writer, allocator, stripped, opts),
+        .er => writeEr(writer, allocator, stripped, opts),
+        .git_graph => writeGit(writer, allocator, stripped, opts),
         .journey,
         .gantt,
         .pie,
@@ -98,6 +100,25 @@ pub fn writeMermaid(
         => error.UnsupportedDiagram,
         .unknown => error.InvalidMermaid,
     };
+}
+
+fn stripInitDirectives(allocator: std.mem.Allocator, source: []const u8) RenderError![]u8 {
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer buf.deinit(allocator);
+
+    var cursor: usize = 0;
+    while (std.mem.indexOf(u8, source[cursor..], "%%{")) |rel| {
+        const block_start = cursor + rel;
+        try buf.appendSlice(allocator, source[cursor..block_start]);
+
+        const end_rel = std.mem.indexOf(u8, source[block_start + 3 ..], "}%%") orelse {
+            try buf.appendSlice(allocator, source[block_start..]);
+            return buf.toOwnedSlice(allocator);
+        };
+        cursor = block_start + 3 + end_rel + 3;
+    }
+    try buf.appendSlice(allocator, source[cursor..]);
+    return buf.toOwnedSlice(allocator);
 }
 
 fn writeClass(
@@ -492,6 +513,31 @@ test "classifyHeader skips leading comments and blank lines" {
         \\    A --> B
     ;
     try std.testing.expectEqual(DiagramKind.flowchart, classifyHeader(source));
+}
+
+test "writeMermaid strips multi-line init directive before flowchart" {
+    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+
+    const opts: Options = .{
+        .enable_ansi = false,
+        .palette = theme.default_palette,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    };
+
+    try writeMermaid(&sink.writer, std.testing.allocator,
+        \\%%{init: {
+        \\  "theme": "dark"
+        \\}}%%
+        \\graph TD
+        \\    A --> B
+    , opts);
+
+    const output = sink.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "A") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "B") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "▼") != null);
 }
 
 test "writeMermaid returns UnsupportedDiagram for gantt" {
