@@ -79,9 +79,10 @@ pub fn writeMermaid(
     source: []const u8,
     opts: Options,
 ) RenderError!void {
-    const stripped = try stripInitDirectives(allocator, source);
+    const kind = classifyHeader(source);
+    const stripped = try stripInitDirectives(allocator, source, kind);
     defer allocator.free(stripped);
-    return switch (classifyHeader(stripped)) {
+    return switch (kind) {
         .flowchart => writeFlowchart(writer, allocator, stripped, opts),
         .sequence => writeSequence(writer, allocator, stripped, opts),
         .class_ => writeClass(writer, allocator, stripped, opts),
@@ -102,9 +103,15 @@ pub fn writeMermaid(
     };
 }
 
-fn stripInitDirectives(allocator: std.mem.Allocator, source: []const u8) RenderError![]u8 {
+fn stripInitDirectives(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    kind: DiagramKind,
+) RenderError![]u8 {
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     errdefer buf.deinit(allocator);
+
+    const unsafe_key = diagramConfigKey(kind);
 
     var cursor: usize = 0;
     while (cursor < source.len) {
@@ -123,7 +130,9 @@ fn stripInitDirectives(allocator: std.mem.Allocator, source: []const u8) RenderE
             };
             const block_end = body_start + end_rel + 3;
             const body = source[body_start .. body_start + end_rel];
-            if (containsUnsafeInitKey(body)) return error.UnsupportedFeature;
+            if (unsafe_key) |k| {
+                if (std.mem.indexOf(u8, body, k) != null) return error.UnsupportedFeature;
+            }
 
             var next = block_end;
             while (next < source.len and (source[next] == ' ' or source[next] == '\t' or source[next] == '\r')) : (next += 1) {}
@@ -139,31 +148,25 @@ fn stripInitDirectives(allocator: std.mem.Allocator, source: []const u8) RenderE
     return buf.toOwnedSlice(allocator);
 }
 
-const unsafe_init_keys = [_][]const u8{
-    "\"gitGraph\"",
-    "\"flowchart\"",
-    "\"sequence\"",
-    "\"classDiagram\"",
-    "\"class\"",
-    "\"stateDiagram\"",
-    "\"state\"",
-    "\"er\"",
-    "\"journey\"",
-    "\"gantt\"",
-    "\"pie\"",
-    "\"mindmap\"",
-    "\"timeline\"",
-    "\"quadrantChart\"",
-    "\"xychart\"",
-    "\"sankey\"",
-    "\"block\"",
-};
-
-fn containsUnsafeInitKey(body: []const u8) bool {
-    for (unsafe_init_keys) |k| {
-        if (std.mem.indexOf(u8, body, k) != null) return true;
-    }
-    return false;
+fn diagramConfigKey(kind: DiagramKind) ?[]const u8 {
+    return switch (kind) {
+        .flowchart => "\"flowchart\"",
+        .sequence => "\"sequence\"",
+        .class_ => "\"class\"",
+        .state => "\"state\"",
+        .er => "\"er\"",
+        .git_graph => "\"gitGraph\"",
+        .journey => "\"journey\"",
+        .gantt => "\"gantt\"",
+        .pie => "\"pie\"",
+        .mindmap => "\"mindmap\"",
+        .timeline => "\"timeline\"",
+        .quadrant => "\"quadrantChart\"",
+        .xychart => "\"xychart\"",
+        .sankey => "\"sankey\"",
+        .block => "\"block\"",
+        .unknown => null,
+    };
 }
 
 fn writeClass(
@@ -515,12 +518,24 @@ fn clipToWidth(text: []const u8, budget: usize, ambiguous: width_mod.AmbiguousWi
 }
 
 fn firstMeaningfulLine(source: []const u8) ?[]const u8 {
-    var it = std.mem.splitScalar(u8, source, '\n');
-    while (it.next()) |raw| {
-        const trimmed = std.mem.trim(u8, raw, " \t\r");
-        if (trimmed.len == 0) continue;
-        if (std.mem.startsWith(u8, trimmed, "%%")) continue;
-        return trimmed;
+    var cursor: usize = 0;
+    while (cursor < source.len) {
+        const nl = std.mem.indexOfScalarPos(u8, source, cursor, '\n');
+        const line_end = nl orelse source.len;
+        const line = source[cursor..line_end];
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+
+        if (trimmed.len != 0 and std.mem.startsWith(u8, trimmed, "%%{")) {
+            const after = std.mem.indexOf(u8, source[cursor..], "}%%") orelse return null;
+            cursor += after + 3;
+            if (cursor < source.len and source[cursor] == '\r') cursor += 1;
+            if (cursor < source.len and source[cursor] == '\n') cursor += 1;
+            continue;
+        }
+
+        const advance = if (nl != null) line_end + 1 else line_end;
+        if (trimmed.len != 0 and !std.mem.startsWith(u8, trimmed, "%%")) return trimmed;
+        cursor = advance;
     }
     return null;
 }
@@ -623,6 +638,29 @@ test "writeMermaid keeps %%{...}%% inside flowchart node label" {
 
     const output = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "%%{x}%%") != null);
+}
+
+test "writeMermaid silently strips init config scoped to a different diagram" {
+    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+
+    const opts: Options = .{
+        .enable_ansi = false,
+        .palette = theme.default_palette,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    };
+
+    try writeMermaid(&sink.writer, std.testing.allocator,
+        \\%%{init: { "flowchart": { "curve": "basis" } }}%%
+        \\sequenceDiagram
+        \\    Alice->>Bob: hi
+    , opts);
+
+    const output = sink.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "Alice") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Bob") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "hi") != null);
 }
 
 test "writeMermaid rejects init with diagram-specific config as UnsupportedFeature" {
