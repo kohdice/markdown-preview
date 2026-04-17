@@ -526,3 +526,75 @@ test "computeErLayout stacks two-entity relation as bottom_up rows" {
     }
     try std.testing.expect(row_set[0] and row_set[1]);
 }
+
+test "computeErLayout 1-parent 2-children branch separates siblings across columns" {
+    const alloc = std.testing.allocator;
+    var diagram = try parse.parseSource(alloc,
+        \\erDiagram
+        \\    CUSTOMER ||--o{ ORDER : places
+        \\    CUSTOMER ||--o{ INVOICE : receives
+    );
+    defer diagram.deinit();
+
+    var layout = try computeErLayout(alloc, &diagram, .narrow);
+    defer layout.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), layout.positions.len);
+    try std.testing.expectEqual(@as(usize, 2), layout.rows);
+    try std.testing.expectEqual(@as(usize, 2), layout.cols);
+
+    var id_customer: ?usize = null;
+    var id_order: ?usize = null;
+    var id_invoice: ?usize = null;
+    for (diagram.entities, 0..) |entity, i| {
+        if (std.mem.eql(u8, entity.id_text, "CUSTOMER")) id_customer = i;
+        if (std.mem.eql(u8, entity.id_text, "ORDER")) id_order = i;
+        if (std.mem.eql(u8, entity.id_text, "INVOICE")) id_invoice = i;
+    }
+    try std.testing.expect(id_customer != null and id_order != null and id_invoice != null);
+
+    try std.testing.expectEqual(@as(usize, 1), layout.positions[id_customer.?].row);
+    try std.testing.expectEqual(@as(usize, 0), layout.positions[id_order.?].row);
+    try std.testing.expectEqual(@as(usize, 0), layout.positions[id_invoice.?].row);
+
+    const o_col = layout.positions[id_order.?].col;
+    const i_col = layout.positions[id_invoice.?].col;
+    try std.testing.expect(o_col != i_col);
+    try std.testing.expect(o_col < 2 and i_col < 2);
+}
+
+test "computeErLayout 2-parents 1-child merge stacks parents in bottom row" {
+    const alloc = std.testing.allocator;
+    var diagram = try parse.parseSource(alloc,
+        \\erDiagram
+        \\    CUSTOMER ||--o{ ORDER : places
+        \\    SHIPPER ||--o{ ORDER : handles
+    );
+    defer diagram.deinit();
+
+    var layout = try computeErLayout(alloc, &diagram, .narrow);
+    defer layout.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), layout.positions.len);
+    try std.testing.expectEqual(@as(usize, 2), layout.rows);
+    try std.testing.expectEqual(@as(usize, 2), layout.cols);
+
+    var id_customer: ?usize = null;
+    var id_shipper: ?usize = null;
+    var id_order: ?usize = null;
+    for (diagram.entities, 0..) |entity, i| {
+        if (std.mem.eql(u8, entity.id_text, "CUSTOMER")) id_customer = i;
+        if (std.mem.eql(u8, entity.id_text, "SHIPPER")) id_shipper = i;
+        if (std.mem.eql(u8, entity.id_text, "ORDER")) id_order = i;
+    }
+    try std.testing.expect(id_customer != null and id_shipper != null and id_order != null);
+
+    try std.testing.expectEqual(@as(usize, 1), layout.positions[id_customer.?].row);
+    try std.testing.expectEqual(@as(usize, 1), layout.positions[id_shipper.?].row);
+    try std.testing.expectEqual(@as(usize, 0), layout.positions[id_order.?].row);
+
+    const c_col = layout.positions[id_customer.?].col;
+    const s_col = layout.positions[id_shipper.?].col;
+    try std.testing.expect(c_col != s_col);
+    try std.testing.expect(c_col < 2 and s_col < 2);
+}
