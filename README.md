@@ -88,15 +88,27 @@ The following diagram types are rendered as ASCII art.
 
 ### `classDiagram` / `classDiagram-v2`
 
-- Relations: `<|--`, `*--`, `o--`, `-->`, `..>`, `--` (and reverses)
-- Visibility: `+`, `-`, `#`, `~`
-- Fields and methods (methods accept return types: `+get(k) V`)
-- Block form: `class X { ... }`
-- Stereotypes: `<<interface>>`, `<<abstract>>` — inside a block body,
-  inline `class Foo { <<interface>> }`, or trailing `class Foo <<interface>>`
+- Relations: `<|--`, `*--`, `o--`, `-->`, `..>`, `--` (and reverses).
+  UML markers sit on the side written in the source: `<|--` places the
+  triangle on the left-hand class, `--|>` on the right-hand class. Bare
+  `--` is rendered as an association with the arrow on the right-hand
+  (`to`) side.
+- Visibility prefixes: `+`, `-`, `#`, `~`
+- Members follow upstream rules: **attributes** use `Type name`
+  (whitespace-split); **methods** are `name(params) ReturnType`.
+  `name$` or `$` in the rest-text marks static; `name*` or `*` after
+  `)` marks abstract. Both flags are retained in the AST.
+- Annotations (`<<interface>>`, `<<abstract>>`): inside a block body or
+  inline `class Foo { <<interface>> }`. The trailing form without braces
+  (`class Foo <<interface>>`) is silently ignored to match upstream.
 - Multiplicity: `"1" --> "*"`
-- Generics: `class List~T~` (rendered as `List<T>`)
-- `namespace Foo { ... }`
+- Generics: `class List~T~` renders as `List<T>`; multi-parameter forms
+  like `class Map~K,V~` keep their raw text (upstream non-greedy
+  fallback) — `id_text` and `label` both read `Map~K,V~`.
+- Dotted and hyphenated class IDs (`com.example.Foo`, `a-b`) are
+  accepted — class IDs follow upstream `\S+?` rules.
+- `namespace Foo { ... }` wraps inner classes in an outer ASCII frame
+  whose top-edge bears the namespace name.
 
 ### `stateDiagram` / `stateDiagram-v2`
 
