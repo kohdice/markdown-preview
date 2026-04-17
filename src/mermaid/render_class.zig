@@ -633,6 +633,20 @@ test "writeClass renders class box with attribute type and method params" {
     try std.testing.expect(std.mem.indexOf(u8, out, "+ save(entity): Result") != null);
 }
 
+test "writeClass collapses multi-whitespace and tabs in attribute name" {
+    const alloc = std.testing.allocator;
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+
+    try writeClass(&sink.writer, alloc, "classDiagram\n    class C {\n        +int retry   count\n        +bool is\tready\n    }\n", .{ .wrap_width = null, .ambiguous_width = .narrow });
+
+    const out = sink.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "+ retry count: int") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "+ is ready: bool") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "retry   count") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "is\tready") == null);
+}
+
 test "writeClass renders inheritance with triangle head" {
     const alloc = std.testing.allocator;
     var sink: std.io.Writer.Allocating = .init(alloc);
