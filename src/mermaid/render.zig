@@ -87,6 +87,7 @@ pub fn writeMermaid(
         break :blk key_buf[0..1];
     } else &.{};
     const stripped = directive.stripInitDirectives(allocator, source, unsafe_keys) catch |err| switch (err) {
+        error.InvalidDirective => return error.InvalidMermaid,
         error.UnsupportedFeature => return error.UnsupportedFeature,
         error.OutOfMemory => return error.OutOfMemory,
     };

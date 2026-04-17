@@ -60,6 +60,7 @@ const Parser = struct {
 
 pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!types.GitGraph {
     const stripped = directive.stripInitDirectives(allocator, source, &.{"\"gitGraph\""}) catch |err| switch (err) {
+        error.InvalidDirective => return error.InvalidMermaid,
         error.UnsupportedFeature => return error.UnsupportedFeature,
         error.OutOfMemory => return error.OutOfMemory,
     };
@@ -401,6 +402,14 @@ test "silently skips theme-only init directive" {
     defer g.deinit();
     try std.testing.expectEqual(@as(usize, 1), g.commits.len);
     try std.testing.expectEqual(@as(usize, 1), g.branches.len);
+}
+
+test "rejects unclosed init directive as invalid" {
+    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+        \\%%{init:
+        \\gitGraph
+        \\    commit
+    ));
 }
 
 test "rejects unknown commit key as invalid" {

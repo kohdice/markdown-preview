@@ -1,6 +1,7 @@
 const std = @import("std");
 
 pub const Error = error{
+    InvalidDirective,
     UnsupportedFeature,
     OutOfMemory,
 };
@@ -24,10 +25,7 @@ pub fn stripInitDirectives(
 
         if (line_end - i >= 3 and source[i] == '%' and source[i + 1] == '%' and source[i + 2] == '{') {
             const body_start = i + 3;
-            const end_rel = std.mem.indexOf(u8, source[body_start..], "}%%") orelse {
-                try buf.appendSlice(allocator, source[line_start..]);
-                return buf.toOwnedSlice(allocator);
-            };
+            const end_rel = std.mem.indexOf(u8, source[body_start..], "}%%") orelse return error.InvalidDirective;
             const block_end = body_start + end_rel + 3;
             const body = source[body_start .. body_start + end_rel];
             for (unsafe_keys) |k| {
@@ -88,6 +86,14 @@ test "stripInitDirectives rejects directive matching any unsafe key" {
         std.testing.allocator,
         "%%{init: { \"gitGraph\": { \"mainBranchName\": \"trunk\" } }}%%\n",
         &.{"\"gitGraph\""},
+    ));
+}
+
+test "stripInitDirectives rejects unclosed directive" {
+    try std.testing.expectError(error.InvalidDirective, stripInitDirectives(
+        std.testing.allocator,
+        "%%{init:\ngraph TD\n",
+        &.{},
     ));
 }
 
