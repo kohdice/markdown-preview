@@ -79,6 +79,116 @@ const LayoutInfo = struct {
     flow_graph_edges: []types.Edge,
 };
 
+pub const ErLayoutError = error{OutOfMemory};
+
+fn computeErLayout(
+    allocator: std.mem.Allocator,
+    diagram: *const types.ErDiagram,
+    ambiguous: width_mod.AmbiguousWidth,
+) ErLayoutError!types.Layout {
+    const n = diagram.entities.len;
+    if (n == 0) {
+        const positions = try allocator.alloc(types.GridPos, 0);
+        errdefer allocator.free(positions);
+        const labels = try allocator.alloc([]const u8, 0);
+        return .{
+            .allocator = allocator,
+            .positions = positions,
+            .truncated_labels = labels,
+            .truncation_buf = null,
+            .rows = 0,
+            .cols = 0,
+            .cell_w = 0,
+            .cell_h = 0,
+        };
+    }
+
+    const levels = try allocator.alloc(usize, n);
+    defer allocator.free(levels);
+    @memset(levels, 0);
+
+    try assignErLevels(allocator, diagram.relations, n, levels);
+
+    var max_level: usize = 0;
+    for (levels) |l| max_level = @max(max_level, l);
+
+    const level_counts = try allocator.alloc(usize, max_level + 1);
+    defer allocator.free(level_counts);
+    @memset(level_counts, 0);
+
+    const positions = try allocator.alloc(types.GridPos, n);
+    errdefer allocator.free(positions);
+
+    for (0..n) |i| {
+        const level = levels[i];
+        const col = level_counts[level];
+        level_counts[level] += 1;
+        positions[i] = .{
+            .row = max_level - level,
+            .col = col,
+        };
+    }
+
+    var cols: usize = 0;
+    for (level_counts) |c| cols = @max(cols, c);
+    if (cols == 0) cols = 1;
+
+    const truncated_labels = try allocator.alloc([]const u8, 0);
+    errdefer allocator.free(truncated_labels);
+
+    return .{
+        .allocator = allocator,
+        .positions = positions,
+        .truncated_labels = truncated_labels,
+        .truncation_buf = null,
+        .rows = max_level + 1,
+        .cols = cols,
+        .cell_w = computeRequiredBoxWidth(diagram, ambiguous),
+        .cell_h = computeRequiredBoxHeight(diagram),
+    };
+}
+
+fn assignErLevels(
+    allocator: std.mem.Allocator,
+    relations: []const types.ErRelation,
+    n: usize,
+    levels: []usize,
+) ErLayoutError!void {
+    const remaining = try allocator.alloc(u32, n);
+    defer allocator.free(remaining);
+    @memset(remaining, 0);
+    for (relations) |rel| {
+        if (rel.to < n) remaining[rel.to] += 1;
+    }
+
+    var queue: std.ArrayListUnmanaged(types.NodeId) = .empty;
+    defer queue.deinit(allocator);
+
+    for (0..n) |i| {
+        if (remaining[i] == 0) try queue.append(allocator, @intCast(i));
+    }
+    if (queue.items.len == 0) {
+        try queue.append(allocator, 0);
+        remaining[0] = 0;
+    }
+
+    var qi: usize = 0;
+    while (qi < queue.items.len) : (qi += 1) {
+        const u = queue.items[qi];
+        for (relations) |rel| {
+            if (rel.from != u) continue;
+            const v = rel.to;
+            if (v >= n) continue;
+            const candidate = levels[u] + 1;
+            if (candidate > levels[v]) levels[v] = candidate;
+            if (remaining[v] > 0) {
+                remaining[v] -= 1;
+                if (remaining[v] == 0) try queue.append(allocator, v);
+            }
+        }
+    }
+}
+
 fn computeLayout(
     allocator: std.mem.Allocator,
     diagram: *const types.ErDiagram,
@@ -420,4 +530,62 @@ test "writeEr handles empty entity block" {
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "ORDER") != null);
+}
+
+test "computeErLayout places single entity at origin with rows=cols=1" {
+    const alloc = std.testing.allocator;
+    var diagram = try parse.parseSource(alloc,
+        \\erDiagram
+        \\    CUSTOMER {
+        \\        string id
+        \\    }
+    );
+    defer diagram.deinit();
+
+    var layout = try computeErLayout(alloc, &diagram, .narrow);
+    defer layout.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), layout.positions.len);
+    try std.testing.expectEqual(@as(usize, 0), layout.positions[0].row);
+    try std.testing.expectEqual(@as(usize, 0), layout.positions[0].col);
+    try std.testing.expectEqual(@as(usize, 1), layout.rows);
+    try std.testing.expectEqual(@as(usize, 1), layout.cols);
+}
+
+test "computeErLayout has outer_pad 0 (ER has no namespaces)" {
+    const alloc = std.testing.allocator;
+    var diagram = try parse.parseSource(alloc,
+        \\erDiagram
+        \\    A ||--|| B : r
+    );
+    defer diagram.deinit();
+
+    var layout = try computeErLayout(alloc, &diagram, .narrow);
+    defer layout.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), layout.outer_pad);
+}
+
+test "computeErLayout stacks two-entity relation as bottom_up rows" {
+    const alloc = std.testing.allocator;
+    var diagram = try parse.parseSource(alloc,
+        \\erDiagram
+        \\    CUSTOMER ||--o{ ORDER : places
+    );
+    defer diagram.deinit();
+
+    var layout = try computeErLayout(alloc, &diagram, .narrow);
+    defer layout.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), layout.positions.len);
+    try std.testing.expectEqual(@as(usize, 2), layout.rows);
+    try std.testing.expectEqual(@as(usize, 1), layout.cols);
+
+    var row_set = [_]bool{ false, false };
+    for (layout.positions) |pos| {
+        try std.testing.expectEqual(@as(usize, 0), pos.col);
+        try std.testing.expect(pos.row < 2);
+        row_set[pos.row] = true;
+    }
+    try std.testing.expect(row_set[0] and row_set[1]);
 }
