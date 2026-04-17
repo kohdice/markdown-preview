@@ -12,6 +12,7 @@ pub const parse_er = @import("mermaid/parse_er.zig");
 pub const render_er = @import("mermaid/render_er.zig");
 pub const parse_git = @import("mermaid/parse_git.zig");
 pub const render_git = @import("mermaid/render_git.zig");
+pub const directive = @import("mermaid/directive.zig");
 pub const render = @import("mermaid/render.zig");
 
 pub const RenderError = render.RenderError;
@@ -33,5 +34,6 @@ test {
     _ = @import("mermaid/render_er.zig");
     _ = @import("mermaid/parse_git.zig");
     _ = @import("mermaid/render_git.zig");
+    _ = @import("mermaid/directive.zig");
     _ = @import("mermaid/render.zig");
 }

@@ -9,6 +9,7 @@ const render_class = @import("render_class.zig");
 const render_er = @import("render_er.zig");
 const render_git = @import("render_git.zig");
 const parse_state = @import("parse_state.zig");
+const directive = @import("directive.zig");
 const theme = @import("../term/theme.zig");
 const width_mod = @import("../term/width.zig");
 
@@ -80,7 +81,15 @@ pub fn writeMermaid(
     opts: Options,
 ) RenderError!void {
     const kind = classifyHeader(source);
-    const stripped = try stripInitDirectives(allocator, source, kind);
+    var key_buf: [1][]const u8 = undefined;
+    const unsafe_keys: []const []const u8 = if (diagramConfigKey(kind)) |k| blk: {
+        key_buf[0] = k;
+        break :blk key_buf[0..1];
+    } else &.{};
+    const stripped = directive.stripInitDirectives(allocator, source, unsafe_keys) catch |err| switch (err) {
+        error.UnsupportedFeature => return error.UnsupportedFeature,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
     defer allocator.free(stripped);
     return switch (kind) {
         .flowchart => writeFlowchart(writer, allocator, stripped, opts),
@@ -101,51 +110,6 @@ pub fn writeMermaid(
         => error.UnsupportedDiagram,
         .unknown => error.InvalidMermaid,
     };
-}
-
-fn stripInitDirectives(
-    allocator: std.mem.Allocator,
-    source: []const u8,
-    kind: DiagramKind,
-) RenderError![]u8 {
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    errdefer buf.deinit(allocator);
-
-    const unsafe_key = diagramConfigKey(kind);
-
-    var cursor: usize = 0;
-    while (cursor < source.len) {
-        const line_start = cursor;
-        const nl = std.mem.indexOfScalarPos(u8, source, cursor, '\n');
-        const line_end = nl orelse source.len;
-
-        var i = line_start;
-        while (i < line_end and (source[i] == ' ' or source[i] == '\t')) : (i += 1) {}
-
-        if (line_end - i >= 3 and source[i] == '%' and source[i + 1] == '%' and source[i + 2] == '{') {
-            const body_start = i + 3;
-            const end_rel = std.mem.indexOf(u8, source[body_start..], "}%%") orelse {
-                try buf.appendSlice(allocator, source[line_start..]);
-                return buf.toOwnedSlice(allocator);
-            };
-            const block_end = body_start + end_rel + 3;
-            const body = source[body_start .. body_start + end_rel];
-            if (unsafe_key) |k| {
-                if (std.mem.indexOf(u8, body, k) != null) return error.UnsupportedFeature;
-            }
-
-            var next = block_end;
-            while (next < source.len and (source[next] == ' ' or source[next] == '\t' or source[next] == '\r')) : (next += 1) {}
-            if (next < source.len and source[next] == '\n') next += 1;
-            cursor = next;
-            continue;
-        }
-
-        const line_inclusive_end = if (nl != null) line_end + 1 else line_end;
-        try buf.appendSlice(allocator, source[line_start..line_inclusive_end]);
-        cursor = line_inclusive_end;
-    }
-    return buf.toOwnedSlice(allocator);
 }
 
 fn diagramConfigKey(kind: DiagramKind) ?[]const u8 {
