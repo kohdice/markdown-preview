@@ -374,13 +374,55 @@ fn parseBlockBodyLine(parser: *Parser, line: []const u8) ParseError!void {
         return;
     }
 
-    try validateLabel(line);
-    const member = try parseMemberExpr(line);
+    const processed = try replaceTabsWithSpaces(parser, line);
+    try validateLabel(processed);
+    const member = try parseMemberExpr(processed);
+    try appendMember(parser, parser.block_class, member);
+}
+
+fn replaceTabsWithSpaces(parser: *Parser, line: []const u8) ParseError![]const u8 {
+    if (std.mem.indexOfScalar(u8, line, '\t') == null) return line;
+    const buf = try parser.allocator.alloc(u8, line.len);
+    errdefer parser.allocator.free(buf);
+    for (line, 0..) |c, i| buf[i] = if (c == '\t') ' ' else c;
+    try parser.owned_labels.append(parser.allocator, buf);
+    return buf;
+}
+
+fn appendMember(parser: *Parser, class_index: usize, member: ParsedMember) ParseError!void {
+    var value = member.value;
     if (member.is_method) {
-        try parser.classes.items[parser.block_class].methods.append(parser.allocator, member.value);
-    } else {
-        try parser.classes.items[parser.block_class].attributes.append(parser.allocator, member.value);
+        try parser.classes.items[class_index].methods.append(parser.allocator, value);
+        return;
     }
+    if (needsWhitespaceNormalize(value.name)) {
+        const normalized = try joinWhitespaceSeparated(parser.allocator, value.name);
+        try parser.owned_labels.append(parser.allocator, normalized);
+        value.name = normalized;
+    }
+    try parser.classes.items[class_index].attributes.append(parser.allocator, value);
+}
+
+fn needsWhitespaceNormalize(s: []const u8) bool {
+    var i: usize = 0;
+    while (i < s.len) : (i += 1) {
+        if (s[i] == '\t') return true;
+        if (i + 1 < s.len and s[i] == ' ' and s[i + 1] == ' ') return true;
+    }
+    return false;
+}
+
+fn joinWhitespaceSeparated(allocator: std.mem.Allocator, s: []const u8) ParseError![]u8 {
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer buf.deinit(allocator);
+    var it = std.mem.tokenizeAny(u8, s, " \t");
+    var first = true;
+    while (it.next()) |tok| {
+        if (!first) try buf.append(allocator, ' ');
+        first = false;
+        try buf.appendSlice(allocator, tok);
+    }
+    return try buf.toOwnedSlice(allocator);
 }
 
 const ParsedMember = struct {
@@ -479,21 +521,19 @@ const MemberError = ParseError || error{NotMember};
 fn parseMemberLine(parser: *Parser, line: []const u8) MemberError!void {
     const colon_idx = std.mem.indexOfScalar(u8, line, ':') orelse return error.NotMember;
     const name_part = std.mem.trimRight(u8, line[0..colon_idx], " \t");
-    const member_text = std.mem.trimLeft(u8, line[colon_idx + 1 ..], " \t");
+    const raw_member_text = std.mem.trimLeft(u8, line[colon_idx + 1 ..], " \t");
 
-    if (name_part.len == 0 or member_text.len == 0) return error.NotMember;
+    if (name_part.len == 0 or raw_member_text.len == 0) return error.NotMember;
     validateIdent(name_part) catch return error.NotMember;
+
+    const member_text = try replaceTabsWithSpaces(parser, raw_member_text);
     try validateLabel(member_text);
 
     const parsed = try parseMemberExpr(member_text);
 
     const id = try parser.intern(name_part);
     try parser.recordClassId(id);
-    if (parsed.is_method) {
-        try parser.classes.items[id].methods.append(parser.allocator, parsed.value);
-    } else {
-        try parser.classes.items[id].attributes.append(parser.allocator, parsed.value);
-    }
+    try appendMember(parser, id, parsed);
 }
 
 const RelationOp = struct {
@@ -839,6 +879,50 @@ test "parses class attribute keeps middle tokens in name" {
         \\    }
     );
     defer d.deinit();
+    const a = d.classes[0].attributes[0];
+    try std.testing.expectEqualStrings("int", a.type_text.?);
+    try std.testing.expectEqualStrings("retry count", a.name);
+}
+
+test "parses class attribute with multi-whitespace name" {
+    var d = try parseSource(std.testing.allocator,
+        \\classDiagram
+        \\    class C {
+        \\        +int retry   count
+        \\    }
+    );
+    defer d.deinit();
+    try std.testing.expectEqual(@as(usize, 1), d.classes[0].attributes.len);
+    const a = d.classes[0].attributes[0];
+    try std.testing.expectEqualStrings("int", a.type_text.?);
+    try std.testing.expectEqualStrings("retry count", a.name);
+}
+
+test "parses class attribute via colon form with multi-whitespace name" {
+    var d = try parseSource(std.testing.allocator,
+        \\classDiagram
+        \\    C : +int retry   count
+    );
+    defer d.deinit();
+    try std.testing.expectEqual(@as(usize, 1), d.classes[0].attributes.len);
+    const a = d.classes[0].attributes[0];
+    try std.testing.expectEqualStrings("int", a.type_text.?);
+    try std.testing.expectEqualStrings("retry count", a.name);
+}
+
+test "parses class attribute with tab-separated name in block form" {
+    var d = try parseSource(std.testing.allocator, "classDiagram\n    class C {\n        +int retry\t\tcount\n    }\n");
+    defer d.deinit();
+    try std.testing.expectEqual(@as(usize, 1), d.classes[0].attributes.len);
+    const a = d.classes[0].attributes[0];
+    try std.testing.expectEqualStrings("int", a.type_text.?);
+    try std.testing.expectEqualStrings("retry count", a.name);
+}
+
+test "parses class attribute with tab-separated name in colon form" {
+    var d = try parseSource(std.testing.allocator, "classDiagram\n    C : +int retry\t\tcount\n");
+    defer d.deinit();
+    try std.testing.expectEqual(@as(usize, 1), d.classes[0].attributes.len);
     const a = d.classes[0].attributes[0];
     try std.testing.expectEqualStrings("int", a.type_text.?);
     try std.testing.expectEqualStrings("retry count", a.name);
