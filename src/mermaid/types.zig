@@ -172,35 +172,81 @@ pub fn freeSubgraphsPublic(allocator: std.mem.Allocator, subgraphs: []Subgraph) 
 
 pub const ParticipantId = u16;
 
-pub const MessageStyle = enum {
-    solid_arrow,
-    dashed_arrow,
-    solid_line,
-    dashed_line,
-};
+pub const ParticipantKind = enum { participant, actor };
+
+pub const LineStyle = enum { solid, dashed };
+pub const ArrowHead = enum { filled, open };
 
 pub const Participant = struct {
     id: ParticipantId,
     id_text: []const u8,
     label: []const u8,
+    kind: ParticipantKind = .participant,
 };
 
 pub const SequenceMessage = struct {
     from: ParticipantId,
     to: ParticipantId,
     label: []const u8,
-    style: MessageStyle,
+    line_style: LineStyle,
+    arrow_head: ArrowHead,
+    activate: bool = false,
+    deactivate: bool = false,
+};
+
+pub const NotePlacement = enum { right_of, left_of, over };
+
+pub const SequenceNote = struct {
+    actor_ids: []ParticipantId,
+    text: []const u8,
+    placement: NotePlacement,
+    after_index: i32,
+};
+
+pub const SequenceBlockKind = enum {
+    loop,
+    alt,
+    opt,
+    par,
+    critical,
+    rect,
+    break_,
+};
+
+pub const SequenceBlockDivider = struct {
+    message_index: u32,
+    label: []const u8,
+};
+
+pub const SequenceBlock = struct {
+    kind: SequenceBlockKind,
+    label: []const u8,
+    start_index: u32,
+    end_index: u32,
+    source_order: u32 = 0,
+    parent_order: ?u32 = null,
+    dividers: []SequenceBlockDivider = &.{},
 };
 
 pub const SequenceDiagram = struct {
     allocator: std.mem.Allocator,
     participants: []Participant,
     messages: []SequenceMessage,
+    notes: []SequenceNote = &.{},
+    blocks: []SequenceBlock = &.{},
     owned_strings: [][]u8 = &.{},
 
     pub fn deinit(self: *SequenceDiagram) void {
         self.allocator.free(self.participants);
         self.allocator.free(self.messages);
+        for (self.notes) |n| {
+            if (n.actor_ids.len > 0) self.allocator.free(n.actor_ids);
+        }
+        if (self.notes.len > 0) self.allocator.free(self.notes);
+        for (self.blocks) |b| {
+            if (b.dividers.len > 0) self.allocator.free(b.dividers);
+        }
+        if (self.blocks.len > 0) self.allocator.free(self.blocks);
         for (self.owned_strings) |s| self.allocator.free(s);
         if (self.owned_strings.len > 0) self.allocator.free(self.owned_strings);
     }
