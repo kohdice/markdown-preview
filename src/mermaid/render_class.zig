@@ -268,6 +268,7 @@ fn drawRelation(
     const tgt_top = route_mod.boxTop(layout, tgt_pos.row);
     const tgt_left = route_mod.boxLeft(layout, tgt_pos.col);
 
+    const src_box_h = actualBoxHeight(&diagram.classes[rel.from]);
     const tgt_box_h = actualBoxHeight(&diagram.classes[rel.to]);
 
     const start_row = src_top;
@@ -292,7 +293,10 @@ fn drawRelation(
         ambiguous,
     );
 
-    replaceArrowHead(canvas, tgt_top, tgt_left, tgt_box_h, layout.cell_w, rel, glyphs);
+    switch (rel.marker_at) {
+        .to => replaceArrowHeadAtBottom(canvas, tgt_top, tgt_left, tgt_box_h, layout.cell_w, rel, glyphs),
+        .from => replaceArrowHeadAtTop(canvas, src_top, src_left, src_box_h, layout.cell_w, rel, glyphs),
+    }
 
     if (rel.from_cardinality) |c| drawCardinalityLabel(canvas, start_row, start_col, c, ambiguous, .source);
     if (rel.to_cardinality) |c| drawCardinalityLabel(canvas, goal_row, goal_col, c, ambiguous, .target);
@@ -322,26 +326,46 @@ fn drawCardinalityLabel(
     canvas.drawLabel(row, col, text, ambiguous);
 }
 
-fn replaceArrowHead(
+fn replaceArrowHeadAtBottom(
     canvas: *canvas_mod.Canvas,
-    tgt_top: usize,
-    tgt_left: usize,
-    tgt_box_h: usize,
+    box_top: usize,
+    box_left: usize,
+    box_h: usize,
     cell_w: usize,
     rel: types.ClassRelation,
     glyphs: *const canvas_mod.GlyphSet,
 ) void {
-    const tgt_center = tgt_left + cell_w / 2;
+    const center = box_left + cell_w / 2;
 
-    const border_row = tgt_top + tgt_box_h - 1;
-    if (border_row < canvas.rows and tgt_center < canvas.cols) {
-        canvas.setGlyph(border_row, tgt_center, glyphs.tee_t);
+    const border_row = box_top + box_h - 1;
+    if (border_row < canvas.rows and center < canvas.cols) {
+        canvas.setGlyph(border_row, center, glyphs.tee_t);
     }
 
-    const arrow_row = tgt_top + tgt_box_h;
-    if (arrow_row < canvas.rows and tgt_center < canvas.cols) {
-        const head = relationHead(rel.kind, glyphs);
-        canvas.setGlyph(arrow_row, tgt_center, head);
+    const arrow_row = box_top + box_h;
+    if (arrow_row < canvas.rows and center < canvas.cols) {
+        canvas.setGlyph(arrow_row, center, relationHead(rel.kind, glyphs));
+    }
+}
+
+fn replaceArrowHeadAtTop(
+    canvas: *canvas_mod.Canvas,
+    box_top: usize,
+    box_left: usize,
+    box_h: usize,
+    cell_w: usize,
+    rel: types.ClassRelation,
+    glyphs: *const canvas_mod.GlyphSet,
+) void {
+    _ = box_h;
+    const center = box_left + cell_w / 2;
+
+    if (box_top < canvas.rows and center < canvas.cols) {
+        canvas.setGlyph(box_top, center, glyphs.tee_b);
+    }
+
+    if (box_top > 0 and center < canvas.cols) {
+        canvas.setGlyph(box_top - 1, center, relationHead(rel.kind, glyphs));
     }
 }
 
@@ -439,6 +463,40 @@ test "writeClass association arrow head points toward target (upward)" {
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "▲") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "▼") == null);
+}
+
+test "writeClass marker_at from places triangle at source end" {
+    const alloc = std.testing.allocator;
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+
+    try writeClass(&sink.writer, alloc,
+        \\classDiagram
+        \\    Animal <|-- Dog
+    , .{ .wrap_width = null, .ambiguous_width = .narrow });
+
+    const out = sink.writer.buffered();
+
+    var line_iter = std.mem.splitScalar(u8, out, '\n');
+    var triangle_line: ?usize = null;
+    var animal_line: ?usize = null;
+    var dog_line: ?usize = null;
+    var idx: usize = 0;
+    while (line_iter.next()) |line| : (idx += 1) {
+        if (std.mem.indexOf(u8, line, "△") != null and triangle_line == null) triangle_line = idx;
+        if (std.mem.indexOf(u8, line, "Animal") != null and animal_line == null) animal_line = idx;
+        if (std.mem.indexOf(u8, line, "Dog") != null and dog_line == null) dog_line = idx;
+    }
+    try std.testing.expect(triangle_line != null);
+    try std.testing.expect(animal_line != null);
+    try std.testing.expect(dog_line != null);
+
+    const t = triangle_line.?;
+    const a = animal_line.?;
+    const d = dog_line.?;
+    const dist_to_animal = if (t > a) t - a else a - t;
+    const dist_to_dog = if (t > d) t - d else d - t;
+    try std.testing.expect(dist_to_animal < dist_to_dog);
 }
 
 test "writeClass bare -- renders as association with arrow" {
