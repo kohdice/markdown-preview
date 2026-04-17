@@ -107,18 +107,63 @@ fn stripInitDirectives(allocator: std.mem.Allocator, source: []const u8) RenderE
     errdefer buf.deinit(allocator);
 
     var cursor: usize = 0;
-    while (std.mem.indexOf(u8, source[cursor..], "%%{")) |rel| {
-        const block_start = cursor + rel;
-        try buf.appendSlice(allocator, source[cursor..block_start]);
+    while (cursor < source.len) {
+        const line_start = cursor;
+        const nl = std.mem.indexOfScalarPos(u8, source, cursor, '\n');
+        const line_end = nl orelse source.len;
 
-        const end_rel = std.mem.indexOf(u8, source[block_start + 3 ..], "}%%") orelse {
-            try buf.appendSlice(allocator, source[block_start..]);
-            return buf.toOwnedSlice(allocator);
-        };
-        cursor = block_start + 3 + end_rel + 3;
+        var i = line_start;
+        while (i < line_end and (source[i] == ' ' or source[i] == '\t')) : (i += 1) {}
+
+        if (line_end - i >= 3 and source[i] == '%' and source[i + 1] == '%' and source[i + 2] == '{') {
+            const body_start = i + 3;
+            const end_rel = std.mem.indexOf(u8, source[body_start..], "}%%") orelse {
+                try buf.appendSlice(allocator, source[line_start..]);
+                return buf.toOwnedSlice(allocator);
+            };
+            const block_end = body_start + end_rel + 3;
+            const body = source[body_start .. body_start + end_rel];
+            if (containsUnsafeInitKey(body)) return error.UnsupportedFeature;
+
+            var next = block_end;
+            while (next < source.len and (source[next] == ' ' or source[next] == '\t' or source[next] == '\r')) : (next += 1) {}
+            if (next < source.len and source[next] == '\n') next += 1;
+            cursor = next;
+            continue;
+        }
+
+        const line_inclusive_end = if (nl != null) line_end + 1 else line_end;
+        try buf.appendSlice(allocator, source[line_start..line_inclusive_end]);
+        cursor = line_inclusive_end;
     }
-    try buf.appendSlice(allocator, source[cursor..]);
     return buf.toOwnedSlice(allocator);
+}
+
+const unsafe_init_keys = [_][]const u8{
+    "\"gitGraph\"",
+    "\"flowchart\"",
+    "\"sequence\"",
+    "\"classDiagram\"",
+    "\"class\"",
+    "\"stateDiagram\"",
+    "\"state\"",
+    "\"er\"",
+    "\"journey\"",
+    "\"gantt\"",
+    "\"pie\"",
+    "\"mindmap\"",
+    "\"timeline\"",
+    "\"quadrantChart\"",
+    "\"xychart\"",
+    "\"sankey\"",
+    "\"block\"",
+};
+
+fn containsUnsafeInitKey(body: []const u8) bool {
+    for (unsafe_init_keys) |k| {
+        if (std.mem.indexOf(u8, body, k) != null) return true;
+    }
+    return false;
 }
 
 fn writeClass(
@@ -538,6 +583,65 @@ test "writeMermaid strips multi-line init directive before flowchart" {
     try std.testing.expect(std.mem.indexOf(u8, output, "A") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "B") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "▼") != null);
+}
+
+test "writeMermaid keeps %%{...}%% inside sequence message label" {
+    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+
+    const opts: Options = .{
+        .enable_ansi = false,
+        .palette = theme.default_palette,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    };
+
+    try writeMermaid(&sink.writer, std.testing.allocator,
+        \\sequenceDiagram
+        \\    Alice->>Bob: %%{x}%%
+    , opts);
+
+    const output = sink.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "%%{x}%%") != null);
+}
+
+test "writeMermaid keeps %%{...}%% inside flowchart node label" {
+    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+
+    const opts: Options = .{
+        .enable_ansi = false,
+        .palette = theme.default_palette,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    };
+
+    try writeMermaid(&sink.writer, std.testing.allocator,
+        \\graph TD
+        \\    A[%%{x}%%] --> B
+    , opts);
+
+    const output = sink.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "%%{x}%%") != null);
+}
+
+test "writeMermaid rejects init with diagram-specific config as UnsupportedFeature" {
+    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+
+    const opts: Options = .{
+        .enable_ansi = false,
+        .palette = theme.default_palette,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    };
+
+    try std.testing.expectError(error.UnsupportedFeature, writeMermaid(
+        &sink.writer,
+        std.testing.allocator,
+        "%%{init: { \"gitGraph\": { \"mainBranchName\": \"trunk\" } }}%%\ngitGraph\n    commit\n",
+        opts,
+    ));
 }
 
 test "writeMermaid returns UnsupportedDiagram for gantt" {

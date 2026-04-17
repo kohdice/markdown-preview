@@ -214,11 +214,27 @@ test "gitGraph TB orientation falls back to feature-not-supported diagnostic" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "gitGraph TB:") != null);
 }
 
-test "init directive in gitGraph is stripped before rendering" {
+test "init directive with gitGraph config falls back to feature-not-supported diagnostic" {
     const allocator = std.testing.allocator;
     const source =
         \\```mermaid
         \\%%{init: { "gitGraph": { "mainBranchName": "trunk" } }}%%
+        \\gitGraph
+        \\    commit
+        \\```
+        \\
+    ;
+    const rendered = try helpers.renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid: feature not yet supported by mp]") != null);
+}
+
+test "theme-only init directive renders gitGraph successfully" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\```mermaid
+        \\%%{init: { "theme": "dark" }}%%
         \\gitGraph
         \\    commit
         \\```
