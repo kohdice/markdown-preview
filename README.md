@@ -99,8 +99,12 @@ The following diagram types are rendered as ASCII art.
   `--` is rendered as an association with the arrow on the right-hand
   (`to`) side.
 - Visibility prefixes: `+`, `-`, `#`, `~`
-- Members follow upstream rules: **attributes** use `Type name`
-  (whitespace-split); **methods** are `name(params) ReturnType`.
+- Members follow upstream rules: **attributes** use `Type name` — the
+  line is split on any whitespace run (spaces or tabs), the first
+  token becomes the type, and the remainder joins back with single
+  spaces (upstream `split(/\s+/).slice(1).join(' ')` parity), so
+  `+int retry   count` and `+int retry\tcount` both yield
+  `name = "retry count"`. **Methods** are `name(params) ReturnType`.
   `name$` or `$` in the rest-text marks static; `name*` or `*` after
   `)` marks abstract. Both flags are retained in the AST.
 - Annotations (`<<interface>>`, `<<abstract>>`): inside a block body or
