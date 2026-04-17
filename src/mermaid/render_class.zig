@@ -1001,3 +1001,75 @@ test "computeClassLayout stacks two-class inheritance as bottom_up rows" {
     }
     try std.testing.expect(row_set[0] and row_set[1]);
 }
+
+test "computeClassLayout 1-parent 2-children branch separates siblings across columns" {
+    const alloc = std.testing.allocator;
+    var diagram = try parse.parseSource(alloc,
+        \\classDiagram
+        \\    Animal <|-- Dog
+        \\    Animal <|-- Cat
+    );
+    defer diagram.deinit();
+
+    var layout = try computeClassLayout(alloc, &diagram, .narrow);
+    defer layout.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), layout.positions.len);
+    try std.testing.expectEqual(@as(usize, 2), layout.rows);
+    try std.testing.expectEqual(@as(usize, 2), layout.cols);
+
+    var id_animal: ?usize = null;
+    var id_dog: ?usize = null;
+    var id_cat: ?usize = null;
+    for (diagram.classes, 0..) |cls, i| {
+        if (std.mem.eql(u8, cls.id_text, "Animal")) id_animal = i;
+        if (std.mem.eql(u8, cls.id_text, "Dog")) id_dog = i;
+        if (std.mem.eql(u8, cls.id_text, "Cat")) id_cat = i;
+    }
+    try std.testing.expect(id_animal != null and id_dog != null and id_cat != null);
+
+    try std.testing.expectEqual(@as(usize, 1), layout.positions[id_animal.?].row);
+    try std.testing.expectEqual(@as(usize, 0), layout.positions[id_dog.?].row);
+    try std.testing.expectEqual(@as(usize, 0), layout.positions[id_cat.?].row);
+
+    const dog_col = layout.positions[id_dog.?].col;
+    const cat_col = layout.positions[id_cat.?].col;
+    try std.testing.expect(dog_col != cat_col);
+    try std.testing.expect(dog_col < 2 and cat_col < 2);
+}
+
+test "computeClassLayout 2-parents 1-child merge stacks parents in bottom row" {
+    const alloc = std.testing.allocator;
+    var diagram = try parse.parseSource(alloc,
+        \\classDiagram
+        \\    Vehicle <|-- Car
+        \\    Trackable <|-- Car
+    );
+    defer diagram.deinit();
+
+    var layout = try computeClassLayout(alloc, &diagram, .narrow);
+    defer layout.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), layout.positions.len);
+    try std.testing.expectEqual(@as(usize, 2), layout.rows);
+    try std.testing.expectEqual(@as(usize, 2), layout.cols);
+
+    var id_vehicle: ?usize = null;
+    var id_trackable: ?usize = null;
+    var id_car: ?usize = null;
+    for (diagram.classes, 0..) |cls, i| {
+        if (std.mem.eql(u8, cls.id_text, "Vehicle")) id_vehicle = i;
+        if (std.mem.eql(u8, cls.id_text, "Trackable")) id_trackable = i;
+        if (std.mem.eql(u8, cls.id_text, "Car")) id_car = i;
+    }
+    try std.testing.expect(id_vehicle != null and id_trackable != null and id_car != null);
+
+    try std.testing.expectEqual(@as(usize, 1), layout.positions[id_vehicle.?].row);
+    try std.testing.expectEqual(@as(usize, 1), layout.positions[id_trackable.?].row);
+    try std.testing.expectEqual(@as(usize, 0), layout.positions[id_car.?].row);
+
+    const v_col = layout.positions[id_vehicle.?].col;
+    const t_col = layout.positions[id_trackable.?].col;
+    try std.testing.expect(v_col != t_col);
+    try std.testing.expect(v_col < 2 and t_col < 2);
+}
