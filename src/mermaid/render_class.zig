@@ -126,7 +126,8 @@ fn writeLineWithSpans(
 ) RenderError!void {
     var col: usize = 0;
     var i: usize = 0;
-    var open_span: ?StyleKind = null;
+    var open_static = false;
+    var open_abstract = false;
     while (i < line.len) {
         const cp_len = std.unicode.utf8ByteSequenceLength(line[i]) catch 1;
         const cp_end = @min(i + cp_len, line.len);
@@ -136,33 +137,38 @@ fn writeLineWithSpans(
         else
             width_mod.displayWidth(cp_bytes, ambiguous);
 
-        if (open_span == null) {
-            if (findSpanStart(spans, row, col)) |kind| {
-                try writeStyleOpen(writer, kind);
-                open_span = kind;
-            }
+        if (!open_static and hasSpanStart(spans, row, col, .static_)) {
+            try writeStyleOpen(writer, .static_);
+            open_static = true;
+        }
+        if (!open_abstract and hasSpanStart(spans, row, col, .abstract_)) {
+            try writeStyleOpen(writer, .abstract_);
+            open_abstract = true;
         }
 
         writer.writeAll(cp_bytes) catch return error.WriteFailed;
 
-        if (open_span) |kind| {
-            if (spanEndsAt(spans, row, col + cp_w, kind)) {
-                try writeStyleClose(writer, kind);
-                open_span = null;
-            }
+        if (open_static and spanEndsAt(spans, row, col + cp_w, .static_)) {
+            try writeStyleClose(writer, .static_);
+            open_static = false;
+        }
+        if (open_abstract and spanEndsAt(spans, row, col + cp_w, .abstract_)) {
+            try writeStyleClose(writer, .abstract_);
+            open_abstract = false;
         }
 
         col += cp_w;
         i = cp_end;
     }
-    if (open_span) |kind| try writeStyleClose(writer, kind);
+    if (open_static) try writeStyleClose(writer, .static_);
+    if (open_abstract) try writeStyleClose(writer, .abstract_);
 }
 
-fn findSpanStart(spans: []const StyledSpan, row: usize, col: usize) ?StyleKind {
+fn hasSpanStart(spans: []const StyledSpan, row: usize, col: usize, kind: StyleKind) bool {
     for (spans) |s| {
-        if (s.row == row and s.col_start == col) return s.kind;
+        if (s.row == row and s.col_start == col and s.kind == kind) return true;
     }
-    return null;
+    return false;
 }
 
 fn spanEndsAt(spans: []const StyledSpan, row: usize, col: usize, kind: StyleKind) bool {
@@ -715,6 +721,25 @@ test "writeClass wraps static member with SGR underline when enable_ansi" {
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[4m") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[24m") != null);
+}
+
+test "writeClass wraps static and abstract method with both SGR when enable_ansi" {
+    const alloc = std.testing.allocator;
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+
+    try writeClass(&sink.writer, alloc,
+        \\classDiagram
+        \\    class C {
+        \\        +run$()*
+        \\    }
+    , .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = true });
+
+    const out = sink.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[4m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[24m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[3m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[23m") != null);
 }
 
 test "writeClass wraps abstract method with SGR italic when enable_ansi" {
