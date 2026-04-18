@@ -8,6 +8,7 @@ const render_sequence = @import("render_sequence.zig");
 const render_class = @import("render_class.zig");
 const render_er = @import("render_er.zig");
 const render_git = @import("render_git.zig");
+const render_xychart = @import("render_xychart.zig");
 const parse_state = @import("parse_state.zig");
 const directive = @import("directive.zig");
 const theme = @import("../term/theme.zig");
@@ -67,7 +68,7 @@ pub fn classifyHeader(source: []const u8) DiagramKind {
     if (std.ascii.eqlIgnoreCase(token, "timeline")) return .timeline;
     if (std.ascii.eqlIgnoreCase(token, "gitGraph")) return .git_graph;
     if (std.ascii.eqlIgnoreCase(token, "quadrantChart")) return .quadrant;
-    if (std.ascii.eqlIgnoreCase(token, "xychart-beta")) return .xychart;
+    if (std.ascii.eqlIgnoreCase(token, "xychart")) return .xychart;
     if (std.ascii.eqlIgnoreCase(token, "sankey-beta")) return .sankey;
     if (std.ascii.eqlIgnoreCase(token, "block-beta")) return .block;
 
@@ -99,13 +100,13 @@ pub fn writeMermaid(
         .state => writeState(writer, allocator, stripped, opts),
         .er => writeEr(writer, allocator, stripped, opts),
         .git_graph => writeGit(writer, allocator, stripped, opts),
+        .xychart => writeXyChart(writer, allocator, stripped, opts),
         .journey,
         .gantt,
         .pie,
         .mindmap,
         .timeline,
         .quadrant,
-        .xychart,
         .sankey,
         .block,
         => error.UnsupportedDiagram,
@@ -127,7 +128,7 @@ fn diagramConfigKey(kind: DiagramKind) ?[]const u8 {
         .mindmap => "\"mindmap\"",
         .timeline => "\"timeline\"",
         .quadrant => "\"quadrantChart\"",
-        .xychart => "\"xychart\"",
+        .xychart => "\"xyChart\"",
         .sankey => "\"sankey\"",
         .block => "\"block\"",
         .unknown => null,
@@ -178,6 +179,25 @@ fn writeGit(
     render_git.writeGit(writer, allocator, source, .{
         .wrap_width = opts.wrap_width,
         .ambiguous_width = opts.ambiguous_width,
+    }) catch |err| switch (err) {
+        error.InvalidMermaid => return error.InvalidMermaid,
+        error.UnsupportedFeature => return error.UnsupportedFeature,
+        error.OutOfMemory => return error.OutOfMemory,
+        error.WriteFailed => return error.WriteFailed,
+    };
+}
+
+fn writeXyChart(
+    writer: *std.io.Writer,
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    opts: Options,
+) RenderError!void {
+    render_xychart.writeXyChart(writer, allocator, source, .{
+        .wrap_width = opts.wrap_width,
+        .ambiguous_width = opts.ambiguous_width,
+        .enable_ansi = opts.enable_ansi,
+        .palette = opts.palette,
     }) catch |err| switch (err) {
         error.InvalidMermaid => return error.InvalidMermaid,
         error.UnsupportedFeature => return error.UnsupportedFeature,
@@ -538,6 +558,31 @@ test "classifyHeader skips leading comments and blank lines" {
     try std.testing.expectEqual(DiagramKind.flowchart, classifyHeader(source));
 }
 
+test "classifyHeader recognises bare xychart as xychart" {
+    try std.testing.expectEqual(DiagramKind.xychart, classifyHeader("xychart\nbar [1, 2]\n"));
+}
+
+test "classifyHeader recognises case-insensitive XYChart as xychart" {
+    try std.testing.expectEqual(DiagramKind.xychart, classifyHeader("XYChart\nbar [1, 2]\n"));
+}
+
+test "classifyHeader rejects legacy xychart-beta as unknown" {
+    try std.testing.expectEqual(DiagramKind.unknown, classifyHeader("xychart-beta\nbar [1, 2]\n"));
+}
+
+test "writeMermaid accepts bare xychart source end-to-end" {
+    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    const opts: Options = .{
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+        .enable_ansi = false,
+        .palette = theme.default_palette,
+    };
+    try writeMermaid(&sink.writer, std.testing.allocator, "xychart\nbar [1, 2, 3]\n", opts);
+    try std.testing.expect(sink.writer.buffered().len > 0);
+}
+
 test "writeMermaid strips multi-line init directive before flowchart" {
     var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
@@ -643,6 +688,59 @@ test "writeMermaid rejects init with diagram-specific config as UnsupportedFeatu
         "%%{init: { \"gitGraph\": { \"mainBranchName\": \"trunk\" } }}%%\ngitGraph\n    commit\n",
         opts,
     ));
+}
+
+test "writeMermaid rejects init xyChart config as UnsupportedFeature" {
+    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    const opts: Options = .{
+        .enable_ansi = false,
+        .palette = theme.default_palette,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    };
+    try std.testing.expectError(error.UnsupportedFeature, writeMermaid(
+        &sink.writer,
+        std.testing.allocator,
+        "%%{init: { \"xyChart\": { \"width\": 9999 } } }%%\nxychart\nbar [1, 2]\n",
+        opts,
+    ));
+}
+
+test "writeMermaid accepts init theme-only directive before xychart" {
+    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    const opts: Options = .{
+        .enable_ansi = false,
+        .palette = theme.default_palette,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    };
+    try writeMermaid(
+        &sink.writer,
+        std.testing.allocator,
+        "%%{init: { \"theme\": \"dark\" }}%%\nxychart\nbar [1, 2]\n",
+        opts,
+    );
+    try std.testing.expect(sink.writer.buffered().len > 0);
+}
+
+test "writeMermaid treats lowercase xychart key as ordinary config (no UnsupportedFeature)" {
+    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    const opts: Options = .{
+        .enable_ansi = false,
+        .palette = theme.default_palette,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    };
+    try writeMermaid(
+        &sink.writer,
+        std.testing.allocator,
+        "%%{init: { \"xychart\": { \"width\": 9999 } } }%%\nxychart\nbar [1, 2]\n",
+        opts,
+    );
+    try std.testing.expect(sink.writer.buffered().len > 0);
 }
 
 test "writeMermaid returns UnsupportedDiagram for gantt" {
@@ -1112,4 +1210,53 @@ test "writeMermaid diamond node renders with diamond corners" {
     try std.testing.expect(std.mem.indexOf(u8, output, "╱") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "╲") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Decide") != null);
+}
+
+test "writeMermaid dispatches xychart to writeXyChart" {
+    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    const opts: Options = .{
+        .enable_ansi = false,
+        .palette = theme.default_palette,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    };
+    try writeMermaid(&sink.writer, std.testing.allocator, "xychart\ntitle \"Demo\"\n", opts);
+    try std.testing.expect(std.mem.indexOf(u8, sink.writer.buffered(), "Demo") != null);
+}
+
+test "writeMermaid no longer returns UnsupportedDiagram for xychart" {
+    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    const opts: Options = .{
+        .enable_ansi = false,
+        .palette = theme.default_palette,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    };
+    try writeMermaid(&sink.writer, std.testing.allocator, "xychart\n", opts);
+}
+
+test "writeMermaid still returns UnsupportedDiagram for other diagrams" {
+    const opts: Options = .{
+        .enable_ansi = false,
+        .palette = theme.default_palette,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    };
+    const headers = [_][]const u8{
+        "gantt\n",
+        "journey\n",
+        "pie\n",
+        "mindmap\n",
+        "timeline\n",
+        "quadrantChart\n",
+        "sankey-beta\n",
+        "block-beta\n",
+    };
+    for (headers) |h| {
+        var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+        defer sink.deinit();
+        try std.testing.expectError(error.UnsupportedDiagram, writeMermaid(&sink.writer, std.testing.allocator, h, opts));
+    }
 }
