@@ -139,7 +139,6 @@ pub const MermaidGraph = struct {
     class_assignments: []ClassAssignment = &.{},
     node_styles: []NodeStyle = &.{},
     /// Repeated keys are kept in source order.
-    /// TODO: add a per-property later-wins resolver matching upstream.
     link_styles: []LinkStyle = &.{},
     owned_strings: [][]u8 = &.{},
 
@@ -410,6 +409,47 @@ pub const GitGraph = struct {
         self.allocator.free(self.branches);
         self.allocator.free(self.commits);
         if (self.source_buf) |b| self.allocator.free(b);
+    }
+};
+
+pub const XyOrientation = enum { vertical, horizontal };
+
+pub const XySeriesKind = enum { bar, line };
+
+pub const XyAxisKind = enum { category, numeric };
+
+pub const XyAxis = struct {
+    title: ?[]const u8 = null,
+    kind: XyAxisKind = .numeric,
+    categories: [][]const u8 = &.{},
+    numeric_min: f64 = 0,
+    numeric_max: f64 = 0,
+    has_explicit_range: bool = false,
+};
+
+pub const XySeries = struct {
+    kind: XySeriesKind,
+    data: []f64,
+};
+
+pub const XyChart = struct {
+    allocator: std.mem.Allocator,
+    title: ?[]const u8 = null,
+    orientation: XyOrientation = .vertical,
+    x_axis: XyAxis = .{},
+    y_axis: XyAxis = .{},
+    series: []XySeries = &.{},
+    owned_strings: [][]u8 = &.{},
+
+    pub fn deinit(self: *XyChart) void {
+        if (self.x_axis.categories.len > 0)
+            self.allocator.free(self.x_axis.categories);
+        if (self.y_axis.categories.len > 0)
+            self.allocator.free(self.y_axis.categories);
+        for (self.series) |s| if (s.data.len > 0) self.allocator.free(s.data);
+        if (self.series.len > 0) self.allocator.free(self.series);
+        for (self.owned_strings) |s| self.allocator.free(s);
+        if (self.owned_strings.len > 0) self.allocator.free(self.owned_strings);
     }
 };
 
