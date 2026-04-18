@@ -177,6 +177,7 @@ fn writeGit(
     render_git.writeGit(writer, allocator, source, .{
         .wrap_width = opts.wrap_width,
         .ambiguous_width = opts.ambiguous_width,
+        .enable_ansi = opts.enable_ansi,
     }) catch |err| switch (err) {
         error.InvalidMermaid => return error.InvalidMermaid,
         error.UnsupportedFeature => return error.UnsupportedFeature,
