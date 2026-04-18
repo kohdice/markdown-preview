@@ -66,6 +66,7 @@ Supported diagram headers:
 | State     | `stateDiagram`, `stateDiagram-v2` |
 | ER        | `erDiagram`                       |
 | Git graph | `gitGraph`                        |
+| XY chart  | `xychart`                         |
 
 Unrecognized headers, unsupported features, or parse errors fall back to a
 short placeholder line (`[mermaid: ...]`) in place of the diagram.
