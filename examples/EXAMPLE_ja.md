@@ -418,6 +418,27 @@ gitGraph
     commit
 ```
 
+### XY チャート (xychart)
+
+```mermaid
+xychart
+title "Quarterly Performance"
+x-axis ["Q1", "Q2", "Q3", "Q4"]
+y-axis 0 --> 100
+bar [30, 50, 40, 60]
+line [35, 45, 55, 65]
+```
+
+`horizontal` を付けると軸を入れ替えた横向きレンダリングになります。
+
+```mermaid
+xychart horizontal
+title "Monthly Revenue"
+x-axis "Month" [Jan, Feb, Mar]
+y-axis "Revenue" 0 --> 300
+bar [120, 200, 260]
+```
+
 ## 水平線
 
 ---
