@@ -206,6 +206,20 @@ pub const Canvas = struct {
         }
     }
 
+    pub fn drawLabelRole(self: *Canvas, r: usize, c: usize, text: []const u8, role: u8, ambiguous: width_mod.AmbiguousWidth) void {
+        var view = std.unicode.Utf8View.init(text) catch return;
+        var it = view.iterator();
+        var col = c;
+        while (it.nextCodepoint()) |cp| {
+            var buf: [4]u8 = undefined;
+            const len = std.unicode.utf8Encode(cp, &buf) catch return;
+            const w = width_mod.displayWidth(buf[0..len], ambiguous);
+            if (w == 0) return;
+            self.drawCodepointRole(r, col, cp, role, ambiguous);
+            col += w;
+        }
+    }
+
     pub fn drawRect(self: *Canvas, top: usize, left: usize, h: usize, w: usize, glyphs: *const GlyphSet) void {
         if (h < 2 or w < 2) return;
         self.setGlyph(top, left, glyphs.corner_tl);
