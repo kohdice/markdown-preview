@@ -68,5 +68,8 @@ Supported diagram headers:
 | Git graph | `gitGraph`                        |
 | XY chart  | `xychart`                         |
 
+When the terminal supports color, `gitGraph` and `xychart` are rendered
+with lane/series colors.
+
 Unrecognized headers, unsupported features, or parse errors fall back to a
 short placeholder line (`[mermaid: ...]`) in place of the diagram.
