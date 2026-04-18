@@ -17,6 +17,148 @@ const sgr = struct {
     const fg_truecolor_fmt = "\x1b[38;2;{};{};{}m";
 };
 
+pub const ColorMode = enum { none, ansi16, ansi256, truecolor };
+
+pub const Hsl = struct { h: f32, s: f32, l: f32 };
+
+pub fn hslToRgb(hsl: Hsl) theme.Rgb {
+    const c = (1 - @abs(2 * hsl.l - 1)) * hsl.s;
+    const h_prime = hsl.h / 60.0;
+    const x = c * (1 - @abs(@mod(h_prime, 2.0) - 1));
+    var r1: f32 = 0;
+    var g1: f32 = 0;
+    var b1: f32 = 0;
+    if (h_prime < 1) {
+        r1 = c;
+        g1 = x;
+    } else if (h_prime < 2) {
+        r1 = x;
+        g1 = c;
+    } else if (h_prime < 3) {
+        g1 = c;
+        b1 = x;
+    } else if (h_prime < 4) {
+        g1 = x;
+        b1 = c;
+    } else if (h_prime < 5) {
+        r1 = x;
+        b1 = c;
+    } else {
+        r1 = c;
+        b1 = x;
+    }
+    const m = hsl.l - c / 2;
+    return .{
+        .r = @intFromFloat(@round((r1 + m) * 255)),
+        .g = @intFromFloat(@round((g1 + m) * 255)),
+        .b = @intFromFloat(@round((b1 + m) * 255)),
+    };
+}
+
+pub fn rgbToHsl(rgb: theme.Rgb) Hsl {
+    const r: f32 = @as(f32, @floatFromInt(rgb.r)) / 255.0;
+    const g: f32 = @as(f32, @floatFromInt(rgb.g)) / 255.0;
+    const b: f32 = @as(f32, @floatFromInt(rgb.b)) / 255.0;
+    const max_c = @max(@max(r, g), b);
+    const min_c = @min(@min(r, g), b);
+    const l = (max_c + min_c) / 2;
+    if (max_c == min_c) return .{ .h = 0, .s = 0, .l = l };
+    const chroma = max_c - min_c;
+    const s = chroma / (1 - @abs(2 * l - 1));
+    var h: f32 = 0;
+    if (max_c == r) {
+        h = @mod((g - b) / chroma, 6);
+    } else if (max_c == g) {
+        h = (b - r) / chroma + 2;
+    } else {
+        h = (r - g) / chroma + 4;
+    }
+    h *= 60;
+    if (h < 0) h += 360;
+    return .{ .h = h, .s = s, .l = l };
+}
+
+pub fn detectColorMode(env: anytype) ColorMode {
+    if (env.get("NO_COLOR")) |_| return .none;
+    if (env.get("COLORTERM")) |v| {
+        if (std.mem.eql(u8, v, "truecolor") or std.mem.eql(u8, v, "24bit")) return .truecolor;
+    }
+    if (env.get("TERM")) |v| {
+        if (std.mem.indexOf(u8, v, "256color") != null) return .ansi256;
+        if (!std.mem.eql(u8, v, "dumb") and v.len > 0) return .ansi16;
+    }
+    return .none;
+}
+
+pub fn writeSgrFg(writer: *std.io.Writer, rgb: theme.Rgb, mode: ColorMode) !void {
+    switch (mode) {
+        .none => return,
+        .truecolor => {
+            var buf: [24]u8 = undefined;
+            const len = formatTruecolor(&buf, rgb.r, rgb.g, rgb.b);
+            try writer.writeAll(buf[0..len]);
+        },
+        .ansi256 => {
+            var buf: [12]u8 = undefined;
+            const len = formatAnsi256(&buf, ansi256Index(rgb.r, rgb.g, rgb.b));
+            try writer.writeAll(buf[0..len]);
+        },
+        .ansi16 => {
+            var buf: [8]u8 = undefined;
+            const len = formatAnsi16(&buf, ansi16Code(rgb.r, rgb.g, rgb.b));
+            try writer.writeAll(buf[0..len]);
+        },
+    }
+}
+
+fn ansi16Code(r: u8, g: u8, b: u8) u8 {
+    const luma = (@as(u32, r) * 299 + @as(u32, g) * 587 + @as(u32, b) * 114) / 1000;
+    const max_c: u32 = @max(@max(r, g), b);
+    if (max_c == 0) return 30;
+    const thr = max_c * 3;
+    var code: u8 = 30;
+    if (@as(u32, r) * 5 >= thr) code += 1;
+    if (@as(u32, g) * 5 >= thr) code += 2;
+    if (@as(u32, b) * 5 >= thr) code += 4;
+    if (luma > 100) code += 60;
+    return code;
+}
+
+fn formatAnsi16(buf: []u8, code: u8) usize {
+    const prefix = "\x1b[";
+    @memcpy(buf[0..prefix.len], prefix);
+    var pos: usize = prefix.len;
+    pos += writeDecimal(buf[pos..], code);
+    buf[pos] = 'm';
+    pos += 1;
+    return pos;
+}
+
+fn ansi256Index(r: u8, g: u8, b: u8) u8 {
+    const max_c = @max(@max(r, g), b);
+    const min_c = @min(@min(r, g), b);
+    if (max_c - min_c < 10) {
+        const luma = (@as(u32, r) * 299 + @as(u32, g) * 587 + @as(u32, b) * 114) / 1000;
+        if (luma < 8) return 16;
+        const step = @min(@as(u32, 23), (luma - 8) / 10);
+        return 232 + @as(u8, @intCast(step));
+    }
+    const qr = (@as(u32, r) * 6) / 256;
+    const qg = (@as(u32, g) * 6) / 256;
+    const qb = (@as(u32, b) * 6) / 256;
+    return 16 + @as(u8, @intCast(36 * qr + 6 * qg + qb));
+}
+
+fn formatAnsi256(buf: []u8, idx: u8) usize {
+    const prefix = "\x1b[38;5;";
+    @memcpy(buf[0..prefix.len], prefix);
+    var pos: usize = prefix.len;
+    pos += writeDecimal(buf[pos..], idx);
+    buf[pos] = 'm';
+    pos += 1;
+    return pos;
+}
+
 pub const TextStyle = struct {
     fg: ?theme.Rgb = null,
     bold: bool = false,
@@ -161,6 +303,91 @@ fn writeSanitized(writer: *std.io.Writer, text: []const u8) !void {
 }
 
 const testing = std.testing;
+
+test "writeSgrFg emits ESC[38;2;R;G;Bm in truecolor mode" {
+    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    try writeSgrFg(&buf.writer, .{ .r = 59, .g = 130, .b = 246 }, .truecolor);
+    try testing.expectEqualStrings("\x1b[38;2;59;130;246m", buf.writer.buffered());
+}
+
+test "writeSgrFg writes nothing in none mode" {
+    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    try writeSgrFg(&buf.writer, .{ .r = 59, .g = 130, .b = 246 }, .none);
+    try testing.expectEqualStrings("", buf.writer.buffered());
+}
+
+test "writeSgrFg in ansi256 mode maps pure red to color cube 196" {
+    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    try writeSgrFg(&buf.writer, .{ .r = 255, .g = 0, .b = 0 }, .ansi256);
+    try testing.expectEqualStrings("\x1b[38;5;196m", buf.writer.buffered());
+}
+
+test "writeSgrFg in ansi256 mode maps mid-gray to grayscale index 244" {
+    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    try writeSgrFg(&buf.writer, .{ .r = 128, .g = 128, .b = 128 }, .ansi256);
+    try testing.expectEqualStrings("\x1b[38;5;244m", buf.writer.buffered());
+}
+
+test "writeSgrFg in ansi16 mode maps bright red to code 91" {
+    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    try writeSgrFg(&buf.writer, .{ .r = 255, .g = 64, .b = 64 }, .ansi16);
+    try testing.expectEqualStrings("\x1b[91m", buf.writer.buffered());
+}
+
+test "writeSgrFg in ansi16 mode maps dark blue to code 34" {
+    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    try writeSgrFg(&buf.writer, .{ .r = 0, .g = 0, .b = 64 }, .ansi16);
+    try testing.expectEqualStrings("\x1b[34m", buf.writer.buffered());
+}
+
+test "hslToRgb converts pure red HSL (0, 1, 0.5) to RGB (255, 0, 0)" {
+    const rgb = hslToRgb(.{ .h = 0, .s = 1, .l = 0.5 });
+    try testing.expectEqual(@as(u8, 255), rgb.r);
+    try testing.expectEqual(@as(u8, 0), rgb.g);
+    try testing.expectEqual(@as(u8, 0), rgb.b);
+}
+
+test "rgbToHsl converts pure blue RGB (0, 0, 255) to HSL (240, 1, 0.5)" {
+    const hsl = rgbToHsl(.{ .r = 0, .g = 0, .b = 255 });
+    try testing.expectApproxEqAbs(@as(f32, 240), hsl.h, 1);
+    try testing.expectApproxEqAbs(@as(f32, 1), hsl.s, 0.01);
+    try testing.expectApproxEqAbs(@as(f32, 0.5), hsl.l, 0.01);
+}
+
+fn StubEnv(comptime pairs: anytype) type {
+    return struct {
+        pub fn get(name: []const u8) ?[]const u8 {
+            inline for (pairs) |pair| {
+                if (std.mem.eql(u8, name, pair[0])) return pair[1];
+            }
+            return null;
+        }
+    };
+}
+
+test "detectColorMode returns truecolor when COLORTERM=truecolor" {
+    const env = StubEnv(.{.{ "COLORTERM", "truecolor" }});
+    try testing.expectEqual(ColorMode.truecolor, detectColorMode(env));
+}
+
+test "detectColorMode returns ansi256 when TERM contains 256color" {
+    const env = StubEnv(.{.{ "TERM", "xterm-256color" }});
+    try testing.expectEqual(ColorMode.ansi256, detectColorMode(env));
+}
+
+test "detectColorMode returns none when NO_COLOR is set" {
+    const env = StubEnv(.{
+        .{ "NO_COLOR", "1" },
+        .{ "COLORTERM", "truecolor" },
+    });
+    try testing.expectEqual(ColorMode.none, detectColorMode(env));
+}
 
 test "writeStyled fast path boundary at 256 bytes" {
     const style: TextStyle = .{ .fg = .{ .r = 0, .g = 0, .b = 0 } };
