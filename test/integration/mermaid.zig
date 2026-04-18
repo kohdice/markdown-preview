@@ -415,3 +415,81 @@ test "mermaid empty content renders empty fence" {
 
     try std.testing.expectEqualStrings("```mermaid\n```\n", rendered);
 }
+
+test "gitGraph with enable_ansi=true emits ANSI SGR through renderer pipeline" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\```mermaid
+        \\gitGraph
+        \\    commit
+        \\    branch develop
+        \\    commit
+        \\```
+        \\
+    ;
+    const rendered = try helpers.renderToOwnedSlice(allocator, source, .{ .enable_ansi = true });
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\x1b[38;2;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "●") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[main]") != null);
+}
+
+test "gitGraph enable_ansi=false matches bare-default call byte-for-byte" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\```mermaid
+        \\gitGraph
+        \\    commit
+        \\    branch develop
+        \\    commit
+        \\    checkout main
+        \\    merge develop
+        \\```
+        \\
+    ;
+    const with_flag = try helpers.renderToOwnedSlice(allocator, source, .{ .enable_ansi = false });
+    defer allocator.free(with_flag);
+    const defaults = try helpers.renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(defaults);
+
+    try std.testing.expectEqualStrings(with_flag, defaults);
+}
+
+test "xychart with enable_ansi=true emits ANSI SGR through renderer pipeline" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\```mermaid
+        \\xychart
+        \\    title "Demo"
+        \\    x-axis [a, b, c]
+        \\    bar [1, 2, 3]
+        \\```
+        \\
+    ;
+    const rendered = try helpers.renderToOwnedSlice(allocator, source, .{ .enable_ansi = true });
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\x1b[38;2;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Demo") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "█") != null);
+}
+
+test "xychart enable_ansi=false matches bare-default call byte-for-byte" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\```mermaid
+        \\xychart
+        \\    title "Demo"
+        \\    x-axis [a, b, c]
+        \\    bar [1, 2, 3]
+        \\```
+        \\
+    ;
+    const with_flag = try helpers.renderToOwnedSlice(allocator, source, .{ .enable_ansi = false });
+    defer allocator.free(with_flag);
+    const defaults = try helpers.renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(defaults);
+
+    try std.testing.expectEqualStrings(with_flag, defaults);
+}
