@@ -74,3 +74,27 @@ pub const default_syntax_palette: SyntaxPalette = .{
     .operator = solarized.base0,
     .plain = solarized.base0,
 };
+
+/// Ordered for maximum adjacent-slot hue separation.
+pub const default_lane_palette: [8]Rgb = .{
+    solarized.red,
+    solarized.cyan,
+    solarized.orange,
+    solarized.blue,
+    solarized.yellow,
+    solarized.violet,
+    solarized.green,
+    solarized.magenta,
+};
+
+/// blue-first per matplotlib tab10 / D3 schemeCategory10 convention.
+pub const default_series_palette: [8]Rgb = .{
+    solarized.blue,
+    solarized.orange,
+    solarized.cyan,
+    solarized.red,
+    solarized.violet,
+    solarized.green,
+    solarized.magenta,
+    solarized.yellow,
+};
