@@ -4,7 +4,6 @@ const parse = @import("parse_xychart.zig");
 const canvas_mod = @import("canvas.zig");
 const theme = @import("../term/theme.zig");
 const width_mod = @import("../term/width.zig");
-const ansi = @import("../term/ansi.zig");
 
 pub const RenderError = error{
     InvalidMermaid,
@@ -17,9 +16,12 @@ pub const Options = struct {
     wrap_width: ?usize,
     ambiguous_width: width_mod.AmbiguousWidth,
     enable_ansi: bool,
-    palette: theme.Palette,
     use_ascii: bool = false,
 };
+
+fn seriesRole(idx: usize) u8 {
+    return @as(u8, @intCast(idx & 0x07));
+}
 
 const PLOT_ROWS: usize = 20;
 const MAX_SERIES_POINTS: usize = 1024;
@@ -186,7 +188,7 @@ fn writeVertical(
     var line_idx: usize = 0;
     for (chart.series, 0..) |series, series_idx| {
         const n = series.data.len;
-        const role: u8 = @intCast(series_idx);
+        const role = seriesRole(series_idx);
         if (n == 0) {
             if (series.kind == .bar) bar_idx += 1 else line_idx += 1;
             continue;
@@ -246,11 +248,7 @@ fn writeVertical(
     }
 
     if (opts.enable_ansi and chart.series.len > 0) {
-        const role_colors = buildSeriesColors(allocator, chart.series.len) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-        };
-        defer allocator.free(role_colors);
-        canvas_mod.writeCanvasAnsi(writer, &canvas, opts.wrap_width, opts.ambiguous_width, role_colors, .truecolor) catch return error.WriteFailed;
+        canvas_mod.writeCanvasAnsi(writer, &canvas, opts.wrap_width, opts.ambiguous_width, &theme.default_series_palette, .truecolor) catch return error.WriteFailed;
     } else {
         canvas_mod.writeCanvas(writer, &canvas, opts.wrap_width, opts.ambiguous_width) catch return error.WriteFailed;
     }
@@ -357,7 +355,7 @@ fn writeHorizontal(
     for (chart.series, 0..) |series, series_idx| {
         const n = series.data.len;
         if (n == 0) continue;
-        const role: u8 = @intCast(series_idx);
+        const role = seriesRole(series_idx);
         switch (series.kind) {
             .bar => {
                 for (series.data, 0..) |v, i| {
@@ -410,11 +408,7 @@ fn writeHorizontal(
     }
 
     if (opts.enable_ansi and chart.series.len > 0) {
-        const role_colors = buildSeriesColors(allocator, chart.series.len) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-        };
-        defer allocator.free(role_colors);
-        canvas_mod.writeCanvasAnsi(writer, &canvas, opts.wrap_width, opts.ambiguous_width, role_colors, .truecolor) catch return error.WriteFailed;
+        canvas_mod.writeCanvasAnsi(writer, &canvas, opts.wrap_width, opts.ambiguous_width, &theme.default_series_palette, .truecolor) catch return error.WriteFailed;
     } else {
         canvas_mod.writeCanvas(writer, &canvas, opts.wrap_width, opts.ambiguous_width) catch return error.WriteFailed;
     }
@@ -548,7 +542,7 @@ fn drawLegend(
             .bar => xy.bar,
             .line => xy.h_line,
         };
-        canvas.setGlyphRole(row, col, g, @intCast(series_idx));
+        canvas.setGlyphRole(row, col, g, seriesRole(series_idx));
         col += 2;
         var buf: [32]u8 = undefined;
         const name = switch (series.kind) {
@@ -793,7 +787,6 @@ fn renderToString(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
         .wrap_width = null,
         .ambiguous_width = .narrow,
         .enable_ansi = false,
-        .palette = theme.default_palette,
     });
     return sink.toOwnedSlice();
 }
@@ -1514,7 +1507,6 @@ test "writeXyChart use_ascii=true substitutes +|-#. for unicode drawing glyphs" 
         .wrap_width = null,
         .ambiguous_width = .narrow,
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .use_ascii = true,
     });
     const out = try sink.toOwnedSlice();
@@ -1545,66 +1537,63 @@ test "writeXyChart returns UnsupportedFeature for series exceeding 1024 points" 
         .wrap_width = null,
         .ambiguous_width = .narrow,
         .enable_ansi = false,
-        .palette = theme.default_palette,
     }));
 }
 
-fn isDarkBackground(bg: theme.Rgb) bool {
-    const luma = (@as(u32, bg.r) * 299 + @as(u32, bg.g) * 587 + @as(u32, bg.b) * 114) / 1000;
-    return luma < 128;
-}
+test "writeXyChart wraps series colors modulo 8 (series 0 and series 8 share role)" {
+    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    try writeXyChart(&sink.writer, std.testing.allocator,
+        \\xychart
+        \\x-axis [a]
+        \\bar [1]
+        \\bar [2]
+        \\bar [3]
+        \\bar [4]
+        \\bar [5]
+        \\bar [6]
+        \\bar [7]
+        \\bar [8]
+        \\bar [9]
+    , .{
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+        .enable_ansi = true,
+    });
+    const out = sink.writer.buffered();
 
-const CHART_ACCENT: theme.Rgb = .{ .r = 0x3b, .g = 0x82, .b = 0xf6 };
-const CHART_BG: theme.Rgb = .{ .r = 0, .g = 0, .b = 0 };
-
-fn buildSeriesColors(allocator: std.mem.Allocator, n: usize) ![]theme.Rgb {
-    const colors = try allocator.alloc(theme.Rgb, n);
-    for (0..n) |i| colors[i] = getSeriesColor(i, CHART_ACCENT, CHART_BG);
-    return colors;
-}
-
-fn getSeriesColor(i: usize, accent: theme.Rgb, bg: theme.Rgb) theme.Rgb {
-    if (i == 0) return accent;
-    const accent_hsl = ansi.rgbToHsl(accent);
-    const layer: f32 = @floatFromInt((i + 1) / 2);
-    const odd = (i % 2) == 1;
-    const bg_dark = isDarkBackground(bg);
-    const base_step: f32 = 0.08;
-    var delta: f32 = base_step * layer;
-    if (bg_dark) {
-        if (!odd) delta = -delta;
-    } else {
-        if (odd) delta = -delta;
+    var max_sgrs: usize = 0;
+    var lines = std.mem.splitScalar(u8, out, '\n');
+    while (lines.next()) |line| {
+        var count: usize = 0;
+        var pos: usize = 0;
+        while (std.mem.indexOfPos(u8, line, pos, "\x1b[38;2;")) |idx| {
+            const m = std.mem.indexOfScalarPos(u8, line, idx, 'm') orelse break;
+            count += 1;
+            pos = m + 1;
+        }
+        if (count > max_sgrs) max_sgrs = count;
     }
-    const new_l = std.math.clamp(accent_hsl.l + delta, 0.05, 0.95);
-    return ansi.hslToRgb(.{ .h = accent_hsl.h, .s = accent_hsl.s, .l = new_l });
-}
+    try std.testing.expectEqual(@as(usize, 9), max_sgrs);
 
-test "getSeriesColor returns accent unchanged for index 0" {
-    const accent: theme.Rgb = .{ .r = 59, .g = 130, .b = 246 };
-    const bg: theme.Rgb = .{ .r = 255, .g = 255, .b = 255 };
-    const c = getSeriesColor(0, accent, bg);
-    try std.testing.expectEqual(accent.r, c.r);
-    try std.testing.expectEqual(accent.g, c.g);
-    try std.testing.expectEqual(accent.b, c.b);
-}
-
-test "getSeriesColor index 1 on light background produces darker shade" {
-    const accent: theme.Rgb = .{ .r = 59, .g = 130, .b = 246 };
-    const light_bg: theme.Rgb = .{ .r = 255, .g = 255, .b = 255 };
-    const c = getSeriesColor(1, accent, light_bg);
-    const accent_hsl = ansi.rgbToHsl(accent);
-    const new_hsl = ansi.rgbToHsl(c);
-    try std.testing.expect(new_hsl.l < accent_hsl.l);
-}
-
-test "getSeriesColor index 1 on dark background produces lighter shade" {
-    const accent: theme.Rgb = .{ .r = 59, .g = 130, .b = 246 };
-    const dark_bg: theme.Rgb = .{ .r = 0, .g = 0, .b = 0 };
-    const c = getSeriesColor(1, accent, dark_bg);
-    const accent_hsl = ansi.rgbToHsl(accent);
-    const new_hsl = ansi.rgbToHsl(c);
-    try std.testing.expect(new_hsl.l > accent_hsl.l);
+    const p = theme.default_series_palette;
+    var buf0: [32]u8 = undefined;
+    const sgr0 = std.fmt.bufPrint(&buf0, "\x1b[38;2;{d};{d};{d}m", .{ p[0].r, p[0].g, p[0].b }) catch unreachable;
+    var lines2 = std.mem.splitScalar(u8, out, '\n');
+    var saw_double_sgr0 = false;
+    while (lines2.next()) |line| {
+        var c: usize = 0;
+        var p0: usize = 0;
+        while (std.mem.indexOfPos(u8, line, p0, sgr0)) |idx| {
+            c += 1;
+            p0 = idx + sgr0.len;
+        }
+        if (c >= 2) {
+            saw_double_sgr0 = true;
+            break;
+        }
+    }
+    try std.testing.expect(saw_double_sgr0);
 }
 
 test "writeXyChart with enable_ansi=true emits truecolor escape for bars" {
@@ -1614,7 +1603,6 @@ test "writeXyChart with enable_ansi=true emits truecolor escape for bars" {
         .wrap_width = null,
         .ambiguous_width = .narrow,
         .enable_ansi = true,
-        .palette = theme.default_palette,
     });
     try std.testing.expect(std.mem.indexOf(u8, sink.writer.buffered(), "\x1b[38;2;") != null);
 }
@@ -1626,7 +1614,6 @@ test "writeXyChart with 2 bar series produces two distinct SGR foreground sequen
         .wrap_width = null,
         .ambiguous_width = .narrow,
         .enable_ansi = true,
-        .palette = theme.default_palette,
     });
     const out = sink.writer.buffered();
     var first: ?[]const u8 = null;
@@ -1655,7 +1642,6 @@ test "writeXyChart with enable_ansi=false (default) emits no SGR escape" {
         .wrap_width = null,
         .ambiguous_width = .narrow,
         .enable_ansi = false,
-        .palette = theme.default_palette,
     });
     try std.testing.expect(std.mem.indexOf(u8, sink.writer.buffered(), "\x1b[") == null);
 }
@@ -1668,7 +1654,6 @@ test "vertical xychart clips each line when wrap_width=30 with enable_ansi=true"
         .wrap_width = 30,
         .ambiguous_width = .narrow,
         .enable_ansi = true,
-        .palette = theme.default_palette,
     });
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "\u{2026}") != null);
@@ -1683,7 +1668,6 @@ test "horizontal xychart clips each line when wrap_width=30 with enable_ansi=tru
         .wrap_width = 30,
         .ambiguous_width = .narrow,
         .enable_ansi = true,
-        .palette = theme.default_palette,
     });
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "\u{2026}") != null);
@@ -1697,7 +1681,6 @@ test "vertical xychart with wrap_width=null and enable_ansi=true emits no ellips
         .wrap_width = null,
         .ambiguous_width = .narrow,
         .enable_ansi = true,
-        .palette = theme.default_palette,
     });
     try std.testing.expect(std.mem.indexOf(u8, sink.writer.buffered(), "\u{2026}") == null);
 }

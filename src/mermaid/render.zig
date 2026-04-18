@@ -11,7 +11,6 @@ const render_git = @import("render_git.zig");
 const render_xychart = @import("render_xychart.zig");
 const parse_state = @import("parse_state.zig");
 const directive = @import("directive.zig");
-const theme = @import("../term/theme.zig");
 const width_mod = @import("../term/width.zig");
 
 pub const RenderError = error{
@@ -24,7 +23,6 @@ pub const RenderError = error{
 
 pub const Options = struct {
     enable_ansi: bool,
-    palette: theme.Palette,
     wrap_width: ?usize,
     ambiguous_width: width_mod.AmbiguousWidth,
 };
@@ -197,7 +195,6 @@ fn writeXyChart(
         .wrap_width = opts.wrap_width,
         .ambiguous_width = opts.ambiguous_width,
         .enable_ansi = opts.enable_ansi,
-        .palette = opts.palette,
     }) catch |err| switch (err) {
         error.InvalidMermaid => return error.InvalidMermaid,
         error.UnsupportedFeature => return error.UnsupportedFeature,
@@ -577,7 +574,6 @@ test "writeMermaid accepts bare xychart source end-to-end" {
         .wrap_width = null,
         .ambiguous_width = .narrow,
         .enable_ansi = false,
-        .palette = theme.default_palette,
     };
     try writeMermaid(&sink.writer, std.testing.allocator, "xychart\nbar [1, 2, 3]\n", opts);
     try std.testing.expect(sink.writer.buffered().len > 0);
@@ -589,7 +585,6 @@ test "writeMermaid strips multi-line init directive before flowchart" {
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -614,7 +609,6 @@ test "writeMermaid keeps %%{...}%% inside sequence message label" {
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -634,7 +628,6 @@ test "writeMermaid keeps %%{...}%% inside flowchart node label" {
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -654,7 +647,6 @@ test "writeMermaid silently strips init config scoped to a different diagram" {
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -677,7 +669,6 @@ test "writeMermaid rejects init with diagram-specific config as UnsupportedFeatu
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -695,7 +686,6 @@ test "writeMermaid rejects init xyChart config as UnsupportedFeature" {
     defer sink.deinit();
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -712,7 +702,6 @@ test "writeMermaid accepts init theme-only directive before xychart" {
     defer sink.deinit();
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -730,7 +719,6 @@ test "writeMermaid treats lowercase xychart key as ordinary config (no Unsupport
     defer sink.deinit();
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -749,7 +737,6 @@ test "writeMermaid returns UnsupportedDiagram for gantt" {
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -766,7 +753,6 @@ test "writeMermaid renders graph BT as canvas vertical flip of graph TD" {
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -843,7 +829,6 @@ test "writeMermaid produces identical output for graph RL and graph LR" {
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -860,7 +845,6 @@ test "writeMermaid draws frame and title around flowchart subgraph" {
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -885,7 +869,6 @@ test "writeMermaid drops edges to empty composite state" {
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -908,7 +891,6 @@ test "writeMermaid draws composite state frame without routing to invisible node
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -936,7 +918,6 @@ test "writeMermaid renders erDiagram" {
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -954,7 +935,6 @@ test "writeMermaid renders gitGraph with LR colon header" {
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -971,7 +951,6 @@ test "writeMermaid returns UnsupportedFeature for cherry-pick" {
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -990,7 +969,6 @@ test "writeMermaid returns UnsupportedFeature for erDiagram direction" {
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -1016,7 +994,6 @@ test "writeMermaid renders stateDiagram-v2" {
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -1033,7 +1010,6 @@ test "writeMermaid renders sequence diagram" {
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -1051,7 +1027,6 @@ test "writeMermaid returns InvalidMermaid for unknown diagram type" {
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -1065,7 +1040,6 @@ test "writeMermaid renders single-edge flowchart" {
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -1085,7 +1059,6 @@ test "writeMermaid renders labeled edge with label text in output" {
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -1102,7 +1075,6 @@ test "writeMermaid keeps Unicode glyphs in wide ambiguous mode" {
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .wide,
     };
@@ -1121,7 +1093,6 @@ test "writeMermaid LR direction renders horizontally" {
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -1140,7 +1111,6 @@ test "writeMermaid empty flowchart emits nothing" {
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -1155,7 +1125,6 @@ test "writeMermaid flowchart --- edge does not emit an arrow head" {
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -1176,7 +1145,6 @@ test "writeMermaid stateDiagram renders rounded corners for [*] and stadium stat
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -1199,7 +1167,6 @@ test "writeMermaid diamond node renders with diamond corners" {
 
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -1217,7 +1184,6 @@ test "writeMermaid dispatches xychart to writeXyChart" {
     defer sink.deinit();
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -1230,7 +1196,6 @@ test "writeMermaid no longer returns UnsupportedDiagram for xychart" {
     defer sink.deinit();
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };
@@ -1240,7 +1205,6 @@ test "writeMermaid no longer returns UnsupportedDiagram for xychart" {
 test "writeMermaid still returns UnsupportedDiagram for other diagrams" {
     const opts: Options = .{
         .enable_ansi = false,
-        .palette = theme.default_palette,
         .wrap_width = null,
         .ambiguous_width = .narrow,
     };

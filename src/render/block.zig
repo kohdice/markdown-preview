@@ -311,7 +311,6 @@ pub const RenderSession = struct {
     fn writeMermaidBody(self: *RenderSession, content: []const u8) mermaid.RenderError!void {
         const opts: mermaid.Options = .{
             .enable_ansi = self.ctx.enable_ansi,
-            .palette = self.ctx.palette,
             .wrap_width = self.wrap_width,
             .ambiguous_width = self.ctx.ambiguous_width,
         };
