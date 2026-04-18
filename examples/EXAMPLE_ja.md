@@ -199,6 +199,248 @@ fi
     plain text stays as-is.
 ```
 
+## Mermaid 図
+
+以下の Mermaid 図は ASCII アートとしてその場で描画されます。
+
+### フローチャート (flowchart)
+
+#### 基本 (TD 方向)
+
+```mermaid
+flowchart TD
+    A(Input) --> B[Lexer]
+    B --> C[Parser]
+    C --> D{Valid?}
+    D -->|yes| E[Render]
+    D -->|no| F[Report error]
+    E --> G([Done])
+    F --> G
+```
+
+#### 基本 (LR 方向)
+
+```mermaid
+flowchart LR
+    Src(Markdown) --> Lex[Lexer]
+    Lex --> AST[AST Builder]
+    AST --> Render[Renderer]
+    Render --> Out([ANSI output])
+```
+
+#### ネストした subgraph
+
+```mermaid
+flowchart TD
+    subgraph services [ServicesLayer]
+        Svc1[Receive request] --> Svc2[Validate payload]
+        subgraph adapters [AdaptersLayer]
+            A1[DB adapter] --> A2[Cache adapter]
+        end
+        Svc2 --> A1
+    end
+    A2 --> Out([Done])
+```
+
+### シーケンス図 (sequenceDiagram)
+
+#### 基本
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant B as Browser
+    participant API
+    participant DB
+
+    U->>B: Open /login
+    B->>API: POST /login
+    API->>DB: SELECT user
+    DB-->>API: user row
+    API-->>B: 200 OK + token
+    B-->>U: render dashboard
+```
+
+#### `alt` / `else` / `par` と note
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API
+    participant DB
+    Client->>API: GET /resource
+    alt cached
+        API-->>Client: 200 OK (cached)
+    else miss
+        API->>DB: SELECT resource
+        DB-->>API: row
+        API-->>Client: 200 OK
+    end
+    par warm cache
+        API->>DB: touch resource
+    and record metrics
+        API->>DB: insert metric
+    end
+    Note over Client,API: request completed
+```
+
+### クラス図 (classDiagram)
+
+#### 基本
+
+```mermaid
+classDiagram
+    class Repository {
+        <<interface>>
+        +findById(id) Entity
+        +save(entity) void
+        +delete(id) void
+    }
+    class UserRepository {
+        -db Database
+        +findById(id) User
+        +save(user) void
+        +delete(id) void
+        +findByEmail(email) User
+    }
+    class User {
+        +id int
+        +email str
+        +name str
+        +hashedPassword str
+        +verify(password) bool
+    }
+    Repository <|.. UserRepository
+    UserRepository o-- User
+```
+
+#### namespace・annotation・static/abstract メンバー
+
+```mermaid
+classDiagram
+    namespace Billing {
+        class Account {
+            <<abstract>>
+            +String ownerId
+            +int balance$
+            +apply(Transaction) void
+            +settle()*
+        }
+        class Transaction {
+            +String id
+            +int amount
+            +describe() String
+        }
+    }
+    Account o-- Transaction : records
+```
+
+### 状態遷移図 (stateDiagram)
+
+#### 基本
+
+```mermaid
+stateDiagram-v2
+    state "Waiting for payment" as Pending
+    state "Payment confirmed" as Confirmed
+    state "Being shipped" as Shipped
+
+    [*] --> Pending
+    Pending --> Confirmed : payment_received
+    Confirmed --> Shipped : dispatched
+    Shipped --> Delivered : arrived
+    Delivered --> [*]
+```
+
+#### 複合状態 (composite state)
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    state Active {
+        [*] --> Waiting
+        Waiting --> Working : request
+        Working --> Waiting : finished
+    }
+    Idle --> Active : start
+    Active --> Idle : stop
+    Idle --> [*]
+```
+
+### ER 図 (erDiagram)
+
+```mermaid
+erDiagram
+    authors ||--o{ books : writes
+    categories ||--o{ book_categories : tags
+    books ||--o{ book_categories : classified_as
+
+    authors {
+        INT id PK
+        VARCHAR name
+        VARCHAR email
+        DATETIME created_at
+    }
+    books {
+        INT id PK
+        INT author_id FK
+        VARCHAR title
+        INT price
+        DATE published_at
+    }
+    categories {
+        INT id PK
+        VARCHAR name
+        VARCHAR slug
+    }
+    book_categories {
+        INT book_id FK
+        INT category_id FK
+    }
+```
+
+### gitGraph
+
+ターミナルがカラー対応していれば、branch ごとに色分けされて表示されます。
+
+```mermaid
+gitGraph
+    commit id: "init"
+    commit tag: "v0.9"
+    branch develop
+    commit
+    branch feature
+    commit
+    commit
+    checkout develop
+    merge feature
+    commit
+    checkout main
+    merge develop tag: "v1.0" type: HIGHLIGHT
+    commit
+```
+
+### XY チャート (xychart)
+
+```mermaid
+xychart
+title "Quarterly Performance"
+x-axis ["Q1", "Q2", "Q3", "Q4"]
+y-axis 0 --> 100
+bar [30, 50, 40, 60]
+line [35, 45, 55, 65]
+```
+
+`horizontal` を付けると軸を入れ替えた横向きレンダリングになります。
+
+```mermaid
+xychart horizontal
+title "Monthly Revenue"
+x-axis "Month" [Jan, Feb, Mar]
+y-axis "Revenue" 0 --> 300
+bar [120, 200, 260]
+```
+
 ## 水平線
 
 ---

@@ -8,6 +8,12 @@ markdown-preview is a command to preview Markdown.
 
 - Zig version: 0.15.2 (`minimum_zig_version` in build.zig.zon)
 
+## CORE PRINCIPLES
+
+- Follow Kent Beck's Test-Driven Development (TDD) methodology as the preferred approach for all development work.
+- Document at the right layer: Code → How, Tests → What, Commits → Why, Comments → Why not
+- Keep documentation up to date with code changes
+
 ## Build Commands
 
 ```bash

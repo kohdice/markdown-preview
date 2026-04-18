@@ -8,6 +8,7 @@ const prefix_writer = @import("prefix_writer.zig");
 const render_table = @import("table.zig");
 const highlight = @import("../term/highlight.zig");
 const render_context = @import("context.zig");
+const mermaid = @import("../mermaid.zig");
 
 const RenderContext = render_context.RenderContext;
 
@@ -280,6 +281,21 @@ pub const RenderSession = struct {
         const fence_style: ansi.TextStyle = .{ .fg = self.ctx.palette.code_fence, .dim = true };
         try ansi.writeStyled(self.writer, self.ctx.enable_ansi, fence_style, code_fence.opener);
 
+        if (std.ascii.eqlIgnoreCase(code_fence.language, "mermaid")) {
+            if (code_fence.content.len > 0) {
+                try self.writer.writeByte('\n');
+                self.writeMermaidBody(code_fence.content) catch |err| switch (err) {
+                    error.InvalidMermaid, error.UnsupportedDiagram, error.UnsupportedFeature => try self.writeMermaidFallback(code_fence.content, err),
+                    else => return err,
+                };
+            }
+            if (code_fence.closer) |closer| {
+                try self.writer.writeByte('\n');
+                try ansi.writeStyled(self.writer, self.ctx.enable_ansi, fence_style, closer);
+            }
+            return;
+        }
+
         const language = highlight.Language.fromString(code_fence.language);
         if (code_fence.content.len > 0) {
             try self.writer.writeByte('\n');
@@ -290,6 +306,28 @@ pub const RenderSession = struct {
             try self.writer.writeByte('\n');
             try ansi.writeStyled(self.writer, self.ctx.enable_ansi, fence_style, closer);
         }
+    }
+
+    fn writeMermaidBody(self: *RenderSession, content: []const u8) mermaid.RenderError!void {
+        const opts: mermaid.Options = .{
+            .enable_ansi = self.ctx.enable_ansi,
+            .wrap_width = self.wrap_width,
+            .ambiguous_width = self.ctx.ambiguous_width,
+        };
+        try mermaid.writeMermaid(self.writer, self.ephemeral_allocator, content, opts);
+    }
+
+    fn writeMermaidFallback(self: *RenderSession, content: []const u8, err: mermaid.RenderError) !void {
+        const label = switch (err) {
+            error.UnsupportedDiagram => "[mermaid: diagram type not yet supported by mp]\n",
+            error.UnsupportedFeature => "[mermaid: feature not yet supported by mp]\n",
+            error.InvalidMermaid => "[mermaid: parse error]\n",
+            else => "[mermaid: render error]\n",
+        };
+        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, .{
+            .fg = self.ctx.palette.inline_code,
+        }, label);
+        try self.writeFenceBody(content, null);
     }
 
     fn writeFenceBody(self: *RenderSession, content: []const u8, language: ?highlight.Language) !void {

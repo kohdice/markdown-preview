@@ -4,8 +4,7 @@ const parse_block = @import("block.zig");
 
 pub const CellParseError = std.mem.Allocator.Error || error{UnclosedCodeSpan};
 
-/// Check if a line is a valid table delimiter row.
-/// Pattern: optional leading `|`, then cells of `:?-+:?` separated by `|`.
+/// Accepts an optional leading `|`, then cells of `:?-+:?` separated by `|`.
 pub fn isDelimiterRow(line: []const u8) bool {
     const trimmed = std.mem.trim(u8, line, parse_block.horizontal_whitespace);
     if (trimmed.len == 0) return false;
@@ -59,7 +58,7 @@ pub fn alignments(allocator: std.mem.Allocator, line: []const u8) ![]ast.Alignme
     return try aligns.toOwnedSlice(allocator);
 }
 
-/// Parse a row into cells (split on unescaped `|`).
+/// Splits a row on unescaped `|` and trims horizontal whitespace in each cell.
 pub fn cells(allocator: std.mem.Allocator, line: []const u8) CellParseError![][]const u8 {
     const trimmed = std.mem.trim(u8, line, parse_block.horizontal_whitespace);
     var result: std.ArrayListUnmanaged([]const u8) = .{};
@@ -130,7 +129,6 @@ const CellIterator = struct {
                 const cell = self.text[start..self.pos];
                 self.pos += 1;
 
-                // If this pipe is the trailing one and nothing follows, don't emit empty cell
                 if (self.pos >= self.text.len or
                     std.mem.trim(u8, self.text[self.pos..], parse_block.horizontal_whitespace).len == 0)
                 {
