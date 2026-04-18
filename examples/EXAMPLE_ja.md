@@ -401,6 +401,8 @@ erDiagram
 
 ### gitGraph
 
+ターミナルがカラー対応していれば、branch ごとに色分けされて表示されます。
+
 ```mermaid
 gitGraph
     commit id: "init"

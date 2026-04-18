@@ -401,6 +401,8 @@ erDiagram
 
 ### gitGraph
 
+When the terminal supports color, each branch is rendered in its own color.
+
 ```mermaid
 gitGraph
     commit id: "init"
