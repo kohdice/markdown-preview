@@ -1010,7 +1010,6 @@ test "layout cell_w accommodates wide ambiguous-width labels" {
 
 test "layout cell_w differs between narrow and wide for EAW=A labels" {
     const alloc = std.testing.allocator;
-    // Greek letters are East Asian Width "Ambiguous": 1 column narrow, 2 columns wide.
     const ambig_label = "αβγ";
     try std.testing.expectEqual(@as(usize, 3), width_mod.displayWidth(ambig_label, .narrow));
     try std.testing.expectEqual(@as(usize, 6), width_mod.displayWidth(ambig_label, .wide));

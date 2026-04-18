@@ -1,6 +1,6 @@
 // Generated from Unicode 16.0 UnicodeData.txt — General_Category ∈ {Lu, Ll, Lt, Lm, Lo}.
 // 675 non-ASCII ranges covering 141 028 codepoints.
-//
+
 // Regenerate: download https://www.unicode.org/Public/16.0.0/ucd/UnicodeData.txt
 // and run the range-extraction script (see parse_state.zig history).
 

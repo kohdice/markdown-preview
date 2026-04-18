@@ -1710,8 +1710,6 @@ test "WrapWriter single char per line" {
 }
 
 test "WrapWriter non-CSI ESC matches wrapText" {
-    // "\x1bX" — ESC followed by non-'[' is not a CSI.
-    // wrapText processes ESC as width 0 and X as width 1.
     try expectWrapParity("\x1bXhello", 10, .narrow);
 }
 

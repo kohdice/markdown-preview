@@ -290,14 +290,12 @@ pub const Highlighter = struct {
 
         // 1. Collect every capture whose pattern's predicates all pass and
         //    whose name is not a visual-editor meta capture.
-        //
         // Tree-sitter's C runtime intentionally does not evaluate predicates
         // such as `#eq?`, `#match?`, `#any-of?`, or `#lua-match?`. The caller
         // is expected to filter matches itself. Without this filtering, every
         // `(identifier) @type (#lua-match? ...)` pattern would match every
         // identifier, letting the highest pattern_index capture win regardless
         // of intent and producing obviously wrong colors.
-        //
         // Several grammars also attach editor-only meta captures to real
         // nodes, e.g. `(comment) @comment @spell`. Those meta captures share
         // the same pattern_index and byte range as the real style, so without
@@ -1280,8 +1278,6 @@ test "Highlighter: cpp keeps c primitive types via comptime query concat" {
     const rendered = try renderHighlightedForTest(&hl, allocator, "int main() { return 0; }", .cpp);
     defer allocator.free(rendered);
 
-    // Both `return` and `int` come from the C base query; if either is
-    // missing, the comptime concat in build.zig's wrapper broke.
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, keyword_ansi ++ "return"));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, type_name_ansi ++ "int"));
 }

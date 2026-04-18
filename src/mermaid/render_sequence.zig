@@ -728,7 +728,6 @@ test "activate/deactivate flags are parsed but ASCII does not draw activation (u
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "Hello") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "World") != null);
-    // upstream ASCII renderer does not visually distinguish activated lifelines
     try std.testing.expect(std.mem.indexOf(u8, out, "║") == null);
 }
 
@@ -953,7 +952,6 @@ test "nested block outer frame has no gaps on inner block rows" {
     , .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    // Inner frame rows should preserve the outer border on the left edge.
     try std.testing.expect(std.mem.indexOf(u8, out, "│┌") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "│└") != null);
 }
