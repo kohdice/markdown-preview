@@ -4,12 +4,18 @@ const render = @import("render.zig");
 const term = @import("term.zig");
 const file_watcher = @import("watch/file_watcher.zig");
 const raw_term = @import("watch/raw_term.zig");
+const render_buffer_mod = @import("watch/render_buffer.zig");
 const width = term.width;
 const terminal = term.terminal;
 
 const max_file_bytes = 10 * 1024 * 1024;
 const exit_success: u8 = 0;
 const exit_failure: u8 = 1;
+
+const default_term_cols: usize = 80;
+const default_term_rows: usize = 24;
+
+const key_read_buf_size: usize = 16;
 
 pub const WatchOptions = struct {
     allocator: std.mem.Allocator,
@@ -73,10 +79,10 @@ pub fn run(opts: WatchOptions) !u8 {
     var cycle_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer cycle_arena.deinit();
 
-    var output_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer output_arena.deinit();
+    var buffer = render_buffer_mod.RenderBuffer.init(state_arena.allocator());
+    defer buffer.deinit();
 
-    var term_size = terminal.getTerminalSize(opts.stdout_handle) orelse terminal.TerminalSize{ .cols = 80, .rows = 24 };
+    var term_size = terminal.getTerminalSize(opts.stdout_handle) orelse terminal.TerminalSize{ .cols = default_term_cols, .rows = default_term_rows };
     var wrap_width: ?usize = if (opts.enable_ansi) term_size.cols else null;
 
     var rt = raw_term.RawTerm.setup(opts.stdin_handle, opts.stdout) catch {
@@ -86,12 +92,9 @@ pub fn run(opts: WatchOptions) !u8 {
     defer rt.teardown();
 
     var scroll_offset: usize = 0;
-    var rendered: []const u8 = "";
-    var line_index: LineIndex = .{ .line_offsets = &.{}, .total_lines = 0 };
 
-    rendered = renderToSlice(opts, &renderer, &cycle_arena, &output_arena, wrap_width);
-    line_index = buildLineIndex(output_arena.allocator(), rendered);
-    displayPage(opts.stdout, rendered, line_index, scroll_offset, term_size.rows, opts.enable_ansi);
+    renderTo(opts, &renderer, &cycle_arena, &buffer, wrap_width);
+    displayPage(opts.stdout, &buffer, scroll_offset, term_size.rows, opts.enable_ansi);
 
     var watcher = file_watcher.FileWatcher.init(dir_z, name_z) catch |err| {
         try opts.stderr.print("mp: unable to watch '{s}': {s}\n", .{ opts.path, @errorName(err) });
@@ -99,7 +102,7 @@ pub fn run(opts: WatchOptions) !u8 {
     };
     defer watcher.deinit();
 
-    const exit_reason = eventLoop(opts, &rt, &watcher, &renderer, &cycle_arena, &output_arena, &term_size, &wrap_width, &scroll_offset, &rendered, &line_index);
+    const exit_reason = eventLoop(opts, &rt, &watcher, &renderer, &cycle_arena, &buffer, &term_size, &wrap_width, &scroll_offset);
 
     return switch (exit_reason) {
         .user_quit => exit_success,
@@ -114,12 +117,10 @@ fn eventLoop(
     watcher: *file_watcher.FileWatcher,
     renderer: *render.Renderer,
     cycle_arena: *std.heap.ArenaAllocator,
-    output_arena: *std.heap.ArenaAllocator,
+    buffer: *render_buffer_mod.RenderBuffer,
     term_size: *terminal.TerminalSize,
     wrap_width: *?usize,
     scroll_offset: *usize,
-    rendered: *[]const u8,
-    line_index: *LineIndex,
 ) ExitReason {
     const watcher_idx: usize = 0;
     const stdin_idx: usize = 1;
@@ -144,8 +145,7 @@ fn eventLoop(
                     term_size.* = terminal.getTerminalSize(opts.stdout_handle) orelse term_size.*;
                     wrap_width.* = if (opts.enable_ansi) term_size.cols else null;
                     scroll_offset.* = 0;
-                    rendered.* = renderToSlice(opts, renderer, cycle_arena, output_arena, wrap_width.*);
-                    line_index.* = buildLineIndex(output_arena.allocator(), rendered.*);
+                    renderTo(opts, renderer, cycle_arena, buffer, wrap_width.*);
                     needs_redisplay = true;
                 } else {
                     return .signal_exit;
@@ -157,26 +157,25 @@ fn eventLoop(
             const event = watcher.consumeEvents() catch return .poll_error;
             if (event != .none) {
                 scroll_offset.* = 0;
-                rendered.* = renderToSlice(opts, renderer, cycle_arena, output_arena, wrap_width.*);
-                line_index.* = buildLineIndex(output_arena.allocator(), rendered.*);
+                renderTo(opts, renderer, cycle_arena, buffer, wrap_width.*);
                 needs_redisplay = true;
             }
         }
 
         if (poll_fds[stdin_idx].revents & std.posix.POLL.IN != 0) {
-            var key_buf: [16]u8 = undefined;
+            var key_buf: [key_read_buf_size]u8 = undefined;
             const n = std.posix.read(opts.stdin_handle, &key_buf) catch return .poll_error;
             for (key_buf[0..n]) |byte| {
                 const action = input.feedByte(byte);
                 if (action == .quit) return .user_quit;
-                if (applyAction(action, scroll_offset, line_index.total_lines, term_size.rows)) {
+                if (applyAction(action, scroll_offset, buffer.totalLines(), term_size.rows)) {
                     needs_redisplay = true;
                 }
             }
         }
 
         if (needs_redisplay) {
-            displayPage(opts.stdout, rendered.*, line_index.*, scroll_offset.*, term_size.rows, opts.enable_ansi);
+            displayPage(opts.stdout, buffer, scroll_offset.*, term_size.rows, opts.enable_ansi);
         }
     }
 }
@@ -291,47 +290,40 @@ const InputState = struct {
     }
 };
 
-fn renderToSlice(
+fn renderTo(
     opts: WatchOptions,
     renderer: *render.Renderer,
     cycle_arena: *std.heap.ArenaAllocator,
-    output_arena: *std.heap.ArenaAllocator,
+    buffer: *render_buffer_mod.RenderBuffer,
     wrap_width: ?usize,
-) []const u8 {
+) void {
     _ = cycle_arena.reset(.retain_capacity);
-    _ = output_arena.reset(.retain_capacity);
     const cycle_alloc = cycle_arena.allocator();
-    const out_alloc = output_arena.allocator();
-
-    var output: std.io.Writer.Allocating = .init(out_alloc);
+    buffer.reset();
 
     const source = opts.cwd.readFileAlloc(cycle_alloc, opts.path, max_file_bytes) catch |err| {
-        output.writer.print("mp: unable to read '{s}': {s}\n", .{ opts.path, @errorName(err) }) catch {};
-        return flushAndGetBuffer(&output);
+        buffer.writer.print("mp: unable to read '{s}': {s}\n", .{ opts.path, @errorName(err) }) catch {};
+        buffer.writer.flush() catch {};
+        return;
     };
 
     var doc = parse.parseOwned(cycle_alloc, .{
         .allocator = cycle_alloc,
         .buffer = source,
     }) catch {
-        output.writer.writeAll("mp: parse error\n") catch {};
-        return flushAndGetBuffer(&output);
+        buffer.writer.writeAll("mp: parse error\n") catch {};
+        buffer.writer.flush() catch {};
+        return;
     };
     defer doc.deinit();
 
-    renderer.renderDocument(&output.writer, &doc, wrap_width, cycle_alloc) catch {};
-    return flushAndGetBuffer(&output);
-}
-
-fn flushAndGetBuffer(output: *std.io.Writer.Allocating) []const u8 {
-    output.writer.flush() catch {};
-    return output.writer.buffered();
+    renderer.render(&buffer.writer, &doc, wrap_width) catch {};
+    buffer.writer.flush() catch {};
 }
 
 fn displayPage(
     stdout: *std.io.Writer,
-    rendered: []const u8,
-    line_index: LineIndex,
+    buffer: *const render_buffer_mod.RenderBuffer,
     scroll_offset: usize,
     visible_rows: usize,
     enable_ansi: bool,
@@ -340,12 +332,13 @@ fn displayPage(
 
     stdout.writeAll("\x1b[H\x1b[J") catch return;
 
-    const range = visibleRange(line_index.line_offsets, rendered.len, scroll_offset, content_rows);
+    const rendered = buffer.buffered();
+    const range = visibleRange(buffer.lineOffsets(), rendered.len, scroll_offset, content_rows);
     if (range.end > range.start) {
         stdout.writeAll(rendered[range.start..range.end]) catch return;
     }
 
-    writeStatusLine(stdout, scroll_offset, content_rows, line_index.total_lines, enable_ansi);
+    writeStatusLine(stdout, scroll_offset, content_rows, buffer.totalLines(), enable_ansi);
 
     stdout.flush() catch {};
 }
@@ -366,30 +359,6 @@ fn writeStatusLine(
     } else {
         stdout.writeAll(":") catch return;
     }
-}
-
-const LineIndex = struct {
-    line_offsets: []const usize,
-    total_lines: usize,
-};
-
-fn buildLineIndex(allocator: std.mem.Allocator, data: []const u8) LineIndex {
-    var offsets: std.ArrayListUnmanaged(usize) = .empty;
-    offsets.append(allocator, 0) catch return .{ .line_offsets = &.{}, .total_lines = 0 };
-
-    for (data, 0..) |byte, i| {
-        if (byte == '\n' and i + 1 < data.len) {
-            offsets.append(allocator, i + 1) catch break;
-        }
-    }
-
-    const total = offsets.items.len;
-    if (data.len == 0) return .{ .line_offsets = &.{}, .total_lines = 0 };
-
-    return .{
-        .line_offsets = offsets.items,
-        .total_lines = total,
-    };
 }
 
 const VisibleRange = struct {
@@ -489,48 +458,6 @@ test "InputState double ESC: first consumed, second starts new sequence" {
     try std.testing.expectEqual(InputPhase.esc, s.phase);
 }
 
-test "buildLineIndex empty input" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const idx = buildLineIndex(arena.allocator(), "");
-    try std.testing.expectEqual(@as(usize, 0), idx.total_lines);
-}
-
-test "buildLineIndex single line without newline" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const idx = buildLineIndex(arena.allocator(), "hello");
-    try std.testing.expectEqual(@as(usize, 1), idx.total_lines);
-    try std.testing.expectEqual(@as(usize, 0), idx.line_offsets[0]);
-}
-
-test "buildLineIndex single line with newline" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const idx = buildLineIndex(arena.allocator(), "hello\n");
-    try std.testing.expectEqual(@as(usize, 1), idx.total_lines);
-    try std.testing.expectEqual(@as(usize, 0), idx.line_offsets[0]);
-}
-
-test "buildLineIndex two lines" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const idx = buildLineIndex(arena.allocator(), "a\nb");
-    try std.testing.expectEqual(@as(usize, 2), idx.total_lines);
-    try std.testing.expectEqual(@as(usize, 0), idx.line_offsets[0]);
-    try std.testing.expectEqual(@as(usize, 2), idx.line_offsets[1]);
-}
-
-test "buildLineIndex three lines with trailing newline" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const idx = buildLineIndex(arena.allocator(), "a\nb\nc\n");
-    try std.testing.expectEqual(@as(usize, 3), idx.total_lines);
-    try std.testing.expectEqual(@as(usize, 0), idx.line_offsets[0]);
-    try std.testing.expectEqual(@as(usize, 2), idx.line_offsets[1]);
-    try std.testing.expectEqual(@as(usize, 4), idx.line_offsets[2]);
-}
-
 test "visibleRange selects correct byte range" {
     const offsets = [_]usize{ 0, 4, 8, 12 };
     const range = visibleRange(&offsets, 15, 1, 2);
@@ -557,4 +484,76 @@ test "visibleRange empty offsets" {
     const range = visibleRange(&offsets, 0, 0, 10);
     try std.testing.expectEqual(@as(usize, 0), range.start);
     try std.testing.expectEqual(@as(usize, 0), range.end);
+}
+
+fn naiveLineOffsets(
+    allocator: std.mem.Allocator,
+    bytes: []const u8,
+) ![]usize {
+    var offsets: std.ArrayListUnmanaged(usize) = .empty;
+    if (bytes.len == 0) return offsets.toOwnedSlice(allocator);
+    try offsets.append(allocator, 0);
+    var i: usize = 0;
+    while (i + 1 < bytes.len) : (i += 1) {
+        if (bytes[i] == '\n') try offsets.append(allocator, i + 1);
+    }
+    return offsets.toOwnedSlice(allocator);
+}
+
+test "render cycle produces line offsets matching naive newline scan" {
+    const allocator = std.testing.allocator;
+
+    var doc = try parse.parseBorrowed(allocator,
+        \\# Title
+        \\
+        \\Paragraph one with **bold** and _italic_ text.
+        \\
+        \\- item a
+        \\- item b
+        \\
+        \\Paragraph two.
+        \\
+    );
+    defer doc.deinit();
+
+    var renderer = render.Renderer.init(allocator, .{
+        .enable_ansi = false,
+        .ambiguous_width = .narrow,
+    });
+    defer renderer.deinit();
+
+    var buffer = render_buffer_mod.RenderBuffer.init(allocator);
+    defer buffer.deinit();
+
+    try renderer.render(&buffer.writer, &doc, null);
+    try buffer.writer.flush();
+
+    const expected = try naiveLineOffsets(allocator, buffer.buffered());
+    defer allocator.free(expected);
+
+    try std.testing.expectEqualSlices(usize, expected, buffer.lineOffsets());
+}
+
+test "render cycle of empty document produces no line offsets" {
+    const allocator = std.testing.allocator;
+
+    var doc = try parse.parseBorrowed(allocator, "");
+    defer doc.deinit();
+
+    var renderer = render.Renderer.init(allocator, .{
+        .enable_ansi = false,
+        .ambiguous_width = .narrow,
+    });
+    defer renderer.deinit();
+
+    var buffer = render_buffer_mod.RenderBuffer.init(allocator);
+    defer buffer.deinit();
+
+    try renderer.render(&buffer.writer, &doc, null);
+    try buffer.writer.flush();
+
+    const expected = try naiveLineOffsets(allocator, buffer.buffered());
+    defer allocator.free(expected);
+
+    try std.testing.expectEqualSlices(usize, expected, buffer.lineOffsets());
 }
