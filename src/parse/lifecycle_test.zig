@@ -1,5 +1,7 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const parse = @import("../parse.zig");
+const source_loader = @import("../source_loader.zig");
 
 const TrackingAllocator = struct {
     child: std.mem.Allocator,
@@ -106,6 +108,32 @@ test "parse with owned source frees the buffer on deinit" {
     try std.testing.expect(!tracking.tracked_freed);
     doc.deinit();
     try std.testing.expect(tracking.tracked_freed);
+}
+
+test "parse with mapped source unmaps the buffer on deinit" {
+    if (builtin.os.tag == .windows) return;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const threshold = 64 * 1024;
+    const data = try std.testing.allocator.alloc(u8, threshold);
+    defer std.testing.allocator.free(data);
+    @memset(data, 'a');
+    data[data.len - 1] = '\n';
+
+    try tmp.dir.writeFile(.{ .sub_path = "big.md", .data = data });
+
+    const source = try source_loader.loadFile(std.testing.allocator, tmp.dir, "big.md");
+    try std.testing.expect(source == .mapped);
+
+    var doc = try parse.parse(std.testing.allocator, source);
+    try std.testing.expect(doc.source_storage == .mapped);
+    try std.testing.expectEqual(@as(usize, threshold), doc.source.len);
+
+    doc.deinit();
+    try std.testing.expect(doc.source_storage == .borrowed);
+    try std.testing.expectEqual(@as(usize, 0), doc.source.len);
 }
 
 test "parse with owned source can free buffer with a different allocator than AST storage" {
