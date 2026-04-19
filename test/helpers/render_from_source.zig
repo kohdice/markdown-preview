@@ -17,7 +17,7 @@ pub fn renderToOwnedSlice(
     var output: std.io.Writer.Allocating = .init(allocator);
     defer output.deinit();
 
-    var doc = try parse.parse(allocator, .{ .borrowed = input });
+    var doc = try parse(allocator, .{ .borrowed = input });
     defer doc.deinit();
 
     var renderer: Renderer = undefined;

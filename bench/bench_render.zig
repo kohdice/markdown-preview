@@ -44,7 +44,7 @@ fn runScenario(scenario: Scenario) !void {
     var parse_gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = parse_gpa.deinit();
 
-    var doc = try parse.parse(parse_gpa.allocator(), .{ .borrowed = scenario.input });
+    var doc = try parse(parse_gpa.allocator(), .{ .borrowed = scenario.input });
     defer doc.deinit();
 
     var render_gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -80,7 +80,7 @@ fn runScenario(scenario: Scenario) !void {
 
 fn renderOnce(
     renderer: *Renderer,
-    doc: *const markdown_preview.parse.Document,
+    doc: anytype,
     counting: *const bench.CountingAllocator,
 ) !RenderResult {
     var sink: [512]u8 = undefined;

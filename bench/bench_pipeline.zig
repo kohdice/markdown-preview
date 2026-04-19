@@ -134,7 +134,7 @@ fn runOnce(
     var parse_counting = bench.CountingAllocator.init(allocator);
     const parse_before = parse_counting.snapshot();
     var parse_timer = try std.time.Timer.start();
-    var doc = try parse.parse(parse_counting.allocator(), source);
+    var doc = try parse(parse_counting.allocator(), source);
     const parse_ns = parse_timer.read();
     defer doc.deinit();
     const parse_after = parse_counting.snapshot();
