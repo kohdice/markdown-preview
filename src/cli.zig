@@ -79,7 +79,6 @@ pub fn run(opts: RunOptions) !u8 {
 
     if (parsed.watch) {
         return watch.run(.{
-            .allocator = opts.allocator,
             .cwd = opts.cwd,
             .path = parsed.path,
             .stdout = opts.stdout,
@@ -87,7 +86,6 @@ pub fn run(opts: RunOptions) !u8 {
             .stdout_handle = opts.stdout_handle,
             .stdin_handle = opts.stdin_handle,
             .enable_ansi = opts.enable_ansi,
-            .wrap_width = opts.wrap_width,
             .ambiguous_width = opts.ambiguous_width,
         });
     }
