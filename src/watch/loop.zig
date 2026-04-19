@@ -1,4 +1,6 @@
 const std = @import("std");
+const content_hash = @import("content_hash.zig");
+const debounce_mod = @import("debounce.zig");
 const file_watcher = @import("file_watcher.zig");
 const input = @import("input.zig");
 const options = @import("options.zig");
@@ -9,6 +11,8 @@ const render = @import("../render.zig");
 const render_buffer_mod = @import("render_buffer.zig");
 const term = @import("../term.zig");
 const terminal = term.terminal;
+
+const debounce_window_ns: u64 = 100 * std.time.ns_per_ms;
 
 pub const ExitReason = enum {
     user_quit,
@@ -26,6 +30,7 @@ pub fn eventLoop(
     term_size: *terminal.TerminalSize,
     wrap_width: *?usize,
     scroll_offset: *usize,
+    hash: *content_hash.ContentHash,
 ) ExitReason {
     const watcher_idx: usize = 0;
     const stdin_idx: usize = 1;
@@ -38,9 +43,12 @@ pub fn eventLoop(
     };
 
     var input_state: input.InputState = .{};
+    var debounce: debounce_mod.DebounceState = .{};
+    var timer = std.time.Timer.start() catch return .poll_error;
 
     while (true) {
-        _ = std.posix.poll(&poll_fds, -1) catch return .poll_error;
+        const timeout = debounce.pollTimeoutMs(timer.read());
+        _ = std.posix.poll(&poll_fds, timeout) catch return .poll_error;
 
         var needs_redisplay = false;
 
@@ -50,7 +58,9 @@ pub fn eventLoop(
                     term_size.* = terminal.getTerminalSize(opts.stdout_handle) orelse term_size.*;
                     wrap_width.* = if (opts.enable_ansi) term_size.cols else null;
                     scroll_offset.* = 0;
-                    pipeline.renderTo(opts.cwd, opts.path, renderer, cycle_arena, buffer, wrap_width.*);
+                    debounce.clear();
+                    hash.reset();
+                    _ = pipeline.renderTo(opts.cwd, opts.path, renderer, cycle_arena, buffer, wrap_width.*, hash);
                     needs_redisplay = true;
                 } else {
                     return .signal_exit;
@@ -61,9 +71,7 @@ pub fn eventLoop(
         if (poll_fds[watcher_idx].revents & std.posix.POLL.IN != 0) {
             const event = watcher.consumeEvents() catch return .poll_error;
             if (event != .none) {
-                scroll_offset.* = 0;
-                pipeline.renderTo(opts.cwd, opts.path, renderer, cycle_arena, buffer, wrap_width.*);
-                needs_redisplay = true;
+                debounce.schedule(timer.read(), debounce_window_ns);
             }
         }
 
@@ -77,6 +85,13 @@ pub fn eventLoop(
                     needs_redisplay = true;
                 }
             }
+        }
+
+        if (debounce.expired(timer.read())) {
+            debounce.clear();
+            scroll_offset.* = 0;
+            const outcome = pipeline.renderTo(opts.cwd, opts.path, renderer, cycle_arena, buffer, wrap_width.*, hash);
+            if (outcome != .skipped_unchanged) needs_redisplay = true;
         }
 
         if (needs_redisplay) {

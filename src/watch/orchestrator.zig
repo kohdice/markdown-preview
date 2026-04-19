@@ -1,4 +1,5 @@
 const std = @import("std");
+const content_hash = @import("content_hash.zig");
 const file_watcher = @import("file_watcher.zig");
 const loop = @import("loop.zig");
 const options = @import("options.zig");
@@ -64,8 +65,9 @@ pub fn run(opts: WatchOptions) !u8 {
     defer rt.teardown();
 
     var scroll_offset: usize = 0;
+    var hash: content_hash.ContentHash = .{};
 
-    pipeline.renderTo(opts.cwd, opts.path, &renderer, &cycle_arena, &buffer, wrap_width);
+    _ = pipeline.renderTo(opts.cwd, opts.path, &renderer, &cycle_arena, &buffer, wrap_width, &hash);
     pager.displayPage(opts.stdout, &buffer, scroll_offset, term_size.rows, opts.enable_ansi);
 
     var watcher = file_watcher.FileWatcher.init(dir_z, name_z) catch |err| {
@@ -74,7 +76,7 @@ pub fn run(opts: WatchOptions) !u8 {
     };
     defer watcher.deinit();
 
-    const exit_reason = loop.eventLoop(opts, &rt, &watcher, &renderer, &cycle_arena, &buffer, &term_size, &wrap_width, &scroll_offset);
+    const exit_reason = loop.eventLoop(opts, &rt, &watcher, &renderer, &cycle_arena, &buffer, &term_size, &wrap_width, &scroll_offset, &hash);
 
     return switch (exit_reason) {
         .user_quit => exit_success,
