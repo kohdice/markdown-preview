@@ -176,9 +176,6 @@ pub fn build(b: *std.Build) void {
     }
 }
 
-/// Options bundle for `attachTreeSitter`. Keeping the argument list as one
-/// struct avoids a sprawling positional signature and makes each grammar
-/// dependency self-documenting at the call site.
 const TreeSitterAttach = struct {
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
@@ -229,9 +226,6 @@ const TreeSitterSupport = struct {
     json_lib: *std.Build.Step.Compile,
 };
 
-/// Prepare tree-sitter runtime state once, then attach it to any module that
-/// directly imports engine files. This keeps the CLI root module and the
-/// library facade aligned without duplicating grammar compilation steps.
 fn prepareTreeSitterSupport(b: *std.Build, a: TreeSitterAttach) TreeSitterSupport {
     const runtime_module = a.ts_dep.module("tree_sitter");
     const zig_module = a.ts_zig_dep.module("tree-sitter-zig");
@@ -405,8 +399,6 @@ fn compileGrammarLibrary(
     return lib;
 }
 
-/// Attach tree-sitter runtime and grammar assets to a module that directly
-/// compiles engine code.
 fn attachTreeSitter(module: *std.Build.Module, support: TreeSitterSupport) void {
     module.addImport("tree_sitter", support.runtime_module);
     // tree-sitter-zig is still packaged with Zig bindings upstream, so we can

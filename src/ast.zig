@@ -141,7 +141,6 @@ pub const List = struct {
 
 pub const ListItem = struct {
     indent: usize,
-    /// `-`, `*`, `+` for unordered; `.` or `)` for ordered.
     marker: u8,
     number: ?[]const u8 = null,
     /// `null` means the item is not a task item; `false` means unchecked.

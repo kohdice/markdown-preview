@@ -135,7 +135,6 @@ pub fn detectAmbiguousWidth(env: anytype) AmbiguousWidth {
     return .narrow;
 }
 
-/// ANSI CSI parameter byte range (0x20–0x3f per ECMA-48 §5.4)
 fn isCsiParamByte(byte: u8) bool {
     return byte >= 0x20 and byte <= 0x3f;
 }
@@ -164,7 +163,6 @@ fn isAsciiPrintable(text: []const u8) bool {
     return true;
 }
 
-/// Calculate the display width of a UTF-8 string in terminal columns.
 /// ASCII printable characters are width 1, CJK characters are width 2,
 /// ANSI escape sequences are width 0, control characters are width 0.
 /// Combining characters and variation selectors are width 0.
@@ -212,8 +210,6 @@ pub fn displayWidth(text: []const u8, ambiguous: AmbiguousWidth) usize {
     return w;
 }
 
-/// Slice a string to fit within max_width display columns.
-/// Preserves ANSI escape sequences and respects UTF-8 byte boundaries.
 fn sliceToWidth(text: []const u8, max_width: usize, ambiguous: AmbiguousWidth) []const u8 {
     var width: usize = 0;
     var i: usize = 0;
@@ -242,9 +238,6 @@ fn sliceToWidth(text: []const u8, max_width: usize, ambiguous: AmbiguousWidth) [
     return text[0..i];
 }
 
-/// Like sliceToWidth but returns an allocated slice that appends an ANSI reset
-/// sequence (\x1b[0m) if the text was truncated inside an active ANSI style.
-/// This prevents style leakage into subsequent terminal output.
 fn sliceToWidthAlloc(
     allocator: std.mem.Allocator,
     text: []const u8,
@@ -307,9 +300,6 @@ fn sliceToWidthAlloc(
     return try allocator.dupe(u8, text[0..i]);
 }
 
-/// Wrap text to fit within max_width display columns.
-/// Preserves ANSI escape sequences. Breaks at word boundaries (spaces) when possible.
-/// Falls back to hard-breaking at the column limit if no space is found.
 fn wrapText(
     allocator: std.mem.Allocator,
     text: []const u8,
@@ -803,14 +793,11 @@ pub const WrapWriter = struct {
 fn isEmoji(cp: u21) bool {
     if (cp >= 0x1F300 and cp <= 0x1F9FF) return true;
     if (cp >= 0x1FA00 and cp <= 0x1FAFF) return true;
-    if (cp >= 0x2600 and cp <= 0x26FF) return true; // Miscellaneous Symbols
-    if (cp >= 0x2700 and cp <= 0x27BF) return true; // Dingbats
+    if (cp >= 0x2600 and cp <= 0x26FF) return true;
+    if (cp >= 0x2700 and cp <= 0x27BF) return true;
     return false;
 }
 
-/// Returns true for code points that should render as 2 columns when
-/// the caller selects `AmbiguousWidth.wide`.
-///
 /// The primary source is Unicode 15.1 `EastAsianWidth.txt` category
 /// `A` (Ambiguous). That catches the UAX #11 formal set — Greek,
 /// Cyrillic, box drawing, most Misc Symbols, and the Private Use
@@ -850,7 +837,6 @@ fn isEmoji(cp: u21) bool {
 fn isEastAsianAmbiguous(cp: u21) bool {
     if (cp < 0x00A1) return false;
 
-    // Latin-1 Supplement
     if (cp == 0x00A1) return true;
     if (cp == 0x00A4) return true;
     if (cp >= 0x00A7 and cp <= 0x00A8) return true;
@@ -872,7 +858,6 @@ fn isEastAsianAmbiguous(cp: u21) bool {
     if (cp == 0x00FC) return true;
     if (cp == 0x00FE) return true;
 
-    // Latin Extended-A
     if (cp == 0x0101) return true;
     if (cp == 0x0111) return true;
     if (cp == 0x0113) return true;
@@ -889,7 +874,6 @@ fn isEastAsianAmbiguous(cp: u21) bool {
     if (cp >= 0x0166 and cp <= 0x0167) return true;
     if (cp == 0x016B) return true;
 
-    // Latin Extended-B
     if (cp == 0x01CE) return true;
     if (cp == 0x01D0) return true;
     if (cp == 0x01D2) return true;
@@ -899,11 +883,9 @@ fn isEastAsianAmbiguous(cp: u21) bool {
     if (cp == 0x01DA) return true;
     if (cp == 0x01DC) return true;
 
-    // IPA Extensions
     if (cp == 0x0251) return true;
     if (cp == 0x0261) return true;
 
-    // Spacing Modifier Letters
     if (cp == 0x02C4) return true;
     if (cp == 0x02C7) return true;
     if (cp >= 0x02C9 and cp <= 0x02CB) return true;
@@ -913,20 +895,17 @@ fn isEastAsianAmbiguous(cp: u21) bool {
     if (cp == 0x02DD) return true;
     if (cp == 0x02DF) return true;
 
-    // Greek and Coptic
     if (cp >= 0x0391 and cp <= 0x03A1) return true;
     if (cp >= 0x03A3 and cp <= 0x03A9) return true;
     if (cp >= 0x03B1 and cp <= 0x03C1) return true;
     if (cp >= 0x03C3 and cp <= 0x03C9) return true;
 
-    // Cyrillic
     if (cp == 0x0401) return true;
     if (cp >= 0x0410 and cp <= 0x044F) return true;
     if (cp == 0x0451) return true;
 
     if (cp < 0x2010) return false;
 
-    // General Punctuation
     if (cp == 0x2010) return true;
     if (cp >= 0x2013 and cp <= 0x2016) return true;
     if (cp >= 0x2018 and cp <= 0x2019) return true;
@@ -939,15 +918,12 @@ fn isEastAsianAmbiguous(cp: u21) bool {
     if (cp == 0x203B) return true;
     if (cp == 0x203E) return true;
 
-    // Superscripts and Subscripts
     if (cp == 0x2074) return true;
     if (cp == 0x207F) return true;
     if (cp >= 0x2081 and cp <= 0x2084) return true;
 
-    // Currency Symbols
     if (cp == 0x20AC) return true;
 
-    // Letterlike Symbols
     if (cp == 0x2103) return true;
     if (cp == 0x2105) return true;
     if (cp == 0x2109) return true;
@@ -957,21 +933,18 @@ fn isEastAsianAmbiguous(cp: u21) bool {
     if (cp == 0x2126) return true;
     if (cp == 0x212B) return true;
 
-    // Number Forms
     if (cp >= 0x2153 and cp <= 0x2154) return true;
     if (cp >= 0x215B and cp <= 0x215E) return true;
     if (cp >= 0x2160 and cp <= 0x216B) return true;
     if (cp >= 0x2170 and cp <= 0x2179) return true;
     if (cp == 0x2189) return true;
 
-    // Arrows
     if (cp >= 0x2190 and cp <= 0x2199) return true;
     if (cp >= 0x21B8 and cp <= 0x21B9) return true;
     if (cp == 0x21D2) return true;
     if (cp == 0x21D4) return true;
     if (cp == 0x21E7) return true;
 
-    // Mathematical Operators
     if (cp == 0x2200) return true;
     if (cp >= 0x2202 and cp <= 0x2203) return true;
     if (cp >= 0x2207 and cp <= 0x2208) return true;
@@ -1001,21 +974,16 @@ fn isEastAsianAmbiguous(cp: u21) bool {
     if (cp == 0x22A5) return true;
     if (cp == 0x22BF) return true;
 
-    // Miscellaneous Technical
     if (cp == 0x2312) return true;
 
-    // Enclosed Alphanumerics
     if (cp >= 0x2460 and cp <= 0x24E9) return true;
     if (cp >= 0x24EB and cp <= 0x254B) return true;
 
-    // Box Drawing
     if (cp >= 0x2550 and cp <= 0x2573) return true;
 
-    // Block Elements
     if (cp >= 0x2580 and cp <= 0x258F) return true;
     if (cp >= 0x2592 and cp <= 0x2595) return true;
 
-    // Geometric Shapes
     if (cp >= 0x25A0 and cp <= 0x25A1) return true;
     if (cp >= 0x25A3 and cp <= 0x25A9) return true;
     if (cp == 0x25AA) return true; // project override: depth-2 list bullet
@@ -1030,7 +998,6 @@ fn isEastAsianAmbiguous(cp: u21) bool {
     if (cp == 0x25E6) return true; // project override: depth-1 list bullet
     if (cp == 0x25EF) return true;
 
-    // Miscellaneous Symbols
     if (cp >= 0x2605 and cp <= 0x2606) return true;
     if (cp == 0x2609) return true;
     if (cp >= 0x260E and cp <= 0x260F) return true;
@@ -1057,20 +1024,15 @@ fn isEastAsianAmbiguous(cp: u21) bool {
     if (cp >= 0x26FB and cp <= 0x26FC) return true;
     if (cp >= 0x26FE and cp <= 0x26FF) return true;
 
-    // Dingbats
     if (cp == 0x273D) return true;
     if (cp >= 0x2776 and cp <= 0x277F) return true;
 
-    // Miscellaneous Symbols and Arrows
     if (cp >= 0x2B56 and cp <= 0x2B59) return true;
 
-    // Private Use Area
     if (cp >= 0xE000 and cp <= 0xF8FF) return true;
 
-    // Specials
     if (cp == 0xFFFD) return true;
 
-    // Enclosed Alphanumeric Supplement (subset flagged A)
     if (cp >= 0x1F100 and cp <= 0x1F10A) return true;
     if (cp >= 0x1F110 and cp <= 0x1F12D) return true;
     if (cp >= 0x1F130 and cp <= 0x1F169) return true;
@@ -1078,7 +1040,6 @@ fn isEastAsianAmbiguous(cp: u21) bool {
     if (cp >= 0x1F18F and cp <= 0x1F190) return true;
     if (cp >= 0x1F19B and cp <= 0x1F1AC) return true;
 
-    // Supplementary Private Use Area-A and Area-B
     if (cp >= 0xF0000 and cp <= 0xFFFFD) return true;
     if (cp >= 0x100000 and cp <= 0x10FFFD) return true;
 
@@ -1094,66 +1055,44 @@ fn codepointWidth(cp: u21, ambiguous: AmbiguousWidth) usize {
         else => {},
     }
 
-    // Variation Selectors
     if (cp >= 0xFE00 and cp <= 0xFE0F) return 0;
     if (cp >= 0xE0100 and cp <= 0xE01EF) return 0;
 
-    // Combining Diacritical Marks
     if (cp >= 0x0300 and cp <= 0x036F) return 0;
-    // Combining Diacritical Marks Extended
     if (cp >= 0x1AB0 and cp <= 0x1AFF) return 0;
-    // Combining Diacritical Marks Supplement
     if (cp >= 0x1DC0 and cp <= 0x1DFF) return 0;
-    // Combining Diacritical Marks for Symbols
     if (cp >= 0x20D0 and cp <= 0x20FF) return 0;
-    // Combining Half Marks
     if (cp >= 0xFE20 and cp <= 0xFE2F) return 0;
-    // Thai combining marks
     if (cp >= 0x0E31 and cp <= 0x0E3A) return 0;
     if (cp >= 0x0E47 and cp <= 0x0E4E) return 0;
 
     // Skin tone modifiers (Fitzpatrick) — modify preceding emoji
     if (cp >= 0x1F3FB and cp <= 0x1F3FF) return 0;
 
-    // Enclosing marks
     if (cp >= 0x20DD and cp <= 0x20E0) return 0;
     if (cp >= 0x20E2 and cp <= 0x20E4) return 0;
 
-    // CJK Unified Ideographs
     if (cp >= 0x4E00 and cp <= 0x9FFF) return 2;
-    // CJK Unified Ideographs Extension A
     if (cp >= 0x3400 and cp <= 0x4DBF) return 2;
-    // CJK Compatibility Ideographs
     if (cp >= 0xF900 and cp <= 0xFAFF) return 2;
-    // CJK Unified Ideographs Extension B-F
     if (cp >= 0x20000 and cp <= 0x2FA1F) return 2;
 
-    // CJK Symbols and Punctuation, Hiragana, and Katakana
     if (cp >= 0x2E80 and cp <= 0x30FF) return 2;
-    // Katakana Phonetic Extensions
     if (cp >= 0x31F0 and cp <= 0x31FF) return 2;
-    // Enclosed CJK Letters and Months
     if (cp >= 0x3200 and cp <= 0x32FF) return 2;
-    // CJK Compatibility
     if (cp >= 0x3300 and cp <= 0x33FF) return 2;
 
-    // Fullwidth Forms
     if (cp >= 0xFF01 and cp <= 0xFF60) return 2;
-    // Fullwidth currency and punctuation variants
     if (cp >= 0xFFE0 and cp <= 0xFFE6) return 2;
 
-    // Hangul Syllables
     if (cp >= 0xAC00 and cp <= 0xD7A3) return 2;
-    // Hangul Jamo
     if (cp >= 0x1100 and cp <= 0x115F) return 2;
     if (cp >= 0x2329 and cp <= 0x232A) return 2;
 
-    // Emoji ranges treated as double-width
     if (cp >= 0x1F300 and cp <= 0x1F9FF) return 2;
     if (cp >= 0x1FA00 and cp <= 0x1FA6F) return 2;
     if (cp >= 0x1FA70 and cp <= 0x1FAFF) return 2;
 
-    // East Asian Width Ambiguous; interpretation depends on terminal mode.
     if (isEastAsianAmbiguous(cp)) {
         return if (ambiguous == .wide) 2 else 1;
     }

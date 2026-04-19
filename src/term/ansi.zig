@@ -1,13 +1,8 @@
 const std = @import("std");
 const theme = @import("theme.zig");
 
-/// ANSI SGR reset sequence (ECMA-48 §8.3.117, SGR parameter 0).
-/// Clears all active style attributes. Exported so modules that emit or
-/// detect ANSI style boundaries share a single source of truth.
 pub const reset_sequence = "\x1b[0m";
 
-/// ANSI Select Graphic Rendition (SGR) escape sequences (ECMA-48 §8.3.117).
-/// The `38;2;r;g;b` form is the 24-bit "true color" foreground extension.
 const sgr = struct {
     const bold = "\x1b[1m";
     const dim = "\x1b[2m";
@@ -111,8 +106,12 @@ pub fn writeSgrFg(writer: *std.io.Writer, rgb: theme.Rgb, mode: ColorMode) !void
     }
 }
 
+fn rec601Luma(r: u8, g: u8, b: u8) u32 {
+    return (@as(u32, r) * 299 + @as(u32, g) * 587 + @as(u32, b) * 114) / 1000;
+}
+
 fn ansi16Code(r: u8, g: u8, b: u8) u8 {
-    const luma = (@as(u32, r) * 299 + @as(u32, g) * 587 + @as(u32, b) * 114) / 1000;
+    const luma = rec601Luma(r, g, b);
     const max_c: u32 = @max(@max(r, g), b);
     if (max_c == 0) return 30;
     const thr = max_c * 3;
@@ -138,7 +137,7 @@ fn ansi256Index(r: u8, g: u8, b: u8) u8 {
     const max_c = @max(@max(r, g), b);
     const min_c = @min(@min(r, g), b);
     if (max_c - min_c < 10) {
-        const luma = (@as(u32, r) * 299 + @as(u32, g) * 587 + @as(u32, b) * 114) / 1000;
+        const luma = rec601Luma(r, g, b);
         if (luma < 8) return 16;
         const step = @min(@as(u32, 23), (luma - 8) / 10);
         return 232 + @as(u8, @intCast(step));

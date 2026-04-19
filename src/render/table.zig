@@ -10,6 +10,7 @@ const render_context = @import("context.zig");
 const RenderContext = render_context.RenderContext;
 
 const min_col_width = 3;
+const border_line_stack_buf_size: usize = 2048;
 
 const border = struct {
     const vertical = "│";
@@ -224,7 +225,7 @@ fn writeBorder(
     for (col_widths) |w| estimated += ((w + 2) / glyph_w) * border.horizontal.len;
     if (col_widths.len > 1) estimated += (col_widths.len - 1) * join.len;
 
-    var buf: [2048]u8 = undefined;
+    var buf: [border_line_stack_buf_size]u8 = undefined;
     if (estimated <= buf.len) {
         var pos: usize = 0;
         @memcpy(buf[pos..][0..left.len], left);

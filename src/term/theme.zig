@@ -15,7 +15,6 @@ pub const Palette = struct {
     code_fence: Rgb,
     link: Rgb,
     error_text: Rgb,
-    /// Foreground color for each heading level, indexed by `level - 1`.
     heading_colors: [heading_level_count]Rgb,
 };
 
@@ -30,7 +29,6 @@ pub const SyntaxPalette = struct {
     plain: Rgb,
 };
 
-/// Ethan Schoonover's Solarized palette.
 const solarized = struct {
     const base02: Rgb = .{ .r = 0x07, .g = 0x36, .b = 0x42 };
     const base01: Rgb = .{ .r = 0x58, .g = 0x6e, .b = 0x75 };
@@ -75,7 +73,6 @@ pub const default_syntax_palette: SyntaxPalette = .{
     .plain = solarized.base0,
 };
 
-/// Ordered for maximum adjacent-slot hue separation.
 pub const default_lane_palette: [8]Rgb = .{
     solarized.red,
     solarized.cyan,
@@ -87,7 +84,6 @@ pub const default_lane_palette: [8]Rgb = .{
     solarized.magenta,
 };
 
-/// blue-first per matplotlib tab10 / D3 schemeCategory10 convention.
 pub const default_series_palette: [8]Rgb = .{
     solarized.blue,
     solarized.orange,

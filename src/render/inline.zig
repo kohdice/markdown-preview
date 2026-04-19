@@ -133,14 +133,17 @@ pub fn writeInlineChain(
     try traverseInlineChain(WriteVisitor, &visitor, ctx.doc, first);
 }
 
+const url_display_buf_size: usize = 128;
+const url_display_max_url_len: usize = url_display_buf_size - 2;
+
 fn writeUrlDisplay(
     writer: *std.io.Writer,
     enable_ansi: bool,
     style: ansi.TextStyle,
     url: []const u8,
 ) !void {
-    if (url.len <= 126) {
-        var buf: [128]u8 = undefined;
+    if (url.len <= url_display_max_url_len) {
+        var buf: [url_display_buf_size]u8 = undefined;
         buf[0] = '(';
         @memcpy(buf[1..][0..url.len], url);
         buf[1 + url.len] = ')';
