@@ -70,7 +70,8 @@ pub fn run(opts: WatchOptions) !u8 {
     var state_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer state_arena.deinit();
 
-    var renderer = render.Renderer.init(state_arena.allocator(), .{
+    var renderer: render.Renderer = undefined;
+    renderer.init(state_arena.allocator(), .{
         .enable_ansi = opts.enable_ansi,
         .ambiguous_width = opts.ambiguous_width,
     });
@@ -516,7 +517,8 @@ test "render cycle produces line offsets matching naive newline scan" {
     );
     defer doc.deinit();
 
-    var renderer = render.Renderer.init(allocator, .{
+    var renderer: render.Renderer = undefined;
+    renderer.init(allocator, .{
         .enable_ansi = false,
         .ambiguous_width = .narrow,
     });
@@ -540,7 +542,8 @@ test "render cycle of empty document produces no line offsets" {
     var doc = try parse.parseBorrowed(allocator, "");
     defer doc.deinit();
 
-    var renderer = render.Renderer.init(allocator, .{
+    var renderer: render.Renderer = undefined;
+    renderer.init(allocator, .{
         .enable_ansi = false,
         .ambiguous_width = .narrow,
     });

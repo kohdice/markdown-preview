@@ -50,7 +50,8 @@ fn runScenario(scenario: Scenario) !void {
     const after_parse = counting.snapshot();
 
     const wrap_width: ?usize = scenario.wrap_width orelse 80;
-    var renderer = render.Renderer.init(allocator, .{ .enable_ansi = scenario.enable_ansi });
+    var renderer: render.Renderer = undefined;
+    renderer.init(allocator, .{ .enable_ansi = scenario.enable_ansi });
     defer renderer.deinit();
 
     var sink: [512]u8 = undefined;

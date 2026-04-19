@@ -1,49 +1,88 @@
 const std = @import("std");
-const ansi = @import("../term/ansi.zig");
+
+pub const PrefixStack = struct {
+    allocator: std.mem.Allocator,
+    segments: std.ArrayListUnmanaged(Segment) = .empty,
+
+    pub const Segment = struct {
+        indent: usize = 0,
+        marker: []const u8 = "",
+    };
+
+    pub fn init(allocator: std.mem.Allocator) PrefixStack {
+        return .{ .allocator = allocator };
+    }
+
+    pub fn deinit(self: *PrefixStack) void {
+        self.segments.deinit(self.allocator);
+    }
+
+    pub fn push(self: *PrefixStack, segment: Segment) !void {
+        try self.segments.append(self.allocator, segment);
+    }
+
+    pub fn pop(self: *PrefixStack) void {
+        _ = self.segments.pop();
+    }
+
+    pub fn isEmpty(self: *const PrefixStack) bool {
+        return self.segments.items.len == 0;
+    }
+
+    pub fn emit(self: *const PrefixStack, writer: *std.io.Writer) !void {
+        for (self.segments.items) |seg| {
+            if (seg.indent > 0) try writer.splatByteAll(' ', seg.indent);
+            if (seg.marker.len > 0) try writer.writeAll(seg.marker);
+        }
+    }
+};
 
 pub const PrefixWriter = struct {
     parent: *std.io.Writer,
+    stack: *const PrefixStack,
     at_line_start: bool,
-    config: Config,
+    buf: [recommended_buffer_size]u8,
     writer: std.io.Writer,
 
-    pub const Config = struct {
-        indent: usize = 0,
-        styled_prefix: []const u8 = "",
-        style: ansi.TextStyle = .{},
-        enable_ansi: bool = false,
-        prefix_first_line: bool = true,
-    };
+    pub const recommended_buffer_size = 512;
 
-    pub fn init(parent: *std.io.Writer, config: Config) PrefixWriter {
-        return .{
+    pub fn init(
+        self: *PrefixWriter,
+        parent: *std.io.Writer,
+        stack: *const PrefixStack,
+    ) void {
+        self.* = .{
             .parent = parent,
-            .at_line_start = config.prefix_first_line,
-            .config = config,
+            .stack = stack,
+            .at_line_start = true,
+            .buf = undefined,
             .writer = .{
-                .buffer = &.{},
+                .buffer = &self.buf,
                 .vtable = &vtable,
             },
         };
     }
 
     pub fn finish(self: *PrefixWriter) std.io.Writer.Error!void {
-        if (self.at_line_start) {
-            try self.emitPrefix();
-            self.at_line_start = false;
-        }
+        try self.writer.flush();
     }
 
     const vtable: std.io.Writer.VTable = .{
         .drain = drain,
-        .flush = std.io.Writer.noopFlush,
+        .flush = std.io.Writer.defaultFlush,
         .rebase = std.io.Writer.failingRebase,
     };
 
     fn drain(w: *std.io.Writer, data: []const []const u8, splat: usize) std.io.Writer.Error!usize {
         const self: *PrefixWriter = @fieldParentPtr("writer", w);
-        var total: usize = 0;
 
+        const buffered = w.buffered();
+        if (buffered.len > 0) {
+            _ = try self.processSlice(buffered);
+            w.end = 0;
+        }
+
+        var total: usize = 0;
         for (data, 0..) |slice, idx| {
             const repeat: usize = if (idx == data.len - 1) splat else 1;
             for (0..repeat) |_| {
@@ -59,7 +98,7 @@ pub const PrefixWriter = struct {
 
         while (pos < bytes.len) {
             if (self.at_line_start) {
-                try self.emitPrefix();
+                if (!self.stack.isEmpty()) try self.stack.emit(self.parent);
                 self.at_line_start = false;
             }
 
@@ -75,165 +114,160 @@ pub const PrefixWriter = struct {
 
         return bytes.len;
     }
-
-    fn emitPrefix(self: *PrefixWriter) std.io.Writer.Error!void {
-        if (self.config.indent > 0)
-            try self.parent.splatByteAll(' ', self.config.indent);
-
-        if (self.config.styled_prefix.len > 0)
-            try ansi.writeStyled(self.parent, self.config.enable_ansi, self.config.style, self.config.styled_prefix);
-    }
 };
 
 const testing = std.testing;
 
-fn collectOutput(f: anytype) ![]u8 {
+test "prefix stack push/pop changes emitted prefix" {
     const allocator = testing.allocator;
+    var stack: PrefixStack = .init(allocator);
+    defer stack.deinit();
+
     var buf: std.io.Writer.Allocating = .init(allocator);
-    errdefer buf.deinit();
-    try f(&buf.writer);
-    var list = buf.toArrayList();
     defer buf.deinit();
-    return list.toOwnedSlice(allocator);
+    var pw: PrefixWriter = undefined;
+    pw.init(&buf.writer, &stack);
+
+    try stack.push(.{ .marker = "> " });
+    try pw.writer.writeAll("a\nb\n");
+    try pw.writer.flush();
+    stack.pop();
+    try pw.writer.writeAll("c\n");
+    try pw.writer.flush();
+
+    try testing.expectEqualStrings("> a\n> b\nc\n", buf.written());
 }
 
-test "prefix every line with indent" {
+test "empty stack produces no prefix" {
     const allocator = testing.allocator;
-    const result = try collectOutput(struct {
-        fn run(w: *std.io.Writer) !void {
-            var pw = PrefixWriter.init(w, .{ .indent = 2 });
-            try pw.writer.writeAll("a\nb\nc");
-        }
-    }.run);
-    defer allocator.free(result);
-    try testing.expectEqualStrings("  a\n  b\n  c", result);
+    var stack: PrefixStack = .init(allocator);
+    defer stack.deinit();
+
+    var buf: std.io.Writer.Allocating = .init(allocator);
+    defer buf.deinit();
+    var pw: PrefixWriter = undefined;
+    pw.init(&buf.writer, &stack);
+
+    try pw.writer.writeAll("a\nb\n");
+    try pw.writer.flush();
+
+    try testing.expectEqualStrings("a\nb\n", buf.written());
 }
 
-test "empty line keeps prefix" {
+test "nested prefixes compose via stack" {
     const allocator = testing.allocator;
-    const result = try collectOutput(struct {
-        fn run(w: *std.io.Writer) !void {
-            var pw = PrefixWriter.init(w, .{ .indent = 2 });
-            try pw.writer.writeAll("a\n\nb");
-        }
-    }.run);
-    defer allocator.free(result);
-    try testing.expectEqualStrings("  a\n  \n  b", result);
+    var stack: PrefixStack = .init(allocator);
+    defer stack.deinit();
+
+    var buf: std.io.Writer.Allocating = .init(allocator);
+    defer buf.deinit();
+    var pw: PrefixWriter = undefined;
+    pw.init(&buf.writer, &stack);
+
+    try stack.push(.{ .indent = 2 });
+    try stack.push(.{ .marker = "> " });
+    try pw.writer.writeAll("a\nb\n");
+    try pw.writer.flush();
+    stack.pop();
+    stack.pop();
+    try pw.writer.writeAll("c\n");
+    try pw.writer.flush();
+
+    try testing.expectEqualStrings("  > a\n  > b\nc\n", buf.written());
 }
 
-test "trailing newline emits prefix after finish" {
+test "push mid-line does not retroactively prefix first line" {
     const allocator = testing.allocator;
-    const result = try collectOutput(struct {
-        fn run(w: *std.io.Writer) !void {
-            var pw = PrefixWriter.init(w, .{ .indent = 2 });
-            try pw.writer.writeAll("a\n");
-            try pw.finish();
-        }
-    }.run);
-    defer allocator.free(result);
-    try testing.expectEqualStrings("  a\n  ", result);
+    var stack: PrefixStack = .init(allocator);
+    defer stack.deinit();
+
+    var buf: std.io.Writer.Allocating = .init(allocator);
+    defer buf.deinit();
+    var pw: PrefixWriter = undefined;
+    pw.init(&buf.writer, &stack);
+
+    try pw.writer.writeAll("head ");
+    try pw.writer.flush();
+    try stack.push(.{ .indent = 2 });
+    try pw.writer.writeAll("tail\nwrapped\n");
+    try pw.writer.flush();
+    stack.pop();
+
+    try testing.expectEqualStrings("head tail\n  wrapped\n", buf.written());
 }
 
-test "trailing newline without finish omits trailing prefix" {
+test "styled prefix bytes pass through verbatim" {
     const allocator = testing.allocator;
-    const result = try collectOutput(struct {
-        fn run(w: *std.io.Writer) !void {
-            var pw = PrefixWriter.init(w, .{ .indent = 2 });
-            try pw.writer.writeAll("a\n");
-        }
-    }.run);
-    defer allocator.free(result);
-    try testing.expectEqualStrings("  a\n", result);
-}
+    var stack: PrefixStack = .init(allocator);
+    defer stack.deinit();
 
-test "prefix_first_line false skips first line" {
-    const allocator = testing.allocator;
-    const result = try collectOutput(struct {
-        fn run(w: *std.io.Writer) !void {
-            var pw = PrefixWriter.init(w, .{ .indent = 3, .prefix_first_line = false });
-            try pw.writer.writeAll("a\nb\nc");
-        }
-    }.run);
-    defer allocator.free(result);
-    try testing.expectEqualStrings("a\n   b\n   c", result);
-}
+    var buf: std.io.Writer.Allocating = .init(allocator);
+    defer buf.deinit();
+    var pw: PrefixWriter = undefined;
+    pw.init(&buf.writer, &stack);
 
-test "prefix_first_line false with empty line" {
-    const allocator = testing.allocator;
-    const result = try collectOutput(struct {
-        fn run(w: *std.io.Writer) !void {
-            var pw = PrefixWriter.init(w, .{ .indent = 2, .prefix_first_line = false });
-            try pw.writer.writeAll("a\n\nb");
-        }
-    }.run);
-    defer allocator.free(result);
-    try testing.expectEqualStrings("a\n  \n  b", result);
-}
+    const gutter = "\x1b[2m| \x1b[0m";
+    try stack.push(.{ .marker = gutter });
+    try pw.writer.writeAll("x\ny");
+    try pw.writer.flush();
+    stack.pop();
 
-test "styled prefix without ANSI" {
-    const allocator = testing.allocator;
-    const result = try collectOutput(struct {
-        fn run(w: *std.io.Writer) !void {
-            var pw = PrefixWriter.init(w, .{
-                .indent = 1,
-                .styled_prefix = "| ",
-                .enable_ansi = false,
-            });
-            try pw.writer.writeAll("x\ny");
-        }
-    }.run);
-    defer allocator.free(result);
-    try testing.expectEqualStrings(" | x\n | y", result);
-}
-
-test "empty write does not emit prefix" {
-    const allocator = testing.allocator;
-    const result = try collectOutput(struct {
-        fn run(w: *std.io.Writer) !void {
-            var pw = PrefixWriter.init(w, .{ .indent = 2 });
-            try pw.writer.writeAll("");
-            try pw.writer.writeAll("a");
-        }
-    }.run);
-    defer allocator.free(result);
-    try testing.expectEqualStrings("  a", result);
+    try testing.expectEqualStrings("\x1b[2m| \x1b[0mx\n\x1b[2m| \x1b[0my", buf.written());
 }
 
 test "writeByte triggers prefix" {
     const allocator = testing.allocator;
-    const result = try collectOutput(struct {
-        fn run(w: *std.io.Writer) !void {
-            var pw = PrefixWriter.init(w, .{ .indent = 1 });
-            try pw.writer.writeByte('a');
-            try pw.writer.writeByte('\n');
-            try pw.writer.writeByte('b');
-        }
-    }.run);
-    defer allocator.free(result);
-    try testing.expectEqualStrings(" a\n b", result);
+    var stack: PrefixStack = .init(allocator);
+    defer stack.deinit();
+
+    var buf: std.io.Writer.Allocating = .init(allocator);
+    defer buf.deinit();
+    var pw: PrefixWriter = undefined;
+    pw.init(&buf.writer, &stack);
+
+    try stack.push(.{ .indent = 1 });
+    try pw.writer.writeByte('a');
+    try pw.writer.writeByte('\n');
+    try pw.writer.writeByte('b');
+    try pw.writer.flush();
+    stack.pop();
+
+    try testing.expectEqualStrings(" a\n b", buf.written());
 }
 
-test "splatByteAll triggers prefix" {
+test "splatByteAll after newline receives prefix" {
     const allocator = testing.allocator;
-    const result = try collectOutput(struct {
-        fn run(w: *std.io.Writer) !void {
-            var pw = PrefixWriter.init(w, .{ .indent = 2 });
-            try pw.writer.splatByteAll('x', 3);
-        }
-    }.run);
-    defer allocator.free(result);
-    try testing.expectEqualStrings("  xxx", result);
+    var stack: PrefixStack = .init(allocator);
+    defer stack.deinit();
+
+    var buf: std.io.Writer.Allocating = .init(allocator);
+    defer buf.deinit();
+    var pw: PrefixWriter = undefined;
+    pw.init(&buf.writer, &stack);
+
+    try stack.push(.{ .indent = 2 });
+    try pw.writer.splatByteAll('x', 3);
+    try pw.writer.flush();
+    stack.pop();
+
+    try testing.expectEqualStrings("  xxx", buf.written());
 }
 
-test "nested prefix writers" {
+test "empty writes do not emit prefix" {
     const allocator = testing.allocator;
-    const result = try collectOutput(struct {
-        fn run(w: *std.io.Writer) !void {
-            var outer = PrefixWriter.init(w, .{ .indent = 2 });
-            var inner = PrefixWriter.init(&outer.writer, .{ .indent = 3 });
-            try inner.writer.writeAll("a\nb");
-        }
-    }.run);
-    defer allocator.free(result);
-    try testing.expectEqualStrings("     a\n     b", result);
+    var stack: PrefixStack = .init(allocator);
+    defer stack.deinit();
+
+    var buf: std.io.Writer.Allocating = .init(allocator);
+    defer buf.deinit();
+    var pw: PrefixWriter = undefined;
+    pw.init(&buf.writer, &stack);
+
+    try stack.push(.{ .indent = 2 });
+    try pw.writer.writeAll("");
+    try pw.writer.writeAll("a");
+    try pw.writer.flush();
+    stack.pop();
+
+    try testing.expectEqualStrings("  a", buf.written());
 }

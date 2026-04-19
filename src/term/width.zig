@@ -403,7 +403,7 @@ fn wrapText(
 
 pub const WrapWriter = struct {
     parent: *std.io.Writer,
-    line_buf: std.ArrayListUnmanaged(u8),
+    line_buf: *std.ArrayListUnmanaged(u8),
     col: usize,
     last_space_buf: ?usize,
     col_after_last_space: usize,
@@ -413,17 +413,23 @@ pub const WrapWriter = struct {
     suppress_next_emoji: bool,
     pending: [24]u8,
     pending_len: u5,
+    writer_buf: [writer_buffer_size]u8,
     writer: std.io.Writer,
 
+    const writer_buffer_size = 512;
+
     pub fn init(
+        self: *WrapWriter,
         parent: *std.io.Writer,
         max_width: usize,
         ambiguous: AmbiguousWidth,
         allocator: std.mem.Allocator,
-    ) WrapWriter {
-        return .{
+        line_buf: *std.ArrayListUnmanaged(u8),
+    ) void {
+        line_buf.clearRetainingCapacity();
+        self.* = .{
             .parent = parent,
-            .line_buf = .{},
+            .line_buf = line_buf,
             .col = 0,
             .last_space_buf = null,
             .col_after_last_space = 0,
@@ -433,8 +439,9 @@ pub const WrapWriter = struct {
             .suppress_next_emoji = false,
             .pending = undefined,
             .pending_len = 0,
+            .writer_buf = undefined,
             .writer = .{
-                .buffer = &.{},
+                .buffer = &self.writer_buf,
                 .vtable = &wrap_vtable,
             },
         };
@@ -453,13 +460,15 @@ pub const WrapWriter = struct {
         self.suppress_next_emoji = false;
         self.pending_len = 0;
         self.line_buf.clearRetainingCapacity();
+        self.writer.end = 0;
     }
 
     pub fn deinit(self: *WrapWriter) void {
-        self.line_buf.deinit(self.allocator);
+        _ = self;
     }
 
     pub fn finish(self: *WrapWriter) std.io.Writer.Error!void {
+        try self.writer.flush();
         if (self.pending_len > 0) {
             if (self.pending[0] == ESC) {
                 self.line_buf.appendSlice(self.allocator, self.pending[0..self.pending_len]) catch
@@ -481,6 +490,11 @@ pub const WrapWriter = struct {
 
     fn wrapFlush(w: *std.io.Writer) std.io.Writer.Error!void {
         const self: *WrapWriter = @fieldParentPtr("writer", w);
+        const buffered = w.buffered();
+        if (buffered.len > 0) {
+            self.processBytes(buffered) catch return error.WriteFailed;
+            w.end = 0;
+        }
         if (self.line_buf.items.len > 0) {
             try self.parent.writeAll(self.line_buf.items);
             self.line_buf.clearRetainingCapacity();
@@ -490,8 +504,14 @@ pub const WrapWriter = struct {
 
     fn wrapDrain(w: *std.io.Writer, data: []const []const u8, splat: usize) std.io.Writer.Error!usize {
         const self: *WrapWriter = @fieldParentPtr("writer", w);
-        var total: usize = 0;
 
+        const buffered = w.buffered();
+        if (buffered.len > 0) {
+            self.processBytes(buffered) catch return error.WriteFailed;
+            w.end = 0;
+        }
+
+        var total: usize = 0;
         for (data, 0..) |slice, idx| {
             const repeat: usize = if (idx == data.len - 1) splat else 1;
             for (0..repeat) |_| {
@@ -1508,7 +1528,10 @@ fn wrapWriterCollect(input: []const u8, max_w: usize, ambiguous: AmbiguousWidth)
     var buf: std.io.Writer.Allocating = .init(allocator);
     errdefer buf.deinit();
 
-    var ww = WrapWriter.init(&buf.writer, max_w, ambiguous, allocator);
+    var line_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer line_buf.deinit(allocator);
+    var ww: WrapWriter = undefined;
+    ww.init(&buf.writer, max_w, ambiguous, allocator, &line_buf);
     defer ww.deinit();
     try ww.writer.writeAll(input);
     try ww.finish();
@@ -1572,7 +1595,10 @@ test "WrapWriter styled fragment boundaries" {
     var buf: std.io.Writer.Allocating = .init(allocator);
     errdefer buf.deinit();
 
-    var ww = WrapWriter.init(&buf.writer, 10, .narrow, allocator);
+    var line_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer line_buf.deinit(allocator);
+    var ww: WrapWriter = undefined;
+    ww.init(&buf.writer, 10, .narrow, allocator, &line_buf);
     defer ww.deinit();
 
     try ww.writer.writeAll("\x1b[1m");
@@ -1627,7 +1653,10 @@ test "WrapWriter split ANSI CSI across writes" {
     var buf: std.io.Writer.Allocating = .init(allocator);
     errdefer buf.deinit();
 
-    var ww = WrapWriter.init(&buf.writer, 10, .narrow, allocator);
+    var line_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer line_buf.deinit(allocator);
+    var ww: WrapWriter = undefined;
+    ww.init(&buf.writer, 10, .narrow, allocator, &line_buf);
     defer ww.deinit();
 
     try ww.writer.writeAll("\x1b");
@@ -1650,7 +1679,10 @@ test "WrapWriter split ANSI ESC+[ across writes" {
     var buf: std.io.Writer.Allocating = .init(allocator);
     errdefer buf.deinit();
 
-    var ww = WrapWriter.init(&buf.writer, 10, .narrow, allocator);
+    var line_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer line_buf.deinit(allocator);
+    var ww: WrapWriter = undefined;
+    ww.init(&buf.writer, 10, .narrow, allocator, &line_buf);
     defer ww.deinit();
 
     try ww.writer.writeAll("\x1b[");
@@ -1676,7 +1708,10 @@ test "WrapWriter split UTF-8 across writes" {
     var buf: std.io.Writer.Allocating = .init(allocator);
     errdefer buf.deinit();
 
-    var ww = WrapWriter.init(&buf.writer, 10, .narrow, allocator);
+    var line_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer line_buf.deinit(allocator);
+    var ww: WrapWriter = undefined;
+    ww.init(&buf.writer, 10, .narrow, allocator, &line_buf);
     defer ww.deinit();
     try ww.writer.writeAll(full[0..1]);
     try ww.writer.writeAll(full[1..]);

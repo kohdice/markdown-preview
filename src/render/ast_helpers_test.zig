@@ -356,7 +356,8 @@ pub fn renderDocumentToOwnedSlice(
     var output: std.io.Writer.Allocating = .init(allocator);
     defer output.deinit();
 
-    var renderer = render.Renderer.init(allocator, .{
+    var renderer: render.Renderer = undefined;
+    renderer.init(allocator, .{
         .enable_ansi = opts.enable_ansi,
         .ambiguous_width = opts.ambiguous_width,
     });

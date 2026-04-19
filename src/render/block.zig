@@ -47,12 +47,44 @@ fn headingStyle(level: u8, p: theme.Palette) ansi.TextStyle {
 pub const RenderSession = struct {
     ctx: *const RenderContext,
     writer: *std.io.Writer,
+    prefix_stack: *prefix_writer.PrefixStack,
     scratch: std.mem.Allocator,
     persistent_allocator: std.mem.Allocator,
     table_scratch: *render_table.TableScratch,
     wrap_writer: *width.WrapWriter,
     wrap_width: ?usize,
     highlighter: *highlight.Highlighter,
+
+    fn pushSegment(self: *RenderSession, segment: prefix_writer.PrefixStack.Segment) !void {
+        try self.writer.flush();
+        try self.prefix_stack.push(segment);
+    }
+
+    fn popPrefix(self: *RenderSession) !void {
+        errdefer self.prefix_stack.pop();
+        try self.writer.flush();
+        self.prefix_stack.pop();
+    }
+
+    fn pushStyledPrefix(
+        self: *RenderSession,
+        indent: usize,
+        marker: []const u8,
+        style: ansi.TextStyle,
+    ) !void {
+        const rendered_marker: []const u8 = blk: {
+            if (marker.len == 0) break :blk marker;
+            if (!self.ctx.enable_ansi or style.isPlain()) break :blk marker;
+            var tmp: std.io.Writer.Allocating = .init(self.scratch);
+            try ansi.writeStyled(&tmp.writer, self.ctx.enable_ansi, style, marker);
+            break :blk tmp.written();
+        };
+        try self.pushSegment(.{ .indent = indent, .marker = rendered_marker });
+    }
+
+    fn pushIndent(self: *RenderSession, indent: usize) !void {
+        try self.pushSegment(.{ .indent = indent });
+    }
 
     pub fn write(self: *RenderSession, blocks: []const ast.BlockNode) !void {
         for (blocks, 0..) |block, i| {
@@ -85,29 +117,21 @@ pub const RenderSession = struct {
         base_style: ansi.TextStyle,
         continuation_indent: usize,
     ) !void {
-        var prefix: ?prefix_writer.PrefixWriter = null;
-        var target: *std.io.Writer = self.writer;
-        if (continuation_indent > 0) {
-            prefix = prefix_writer.PrefixWriter.init(self.writer, .{
-                .indent = continuation_indent,
-                .prefix_first_line = false,
-            });
-            target = &prefix.?.writer;
-        }
+        const pushed = continuation_indent > 0;
+        if (pushed) try self.pushIndent(continuation_indent);
+        defer if (pushed) self.popPrefix() catch {};
 
         if (self.wrap_width) |wrap_w| {
             const available = if (wrap_w > continuation_indent)
                 wrap_w - continuation_indent
             else
                 1;
-            self.wrap_writer.reset(target, available);
+            self.wrap_writer.reset(self.writer, available);
             try render_inline.writeInlineChain(self.ctx, &self.wrap_writer.writer, first, base_style);
             try self.wrap_writer.finish();
         } else {
-            try render_inline.writeInlineChain(self.ctx, target, first, base_style);
+            try render_inline.writeInlineChain(self.ctx, self.writer, first, base_style);
         }
-
-        if (prefix) |*p| try p.finish();
     }
 
     fn writeHeading(self: *RenderSession, heading: ast.Heading) !void {
@@ -129,27 +153,17 @@ pub const RenderSession = struct {
         const gutter_style: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .dim = true };
         const gutter_width = blockquote.indent + width.displayWidth(blockquote_marker, self.ctx.ambiguous_width);
 
-        var prefix = prefix_writer.PrefixWriter.init(self.writer, .{
-            .indent = blockquote.indent,
-            .styled_prefix = blockquote_marker,
-            .style = gutter_style,
-            .enable_ansi = self.ctx.enable_ansi,
-        });
+        try self.pushStyledPrefix(blockquote.indent, blockquote_marker, gutter_style);
+        errdefer self.popPrefix() catch {};
 
-        const saved_writer = self.writer;
         const saved_wrap = self.wrap_width;
-        defer {
-            self.writer = saved_writer;
-            self.wrap_width = saved_wrap;
-        }
-
-        self.writer = &prefix.writer;
+        defer self.wrap_width = saved_wrap;
         if (saved_wrap) |ww| {
             self.wrap_width = if (ww > gutter_width) ww - gutter_width else null;
         }
 
         try self.writeBlocksInBlockQuote(blockquote.blocks, depth);
-        try prefix.finish();
+        try self.popPrefix();
     }
 
     fn writeBlocksInBlockQuote(self: *RenderSession, blocks: []const ast.BlockNode, depth: usize) anyerror!void {
@@ -230,22 +244,17 @@ pub const RenderSession = struct {
     ) anyerror!void {
         if (indent == 0) return self.writeBlock(child_block, depth);
 
-        var prefix = prefix_writer.PrefixWriter.init(self.writer, .{ .indent = indent });
+        try self.pushIndent(indent);
+        errdefer self.popPrefix() catch {};
 
-        const saved_writer = self.writer;
         const saved_wrap = self.wrap_width;
-        defer {
-            self.writer = saved_writer;
-            self.wrap_width = saved_wrap;
-        }
-
-        self.writer = &prefix.writer;
+        defer self.wrap_width = saved_wrap;
         if (saved_wrap) |ww| {
             self.wrap_width = if (ww > indent) ww - indent else null;
         }
 
         try self.writeBlock(child_block, depth);
-        try prefix.finish();
+        try self.popPrefix();
     }
 
     fn writeListItemParagraph(
@@ -258,17 +267,17 @@ pub const RenderSession = struct {
             return;
         }
 
-        var prefix = prefix_writer.PrefixWriter.init(self.writer, .{
-            .indent = content_col,
-            .prefix_first_line = false,
-        });
+        try self.pushIndent(content_col);
+        errdefer self.popPrefix() catch {};
+
         try render_inline.writeInlineChain(
             self.ctx,
-            &prefix.writer,
+            self.writer,
             paragraph.children,
             .{ .fg = self.ctx.palette.body },
         );
-        try prefix.finish();
+
+        try self.popPrefix();
     }
 
     fn writeCodeFence(self: *RenderSession, code_fence: ast.CodeFence) !void {
@@ -403,8 +412,16 @@ test "RenderSession.write renders heading content without document trailing newl
     defer buf.deinit();
     var table_scratch: render_table.TableScratch = .{};
     defer table_scratch.deinit(allocator);
-    var wrap = width.WrapWriter.init(undefined, 0, .narrow, allocator);
+    var wrap_line_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer wrap_line_buf.deinit(allocator);
+    var wrap: width.WrapWriter = undefined;
+    wrap.init(undefined, 0, .narrow, allocator, &wrap_line_buf);
     defer wrap.deinit();
+
+    var prefix_stack: prefix_writer.PrefixStack = .init(allocator);
+    defer prefix_stack.deinit();
+    var prefix_w: prefix_writer.PrefixWriter = undefined;
+    prefix_w.init(&buf.writer, &prefix_stack);
 
     const ctx: RenderContext = .{
         .doc = &doc,
@@ -415,7 +432,8 @@ test "RenderSession.write renders heading content without document trailing newl
     };
     var session: RenderSession = .{
         .ctx = &ctx,
-        .writer = &buf.writer,
+        .writer = &prefix_w.writer,
+        .prefix_stack = &prefix_stack,
         .scratch = allocator,
         .persistent_allocator = allocator,
         .table_scratch = &table_scratch,
@@ -425,6 +443,7 @@ test "RenderSession.write renders heading content without document trailing newl
     };
 
     try session.write(doc.blocks);
+    try prefix_w.writer.flush();
 
     try std.testing.expectEqualStrings("Hello", buf.writer.buffered());
 }

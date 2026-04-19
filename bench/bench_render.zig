@@ -51,7 +51,8 @@ fn runScenario(scenario: Scenario) !void {
     defer _ = render_gpa.deinit();
 
     var counting = bench.CountingAllocator.init(render_gpa.allocator());
-    var renderer = render.Renderer.init(counting.allocator(), .{
+    var renderer: render.Renderer = undefined;
+    renderer.init(counting.allocator(), .{
         .enable_ansi = scenario.enable_ansi,
         .ambiguous_width = scenario.ambiguous_width,
     });

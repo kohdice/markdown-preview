@@ -59,7 +59,8 @@ test "table renderer reuses scratch on repeated render of the same table-only do
     defer _ = render_gpa.deinit();
 
     var counting = bench.CountingAllocator.init(render_gpa.allocator());
-    var renderer = render.Renderer.init(counting.allocator(), .{});
+    var renderer: render.Renderer = undefined;
+    renderer.init(counting.allocator(), .{});
     defer renderer.deinit();
 
     _ = try renderWithDiscarding(&renderer, &doc, &counting);
@@ -90,7 +91,8 @@ test "table renderer reuses grown scratch when rendering small-large-small table
     defer _ = render_gpa.deinit();
 
     var counting = bench.CountingAllocator.init(render_gpa.allocator());
-    var renderer = render.Renderer.init(counting.allocator(), .{});
+    var renderer: render.Renderer = undefined;
+    renderer.init(counting.allocator(), .{});
     defer renderer.deinit();
 
     _ = try renderWithDiscarding(&renderer, &small_doc, &counting);
