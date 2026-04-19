@@ -1,6 +1,7 @@
 .zig-cache/
 zig-out/
 *.o
+.bench-cache/
 
 # env file
 .env

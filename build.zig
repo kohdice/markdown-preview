@@ -60,6 +60,46 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
+    const release_ts_dep = b.dependency("tree_sitter", .{
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    const release_ts_zig_dep = b.dependency("tree_sitter_zig", .{
+        .target = target,
+        .optimize = .ReleaseFast,
+        .@"build-shared" = false,
+    });
+
+    const release_ts_support = prepareTreeSitterSupport(b, .{
+        .target = target,
+        .optimize = .ReleaseFast,
+        .ts_dep = release_ts_dep,
+        .ts_zig_dep = release_ts_zig_dep,
+        .ts_c_dep = ts_c_dep,
+        .ts_rust_dep = ts_rust_dep,
+        .ts_go_dep = ts_go_dep,
+        .ts_python_dep = ts_python_dep,
+        .ts_javascript_dep = ts_javascript_dep,
+        .ts_bash_dep = ts_bash_dep,
+        .ts_cpp_dep = ts_cpp_dep,
+        .ts_typescript_dep = ts_typescript_dep,
+        .ts_html_dep = ts_html_dep,
+        .ts_css_dep = ts_css_dep,
+        .ts_json_dep = ts_json_dep,
+    });
+
+    const release_exe_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    attachTreeSitter(release_exe_mod, release_ts_support);
+
+    const release_exe = b.addExecutable(.{
+        .name = "mp-release",
+        .root_module = release_exe_mod,
+    });
+
     const bench_mod = b.createModule(.{
         .root_source_file = b.path("bench/bench_inline.zig"),
         .target = target,
@@ -96,6 +136,55 @@ pub fn build(b: *std.Build) void {
         .root_module = bench_mermaid_mod,
     });
 
+    const render_buffer_mod = b.createModule(.{
+        .root_source_file = b.path("src/watch/render_buffer.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const bench_watch_buffer_mod = b.createModule(.{
+        .root_source_file = b.path("bench/bench_watch_buffer.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    bench_watch_buffer_mod.addImport("render_buffer", render_buffer_mod);
+
+    const bench_watch_buffer_exe = b.addExecutable(.{
+        .name = "watch-buffer-bench",
+        .root_module = bench_watch_buffer_mod,
+    });
+
+    const bench_fixtures_mod = b.createModule(.{
+        .root_source_file = b.path("bench/fixtures.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const bench_pipeline_mod = b.createModule(.{
+        .root_source_file = b.path("bench/bench_pipeline.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    attachTreeSitter(bench_pipeline_mod, ts_support);
+    bench_pipeline_mod.addImport("fixtures", bench_fixtures_mod);
+
+    const bench_pipeline_exe = b.addExecutable(.{
+        .name = "pipeline-bench",
+        .root_module = bench_pipeline_mod,
+    });
+
+    const bench_vs_cat_mod = b.createModule(.{
+        .root_source_file = b.path("bench/bench_vs_cat.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    bench_vs_cat_mod.addImport("fixtures", bench_fixtures_mod);
+
+    const bench_vs_cat_exe = b.addExecutable(.{
+        .name = "vs-cat-bench",
+        .root_module = bench_vs_cat_mod,
+    });
+
     const bench_support_mod = b.createModule(.{
         .root_source_file = b.path("bench/bench_support.zig"),
         .target = target,
@@ -112,6 +201,7 @@ pub fn build(b: *std.Build) void {
     bench_mod.addImport("markdown_preview", markdown_preview_mod);
     bench_render_mod.addImport("markdown_preview", markdown_preview_mod);
     bench_mermaid_mod.addImport("markdown_preview", markdown_preview_mod);
+    bench_pipeline_mod.addImport("markdown_preview", markdown_preview_mod);
 
     const run_step = b.step("run", "Run the app");
     const run_cmd = b.addRunArtifact(exe);
@@ -133,6 +223,21 @@ pub fn build(b: *std.Build) void {
     const bench_mermaid_step = b.step("bench-mermaid", "Run Mermaid compile/paint benchmarks");
     const run_bench_mermaid = b.addRunArtifact(bench_mermaid_exe);
     bench_mermaid_step.dependOn(&run_bench_mermaid.step);
+
+    const bench_watch_buffer_step = b.step("bench-watch-buffer", "Run RenderBuffer microbenchmark");
+    const run_bench_watch_buffer = b.addRunArtifact(bench_watch_buffer_exe);
+    bench_watch_buffer_step.dependOn(&run_bench_watch_buffer.step);
+
+    const bench_pipeline_step = b.step("bench-pipeline", "Run parse + render pipeline benchmark");
+    const run_bench_pipeline = b.addRunArtifact(bench_pipeline_exe);
+    bench_pipeline_step.dependOn(&run_bench_pipeline.step);
+    if (b.args) |args| run_bench_pipeline.addArgs(args);
+
+    const bench_vs_cat_step = b.step("bench-vs-cat", "Compare mp throughput against cat");
+    const run_bench_vs_cat = b.addRunArtifact(bench_vs_cat_exe);
+    bench_vs_cat_step.dependOn(&run_bench_vs_cat.step);
+    run_bench_vs_cat.addPrefixedFileArg("--mp=", release_exe.getEmittedBin());
+    if (b.args) |args| run_bench_vs_cat.addArgs(args);
 
     const test_step = b.step("test", "Run tests");
     const test_roots = [_]struct {
