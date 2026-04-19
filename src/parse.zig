@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("ast.zig");
-const parse_document = @import("parse/document.zig");
+const block_phase = @import("parse/block_phase.zig");
+const inline_phase = @import("parse/inline_phase.zig");
 
 pub fn parseBorrowed(allocator: std.mem.Allocator, source: []const u8) !ast.Document {
     const has_trailing_newline = source.len > 0 and source[source.len - 1] == '\n';
@@ -8,14 +9,15 @@ pub fn parseBorrowed(allocator: std.mem.Allocator, source: []const u8) !ast.Docu
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
 
-    const parsed = try parse_document.parse(arena.allocator(), source);
+    const raw_doc = try block_phase.buildRawDocument(arena.allocator(), source);
+    const resolved = try inline_phase.resolveInlines(arena.allocator(), raw_doc);
     return .{
         .source = source,
         .source_storage = .borrowed,
-        .inline_nodes = parsed.inline_nodes,
-        .inline_next = parsed.inline_next,
-        .blocks = parsed.blocks,
-        .link_defs = parsed.link_defs,
+        .inline_nodes = resolved.inline_nodes,
+        .inline_next = resolved.inline_next,
+        .blocks = resolved.blocks,
+        .link_defs = resolved.link_defs,
         .has_trailing_newline = has_trailing_newline,
         .storage = .{ .arena = arena },
     };
@@ -29,21 +31,26 @@ pub fn parseOwned(allocator: std.mem.Allocator, source: ast.Document.OwnedSource
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
 
-    const parsed = try parse_document.parse(arena.allocator(), source.buffer);
+    const raw_doc = try block_phase.buildRawDocument(arena.allocator(), source.buffer);
+    const resolved = try inline_phase.resolveInlines(arena.allocator(), raw_doc);
     return .{
         .source = source.buffer,
         .source_storage = .{ .owned = source },
-        .inline_nodes = parsed.inline_nodes,
-        .inline_next = parsed.inline_next,
-        .blocks = parsed.blocks,
-        .link_defs = parsed.link_defs,
+        .inline_nodes = resolved.inline_nodes,
+        .inline_next = resolved.inline_next,
+        .blocks = resolved.blocks,
+        .link_defs = resolved.link_defs,
         .has_trailing_newline = has_trailing_newline,
         .storage = .{ .arena = arena },
     };
 }
 
 test {
+    _ = @import("parse/block_cursor.zig");
+    _ = @import("parse/block_phase.zig");
     _ = @import("parse/document_test.zig");
+    _ = @import("parse/inline_phase.zig");
+    _ = @import("parse/raw.zig");
 }
 
 test "parseBorrowed builds a document for a single paragraph" {

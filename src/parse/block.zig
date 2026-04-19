@@ -5,30 +5,13 @@ const max_heading_level = 6;
 const min_fence_len = 3;
 const min_thematic_break_markers = 3;
 const max_ordered_digits = 9;
-/// CommonMark §6.7: a hard line break is signaled by a backslash or by
-/// at least two trailing spaces at the end of a line.
 const min_hard_break_spaces = 2;
-
-/// CommonMark §5.2: unordered list bullet markers.
 const unordered_list_markers = "-*+";
-/// CommonMark §5.2: ordered list number-delimiter characters.
 const ordered_list_markers = ".)";
-/// CommonMark §4.1: thematic break markers.
 const thematic_break_markers = "-_*";
-/// CommonMark §4.5: fenced code block delimiter characters.
 const fence_chars = "`~";
-/// CommonMark §2.1: horizontal tab (U+0009) and space (U+0020).
-/// Excludes line terminators because block-level parsers work line-by-line.
 pub const horizontal_whitespace = " \t";
-
-/// CRLF line-ending normalization trim set. After splitting input on `\n`,
-/// strip a trailing `\r` so Windows (CRLF) and Unix (LF) inputs produce
-/// identical line slices for downstream block parsing.
 pub const carriage_return = "\r";
-
-/// Byte-level predicate counterpart to `horizontal_whitespace`. Use this in
-/// manual loops over `[]const u8` indexes where the trim-set form does not
-/// apply (e.g. while-loops advancing a cursor character by character).
 pub fn isHorizontalWhitespace(c: u8) bool {
     return c == ' ' or c == '\t';
 }

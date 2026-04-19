@@ -5,16 +5,8 @@ const parse_link = @import("link.zig");
 
 const DefMap = ast.LinkDefMap;
 
-/// CommonMark §6.2: delimiter runs of length 1/2/3 map to emphasis, strong,
-/// and strong+emphasis; the same value drives the multiple-of-three
-/// rejection rule in the closer search.
 const max_emphasis_delim_run: usize = 3;
-
-/// Accept both `~text~` and `~~text~~`; longer runs fall through as literal
-/// tildes.
 const max_strikethrough_delim_run: usize = 2;
-
-/// RFC 3629 §3: a UTF-8 continuation byte has the bit pattern `10xxxxxx`.
 const utf8_continuation_mask: u8 = 0xC0;
 const utf8_continuation_tag: u8 = 0x80;
 
@@ -22,8 +14,6 @@ const scheme_separator: []const u8 = "://";
 const http_scheme: []const u8 = "http://";
 const https_scheme: []const u8 = "https://";
 
-/// CommonMark §6.7: a hard line break is signaled by a backslash or by
-/// at least two trailing spaces at the end of a line.
 const min_hard_break_spaces: usize = 2;
 
 pub const InlineBuilder = struct {
