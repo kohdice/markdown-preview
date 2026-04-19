@@ -21,6 +21,7 @@ pub const Renderer = struct {
     highlighter: highlight.Highlighter,
     table_scratch: render_table.TableScratch = .{},
     wrap_writer: width.WrapWriter,
+    scratch: std.heap.ArenaAllocator,
 
     pub fn init(persistent_allocator: std.mem.Allocator, opts: RenderOptions) Renderer {
         return .{
@@ -30,6 +31,7 @@ pub const Renderer = struct {
             .syn_palette = theme.default_syntax_palette,
             .highlighter = highlight.Highlighter.init(),
             .wrap_writer = width.WrapWriter.init(undefined, 0, opts.ambiguous_width, persistent_allocator),
+            .scratch = std.heap.ArenaAllocator.init(persistent_allocator),
         };
     }
 
@@ -37,15 +39,17 @@ pub const Renderer = struct {
         self.highlighter.deinit();
         self.table_scratch.deinit(self.persistent_allocator);
         self.wrap_writer.deinit();
+        self.scratch.deinit();
     }
 
-    pub fn renderDocument(
+    pub fn render(
         self: *Renderer,
         writer: *std.io.Writer,
         doc: *const ast.Document,
         wrap_width: ?usize,
-        ephemeral_allocator: std.mem.Allocator,
     ) !void {
+        _ = self.scratch.reset(.retain_capacity);
+        self.table_scratch.reset();
         const ctx: render_context.RenderContext = .{
             .doc = doc,
             .enable_ansi = self.opts.enable_ansi,
@@ -56,7 +60,7 @@ pub const Renderer = struct {
         var session: render_block.RenderSession = .{
             .ctx = &ctx,
             .writer = writer,
-            .ephemeral_allocator = ephemeral_allocator,
+            .scratch = self.scratch.allocator(),
             .persistent_allocator = self.persistent_allocator,
             .wrap_width = wrap_width,
             .highlighter = &self.highlighter,
@@ -64,7 +68,8 @@ pub const Renderer = struct {
             .wrap_writer = &self.wrap_writer,
         };
 
-        try session.renderDocument();
+        try session.write(doc.blocks);
+        if (doc.has_trailing_newline) try writer.writeByte('\n');
     }
 };
 

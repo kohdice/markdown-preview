@@ -121,7 +121,7 @@ pub fn run(opts: RunOptions) !u8 {
     });
     defer renderer.deinit();
 
-    try renderer.renderDocument(opts.stdout, &doc, opts.wrap_width, opts.allocator);
+    try renderer.render(opts.stdout, &doc, opts.wrap_width);
     return exit_success;
 }
 

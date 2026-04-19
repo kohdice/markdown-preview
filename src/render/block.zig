@@ -47,18 +47,12 @@ fn headingStyle(level: u8, p: theme.Palette) ansi.TextStyle {
 pub const RenderSession = struct {
     ctx: *const RenderContext,
     writer: *std.io.Writer,
-    ephemeral_allocator: std.mem.Allocator,
+    scratch: std.mem.Allocator,
     persistent_allocator: std.mem.Allocator,
     table_scratch: *render_table.TableScratch,
     wrap_writer: *width.WrapWriter,
     wrap_width: ?usize,
     highlighter: *highlight.Highlighter,
-
-    pub fn renderDocument(self: *RenderSession) !void {
-        self.table_scratch.reset();
-        try self.write(self.ctx.doc.blocks);
-        if (self.ctx.doc.has_trailing_newline) try self.writer.writeByte('\n');
-    }
 
     pub fn write(self: *RenderSession, blocks: []const ast.BlockNode) !void {
         for (blocks, 0..) |block, i| {
@@ -314,9 +308,9 @@ pub const RenderSession = struct {
             .wrap_width = self.wrap_width,
             .ambiguous_width = self.ctx.ambiguous_width,
         };
-        var diagram = try mermaid.compile(self.ephemeral_allocator, content);
+        var diagram = try mermaid.compile(self.scratch, content);
         defer diagram.deinit();
-        try mermaid.paint(self.writer, self.ephemeral_allocator, &diagram, opts);
+        try mermaid.paint(self.writer, self.scratch, &diagram, opts);
     }
 
     fn writeMermaidFallback(self: *RenderSession, content: []const u8, err: mermaid.PaintError) !void {
@@ -336,7 +330,7 @@ pub const RenderSession = struct {
         if (language) |lang| {
             if (self.ctx.enable_ansi) {
                 self.highlighter.writeHighlightedBlock(
-                    self.ephemeral_allocator,
+                    self.scratch,
                     self.writer,
                     content,
                     lang,
@@ -422,7 +416,7 @@ test "RenderSession.write renders heading content without document trailing newl
     var session: RenderSession = .{
         .ctx = &ctx,
         .writer = &buf.writer,
-        .ephemeral_allocator = allocator,
+        .scratch = allocator,
         .persistent_allocator = allocator,
         .table_scratch = &table_scratch,
         .wrap_writer = &wrap,

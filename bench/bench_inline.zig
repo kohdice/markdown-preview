@@ -56,7 +56,7 @@ fn runScenario(scenario: Scenario) !void {
     var sink: [512]u8 = undefined;
     var discarding: std.io.Writer.Discarding = .init(&sink);
     timer.reset();
-    try renderer.renderDocument(&discarding.writer, &doc, wrap_width, allocator);
+    try renderer.render(&discarding.writer, &doc, wrap_width);
     const render_elapsed_ns = timer.read();
     const after_render = counting.snapshot();
 
