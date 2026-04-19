@@ -1,24 +1,14 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const ast = @import("ast.zig");
+const source_mod = @import("source");
 
 const mmap_threshold: u64 = 64 * 1024;
-
-pub const Loaded = struct {
-    bytes: []const u8,
-    storage: Storage,
-
-    pub const Storage = union(enum) {
-        owned: ast.Document.OwnedSource,
-        mapped: ast.Document.MappedSource,
-    };
-};
 
 pub fn loadFile(
     allocator: std.mem.Allocator,
     dir: std.fs.Dir,
     path: []const u8,
-) !Loaded {
+) !source_mod.Source {
     var file = try dir.openFile(path, .{});
     defer file.close();
 
@@ -28,10 +18,7 @@ pub fn loadFile(
     if (shouldMmap(size)) {
         if (mapFile(file.handle, size)) |mapped_bytes| {
             madviseSequential(mapped_bytes);
-            return .{
-                .bytes = mapped_bytes,
-                .storage = .{ .mapped = .{ .bytes = mapped_bytes } },
-            };
+            return .{ .mapped = .{ .bytes = mapped_bytes } };
         } else |_| {}
     }
 
@@ -65,7 +52,7 @@ fn readFile(
     allocator: std.mem.Allocator,
     file: std.fs.File,
     size: u64,
-) !Loaded {
+) !source_mod.Source {
     if (size > std.math.maxInt(usize)) return error.FileTooLarge;
     const len: usize = @intCast(size);
     var buffer = try allocator.alloc(u8, len);
@@ -82,27 +69,24 @@ fn readFile(
         buffer = try allocator.realloc(buffer, filled);
     }
 
-    return .{
-        .bytes = buffer,
-        .storage = .{ .owned = .{ .allocator = allocator, .buffer = buffer } },
-    };
+    return .{ .owned = .{ .allocator = allocator, .buffer = buffer } };
 }
 
-test "loadFile returns owned storage for small files" {
+test "loadFile returns owned source for small files" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
     const data = "Hello, source_loader!\n";
     try tmp.dir.writeFile(.{ .sub_path = "small.md", .data = data });
 
-    const loaded = try loadFile(std.testing.allocator, tmp.dir, "small.md");
-    defer loaded.storage.owned.allocator.free(loaded.storage.owned.buffer);
+    const source = try loadFile(std.testing.allocator, tmp.dir, "small.md");
+    defer source.owned.allocator.free(source.owned.buffer);
 
-    try std.testing.expect(loaded.storage == .owned);
-    try std.testing.expectEqualStrings(data, loaded.bytes);
+    try std.testing.expect(source == .owned);
+    try std.testing.expectEqualStrings(data, source.bytes());
 }
 
-test "loadFile returns mapped storage at or above mmap threshold" {
+test "loadFile returns mapped source at or above mmap threshold" {
     if (builtin.os.tag == .windows) return;
 
     var tmp = std.testing.tmpDir(.{});
@@ -115,9 +99,9 @@ test "loadFile returns mapped storage at or above mmap threshold" {
 
     try tmp.dir.writeFile(.{ .sub_path = "big.md", .data = data });
 
-    const loaded = try loadFile(std.testing.allocator, tmp.dir, "big.md");
-    defer std.posix.munmap(loaded.storage.mapped.bytes);
+    const source = try loadFile(std.testing.allocator, tmp.dir, "big.md");
+    defer std.posix.munmap(source.mapped.bytes);
 
-    try std.testing.expect(loaded.storage == .mapped);
-    try std.testing.expectEqualSlices(u8, data, loaded.bytes);
+    try std.testing.expect(source == .mapped);
+    try std.testing.expectEqualSlices(u8, data, source.bytes());
 }

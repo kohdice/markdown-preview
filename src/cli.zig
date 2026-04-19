@@ -104,15 +104,12 @@ pub fn run(opts: RunOptions) !u8 {
         });
     }
 
-    const loaded = source_loader.loadFile(opts.allocator, opts.cwd, parsed.path) catch |err| {
+    const source = source_loader.loadFile(opts.allocator, opts.cwd, parsed.path) catch |err| {
         try opts.stderr.print("mp: unable to read '{s}': {s}\n", .{ parsed.path, @errorName(err) });
         return exit_failure;
     };
 
-    var doc = switch (loaded.storage) {
-        .mapped => |m| try parse.parseMapped(opts.allocator, m),
-        .owned => |o| try parse.parseOwned(opts.allocator, o),
-    };
+    var doc = try parse.parse(opts.allocator, source);
     defer doc.deinit();
 
     var renderer: render.Renderer = undefined;
@@ -321,7 +318,7 @@ test "run threads ambiguous_width through to the renderer" {
     );
 }
 
-test "run frees the file buffer via parseOwned" {
+test "run frees the file buffer carried by the source loader" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer {
         const status = gpa.deinit();

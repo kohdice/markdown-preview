@@ -5,9 +5,9 @@ const markdown_preview = @import("markdown_preview");
 fn renderFence(allocator: std.mem.Allocator, source: []const u8, enable_ansi: bool) ![]u8 {
     var output: std.io.Writer.Allocating = .init(allocator);
     defer output.deinit();
-    var doc = try markdown_preview.parse.parseBorrowed(allocator, source);
+    var doc = try markdown_preview.parse.parse(allocator, .{ .borrowed = source });
     defer doc.deinit();
-    var renderer: markdown_preview.render.Renderer = undefined;
+    var renderer: markdown_preview.Renderer = undefined;
     renderer.init(allocator, .{
         .enable_ansi = enable_ansi,
         .ambiguous_width = .narrow,

@@ -1,16 +1,16 @@
 const std = @import("std");
 const markdown_preview = @import("markdown_preview");
 const parse = markdown_preview.parse;
-const render = markdown_preview.render;
+const Renderer = markdown_preview.Renderer;
 const bench = @import("bench_support.zig");
 
-const width = markdown_preview.term.width;
+const AmbiguousWidth = markdown_preview.terminal.AmbiguousWidth;
 
 const Scenario = struct {
     name: []const u8,
     input: []const u8,
     enable_ansi: bool = false,
-    ambiguous_width: width.AmbiguousWidth = .narrow,
+    ambiguous_width: AmbiguousWidth = .narrow,
 };
 
 const RenderResult = struct {
@@ -44,14 +44,14 @@ fn runScenario(scenario: Scenario) !void {
     var parse_gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = parse_gpa.deinit();
 
-    var doc = try parse.parseBorrowed(parse_gpa.allocator(), scenario.input);
+    var doc = try parse.parse(parse_gpa.allocator(), .{ .borrowed = scenario.input });
     defer doc.deinit();
 
     var render_gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = render_gpa.deinit();
 
     var counting = bench.CountingAllocator.init(render_gpa.allocator());
-    var renderer: render.Renderer = undefined;
+    var renderer: Renderer = undefined;
     renderer.init(counting.allocator(), .{
         .enable_ansi = scenario.enable_ansi,
         .ambiguous_width = scenario.ambiguous_width,
@@ -79,8 +79,8 @@ fn runScenario(scenario: Scenario) !void {
 }
 
 fn renderOnce(
-    renderer: *render.Renderer,
-    doc: *const markdown_preview.ast.Document,
+    renderer: *Renderer,
+    doc: *const markdown_preview.parse.Document,
     counting: *const bench.CountingAllocator,
 ) !RenderResult {
     var sink: [512]u8 = undefined;

@@ -49,10 +49,10 @@ test "table renderer reuses scratch on repeated render of the same table-only do
     var parse_gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = parse_gpa.deinit();
 
-    var doc = try parse.parseBorrowed(parse_gpa.allocator(), "| A | B | C |\n" ++
+    var doc = try parse.parse(parse_gpa.allocator(), .{ .borrowed = "| A | B | C |\n" ++
         "| --- | --- | --- |\n" ++
         "| 1 | 2 | 3 |\n" ++
-        "| 4 | 5 | 6 |\n");
+        "| 4 | 5 | 6 |\n" });
     defer doc.deinit();
 
     var render_gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -75,16 +75,16 @@ test "table renderer reuses grown scratch when rendering small-large-small table
     var parse_gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = parse_gpa.deinit();
 
-    var small_doc = try parse.parseBorrowed(parse_gpa.allocator(), "| A | B |\n" ++
+    var small_doc = try parse.parse(parse_gpa.allocator(), .{ .borrowed = "| A | B |\n" ++
         "| --- | --- |\n" ++
-        "| 1 | 2 |\n");
+        "| 1 | 2 |\n" });
     defer small_doc.deinit();
 
-    var large_doc = try parse.parseBorrowed(parse_gpa.allocator(), "| A | B | C | D |\n" ++
+    var large_doc = try parse.parse(parse_gpa.allocator(), .{ .borrowed = "| A | B | C | D |\n" ++
         "| --- | --- | --- | --- |\n" ++
         "| 1 | 2 | 3 | 4 |\n" ++
         "| 5 | 6 | 7 | 8 |\n" ++
-        "| 9 | 10 | 11 | 12 |\n");
+        "| 9 | 10 | 11 | 12 |\n" });
     defer large_doc.deinit();
 
     var render_gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -132,7 +132,7 @@ test "wide table border near 2048-byte batch threshold produces correct output" 
     const source = try buf.toOwnedSlice(allocator);
     defer allocator.free(source);
 
-    var doc = try parse.parseBorrowed(allocator, source);
+    var doc = try parse.parse(allocator, .{ .borrowed = source });
     defer doc.deinit();
 
     const rendered = try helpers.renderDocumentToOwnedSlice(allocator, &doc, .{});

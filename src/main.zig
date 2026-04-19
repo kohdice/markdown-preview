@@ -44,5 +44,6 @@ pub fn main() !void {
 
     stdout_stream.interface.flush() catch |err| return cli.unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
     stderr_stream.interface.flush() catch |err| return cli.unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
+
     if (exit_code != 0) std.process.exit(exit_code);
 }

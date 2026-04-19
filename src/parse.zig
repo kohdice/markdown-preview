@@ -2,65 +2,40 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const block_phase = @import("parse/block_phase.zig");
 const inline_phase = @import("parse/inline_phase.zig");
+const source_mod = @import("source");
 
-pub fn parseBorrowed(allocator: std.mem.Allocator, source: []const u8) !ast.Document {
-    const has_trailing_newline = source.len > 0 and source[source.len - 1] == '\n';
+pub const Document = ast.Document;
+pub const Source = source_mod.Source;
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    errdefer arena.deinit();
-
-    const raw_doc = try block_phase.buildRawDocument(arena.allocator(), source);
-    const resolved = try inline_phase.resolveInlines(arena.allocator(), raw_doc);
-    return .{
-        .source = source,
-        .source_storage = .borrowed,
-        .inline_nodes = resolved.inline_nodes,
-        .inline_next = resolved.inline_next,
-        .blocks = resolved.blocks,
-        .link_defs = resolved.link_defs,
-        .has_trailing_newline = has_trailing_newline,
-        .storage = .{ .arena = arena },
-    };
+pub fn parse(allocator: std.mem.Allocator, src: Source) !Document {
+    switch (src) {
+        .borrowed => |bytes| return buildDocument(allocator, bytes, .borrowed),
+        .owned => |o| {
+            errdefer o.allocator.free(o.buffer);
+            return buildDocument(allocator, o.buffer, .{ .owned = o });
+        },
+        .mapped => |m| {
+            errdefer std.posix.munmap(m.bytes);
+            return buildDocument(allocator, m.bytes, .{ .mapped = m });
+        },
+    }
 }
 
-pub fn parseOwned(allocator: std.mem.Allocator, source: ast.Document.OwnedSource) !ast.Document {
-    errdefer source.allocator.free(source.buffer);
-
-    const has_trailing_newline = source.buffer.len > 0 and source.buffer[source.buffer.len - 1] == '\n';
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    errdefer arena.deinit();
-
-    const raw_doc = try block_phase.buildRawDocument(arena.allocator(), source.buffer);
-    const resolved = try inline_phase.resolveInlines(arena.allocator(), raw_doc);
-    return .{
-        .source = source.buffer,
-        .source_storage = .{ .owned = source },
-        .inline_nodes = resolved.inline_nodes,
-        .inline_next = resolved.inline_next,
-        .blocks = resolved.blocks,
-        .link_defs = resolved.link_defs,
-        .has_trailing_newline = has_trailing_newline,
-        .storage = .{ .arena = arena },
-    };
-}
-
-pub fn parseMapped(
+fn buildDocument(
     allocator: std.mem.Allocator,
-    source: ast.Document.MappedSource,
-) !ast.Document {
-    errdefer std.posix.munmap(source.bytes);
-
-    const has_trailing_newline = source.bytes.len > 0 and source.bytes[source.bytes.len - 1] == '\n';
+    bytes: []const u8,
+    storage: ast.Document.SourceStorage,
+) !Document {
+    const has_trailing_newline = bytes.len > 0 and bytes[bytes.len - 1] == '\n';
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
 
-    const raw_doc = try block_phase.buildRawDocument(arena.allocator(), source.bytes);
+    const raw_doc = try block_phase.buildRawDocument(arena.allocator(), bytes);
     const resolved = try inline_phase.resolveInlines(arena.allocator(), raw_doc);
     return .{
-        .source = source.bytes,
-        .source_storage = .{ .mapped = source },
+        .source = bytes,
+        .source_storage = storage,
         .inline_nodes = resolved.inline_nodes,
         .inline_next = resolved.inline_next,
         .blocks = resolved.blocks,
@@ -78,8 +53,8 @@ test {
     _ = @import("parse/raw.zig");
 }
 
-test "parseBorrowed builds a document for a single paragraph" {
-    var doc = try parseBorrowed(std.testing.allocator, "Hello\n");
+test "parse builds a document for a single paragraph" {
+    var doc = try parse(std.testing.allocator, .{ .borrowed = "Hello\n" });
     defer doc.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
@@ -154,7 +129,7 @@ const TrackingAllocator = struct {
     }
 };
 
-test "parseBorrowed does not free the caller-owned source buffer on deinit" {
+test "parse with borrowed source does not free the caller-owned buffer on deinit" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
 
@@ -165,7 +140,7 @@ test "parseBorrowed does not free the caller-owned source buffer on deinit" {
     defer if (!tracking.tracked_freed) allocator.free(source);
     tracking.track(source);
 
-    var doc = try parseBorrowed(allocator, source);
+    var doc = try parse(allocator, .{ .borrowed = source });
     doc.deinit();
 
     try std.testing.expect(!tracking.tracked_freed);
@@ -174,7 +149,7 @@ test "parseBorrowed does not free the caller-owned source buffer on deinit" {
     try std.testing.expect(tracking.tracked_freed);
 }
 
-test "parseOwned frees the source buffer on deinit" {
+test "parse with owned source frees the buffer on deinit" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
 
@@ -184,16 +159,16 @@ test "parseOwned frees the source buffer on deinit" {
     const source = try allocator.dupe(u8, "Hello\n");
     tracking.track(source);
 
-    var doc = try parseOwned(allocator, .{
+    var doc = try parse(allocator, .{ .owned = .{
         .allocator = allocator,
         .buffer = source,
-    });
+    } });
     try std.testing.expect(!tracking.tracked_freed);
     doc.deinit();
     try std.testing.expect(tracking.tracked_freed);
 }
 
-test "parseOwned can free source with a different allocator than AST storage" {
+test "parse with owned source can free buffer with a different allocator than AST storage" {
     var ast_gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = ast_gpa.deinit();
 
@@ -206,10 +181,10 @@ test "parseOwned can free source with a different allocator than AST storage" {
     const source = try source_allocator.dupe(u8, "Hello\n");
     source_tracking.track(source);
 
-    var doc = try parseOwned(ast_gpa.allocator(), .{
+    var doc = try parse(ast_gpa.allocator(), .{ .owned = .{
         .allocator = source_allocator,
         .buffer = source,
-    });
+    } });
 
     try std.testing.expect(!source_tracking.tracked_freed);
     doc.deinit();

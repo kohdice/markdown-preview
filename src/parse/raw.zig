@@ -62,11 +62,6 @@ pub const RawBlock = union(enum) {
 
 pub const BuildError = std.mem.Allocator.Error || error{UnclosedCodeSpan};
 
-/// Arena-scoped. Mixes owning allocations (outer slices, duped link keys
-/// and URLs, joined code-block buffers) with borrowed slices into the
-/// source buffer; no per-node discriminator distinguishes the two, so no
-/// safe `deinit` can be provided. Must be built on an arena and freed by
-/// draining the arena (see `parse.parseBorrowed`/`parseOwned`).
 pub const RawDocument = struct {
     blocks: []const RawBlock,
     link_defs: ast.LinkDefMap,

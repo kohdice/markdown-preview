@@ -2,6 +2,9 @@ const std = @import("std");
 const builtin = @import("builtin");
 const width = @import("width.zig");
 
+pub const AmbiguousWidth = width.AmbiguousWidth;
+pub const displayWidth = width.displayWidth;
+
 pub const TerminalSize = struct {
     cols: usize,
     rows: usize,

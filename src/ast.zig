@@ -1,4 +1,5 @@
 const std = @import("std");
+const source_mod = @import("source");
 
 pub const LinkDef = struct {
     url: []const u8,
@@ -47,14 +48,8 @@ pub const TableCell = struct {
 };
 
 pub const Document = struct {
-    pub const OwnedSource = struct {
-        allocator: std.mem.Allocator,
-        buffer: []u8,
-    };
-
-    pub const MappedSource = struct {
-        bytes: []align(std.heap.page_size_min) const u8,
-    };
+    pub const OwnedSource = source_mod.Source.Owned;
+    pub const MappedSource = source_mod.Source.Mapped;
 
     pub const SourceStorage = union(enum) {
         borrowed,

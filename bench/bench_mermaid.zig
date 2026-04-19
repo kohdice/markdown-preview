@@ -1,7 +1,6 @@
 const std = @import("std");
 const bench = @import("bench_support.zig");
-const markdown_preview = @import("markdown_preview");
-const mermaid = markdown_preview.mermaid;
+const mermaid = @import("mermaid");
 
 const CompileResult = struct {
     elapsed_ns: u64,

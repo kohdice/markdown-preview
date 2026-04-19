@@ -46,12 +46,19 @@ pub fn build(b: *std.Build) void {
         .ts_json_dep = ts_json_dep,
     });
 
+    const source_mod = b.createModule(.{
+        .root_source_file = b.path("src/source.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
     attachTreeSitter(exe_mod, ts_support);
+    exe_mod.addImport("source", source_mod);
 
     const exe = b.addExecutable(.{
         .name = "mp",
@@ -94,6 +101,7 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseFast,
     });
     attachTreeSitter(release_exe_mod, release_ts_support);
+    release_exe_mod.addImport("source", source_mod);
 
     const release_exe = b.addExecutable(.{
         .name = "mp-release",
@@ -124,12 +132,19 @@ pub fn build(b: *std.Build) void {
         .root_module = bench_render_mod,
     });
 
+    const mermaid_mod = b.createModule(.{
+        .root_source_file = b.path("src/mermaid.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    mermaid_mod.addImport("source", source_mod);
+
     const bench_mermaid_mod = b.createModule(.{
         .root_source_file = b.path("bench/bench_mermaid.zig"),
         .target = target,
         .optimize = optimize,
     });
-    attachTreeSitter(bench_mermaid_mod, ts_support);
+    bench_mermaid_mod.addImport("mermaid", mermaid_mod);
 
     const bench_mermaid_exe = b.addExecutable(.{
         .name = "mermaid-bench",
@@ -160,6 +175,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const source_loader_mod = b.createModule(.{
+        .root_source_file = b.path("src/source_loader.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    source_loader_mod.addImport("source", source_mod);
+
     const bench_pipeline_mod = b.createModule(.{
         .root_source_file = b.path("bench/bench_pipeline.zig"),
         .target = target,
@@ -167,6 +189,7 @@ pub fn build(b: *std.Build) void {
     });
     attachTreeSitter(bench_pipeline_mod, ts_support);
     bench_pipeline_mod.addImport("fixtures", bench_fixtures_mod);
+    bench_pipeline_mod.addImport("source_loader", source_loader_mod);
 
     const bench_pipeline_exe = b.addExecutable(.{
         .name = "pipeline-bench",
@@ -197,10 +220,10 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     attachTreeSitter(markdown_preview_mod, ts_support);
+    markdown_preview_mod.addImport("source", source_mod);
 
     bench_mod.addImport("markdown_preview", markdown_preview_mod);
     bench_render_mod.addImport("markdown_preview", markdown_preview_mod);
-    bench_mermaid_mod.addImport("markdown_preview", markdown_preview_mod);
     bench_pipeline_mod.addImport("markdown_preview", markdown_preview_mod);
 
     const run_step = b.step("run", "Run the app");
@@ -270,6 +293,7 @@ pub fn build(b: *std.Build) void {
             attachTreeSitter(test_mod, ts_support);
         }
         test_mod.addImport("bench_support", bench_support_mod);
+        test_mod.addImport("source", source_mod);
         if (std.mem.eql(u8, test_root.path, "test/test.zig")) {
             test_mod.addImport("markdown_preview", markdown_preview_mod);
         }

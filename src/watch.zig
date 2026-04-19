@@ -302,16 +302,13 @@ fn renderTo(
     const cycle_alloc = cycle_arena.allocator();
     buffer.reset();
 
-    const loaded = source_loader.loadFile(cycle_alloc, opts.cwd, opts.path) catch |err| {
+    const source = source_loader.loadFile(cycle_alloc, opts.cwd, opts.path) catch |err| {
         buffer.writer.print("mp: unable to read '{s}': {s}\n", .{ opts.path, @errorName(err) }) catch {};
         buffer.writer.flush() catch {};
         return;
     };
 
-    var doc = switch (loaded.storage) {
-        .mapped => |m| parse.parseMapped(cycle_alloc, m),
-        .owned => |o| parse.parseOwned(cycle_alloc, o),
-    } catch {
+    var doc = parse.parse(cycle_alloc, source) catch {
         buffer.writer.writeAll("mp: parse error\n") catch {};
         buffer.writer.flush() catch {};
         return;
@@ -504,7 +501,7 @@ fn naiveLineOffsets(
 test "render cycle produces line offsets matching naive newline scan" {
     const allocator = std.testing.allocator;
 
-    var doc = try parse.parseBorrowed(allocator,
+    var doc = try parse.parse(allocator, .{ .borrowed = 
         \\# Title
         \\
         \\Paragraph one with **bold** and _italic_ text.
@@ -514,7 +511,7 @@ test "render cycle produces line offsets matching naive newline scan" {
         \\
         \\Paragraph two.
         \\
-    );
+    });
     defer doc.deinit();
 
     var renderer: render.Renderer = undefined;
@@ -539,7 +536,7 @@ test "render cycle produces line offsets matching naive newline scan" {
 test "render cycle of empty document produces no line offsets" {
     const allocator = std.testing.allocator;
 
-    var doc = try parse.parseBorrowed(allocator, "");
+    var doc = try parse.parse(allocator, .{ .borrowed = "" });
     defer doc.deinit();
 
     var renderer: render.Renderer = undefined;

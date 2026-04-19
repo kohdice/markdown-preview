@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("ast.zig");
+const parse = @import("parse.zig");
 const term = @import("term.zig");
 const highlight = term.highlight;
 const theme = term.theme;
@@ -47,7 +48,7 @@ pub const Renderer = struct {
     pub fn render(
         self: *Renderer,
         writer: *std.io.Writer,
-        doc: *const ast.Document,
+        doc: *const parse.Document,
         wrap_width: ?usize,
     ) !void {
         _ = self.scratch.reset(.retain_capacity);

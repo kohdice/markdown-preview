@@ -1,12 +1,12 @@
 const std = @import("std");
 const markdown_preview = @import("markdown_preview");
 const parse = markdown_preview.parse;
-const render = markdown_preview.render;
-const source_loader = markdown_preview.source_loader;
+const Renderer = markdown_preview.Renderer;
+const source_loader = @import("source_loader");
 const bench = @import("bench_support.zig");
 const fixtures = @import("fixtures");
 
-const AmbiguousWidth = markdown_preview.term.width.AmbiguousWidth;
+const AmbiguousWidth = markdown_preview.terminal.AmbiguousWidth;
 
 const Fixture = struct {
     name: []const u8,
@@ -127,23 +127,20 @@ fn runOnce(
     ambiguous: AmbiguousWidth,
 ) !Run {
     var read_timer = try std.time.Timer.start();
-    const loaded = try source_loader.loadFile(allocator, std.fs.cwd(), path);
+    const source = try source_loader.loadFile(allocator, std.fs.cwd(), path);
     const read_ns = read_timer.read();
-    const input_bytes = loaded.bytes.len;
+    const input_bytes = source.bytes().len;
 
     var parse_counting = bench.CountingAllocator.init(allocator);
     const parse_before = parse_counting.snapshot();
     var parse_timer = try std.time.Timer.start();
-    var doc = switch (loaded.storage) {
-        .mapped => |m| try parse.parseMapped(parse_counting.allocator(), m),
-        .owned => |o| try parse.parseOwned(parse_counting.allocator(), o),
-    };
+    var doc = try parse.parse(parse_counting.allocator(), source);
     const parse_ns = parse_timer.read();
     defer doc.deinit();
     const parse_after = parse_counting.snapshot();
 
     var render_counting = bench.CountingAllocator.init(allocator);
-    var renderer: render.Renderer = undefined;
+    var renderer: Renderer = undefined;
     renderer.init(render_counting.allocator(), .{ .ambiguous_width = ambiguous });
     defer renderer.deinit();
 
