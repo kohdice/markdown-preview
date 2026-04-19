@@ -1,6 +1,3 @@
-//! Fuses render buffering with line-index construction so watch mode avoids a
-//! second pass over output and can reuse arena-backed storage via `reset`.
-
 const std = @import("std");
 
 pub const RenderBuffer = struct {
@@ -67,10 +64,34 @@ pub const RenderBuffer = struct {
     }
 
     fn appendSlice(self: *RenderBuffer, slice: []const u8) !void {
-        for (slice) |byte| try self.appendByte(byte);
+        if (slice.len == 0) return;
+        if (slice.len == 1) return self.appendByte(slice[0]);
+
+        const base = self.bytes.items.len;
+
+        if (base == 0 and self.line_offsets.items.len == 0) {
+            try self.line_offsets.append(self.allocator, 0);
+        }
+
+        if (self.pending_newline) {
+            try self.line_offsets.append(self.allocator, base);
+            self.pending_newline = false;
+        }
+
+        try self.bytes.appendSlice(self.allocator, slice);
+
+        var pos: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, slice, pos, '\n')) |nl| {
+            if (nl + 1 < slice.len) {
+                try self.line_offsets.append(self.allocator, base + nl + 1);
+            } else {
+                self.pending_newline = true;
+            }
+            pos = nl + 1;
+        }
     }
 
-    fn appendByte(self: *RenderBuffer, byte: u8) !void {
+    inline fn appendByte(self: *RenderBuffer, byte: u8) !void {
         if (self.pending_newline) {
             try self.line_offsets.append(self.allocator, self.bytes.items.len);
             self.pending_newline = false;
