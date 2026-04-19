@@ -84,6 +84,18 @@ pub fn build(b: *std.Build) void {
         .root_module = bench_render_mod,
     });
 
+    const bench_mermaid_mod = b.createModule(.{
+        .root_source_file = b.path("bench/bench_mermaid.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    attachTreeSitter(bench_mermaid_mod, ts_support);
+
+    const bench_mermaid_exe = b.addExecutable(.{
+        .name = "mermaid-bench",
+        .root_module = bench_mermaid_mod,
+    });
+
     const bench_support_mod = b.createModule(.{
         .root_source_file = b.path("bench/bench_support.zig"),
         .target = target,
@@ -99,6 +111,7 @@ pub fn build(b: *std.Build) void {
 
     bench_mod.addImport("markdown_preview", markdown_preview_mod);
     bench_render_mod.addImport("markdown_preview", markdown_preview_mod);
+    bench_mermaid_mod.addImport("markdown_preview", markdown_preview_mod);
 
     const run_step = b.step("run", "Run the app");
     const run_cmd = b.addRunArtifact(exe);
@@ -116,6 +129,10 @@ pub fn build(b: *std.Build) void {
     const bench_render_step = b.step("bench-render", "Run table render benchmarks");
     const run_bench_render = b.addRunArtifact(bench_render_exe);
     bench_render_step.dependOn(&run_bench_render.step);
+
+    const bench_mermaid_step = b.step("bench-mermaid", "Run Mermaid compile/paint benchmarks");
+    const run_bench_mermaid = b.addRunArtifact(bench_mermaid_exe);
+    bench_mermaid_step.dependOn(&run_bench_mermaid.step);
 
     const test_step = b.step("test", "Run tests");
     const test_roots = [_]struct {
