@@ -1,5 +1,8 @@
 const std = @import("std");
+const source_mod = @import("source.zig");
 const types = @import("types.zig");
+
+pub const Source = source_mod.Source;
 
 pub const ParseError = error{
     InvalidMermaid,
@@ -50,7 +53,15 @@ fn validateIdent(text: []const u8) ParseError!void {
     }
 }
 
-pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!types.ErDiagram {
+pub fn parseSource(allocator: std.mem.Allocator, source: anytype) ParseError!types.ErDiagram {
+    const owned_source: []u8 = if (@TypeOf(source) == Source) switch (source) {
+        .borrowed => |s| try allocator.dupe(u8, s),
+        .owned => |s| s,
+    } else try allocator.dupe(u8, source);
+    return parseFromOwned(allocator, owned_source);
+}
+
+fn parseFromOwned(allocator: std.mem.Allocator, owned_source: []u8) ParseError!types.ErDiagram {
     var parser: Parser = .{ .allocator = allocator };
     defer parser.interned.deinit(allocator);
     errdefer {
@@ -61,11 +72,16 @@ pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!
         parser.owned_strings.deinit(allocator);
     }
 
+    {
+        errdefer allocator.free(owned_source);
+        try parser.owned_strings.append(allocator, owned_source);
+    }
+
     var header_seen = false;
     var in_block = false;
     var block_entity: types.NodeId = 0;
 
-    var it = std.mem.splitScalar(u8, source, '\n');
+    var it = std.mem.splitScalar(u8, owned_source, '\n');
     while (it.next()) |raw| {
         const stripped_cr = std.mem.trimRight(u8, raw, "\r");
         const trimmed = std.mem.trim(u8, stripped_cr, " \t");

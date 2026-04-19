@@ -1,7 +1,10 @@
 const std = @import("std");
+const source_mod = @import("source.zig");
 const types = @import("types.zig");
 const unicode_letter = @import("unicode_letter.zig");
 const width_mod = @import("../term/width.zig");
+
+pub const Source = source_mod.Source;
 
 pub const ParseError = error{
     InvalidMermaid,
@@ -105,7 +108,15 @@ fn validateLabel(label: []const u8) ParseError!void {
     }
 }
 
-pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!types.MermaidGraph {
+pub fn parseSource(allocator: std.mem.Allocator, source: anytype) ParseError!types.MermaidGraph {
+    const owned_source: []u8 = if (@TypeOf(source) == Source) switch (source) {
+        .borrowed => |s| try allocator.dupe(u8, s),
+        .owned => |s| s,
+    } else try allocator.dupe(u8, source);
+    return parseFromOwned(allocator, owned_source);
+}
+
+fn parseFromOwned(allocator: std.mem.Allocator, owned_source: []u8) ParseError!types.MermaidGraph {
     var parser: Parser = .{ .allocator = allocator };
     defer parser.interned.deinit(allocator);
     defer parser.ctx_stack.deinit(allocator);
@@ -122,9 +133,14 @@ pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!
         parser.owned_strings.deinit(allocator);
     }
 
+    {
+        errdefer allocator.free(owned_source);
+        try parser.owned_strings.append(allocator, owned_source);
+    }
+
     var header_seen = false;
     var top_direction: types.Direction = .top_down;
-    var it = std.mem.splitScalar(u8, source, '\n');
+    var it = std.mem.splitScalar(u8, owned_source, '\n');
     while (it.next()) |raw| {
         const stripped_cr = std.mem.trimRight(u8, raw, "\r");
         const trimmed = std.mem.trim(u8, stripped_cr, " \t");
@@ -450,13 +466,10 @@ fn sideTag(side: StateSide) []const u8 {
     };
 }
 
-/// Transition/description identifiers. Upstream `[\w\p{L}-]+` (/u flag).
 fn validateIdent(text: []const u8) ParseError!void {
     return validateIdentImpl(text, true);
 }
 
-/// State declaration identifiers (composite `state X {` and alias
-/// `state "Label" as X`). Upstream `[\w\p{L}]+` (/u flag) — hyphens disallowed.
 fn validateIdentDeclaration(text: []const u8) ParseError!void {
     return validateIdentImpl(text, false);
 }
@@ -636,22 +649,18 @@ test "silently skips aliased composite with hyphenated id" {
 }
 
 test "rejects non-Letter codepoints inside Letter-dominated blocks" {
-    // U+30A0 Katakana-Hiragana Double Hyphen (Po, not Lo).
     try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
         \\stateDiagram-v2
         \\    \u{30A0} --> B
     ));
-    // U+0660 Arabic-Indic Digit Zero (Nd, not L).
     try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
         \\stateDiagram-v2
         \\    \u{0660} --> B
     ));
-    // U+0E47 Thai Maitaikhu (Mn mark, not Letter).
     try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
         \\stateDiagram-v2
         \\    \u{0E47} --> B
     ));
-    // U+0984 Bengali reserved codepoint (not assigned, falls in a hole).
     try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
         \\stateDiagram-v2
         \\    \u{0984} --> B
@@ -677,15 +686,12 @@ test "accepts Tifinagh letter identifiers" {
 }
 
 test "accepts SMP Letter identifiers (Deseret, Old Italic)" {
-    // U+10400 DESERET CAPITAL LETTER LONG I (Lu)
     var g1 = try parseSource(std.testing.allocator, "stateDiagram-v2\n    \u{10400} --> \u{10428}\n");
     defer g1.deinit();
     try std.testing.expectEqual(@as(usize, 2), g1.nodes.len);
-    // U+10300 OLD ITALIC LETTER A (Lo)
     var g2 = try parseSource(std.testing.allocator, "stateDiagram-v2\n    \u{10300} --> \u{10310}\n");
     defer g2.deinit();
     try std.testing.expectEqual(@as(usize, 2), g2.nodes.len);
-    // U+30FB Katakana Middle Dot (Po, not Lo).
     try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
         \\stateDiagram-v2
         \\    \u{30FB} --> B
@@ -693,14 +699,12 @@ test "accepts SMP Letter identifiers (Deseret, Old Italic)" {
 }
 
 test "accepts Adlam letter identifiers" {
-    // U+1E900 ADLAM CAPITAL LETTER ALIF (Lu)
     var g = try parseSource(std.testing.allocator, "stateDiagram-v2\n    \u{1E900} --> \u{1E922}\n");
     defer g.deinit();
     try std.testing.expectEqual(@as(usize, 2), g.nodes.len);
 }
 
 test "accepts Mende Kikakui letter identifiers" {
-    // U+1E800 MENDE KIKAKUI SYLLABLE M001 KI (Lo)
     var g = try parseSource(std.testing.allocator, "stateDiagram-v2\n    \u{1E800} --> \u{1E810}\n");
     defer g.deinit();
     try std.testing.expectEqual(@as(usize, 2), g.nodes.len);

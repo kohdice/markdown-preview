@@ -1,6 +1,9 @@
 const std = @import("std");
+const source_mod = @import("source.zig");
 const types = @import("types.zig");
 const width_mod = @import("../term/width.zig");
+
+pub const Source = source_mod.Source;
 
 pub const ParseError = error{
     InvalidMermaid,
@@ -61,7 +64,15 @@ fn validateLabel(label: []const u8) ParseError!void {
     }
 }
 
-pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!types.SequenceDiagram {
+pub fn parseSource(allocator: std.mem.Allocator, source: anytype) ParseError!types.SequenceDiagram {
+    const owned_source: []u8 = if (@TypeOf(source) == Source) switch (source) {
+        .borrowed => |s| try allocator.dupe(u8, s),
+        .owned => |s| s,
+    } else try allocator.dupe(u8, source);
+    return parseFromOwned(allocator, owned_source);
+}
+
+fn parseFromOwned(allocator: std.mem.Allocator, owned_source: []u8) ParseError!types.SequenceDiagram {
     var parser: Parser = .{ .allocator = allocator };
     defer parser.interned.deinit(allocator);
     defer {
@@ -87,8 +98,13 @@ pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!
         parser.owned_strings.deinit(allocator);
     }
 
+    {
+        errdefer allocator.free(owned_source);
+        try parser.owned_strings.append(allocator, owned_source);
+    }
+
     var header_seen = false;
-    var it = std.mem.splitScalar(u8, source, '\n');
+    var it = std.mem.splitScalar(u8, owned_source, '\n');
     while (it.next()) |raw| {
         const stripped_cr = std.mem.trimRight(u8, raw, "\r");
         const trimmed = std.mem.trim(u8, stripped_cr, " \t");
@@ -243,7 +259,6 @@ fn parseBlockKeyword(line: []const u8) ?BlockMatch {
     };
 
     for (keywords) |kw| {
-        // Case-sensitive matching (upstream does not use /i for block keywords)
         if (std.mem.startsWith(u8, line, kw.prefix)) {
             return .{
                 .kind = kw.kind,
@@ -287,7 +302,6 @@ fn tryParseElseAnd(parser: *Parser, line: []const u8) ParseError!bool {
 }
 
 fn tryParseNote(parser: *Parser, line: []const u8) ParseError!bool {
-    // Note is case-insensitive (upstream uses /i flag)
     if (!std.ascii.startsWithIgnoreCase(line, "note ")) return false;
 
     var rest = std.mem.trimLeft(u8, line["note ".len..], " \t");
@@ -397,8 +411,6 @@ fn tryParseParticipant(parser: *Parser, line: []const u8) ParticipantError!void 
     parser.participants.items[id].kind = kind;
 }
 
-/// Upstream `\S+?` equivalent: accepts any non-empty string without
-/// whitespace characters.
 fn validateSequenceActorId(text: []const u8) ParseError!void {
     if (text.len == 0) return error.InvalidMermaid;
     for (text) |b| {
@@ -848,9 +860,7 @@ test "loop internal else records as divider (upstream parity)" {
 test "loop internal option records as divider (upstream parity)" {
     // Upstream mermaid treats `else`, `and`, and `option` as a generic
     // divider keyword inside any non-empty block context rather than
-    // pairing them with a specific block kind. This test pins that
-    // stance — `option` inside a `loop` is accepted as a divider, not
-    // silently ignored, matching the sibling `else`-in-`loop` test.
+    // pairing them with a specific block kind.
     var d = try parseSource(std.testing.allocator,
         \\sequenceDiagram
         \\    loop x

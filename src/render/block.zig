@@ -308,16 +308,18 @@ pub const RenderSession = struct {
         }
     }
 
-    fn writeMermaidBody(self: *RenderSession, content: []const u8) mermaid.RenderError!void {
-        const opts: mermaid.Options = .{
+    fn writeMermaidBody(self: *RenderSession, content: []const u8) mermaid.PaintError!void {
+        const opts: mermaid.PaintOptions = .{
             .enable_ansi = self.ctx.enable_ansi,
             .wrap_width = self.wrap_width,
             .ambiguous_width = self.ctx.ambiguous_width,
         };
-        try mermaid.writeMermaid(self.writer, self.ephemeral_allocator, content, opts);
+        var diagram = try mermaid.compile(self.ephemeral_allocator, content);
+        defer diagram.deinit();
+        try mermaid.paint(self.writer, self.ephemeral_allocator, &diagram, opts);
     }
 
-    fn writeMermaidFallback(self: *RenderSession, content: []const u8, err: mermaid.RenderError) !void {
+    fn writeMermaidFallback(self: *RenderSession, content: []const u8, err: mermaid.PaintError) !void {
         const label = switch (err) {
             error.UnsupportedDiagram => "[mermaid: diagram type not yet supported by mp]\n",
             error.UnsupportedFeature => "[mermaid: feature not yet supported by mp]\n",

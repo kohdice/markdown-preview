@@ -1,6 +1,8 @@
 const std = @import("std");
+const source_mod = @import("source.zig");
 const types = @import("types.zig");
-const directive = @import("directive.zig");
+
+pub const Source = source_mod.Source;
 
 pub const ParseError = error{
     InvalidMermaid,
@@ -14,6 +16,7 @@ const Parser = struct {
     branches: std.ArrayListUnmanaged(types.GitBranch) = .empty,
     commits: std.ArrayListUnmanaged(types.GitCommit) = .empty,
     branch_index: std.StringHashMapUnmanaged(u16) = .empty,
+    owned_strings: std.ArrayListUnmanaged([]u8) = .empty,
     current_lane: u16 = 0,
 
     fn ensureMain(self: *Parser) ParseError!void {
@@ -58,24 +61,34 @@ const Parser = struct {
     }
 };
 
-pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!types.GitGraph {
-    const stripped = directive.stripInitDirectives(allocator, source, &.{"\"gitGraph\""}) catch |err| switch (err) {
-        error.InvalidDirective => return error.InvalidMermaid,
-        error.UnsupportedFeature => return error.UnsupportedFeature,
-        error.OutOfMemory => return error.OutOfMemory,
-    };
-    errdefer allocator.free(stripped);
+/// `source` must already be stripped of `%%{init: ...}%%` directives by
+/// `compile` or the caller. Parsing does not revisit directive semantics.
+pub fn parseSource(allocator: std.mem.Allocator, source: anytype) ParseError!types.GitGraph {
+    const owned_source: []u8 = if (@TypeOf(source) == Source) switch (source) {
+        .borrowed => |s| try allocator.dupe(u8, s),
+        .owned => |s| s,
+    } else try allocator.dupe(u8, source);
+    return parseFromOwned(allocator, owned_source);
+}
 
+fn parseFromOwned(allocator: std.mem.Allocator, owned_source: []u8) ParseError!types.GitGraph {
     var parser: Parser = .{ .allocator = allocator };
     defer parser.branch_index.deinit(allocator);
     errdefer {
         parser.branches.deinit(allocator);
         parser.commits.deinit(allocator);
+        for (parser.owned_strings.items) |s| allocator.free(s);
+        parser.owned_strings.deinit(allocator);
+    }
+
+    {
+        errdefer allocator.free(owned_source);
+        try parser.owned_strings.append(allocator, owned_source);
     }
 
     var header_seen = false;
 
-    var it = std.mem.splitScalar(u8, stripped, '\n');
+    var it = std.mem.splitScalar(u8, owned_source, '\n');
     while (it.next()) |raw| {
         const stripped_cr = std.mem.trimRight(u8, raw, "\r");
         const trimmed = std.mem.trim(u8, stripped_cr, " \t");
@@ -97,12 +110,13 @@ pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!
 
     const branches = try parser.branches.toOwnedSlice(allocator);
     const commits = try parser.commits.toOwnedSlice(allocator);
+    const owned_strings = try parser.owned_strings.toOwnedSlice(allocator);
 
     return .{
         .allocator = allocator,
         .branches = branches,
         .commits = commits,
-        .source_buf = stripped,
+        .owned_strings = owned_strings,
     };
 }
 
@@ -382,33 +396,6 @@ test "rejects branch order: suffix" {
         \\gitGraph
         \\    commit
         \\    branch develop order: 2
-    ));
-}
-
-test "rejects init directive carrying gitGraph config" {
-    try std.testing.expectError(error.UnsupportedFeature, parseSource(std.testing.allocator,
-        \\%%{init: { "gitGraph": { "mainBranchName": "trunk" } }}%%
-        \\gitGraph
-        \\    commit
-    ));
-}
-
-test "silently skips theme-only init directive" {
-    var g = try parseSource(std.testing.allocator,
-        \\%%{init: { "theme": "dark" }}%%
-        \\gitGraph
-        \\    commit
-    );
-    defer g.deinit();
-    try std.testing.expectEqual(@as(usize, 1), g.commits.len);
-    try std.testing.expectEqual(@as(usize, 1), g.branches.len);
-}
-
-test "rejects unclosed init directive as invalid" {
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
-        \\%%{init:
-        \\gitGraph
-        \\    commit
     ));
 }
 

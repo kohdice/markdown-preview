@@ -1,6 +1,9 @@
 const std = @import("std");
+const source_mod = @import("source.zig");
 const types = @import("types.zig");
 const width_mod = @import("../term/width.zig");
+
+pub const Source = source_mod.Source;
 
 pub const ParseError = error{
     InvalidMermaid,
@@ -78,7 +81,6 @@ fn validateLabel(label: []const u8) ParseError!void {
     }
 }
 
-/// Upstream `\S+?` — any non-empty, non-whitespace sequence.
 fn validateIdent(text: []const u8) ParseError!void {
     if (text.len == 0) return error.InvalidMermaid;
     for (text) |b| {
@@ -86,7 +88,15 @@ fn validateIdent(text: []const u8) ParseError!void {
     }
 }
 
-pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!types.ClassDiagram {
+pub fn parseSource(allocator: std.mem.Allocator, source: anytype) ParseError!types.ClassDiagram {
+    const owned_source: []u8 = if (@TypeOf(source) == Source) switch (source) {
+        .borrowed => |s| try allocator.dupe(u8, s),
+        .owned => |s| s,
+    } else try allocator.dupe(u8, source);
+    return parseFromOwned(allocator, owned_source);
+}
+
+fn parseFromOwned(allocator: std.mem.Allocator, owned_source: []u8) ParseError!types.ClassDiagram {
     var parser: Parser = .{ .allocator = allocator };
     defer parser.interned.deinit(allocator);
     defer parser.ctx_stack.deinit(allocator);
@@ -103,8 +113,13 @@ pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!
         parser.owned_labels.deinit(allocator);
     }
 
+    {
+        errdefer allocator.free(owned_source);
+        try parser.owned_labels.append(allocator, owned_source);
+    }
+
     var header_seen = false;
-    var it = std.mem.splitScalar(u8, source, '\n');
+    var it = std.mem.splitScalar(u8, owned_source, '\n');
     while (it.next()) |raw| {
         const stripped_cr = std.mem.trimRight(u8, raw, "\r");
         const trimmed = std.mem.trim(u8, stripped_cr, " \t");
@@ -297,11 +312,8 @@ fn parseClassDeclaration(parser: *Parser, rest: []const u8) ParseError!void {
 }
 
 const ClassNameMatch = struct {
-    /// Index into body where the class name ends.
     name_end: usize,
-    /// Inner text of the `~...~` generic parameter, if any.
     generic: ?[]const u8,
-    /// Index into body where trailing content (annotation/block) starts.
     tail_start: usize,
 };
 
