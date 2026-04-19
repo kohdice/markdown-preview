@@ -52,9 +52,14 @@ pub const Document = struct {
         buffer: []u8,
     };
 
+    pub const MappedSource = struct {
+        bytes: []align(std.heap.page_size_min) const u8,
+    };
+
     pub const SourceStorage = union(enum) {
         borrowed,
         owned: OwnedSource,
+        mapped: MappedSource,
     };
 
     pub const Storage = union(enum) {
@@ -80,6 +85,7 @@ pub const Document = struct {
         switch (self.source_storage) {
             .borrowed => {},
             .owned => |owned| owned.allocator.free(owned.buffer),
+            .mapped => |mapped| std.posix.munmap(mapped.bytes),
         }
 
         self.* = .{

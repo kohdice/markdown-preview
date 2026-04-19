@@ -3,9 +3,9 @@ const parse = @import("parse.zig");
 const render = @import("render.zig");
 const term = @import("term.zig");
 const watch = @import("watch.zig");
+const source_loader = @import("source_loader.zig");
 const width = term.width;
 
-const max_file_bytes = 10 * 1024 * 1024;
 const exit_success: u8 = 0;
 const exit_failure: u8 = 1;
 
@@ -104,18 +104,19 @@ pub fn run(opts: RunOptions) !u8 {
         });
     }
 
-    const source = opts.cwd.readFileAlloc(opts.allocator, parsed.path, max_file_bytes) catch |err| {
+    const loaded = source_loader.loadFile(opts.allocator, opts.cwd, parsed.path) catch |err| {
         try opts.stderr.print("mp: unable to read '{s}': {s}\n", .{ parsed.path, @errorName(err) });
         return exit_failure;
     };
 
-    var doc = try parse.parseOwned(opts.allocator, .{
-        .allocator = opts.allocator,
-        .buffer = source,
-    });
+    var doc = switch (loaded.storage) {
+        .mapped => |m| try parse.parseMapped(opts.allocator, m),
+        .owned => |o| try parse.parseOwned(opts.allocator, o),
+    };
     defer doc.deinit();
 
-    var renderer = render.Renderer.init(opts.allocator, .{
+    var renderer: render.Renderer = undefined;
+    renderer.init(opts.allocator, .{
         .enable_ansi = opts.enable_ansi,
         .ambiguous_width = opts.ambiguous_width,
     });

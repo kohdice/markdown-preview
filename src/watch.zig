@@ -5,10 +5,10 @@ const term = @import("term.zig");
 const file_watcher = @import("watch/file_watcher.zig");
 const raw_term = @import("watch/raw_term.zig");
 const render_buffer_mod = @import("watch/render_buffer.zig");
+const source_loader = @import("source_loader.zig");
 const width = term.width;
 const terminal = term.terminal;
 
-const max_file_bytes = 10 * 1024 * 1024;
 const exit_success: u8 = 0;
 const exit_failure: u8 = 1;
 
@@ -302,16 +302,16 @@ fn renderTo(
     const cycle_alloc = cycle_arena.allocator();
     buffer.reset();
 
-    const source = opts.cwd.readFileAlloc(cycle_alloc, opts.path, max_file_bytes) catch |err| {
+    const loaded = source_loader.loadFile(cycle_alloc, opts.cwd, opts.path) catch |err| {
         buffer.writer.print("mp: unable to read '{s}': {s}\n", .{ opts.path, @errorName(err) }) catch {};
         buffer.writer.flush() catch {};
         return;
     };
 
-    var doc = parse.parseOwned(cycle_alloc, .{
-        .allocator = cycle_alloc,
-        .buffer = source,
-    }) catch {
+    var doc = switch (loaded.storage) {
+        .mapped => |m| parse.parseMapped(cycle_alloc, m),
+        .owned => |o| parse.parseOwned(cycle_alloc, o),
+    } catch {
         buffer.writer.writeAll("mp: parse error\n") catch {};
         buffer.writer.flush() catch {};
         return;

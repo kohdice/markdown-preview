@@ -152,6 +152,7 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/watch/raw_term.zig", .needs_tree_sitter = false },
         .{ .path = "src/watch/render_buffer.zig", .needs_tree_sitter = false },
         .{ .path = "src/mermaid.zig", .needs_tree_sitter = false },
+        .{ .path = "src/source_loader.zig", .needs_tree_sitter = false },
     };
 
     for (test_roots) |test_root| {

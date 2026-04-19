@@ -45,6 +45,31 @@ pub fn parseOwned(allocator: std.mem.Allocator, source: ast.Document.OwnedSource
     };
 }
 
+pub fn parseMapped(
+    allocator: std.mem.Allocator,
+    source: ast.Document.MappedSource,
+) !ast.Document {
+    errdefer std.posix.munmap(source.bytes);
+
+    const has_trailing_newline = source.bytes.len > 0 and source.bytes[source.bytes.len - 1] == '\n';
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+
+    const raw_doc = try block_phase.buildRawDocument(arena.allocator(), source.bytes);
+    const resolved = try inline_phase.resolveInlines(arena.allocator(), raw_doc);
+    return .{
+        .source = source.bytes,
+        .source_storage = .{ .mapped = source },
+        .inline_nodes = resolved.inline_nodes,
+        .inline_next = resolved.inline_next,
+        .blocks = resolved.blocks,
+        .link_defs = resolved.link_defs,
+        .has_trailing_newline = has_trailing_newline,
+        .storage = .{ .arena = arena },
+    };
+}
+
 test {
     _ = @import("parse/block_cursor.zig");
     _ = @import("parse/block_phase.zig");
