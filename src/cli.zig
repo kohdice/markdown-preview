@@ -71,18 +71,6 @@ fn parseArgs(args: []const [:0]const u8) ParseError!ParsedArgs {
     return error.MissingPath;
 }
 
-pub fn unwrapWriteError(
-    err: anyerror,
-    stdout_err: ?anyerror,
-    stderr_err: ?anyerror,
-) anyerror {
-    if (err == error.WriteFailed) {
-        if (stdout_err) |underlying| return underlying;
-        if (stderr_err) |underlying| return underlying;
-    }
-    return err;
-}
-
 pub fn run(opts: RunOptions) !u8 {
     const parsed = parseArgs(opts.args) catch {
         try opts.stderr.writeAll(usage_message);
@@ -354,32 +342,4 @@ test "run frees the file buffer carried by the source loader" {
     try std.testing.expectEqual(exit_success, exit_code);
     try std.testing.expectEqualStrings("Owned\n", stdout.writer.buffered());
     try std.testing.expectEqualStrings("", stderr.writer.buffered());
-}
-
-test "unwrapWriteError passes through errors other than WriteFailed" {
-    try std.testing.expectEqual(
-        @as(anyerror, error.OutOfMemory),
-        unwrapWriteError(error.OutOfMemory, error.AccessDenied, error.AccessDenied),
-    );
-}
-
-test "unwrapWriteError surfaces stdout underlying error and prefers it over stderr" {
-    try std.testing.expectEqual(
-        @as(anyerror, error.NoSpaceLeft),
-        unwrapWriteError(error.WriteFailed, error.NoSpaceLeft, error.AccessDenied),
-    );
-}
-
-test "unwrapWriteError falls back to stderr underlying error when stdout has none" {
-    try std.testing.expectEqual(
-        @as(anyerror, error.AccessDenied),
-        unwrapWriteError(error.WriteFailed, null, error.AccessDenied),
-    );
-}
-
-test "unwrapWriteError returns WriteFailed unchanged when both underlying errors are null" {
-    try std.testing.expectEqual(
-        @as(anyerror, error.WriteFailed),
-        unwrapWriteError(error.WriteFailed, null, null),
-    );
 }

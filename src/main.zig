@@ -40,10 +40,22 @@ pub fn main() !void {
         .enable_ansi = enable_ansi,
         .wrap_width = wrap_width,
         .ambiguous_width = ambiguous_default,
-    }) catch |err| return cli.unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
+    }) catch |err| return unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
 
-    stdout_stream.interface.flush() catch |err| return cli.unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
-    stderr_stream.interface.flush() catch |err| return cli.unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
+    stdout_stream.interface.flush() catch |err| return unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
+    stderr_stream.interface.flush() catch |err| return unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
 
     if (exit_code != 0) std.process.exit(exit_code);
+}
+
+fn unwrapWriteError(
+    err: anyerror,
+    stdout_err: ?anyerror,
+    stderr_err: ?anyerror,
+) anyerror {
+    if (err == error.WriteFailed) {
+        if (stdout_err) |underlying| return underlying;
+        if (stderr_err) |underlying| return underlying;
+    }
+    return err;
 }
