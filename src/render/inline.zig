@@ -2,6 +2,7 @@ const std = @import("std");
 const ansi = @import("../term/ansi.zig");
 const ast = @import("../ast.zig");
 const text = @import("../text.zig");
+const width_mod = @import("../term/width.zig");
 const theme = @import("../term/theme.zig");
 const render_context = @import("context.zig");
 const RenderContext = render_context.RenderContext;
@@ -45,79 +46,161 @@ pub const ContainerKind = enum {
     strikethrough,
 };
 
-const WriteVisitor = struct {
-    pub const Error = error{WriteFailed};
+fn InlineVisitor(comptime measure: bool) type {
+    return struct {
+        pub const Error = error{WriteFailed};
+        const Self = @This();
 
-    ctx: *const RenderContext,
-    writer: *std.io.Writer,
-    current_style: ansi.TextStyle,
+        ctx: *const RenderContext,
+        writer: *std.io.Writer,
+        sgr_state: *ansi.StyledState,
+        current_style: ansi.TextStyle,
+        width_total: if (measure) usize else void,
+        ambiguous: if (measure) width_mod.AmbiguousWidth else void,
 
-    pub fn onText(self: *WriteVisitor, content: []const u8) Error!void {
-        try writeTextWithEntities(self.writer, self.ctx.enable_ansi, self.current_style, content);
-    }
-
-    pub fn onCodeSpan(self: *WriteVisitor, content: []const u8) Error!void {
-        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, .{ .fg = self.ctx.palette.inline_code }, content);
-    }
-
-    pub fn onAutolink(self: *WriteVisitor, url: []const u8) Error!void {
-        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, self.current_style.merge(.{ .fg = self.ctx.palette.link, .underline = true }), url);
-    }
-
-    pub fn onSoftBreak(self: *WriteVisitor) Error!void {
-        try self.writer.writeByte('\n');
-    }
-
-    pub fn onHardBreak(self: *WriteVisitor) Error!void {
-        try self.writer.writeByte('\n');
-    }
-
-    pub fn onContainer(self: *WriteVisitor, kind: ContainerKind, doc: *const ast.Document, children: ast.InlineRef) Error!void {
-        const saved = self.current_style;
-        self.current_style = self.current_style.merge(switch (kind) {
-            .emphasis => ansi.TextStyle{ .italic = true },
-            .strong => ansi.TextStyle{ .bold = true },
-            .bold_italic => ansi.TextStyle{ .bold = true, .italic = true },
-            .strikethrough => ansi.TextStyle{ .strikethrough = true },
-        });
-        try traverseInlineChain(WriteVisitor, self, doc, children);
-        self.current_style = saved;
-    }
-
-    pub fn onLink(self: *WriteVisitor, doc: *const ast.Document, link: ast.LinkInline) Error!void {
-        const saved = self.current_style;
-        self.current_style = self.current_style.merge(.{ .fg = self.ctx.palette.link, .underline = true });
-        try traverseInlineChain(WriteVisitor, self, doc, link.children);
-        self.current_style = saved;
-
-        const muted_dim: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .dim = true };
-        try writeUrlDisplay(self.writer, self.ctx.enable_ansi, muted_dim, link.url);
-        if (link.title) |t| {
-            const title_style: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .dim = true, .italic = true };
-            try ansi.writeStyled(self.writer, self.ctx.enable_ansi, title_style, link_title_separator);
-            try ansi.writeStyled(self.writer, self.ctx.enable_ansi, title_style, t);
+        inline fn addWidth(self: *Self, bytes: []const u8) void {
+            if (comptime measure) {
+                self.width_total += width_mod.displayWidth(bytes, self.ambiguous);
+            }
         }
-    }
 
-    pub fn onImage(self: *WriteVisitor, doc: *const ast.Document, img: ast.ImageInline) Error!void {
-        const img_style: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .italic = true };
-        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, img_style, image_alt_prefix);
-
-        const saved = self.current_style;
-        self.current_style = img_style;
-        try traverseInlineChain(WriteVisitor, self, doc, img.children);
-        self.current_style = saved;
-
-        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, img_style, image_alt_suffix);
-        const muted_dim: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .dim = true };
-        try writeUrlDisplay(self.writer, self.ctx.enable_ansi, muted_dim, img.url);
-        if (img.title) |t| {
-            const title_style: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .dim = true, .italic = true };
-            try ansi.writeStyled(self.writer, self.ctx.enable_ansi, title_style, link_title_separator);
-            try ansi.writeStyled(self.writer, self.ctx.enable_ansi, title_style, t);
+        pub fn onText(self: *Self, content: []const u8) Error!void {
+            try writeTextWithEntities(self, content, self.current_style);
         }
-    }
-};
+
+        pub fn onCodeSpan(self: *Self, content: []const u8) Error!void {
+            self.addWidth(content);
+            try ansi.writeStyledRun(
+                self.writer,
+                self.ctx.enable_ansi,
+                self.sgr_state,
+                .{ .fg = self.ctx.palette.inline_code },
+                content,
+            );
+        }
+
+        pub fn onAutolink(self: *Self, url: []const u8) Error!void {
+            self.addWidth(url);
+            try ansi.writeStyledRun(
+                self.writer,
+                self.ctx.enable_ansi,
+                self.sgr_state,
+                self.current_style.merge(.{ .fg = self.ctx.palette.link, .underline = true }),
+                url,
+            );
+        }
+
+        pub fn onSoftBreak(self: *Self) Error!void {
+            try ansi.flushStyle(self.writer, self.sgr_state);
+            self.writer.writeByte('\n') catch return error.WriteFailed;
+        }
+
+        pub fn onHardBreak(self: *Self) Error!void {
+            try ansi.flushStyle(self.writer, self.sgr_state);
+            self.writer.writeByte('\n') catch return error.WriteFailed;
+        }
+
+        pub fn onContainer(self: *Self, kind: ContainerKind, doc: *const ast.Document, children: ast.InlineRef) Error!void {
+            const saved = self.current_style;
+            self.current_style = self.current_style.merge(switch (kind) {
+                .emphasis => ansi.TextStyle{ .italic = true },
+                .strong => ansi.TextStyle{ .bold = true },
+                .bold_italic => ansi.TextStyle{ .bold = true, .italic = true },
+                .strikethrough => ansi.TextStyle{ .strikethrough = true },
+            });
+            try traverseInlineChain(Self, self, doc, children);
+            self.current_style = saved;
+        }
+
+        pub fn onLink(self: *Self, doc: *const ast.Document, link: ast.LinkInline) Error!void {
+            const saved = self.current_style;
+            self.current_style = self.current_style.merge(.{ .fg = self.ctx.palette.link, .underline = true });
+            try traverseInlineChain(Self, self, doc, link.children);
+            self.current_style = saved;
+
+            const muted_dim: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .dim = true };
+            try writeUrlDisplay(self, muted_dim, link.url);
+            if (link.title) |t| {
+                const title_style: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .dim = true, .italic = true };
+                self.addWidth(link_title_separator);
+                self.addWidth(t);
+                try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, title_style, link_title_separator);
+                try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, title_style, t);
+            }
+        }
+
+        pub fn onImage(self: *Self, doc: *const ast.Document, img: ast.ImageInline) Error!void {
+            const img_style: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .italic = true };
+            self.addWidth(image_alt_prefix);
+            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, img_style, image_alt_prefix);
+
+            const saved = self.current_style;
+            self.current_style = img_style;
+            try traverseInlineChain(Self, self, doc, img.children);
+            self.current_style = saved;
+
+            self.addWidth(image_alt_suffix);
+            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, img_style, image_alt_suffix);
+            const muted_dim: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .dim = true };
+            try writeUrlDisplay(self, muted_dim, img.url);
+            if (img.title) |t| {
+                const title_style: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .dim = true, .italic = true };
+                self.addWidth(link_title_separator);
+                self.addWidth(t);
+                try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, title_style, link_title_separator);
+                try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, title_style, t);
+            }
+        }
+
+        fn writeUrlDisplay(self: *Self, style: ansi.TextStyle, url: []const u8) Error!void {
+            self.addWidth(link_url_open);
+            self.addWidth(url);
+            self.addWidth(link_url_close);
+            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, style, link_url_open);
+            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, style, url);
+            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, style, link_url_close);
+        }
+
+        fn writeTextWithEntities(self: *Self, content: []const u8, style: ansi.TextStyle) Error!void {
+            if (std.mem.indexOfScalar(u8, content, '&') == null) {
+                self.addWidth(content);
+                try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, style, content);
+                return;
+            }
+
+            var pos: usize = 0;
+            var plain_start: usize = 0;
+
+            while (pos < content.len) {
+                if (content[pos] == '&') {
+                    if (text.decode(content, pos)) |result| {
+                        if (plain_start < pos) {
+                            const plain = content[plain_start..pos];
+                            self.addWidth(plain);
+                            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, style, plain);
+                        }
+                        const decoded = result.bytes[0..result.len];
+                        self.addWidth(decoded);
+                        try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, style, decoded);
+                        pos = result.end;
+                        plain_start = pos;
+                        continue;
+                    }
+                }
+                pos += 1;
+            }
+
+            if (plain_start < content.len) {
+                const tail = content[plain_start..];
+                self.addWidth(tail);
+                try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, style, tail);
+            }
+        }
+    };
+}
+
+const WriteVisitor = InlineVisitor(false);
+const MeasureWriteVisitor = InlineVisitor(true);
 
 pub fn writeInlineChain(
     ctx: *const RenderContext,
@@ -125,62 +208,151 @@ pub fn writeInlineChain(
     first: ast.InlineRef,
     base_style: ansi.TextStyle,
 ) !void {
-    var visitor = WriteVisitor{
+    var sgr_state: ansi.StyledState = .{};
+    var visitor: WriteVisitor = .{
         .ctx = ctx,
         .writer = writer,
+        .sgr_state = &sgr_state,
         .current_style = base_style,
+        .width_total = {},
+        .ambiguous = {},
     };
     try traverseInlineChain(WriteVisitor, &visitor, ctx.doc, first);
+    try ansi.flushStyle(writer, &sgr_state);
 }
 
-const url_display_buf_size: usize = 128;
-const url_display_max_url_len: usize = url_display_buf_size - 2;
-
-fn writeUrlDisplay(
+pub fn writeAndMeasureInlineChain(
+    ctx: *const RenderContext,
     writer: *std.io.Writer,
-    enable_ansi: bool,
-    style: ansi.TextStyle,
-    url: []const u8,
-) !void {
-    if (url.len <= url_display_max_url_len) {
-        var buf: [url_display_buf_size]u8 = undefined;
-        buf[0] = '(';
-        @memcpy(buf[1..][0..url.len], url);
-        buf[1 + url.len] = ')';
-        try ansi.writeStyled(writer, enable_ansi, style, buf[0 .. url.len + 2]);
-    } else {
-        try ansi.writeStyled(writer, enable_ansi, style, link_url_open);
-        try ansi.writeStyled(writer, enable_ansi, style, url);
-        try ansi.writeStyled(writer, enable_ansi, style, link_url_close);
-    }
+    first: ast.InlineRef,
+    base_style: ansi.TextStyle,
+    ambiguous: width_mod.AmbiguousWidth,
+) !usize {
+    var sgr_state: ansi.StyledState = .{};
+    var visitor: MeasureWriteVisitor = .{
+        .ctx = ctx,
+        .writer = writer,
+        .sgr_state = &sgr_state,
+        .current_style = base_style,
+        .width_total = 0,
+        .ambiguous = ambiguous,
+    };
+    try traverseInlineChain(MeasureWriteVisitor, &visitor, ctx.doc, first);
+    try ansi.flushStyle(writer, &sgr_state);
+    return visitor.width_total;
 }
 
-fn writeTextWithEntities(
-    writer: *std.io.Writer,
-    enable_ansi: bool,
-    style: ansi.TextStyle,
-    content: []const u8,
-) !void {
-    if (std.mem.indexOfScalar(u8, content, '&') == null)
-        return ansi.writeStyled(writer, enable_ansi, style, content);
+const testing = std.testing;
 
-    var pos: usize = 0;
-    var plain_start: usize = 0;
+fn testDoc(inline_nodes: []const ast.InlineNode, inline_next: []const ast.InlineRef) ast.Document {
+    return .{
+        .inline_nodes = inline_nodes,
+        .inline_next = inline_next,
+        .blocks = &.{},
+        .link_defs = .{},
+        .has_trailing_newline = false,
+    };
+}
 
-    while (pos < content.len) {
-        if (content[pos] == '&') {
-            if (text.decode(content, pos)) |result| {
-                if (plain_start < pos)
-                    try ansi.writeStyled(writer, enable_ansi, style, content[plain_start..pos]);
-                try ansi.writeStyled(writer, enable_ansi, style, result.bytes[0..result.len]);
-                pos = result.end;
-                plain_start = pos;
-                continue;
-            }
-        }
-        pos += 1;
-    }
+fn measureOnly(doc: *const ast.Document, first: ast.InlineRef, ambiguous: width_mod.AmbiguousWidth) !usize {
+    var sink: [256]u8 = undefined;
+    var discarding: std.io.Writer.Discarding = .init(&sink);
+    const ctx: RenderContext = .{
+        .doc = doc,
+        .enable_ansi = false,
+        .ambiguous_width = ambiguous,
+        .palette = theme.default_palette,
+        .syn_palette = theme.default_syntax_palette,
+    };
+    return try writeAndMeasureInlineChain(&ctx, &discarding.writer, first, .{}, ambiguous);
+}
 
-    if (plain_start < content.len)
-        try ansi.writeStyled(writer, enable_ansi, style, content[plain_start..]);
+test "writeAndMeasureInlineChain measures plain text" {
+    const nodes = [_]ast.InlineNode{.{ .text = "hello" }};
+    const next = [_]ast.InlineRef{ast.no_inline};
+    const doc = testDoc(&nodes, &next);
+    try testing.expectEqual(@as(usize, 5), try measureOnly(&doc, 0, .narrow));
+}
+
+test "writeAndMeasureInlineChain treats soft and hard breaks as zero width" {
+    const nodes = [_]ast.InlineNode{
+        .{ .text = "a" },
+        .soft_break,
+        .{ .text = "b" },
+        .hard_break,
+        .{ .text = "c" },
+    };
+    const next = [_]ast.InlineRef{ 1, 2, 3, 4, ast.no_inline };
+    const doc = testDoc(&nodes, &next);
+    try testing.expectEqual(@as(usize, 3), try measureOnly(&doc, 0, .narrow));
+}
+
+test "writeAndMeasureInlineChain decodes HTML entity when measuring" {
+    const nodes = [_]ast.InlineNode{.{ .text = "a&amp;b" }};
+    const next = [_]ast.InlineRef{ast.no_inline};
+    const doc = testDoc(&nodes, &next);
+    try testing.expectEqual(@as(usize, 3), try measureOnly(&doc, 0, .narrow));
+}
+
+test "writeAndMeasureInlineChain counts CJK text as width two" {
+    const nodes = [_]ast.InlineNode{.{ .text = "漢字" }};
+    const next = [_]ast.InlineRef{ast.no_inline};
+    const doc = testDoc(&nodes, &next);
+    try testing.expectEqual(@as(usize, 4), try measureOnly(&doc, 0, .narrow));
+}
+
+test "writeAndMeasureInlineChain includes link url and delimiters" {
+    const nodes = [_]ast.InlineNode{
+        .{ .link = .{
+            .url = "http://x.co",
+            .title = null,
+            .children = 1,
+        } },
+        .{ .text = "click" },
+    };
+    const next = [_]ast.InlineRef{ ast.no_inline, ast.no_inline };
+    const doc = testDoc(&nodes, &next);
+    try testing.expectEqual(@as(usize, 18), try measureOnly(&doc, 0, .narrow));
+}
+
+test "writeAndMeasureInlineChain includes image alt and url" {
+    const nodes = [_]ast.InlineNode{
+        .{ .image = .{
+            .url = "img.png",
+            .title = null,
+            .children = 1,
+        } },
+        .{ .text = "alt" },
+    };
+    const next = [_]ast.InlineRef{ ast.no_inline, ast.no_inline };
+    const doc = testDoc(&nodes, &next);
+    try testing.expectEqual(@as(usize, 19), try measureOnly(&doc, 0, .narrow));
+}
+
+test "writeAndMeasureInlineChain width equals displayWidth of rendered bytes" {
+    const allocator = testing.allocator;
+    const nodes = [_]ast.InlineNode{
+        .{ .strong = 3 },
+        .{ .text = " " },
+        .{ .link = .{ .url = "http://example.com", .title = "A title", .children = 4 } },
+        .{ .text = "hello &amp; world" },
+        .{ .text = "link" },
+    };
+    const next = [_]ast.InlineRef{ 1, 2, ast.no_inline, ast.no_inline, ast.no_inline };
+    const doc = testDoc(&nodes, &next);
+
+    var buf: std.io.Writer.Allocating = .init(allocator);
+    defer buf.deinit();
+
+    const ctx: RenderContext = .{
+        .doc = &doc,
+        .enable_ansi = false,
+        .ambiguous_width = .narrow,
+        .palette = theme.default_palette,
+        .syn_palette = theme.default_syntax_palette,
+    };
+    const measured = try writeAndMeasureInlineChain(&ctx, &buf.writer, 0, .{}, .narrow);
+    try buf.writer.flush();
+    const rendered = buf.writer.buffered();
+    try testing.expectEqual(width_mod.displayWidth(rendered, .narrow), measured);
 }
