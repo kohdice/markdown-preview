@@ -30,6 +30,24 @@ fn expectInlineText(expected: []const u8, doc: *const ast.Document, first: ast.I
     try std.testing.expectEqualStrings(expected, inline_node.text);
 }
 
+fn expectParagraphText(expected: []const u8, doc: *const ast.Document, paragraph: *const ast.Paragraph) !void {
+    if (paragraph.raw_lines.len > 0) {
+        try std.testing.expectEqual(ast.no_inline, paragraph.children);
+        try std.testing.expectEqual(@as(usize, 1), paragraph.raw_lines.len);
+        try std.testing.expectEqualStrings(expected, paragraph.raw_lines[0]);
+        return;
+    }
+    try expectInlineText(expected, doc, paragraph.children);
+}
+
+fn expectParagraphRawLines(expected: []const []const u8, paragraph: *const ast.Paragraph) !void {
+    try std.testing.expectEqual(ast.no_inline, paragraph.children);
+    try std.testing.expectEqual(expected.len, paragraph.raw_lines.len);
+    for (expected, paragraph.raw_lines) |want, got| {
+        try std.testing.expectEqualStrings(want, got);
+    }
+}
+
 fn expectLinkInlineNode(
     expected_url: []const u8,
     expected_title: ?[]const u8,
@@ -54,7 +72,7 @@ test "parseDocument produces a single Paragraph for plain text" {
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
     try std.testing.expect(doc.blocks[0] == .paragraph);
-    try expectInlineText("Hello world", &doc, doc.blocks[0].paragraph.children);
+    try expectParagraphText("Hello world", &doc, &doc.blocks[0].paragraph);
     try std.testing.expect(doc.has_trailing_newline);
 }
 
@@ -67,16 +85,7 @@ test "parseDocument groups consecutive non-blank lines into one Paragraph" {
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
     try std.testing.expect(doc.blocks[0] == .paragraph);
-    const first = doc.blocks[0].paragraph.children;
-    try std.testing.expectEqual(@as(usize, 5), inlineCount(&doc, first));
-    try std.testing.expect(inlineNodeAt(&doc, first, 0).* == .text);
-    try std.testing.expectEqualStrings("First line", inlineNodeAt(&doc, first, 0).text);
-    try std.testing.expect(inlineNodeAt(&doc, first, 1).* == .soft_break);
-    try std.testing.expect(inlineNodeAt(&doc, first, 2).* == .text);
-    try std.testing.expectEqualStrings("Second line", inlineNodeAt(&doc, first, 2).text);
-    try std.testing.expect(inlineNodeAt(&doc, first, 3).* == .soft_break);
-    try std.testing.expect(inlineNodeAt(&doc, first, 4).* == .text);
-    try std.testing.expectEqualStrings("Third line", inlineNodeAt(&doc, first, 4).text);
+    try expectParagraphRawLines(&.{ "First line", "Second line", "Third line" }, &doc.blocks[0].paragraph);
 }
 
 test "parseDocument strips leading indentation from paragraph lines" {
@@ -91,13 +100,7 @@ test "parseDocument strips leading indentation from paragraph lines" {
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
     try std.testing.expect(doc.blocks[0] == .paragraph);
-    const first = doc.blocks[0].paragraph.children;
-    try std.testing.expectEqual(@as(usize, 5), inlineCount(&doc, first));
-    try std.testing.expectEqualStrings("aaa", inlineNodeAt(&doc, first, 0).text);
-    try std.testing.expect(inlineNodeAt(&doc, first, 1).* == .soft_break);
-    try std.testing.expectEqualStrings("bbb", inlineNodeAt(&doc, first, 2).text);
-    try std.testing.expect(inlineNodeAt(&doc, first, 3).* == .soft_break);
-    try std.testing.expectEqualStrings("ccc", inlineNodeAt(&doc, first, 4).text);
+    try expectParagraphRawLines(&.{ "aaa", "bbb", "ccc" }, &doc.blocks[0].paragraph);
 }
 
 test "parseDocument collapses runs of blank lines into one blank_line node" {
@@ -111,8 +114,8 @@ test "parseDocument collapses runs of blank lines into one blank_line node" {
     try std.testing.expect(doc.blocks[0] == .paragraph);
     try std.testing.expect(doc.blocks[1] == .blank_line);
     try std.testing.expect(doc.blocks[2] == .paragraph);
-    try expectInlineText("First", &doc, doc.blocks[0].paragraph.children);
-    try expectInlineText("Second", &doc, doc.blocks[2].paragraph.children);
+    try expectParagraphText("First", &doc, &doc.blocks[0].paragraph);
+    try expectParagraphText("Second", &doc, &doc.blocks[2].paragraph);
 }
 
 test "parseDocument records ATX heading level and content" {
@@ -182,9 +185,9 @@ test "parseDocument groups adjacent unordered list items into one List" {
         try std.testing.expectEqual(@as(usize, 1), item.blocks.len);
         try std.testing.expect(item.blocks[0] == .paragraph);
     }
-    try expectInlineText("First", &doc, doc.blocks[0].list.items[0].blocks[0].paragraph.children);
-    try expectInlineText("Second", &doc, doc.blocks[0].list.items[1].blocks[0].paragraph.children);
-    try expectInlineText("Third", &doc, doc.blocks[0].list.items[2].blocks[0].paragraph.children);
+    try expectParagraphText("First", &doc, &doc.blocks[0].list.items[0].blocks[0].paragraph);
+    try expectParagraphText("Second", &doc, &doc.blocks[0].list.items[1].blocks[0].paragraph);
+    try expectParagraphText("Third", &doc, &doc.blocks[0].list.items[2].blocks[0].paragraph);
 }
 
 test "parseDocument stores task checkbox state on list items" {
@@ -203,9 +206,9 @@ test "parseDocument stores task checkbox state on list items" {
     try std.testing.expectEqual(@as(?bool, false), items[1].checked);
     try std.testing.expectEqual(@as(?bool, null), items[2].checked);
 
-    try expectInlineText("Done", &doc, items[0].blocks[0].paragraph.children);
-    try expectInlineText("Todo", &doc, items[1].blocks[0].paragraph.children);
-    try expectInlineText("Plain item", &doc, items[2].blocks[0].paragraph.children);
+    try expectParagraphText("Done", &doc, &items[0].blocks[0].paragraph);
+    try expectParagraphText("Todo", &doc, &items[1].blocks[0].paragraph);
+    try expectParagraphText("Plain item", &doc, &items[2].blocks[0].paragraph);
 }
 
 test "parseDocument groups ordered list items and records numbers" {
@@ -241,13 +244,7 @@ test "parseDocument captures unordered list item continuation lines" {
 
     const item = doc.blocks[0].list.items[0];
     try std.testing.expect(item.blocks[0] == .paragraph);
-    const first = item.blocks[0].paragraph.children;
-    try std.testing.expectEqual(@as(usize, 5), inlineCount(&doc, first));
-    try std.testing.expectEqualStrings("first line", inlineNodeAt(&doc, first, 0).text);
-    try std.testing.expect(inlineNodeAt(&doc, first, 1).* == .soft_break);
-    try std.testing.expectEqualStrings("continued here", inlineNodeAt(&doc, first, 2).text);
-    try std.testing.expect(inlineNodeAt(&doc, first, 3).* == .soft_break);
-    try std.testing.expectEqualStrings("more continuation", inlineNodeAt(&doc, first, 4).text);
+    try expectParagraphRawLines(&.{ "first line", "continued here", "more continuation" }, &item.blocks[0].paragraph);
 }
 
 test "parseDocument collects link definitions into the document map" {
@@ -402,7 +399,7 @@ test "parseDocument keeps trailing blank line outside indented code block" {
     try std.testing.expectEqualStrings("code", doc.blocks[0].code_block.content);
     try std.testing.expect(doc.blocks[1] == .blank_line);
     try std.testing.expect(doc.blocks[2] == .paragraph);
-    try expectInlineText("next", &doc, doc.blocks[2].paragraph.children);
+    try expectParagraphText("next", &doc, &doc.blocks[2].paragraph);
 }
 
 test "parseDocument parses thematic break" {
@@ -433,11 +430,7 @@ test "parseDocument parses blockquote with content lines" {
     try std.testing.expectEqual(@as(usize, 0), bq.indent);
     try std.testing.expectEqual(@as(usize, 1), bq.blocks.len);
     try std.testing.expect(bq.blocks[0] == .paragraph);
-    const first = bq.blocks[0].paragraph.children;
-    try std.testing.expectEqual(@as(usize, 3), inlineCount(&doc, first));
-    try std.testing.expectEqualStrings("first quoted", inlineNodeAt(&doc, first, 0).text);
-    try std.testing.expect(inlineNodeAt(&doc, first, 1).* == .soft_break);
-    try std.testing.expectEqualStrings("second quoted", inlineNodeAt(&doc, first, 2).text);
+    try expectParagraphRawLines(&.{ "first quoted", "second quoted" }, &bq.blocks[0].paragraph);
 }
 
 test "parseDocument supports lazy continuation lines in blockquotes" {
@@ -454,11 +447,7 @@ test "parseDocument supports lazy continuation lines in blockquotes" {
     const bq = doc.blocks[0].blockquote;
     try std.testing.expectEqual(@as(usize, 1), bq.blocks.len);
     try std.testing.expect(bq.blocks[0] == .paragraph);
-    const first = bq.blocks[0].paragraph.children;
-    try std.testing.expectEqual(@as(usize, 3), inlineCount(&doc, first));
-    try std.testing.expectEqualStrings("foo", inlineNodeAt(&doc, first, 0).text);
-    try std.testing.expect(inlineNodeAt(&doc, first, 1).* == .soft_break);
-    try std.testing.expectEqualStrings("bar", inlineNodeAt(&doc, first, 2).text);
+    try expectParagraphRawLines(&.{ "foo", "bar" }, &bq.blocks[0].paragraph);
 }
 
 test "parseDocument parses table with header and body rows" {
@@ -541,11 +530,7 @@ test "parseDocument groups blockquote table and paragraph into one BlockQuote" {
     try std.testing.expectEqual(@as(usize, 2), bq.blocks.len);
     try std.testing.expect(bq.blocks[0] == .table);
     try std.testing.expect(bq.blocks[1] == .paragraph);
-    try expectInlineText(
-        "normal text",
-        &doc,
-        bq.blocks[1].paragraph.children,
-    );
+    try expectParagraphText("normal text", &doc, &bq.blocks[1].paragraph);
 }
 
 test "parseDocument rejects blockquote with pipes but no delimiter as plain blockquote" {
@@ -558,7 +543,7 @@ test "parseDocument rejects blockquote with pipes but no delimiter as plain bloc
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
     try std.testing.expect(doc.blocks[0] == .blockquote);
     try std.testing.expect(doc.blocks[0].blockquote.blocks[0] == .paragraph);
-    try expectInlineText("a | b", &doc, doc.blocks[0].blockquote.blocks[0].paragraph.children);
+    try expectParagraphRawLines(&.{ "a | b", "c | d" }, &doc.blocks[0].blockquote.blocks[0].paragraph);
 }
 
 test "parseDocument rejects table with mismatched header and delimiter column counts" {
@@ -615,7 +600,7 @@ test "parseDocument groups blockquote paragraph and table into one BlockQuote" {
     const bq = doc.blocks[0].blockquote;
     try std.testing.expectEqual(@as(usize, 2), bq.blocks.len);
     try std.testing.expect(bq.blocks[0] == .paragraph);
-    try expectInlineText("intro", &doc, bq.blocks[0].paragraph.children);
+    try expectParagraphText("intro", &doc, &bq.blocks[0].paragraph);
     try std.testing.expect(bq.blocks[1] == .table);
     const tbl = bq.blocks[1].table;
     try expectInlineText("A", &doc, tbl.header[0].children);
@@ -631,15 +616,10 @@ test "parseDocument keeps paragraph continuous across invalid mid-paragraph tabl
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
     try std.testing.expect(doc.blocks[0] == .paragraph);
-    const first = doc.blocks[0].paragraph.children;
-    try std.testing.expectEqual(@as(usize, 7), inlineCount(&doc, first));
-    try std.testing.expectEqualStrings("alpha", inlineNodeAt(&doc, first, 0).text);
-    try std.testing.expect(inlineNodeAt(&doc, first, 1).* == .soft_break);
-    try std.testing.expectEqualStrings("| A |", inlineNodeAt(&doc, first, 2).text);
-    try std.testing.expect(inlineNodeAt(&doc, first, 3).* == .soft_break);
-    try std.testing.expectEqualStrings("| --- | --- |", inlineNodeAt(&doc, first, 4).text);
-    try std.testing.expect(inlineNodeAt(&doc, first, 5).* == .soft_break);
-    try std.testing.expectEqualStrings("beta", inlineNodeAt(&doc, first, 6).text);
+    try expectParagraphRawLines(
+        &.{ "alpha", "| A |", "| --- | --- |", "beta" },
+        &doc.blocks[0].paragraph,
+    );
 }
 
 test "parseDocument splits blockquote on indent change between lines" {
@@ -652,18 +632,10 @@ test "parseDocument splits blockquote on indent change between lines" {
     try std.testing.expectEqual(@as(usize, 2), doc.blocks.len);
     try std.testing.expect(doc.blocks[0] == .blockquote);
     try std.testing.expectEqual(@as(usize, 0), doc.blocks[0].blockquote.indent);
-    try expectInlineText(
-        "a",
-        &doc,
-        doc.blocks[0].blockquote.blocks[0].paragraph.children,
-    );
+    try expectParagraphText("a", &doc, &doc.blocks[0].blockquote.blocks[0].paragraph);
     try std.testing.expect(doc.blocks[1] == .blockquote);
     try std.testing.expectEqual(@as(usize, 2), doc.blocks[1].blockquote.indent);
-    try expectInlineText(
-        "b",
-        &doc,
-        doc.blocks[1].blockquote.blocks[0].paragraph.children,
-    );
+    try expectParagraphText("b", &doc, &doc.blocks[1].blockquote.blocks[0].paragraph);
 }
 
 test "parseDocument represents nested blockquote as recursive BlockQuote" {
@@ -681,7 +653,7 @@ test "parseDocument represents nested blockquote as recursive BlockQuote" {
     const inner = outer.blocks[0].blockquote;
     try std.testing.expectEqual(@as(usize, 1), inner.blocks.len);
     try std.testing.expect(inner.blocks[0] == .paragraph);
-    try expectInlineText("nested", &doc, inner.blocks[0].paragraph.children);
+    try expectParagraphText("nested", &doc, &inner.blocks[0].paragraph);
 }
 
 test "parseDocument represents triple-nested blockquote" {
@@ -699,7 +671,7 @@ test "parseDocument represents triple-nested blockquote" {
     try std.testing.expect(l2.blocks[0] == .blockquote);
     const l3 = l2.blocks[0].blockquote;
     try std.testing.expect(l3.blocks[0] == .paragraph);
-    try expectInlineText("deep", &doc, l3.blocks[0].paragraph.children);
+    try expectParagraphText("deep", &doc, &l3.blocks[0].paragraph);
 }
 
 test "parseDocument groups plain and nested blockquote lines as siblings" {
@@ -715,12 +687,12 @@ test "parseDocument groups plain and nested blockquote lines as siblings" {
     try std.testing.expectEqual(@as(usize, 2), outer.blocks.len);
 
     try std.testing.expect(outer.blocks[0] == .paragraph);
-    try expectInlineText("a", &doc, outer.blocks[0].paragraph.children);
+    try expectParagraphText("a", &doc, &outer.blocks[0].paragraph);
 
     try std.testing.expect(outer.blocks[1] == .blockquote);
     const inner = outer.blocks[1].blockquote;
     try std.testing.expect(inner.blocks[0] == .paragraph);
-    try expectInlineText("b", &doc, inner.blocks[0].paragraph.children);
+    try expectParagraphText("b", &doc, &inner.blocks[0].paragraph);
 }
 
 test "parseDocument represents nested unordered list as ListItem.blocks child" {
@@ -741,7 +713,7 @@ test "parseDocument represents nested unordered list as ListItem.blocks child" {
     try std.testing.expectEqual(@as(usize, 2), parent.blocks.len);
 
     try std.testing.expect(parent.blocks[0] == .paragraph);
-    try expectInlineText("parent", &doc, parent.blocks[0].paragraph.children);
+    try expectParagraphText("parent", &doc, &parent.blocks[0].paragraph);
 
     try std.testing.expect(parent.blocks[1] == .list);
     const inner_list = parent.blocks[1].list;
@@ -752,7 +724,7 @@ test "parseDocument represents nested unordered list as ListItem.blocks child" {
     try std.testing.expectEqual(@as(usize, 2), child.indent);
     try std.testing.expectEqual(@as(usize, 1), child.blocks.len);
     try std.testing.expect(child.blocks[0] == .paragraph);
-    try expectInlineText("child", &doc, child.blocks[0].paragraph.children);
+    try expectParagraphText("child", &doc, &child.blocks[0].paragraph);
 }
 
 test "parseDocument represents ordered parent containing unordered child" {
@@ -774,7 +746,7 @@ test "parseDocument represents ordered parent containing unordered child" {
     try std.testing.expectEqual(@as(usize, 2), outer_item.blocks.len);
 
     try std.testing.expect(outer_item.blocks[0] == .paragraph);
-    try expectInlineText("outer", &doc, outer_item.blocks[0].paragraph.children);
+    try expectParagraphText("outer", &doc, &outer_item.blocks[0].paragraph);
 
     try std.testing.expect(outer_item.blocks[1] == .list);
     const inner_list = outer_item.blocks[1].list;
@@ -783,7 +755,7 @@ test "parseDocument represents ordered parent containing unordered child" {
 
     const inner_item = inner_list.items[0];
     try std.testing.expectEqual(@as(usize, 3), inner_item.indent);
-    try expectInlineText("inner", &doc, inner_item.blocks[0].paragraph.children);
+    try expectParagraphText("inner", &doc, &inner_item.blocks[0].paragraph);
 }
 
 test "parseDocument keeps sibling list items flat when indents match" {
@@ -817,16 +789,12 @@ test "parseDocument promotes continuation paragraph then nested list as siblings
     try std.testing.expectEqual(@as(usize, 2), outer.blocks.len);
 
     try std.testing.expect(outer.blocks[0] == .paragraph);
-    try expectInlineText("first", &doc, outer.blocks[0].paragraph.children);
+    try expectParagraphRawLines(&.{ "first", "continued" }, &outer.blocks[0].paragraph);
 
     try std.testing.expect(outer.blocks[1] == .list);
     const nested = outer.blocks[1].list;
     try std.testing.expectEqual(@as(usize, 1), nested.items.len);
-    try expectInlineText(
-        "nested",
-        &doc,
-        nested.items[0].blocks[0].paragraph.children,
-    );
+    try expectParagraphText("nested", &doc, &nested.items[0].blocks[0].paragraph);
 }
 
 test "parseDocument groups slightly indented sibling items into one list" {
@@ -844,9 +812,9 @@ test "parseDocument groups slightly indented sibling items into one list" {
     try std.testing.expectEqual(@as(usize, 0), list.items[0].indent);
     try std.testing.expectEqual(@as(usize, 1), list.items[1].indent);
     try std.testing.expectEqual(@as(usize, 2), list.items[2].indent);
-    try expectInlineText("a", &doc, list.items[0].blocks[0].paragraph.children);
-    try expectInlineText("b", &doc, list.items[1].blocks[0].paragraph.children);
-    try expectInlineText("c", &doc, list.items[2].blocks[0].paragraph.children);
+    try expectParagraphText("a", &doc, &list.items[0].blocks[0].paragraph);
+    try expectParagraphText("b", &doc, &list.items[1].blocks[0].paragraph);
+    try expectParagraphText("c", &doc, &list.items[2].blocks[0].paragraph);
 }
 
 test "parseDocument keeps zigzag-indented siblings in one list" {
@@ -896,15 +864,15 @@ test "parseDocument preserves paragraph after nested list in same list item" {
     try std.testing.expectEqual(@as(usize, 3), outer.blocks.len);
 
     try std.testing.expect(outer.blocks[0] == .paragraph);
-    try expectInlineText("foo", &doc, outer.blocks[0].paragraph.children);
+    try expectParagraphText("foo", &doc, &outer.blocks[0].paragraph);
 
     try std.testing.expect(outer.blocks[1] == .list);
     const nested = outer.blocks[1].list;
     try std.testing.expectEqual(@as(usize, 1), nested.items.len);
-    try expectInlineText("bar", &doc, nested.items[0].blocks[0].paragraph.children);
+    try expectParagraphText("bar", &doc, &nested.items[0].blocks[0].paragraph);
 
     try std.testing.expect(outer.blocks[2] == .paragraph);
-    try expectInlineText("baz", &doc, outer.blocks[2].paragraph.children);
+    try expectParagraphText("baz", &doc, &outer.blocks[2].paragraph);
 }
 
 test "parseDocument uses dynamic content_col from multi-space marker" {
@@ -919,7 +887,7 @@ test "parseDocument uses dynamic content_col from multi-space marker" {
     const item = doc.blocks[0].list.items[0];
     try std.testing.expectEqual(@as(usize, 1), item.blocks.len);
     try std.testing.expect(item.blocks[0] == .paragraph);
-    try expectInlineText("foo", &doc, item.blocks[0].paragraph.children);
+    try expectParagraphRawLines(&.{ "foo", "continuation" }, &item.blocks[0].paragraph);
 }
 
 test "parseDocument rejects under-indented continuation when marker has extra spaces" {
@@ -934,7 +902,7 @@ test "parseDocument rejects under-indented continuation when marker has extra sp
     const item = doc.blocks[0].list.items[0];
     try std.testing.expectEqual(@as(usize, 1), item.blocks.len);
     try std.testing.expect(item.blocks[0] == .paragraph);
-    try expectInlineText("foo", &doc, item.blocks[0].paragraph.children);
+    try expectParagraphText("foo", &doc, &item.blocks[0].paragraph);
 
     try std.testing.expect(doc.blocks[1] == .paragraph);
 }
@@ -954,11 +922,7 @@ test "parseDocument represents blockquote containing unordered list" {
     const list = bq.blocks[0].list;
     try std.testing.expectEqual(ast.ListKind.unordered, list.kind);
     try std.testing.expectEqual(@as(usize, 1), list.items.len);
-    try expectInlineText(
-        "item",
-        &doc,
-        list.items[0].blocks[0].paragraph.children,
-    );
+    try expectParagraphText("item", &doc, &list.items[0].blocks[0].paragraph);
 }
 
 test "parseDocument represents blockquote containing ordered list" {
@@ -975,8 +939,8 @@ test "parseDocument represents blockquote containing ordered list" {
     try std.testing.expectEqual(@as(usize, 2), list.items.len);
     try std.testing.expectEqualStrings("1", list.items[0].number.?);
     try std.testing.expectEqualStrings("2", list.items[1].number.?);
-    try expectInlineText("foo", &doc, list.items[0].blocks[0].paragraph.children);
-    try expectInlineText("bar", &doc, list.items[1].blocks[0].paragraph.children);
+    try expectParagraphText("foo", &doc, &list.items[0].blocks[0].paragraph);
+    try expectParagraphText("bar", &doc, &list.items[1].blocks[0].paragraph);
 }
 
 test "parseDocument represents loose list with blank-separated paragraphs in one item" {
@@ -994,8 +958,8 @@ test "parseDocument represents loose list with blank-separated paragraphs in one
     try std.testing.expect(item.blocks[0] == .paragraph);
     try std.testing.expect(item.blocks[1] == .blank_line);
     try std.testing.expect(item.blocks[2] == .paragraph);
-    try expectInlineText("foo", &doc, item.blocks[0].paragraph.children);
-    try expectInlineText("bar", &doc, item.blocks[2].paragraph.children);
+    try expectParagraphText("foo", &doc, &item.blocks[0].paragraph);
+    try expectParagraphText("bar", &doc, &item.blocks[2].paragraph);
 }
 
 test "parseDocument keeps blank-separated sibling items in one loose list" {
@@ -1013,8 +977,8 @@ test "parseDocument keeps blank-separated sibling items in one loose list" {
     try std.testing.expect(list.loose);
     try std.testing.expectEqual(@as(usize, 2), list.items.len);
 
-    try expectInlineText("foo", &doc, list.items[0].blocks[0].paragraph.children);
-    try expectInlineText("bar", &doc, list.items[1].blocks[0].paragraph.children);
+    try expectParagraphText("foo", &doc, &list.items[0].blocks[0].paragraph);
+    try expectParagraphText("bar", &doc, &list.items[1].blocks[0].paragraph);
 }
 
 test "parseDocument splits unordered lists when bullet markers differ" {
@@ -1061,11 +1025,7 @@ test "parseDocument represents list item containing blockquote child" {
     const inner_bq = item.blocks[1].blockquote;
     try std.testing.expectEqual(@as(usize, 2), inner_bq.indent);
     try std.testing.expect(inner_bq.blocks[0] == .paragraph);
-    try expectInlineText(
-        "quoted child",
-        &doc,
-        inner_bq.blocks[0].paragraph.children,
-    );
+    try expectParagraphText("quoted child", &doc, &inner_bq.blocks[0].paragraph);
 }
 
 test "parseDocument keeps inner blockquote indent at zero inside list item" {
@@ -1086,11 +1046,7 @@ test "parseDocument keeps inner blockquote indent at zero inside list item" {
     try std.testing.expect(outer_bq.blocks[0] == .blockquote);
     const inner_bq = outer_bq.blocks[0].blockquote;
     try std.testing.expectEqual(@as(usize, 0), inner_bq.indent);
-    try expectInlineText(
-        "quoted",
-        &doc,
-        inner_bq.blocks[0].paragraph.children,
-    );
+    try expectParagraphText("quoted", &doc, &inner_bq.blocks[0].paragraph);
 }
 
 test "parseDocument represents list item containing fenced code child" {
@@ -1119,17 +1075,17 @@ test "parseDocument builds three-level deep unordered nesting" {
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
     const l0 = doc.blocks[0].list;
     try std.testing.expectEqual(@as(usize, 1), l0.items.len);
-    try expectInlineText("a", &doc, l0.items[0].blocks[0].paragraph.children);
+    try expectParagraphText("a", &doc, &l0.items[0].blocks[0].paragraph);
 
     try std.testing.expect(l0.items[0].blocks[1] == .list);
     const l1 = l0.items[0].blocks[1].list;
     try std.testing.expectEqual(@as(usize, 1), l1.items.len);
-    try expectInlineText("b", &doc, l1.items[0].blocks[0].paragraph.children);
+    try expectParagraphText("b", &doc, &l1.items[0].blocks[0].paragraph);
 
     try std.testing.expect(l1.items[0].blocks[1] == .list);
     const l2 = l1.items[0].blocks[1].list;
     try std.testing.expectEqual(@as(usize, 1), l2.items.len);
-    try expectInlineText("c", &doc, l2.items[0].blocks[0].paragraph.children);
+    try expectParagraphText("c", &doc, &l2.items[0].blocks[0].paragraph);
 }
 
 test "parseDocument paragraph with hard break produces hard_break node" {
@@ -1150,7 +1106,7 @@ test "parseDocument paragraph with hard break produces hard_break node" {
     try std.testing.expectEqualStrings("bar", inlineNodeAt(&doc, children, 2).text);
 }
 
-test "parseDocument paragraph with soft break produces soft_break node" {
+test "parseDocument trivial multi-line paragraph stores raw_lines instead of soft_break chain" {
     const allocator = std.testing.allocator;
     const input = "foo\nbar\n";
 
@@ -1159,13 +1115,29 @@ test "parseDocument paragraph with soft break produces soft_break node" {
 
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
     try std.testing.expect(doc.blocks[0] == .paragraph);
-    const children = doc.blocks[0].paragraph.children;
-    try std.testing.expectEqual(@as(usize, 3), inlineCount(&doc, children));
-    try std.testing.expect(inlineNodeAt(&doc, children, 0).* == .text);
-    try std.testing.expectEqualStrings("foo", inlineNodeAt(&doc, children, 0).text);
-    try std.testing.expect(inlineNodeAt(&doc, children, 1).* == .soft_break);
-    try std.testing.expect(inlineNodeAt(&doc, children, 2).* == .text);
-    try std.testing.expectEqualStrings("bar", inlineNodeAt(&doc, children, 2).text);
+    try expectParagraphRawLines(&.{ "foo", "bar" }, &doc.blocks[0].paragraph);
+}
+
+test "parseDocument paragraph with trigger falls back to soft_break chain" {
+    const allocator = std.testing.allocator;
+    const input = "foo *x*\nbar\n";
+
+    var doc = try parse.parse(allocator, .{ .borrowed = input });
+    defer doc.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .paragraph);
+    const paragraph = doc.blocks[0].paragraph;
+    try std.testing.expectEqual(@as(usize, 0), paragraph.raw_lines.len);
+    try std.testing.expect(ast.hasInline(paragraph.children));
+
+    var saw_soft_break = false;
+    var current = paragraph.children;
+    while (ast.hasInline(current)) {
+        if (doc.inlineNode(current).* == .soft_break) saw_soft_break = true;
+        current = doc.inlineNext(current);
+    }
+    try std.testing.expect(saw_soft_break);
 }
 
 test "parseDocument parses table when escaped pipe appears inside a cell" {

@@ -24,6 +24,30 @@ const list_bullet = struct {
     const level2 = "▪ ";
 };
 
+fn writeRawLines(
+    writer: *std.io.Writer,
+    enable_ansi: bool,
+    raw_lines: []const []const u8,
+    base_style: ansi.TextStyle,
+) !void {
+    var state: ansi.StyledState = .{};
+    for (raw_lines, 0..) |line, idx| {
+        if (idx > 0) {
+            try ansi.flushStyle(writer, &state);
+            try writer.writeByte('\n');
+        }
+        const content = if (idx + 1 < raw_lines.len) trimTrailingSpaces(line) else line;
+        try ansi.writeStyledRun(writer, enable_ansi, &state, base_style, content);
+    }
+    try ansi.flushStyle(writer, &state);
+}
+
+fn trimTrailingSpaces(line: []const u8) []const u8 {
+    var end = line.len;
+    while (end > 0 and line[end - 1] == ' ') end -= 1;
+    return line[0..end];
+}
+
 fn bulletForDepth(depth: usize) []const u8 {
     return switch (depth % 3) {
         0 => list_bullet.level0,
@@ -109,7 +133,35 @@ pub const RenderSession = struct {
     }
 
     fn writeParagraph(self: *RenderSession, paragraph: ast.Paragraph) !void {
-        try self.writeInlinesMaybeWrap(paragraph.children, .{ .fg = self.ctx.palette.body }, 0);
+        const style: ansi.TextStyle = .{ .fg = self.ctx.palette.body };
+        if (paragraph.raw_lines.len > 0) {
+            try self.writeRawLinesMaybeWrap(paragraph.raw_lines, style, 0);
+            return;
+        }
+        try self.writeInlinesMaybeWrap(paragraph.children, style, 0);
+    }
+
+    fn writeRawLinesMaybeWrap(
+        self: *RenderSession,
+        raw_lines: []const []const u8,
+        base_style: ansi.TextStyle,
+        continuation_indent: usize,
+    ) !void {
+        const pushed = continuation_indent > 0;
+        if (pushed) try self.pushIndent(continuation_indent);
+        defer if (pushed) self.popPrefix() catch {};
+
+        if (self.wrap_width) |wrap_w| {
+            const available = if (wrap_w > continuation_indent)
+                wrap_w - continuation_indent
+            else
+                1;
+            self.wrap_writer.reset(self.writer, available);
+            try writeRawLines(&self.wrap_writer.writer, self.ctx.enable_ansi, raw_lines, base_style);
+            try self.wrap_writer.finish();
+        } else {
+            try writeRawLines(self.writer, self.ctx.enable_ansi, raw_lines, base_style);
+        }
     }
 
     fn writeInlinesMaybeWrap(
@@ -180,7 +232,12 @@ pub const RenderSession = struct {
     }
 
     fn writeBlockQuoteParagraph(self: *RenderSession, paragraph: ast.Paragraph) !void {
-        try self.writeInlinesMaybeWrap(paragraph.children, .{ .fg = self.ctx.palette.muted }, 0);
+        const style: ansi.TextStyle = .{ .fg = self.ctx.palette.muted };
+        if (paragraph.raw_lines.len > 0) {
+            try self.writeRawLinesMaybeWrap(paragraph.raw_lines, style, 0);
+            return;
+        }
+        try self.writeInlinesMaybeWrap(paragraph.children, style, 0);
     }
 
     fn writeList(self: *RenderSession, list: ast.List, depth: usize) anyerror!void {
@@ -265,8 +322,23 @@ pub const RenderSession = struct {
         paragraph: ast.Paragraph,
         content_col: usize,
     ) !void {
+        const style: ansi.TextStyle = .{ .fg = self.ctx.palette.body };
+
+        if (paragraph.raw_lines.len > 0) {
+            if (content_col == 0 or self.wrap_width != null) {
+                try self.writeRawLinesMaybeWrap(paragraph.raw_lines, style, content_col);
+                return;
+            }
+
+            try self.pushIndent(content_col);
+            errdefer self.popPrefix() catch {};
+            try writeRawLines(self.writer, self.ctx.enable_ansi, paragraph.raw_lines, style);
+            try self.popPrefix();
+            return;
+        }
+
         if (content_col == 0 or self.wrap_width != null) {
-            try self.writeInlinesMaybeWrap(paragraph.children, .{ .fg = self.ctx.palette.body }, content_col);
+            try self.writeInlinesMaybeWrap(paragraph.children, style, content_col);
             return;
         }
 
@@ -277,7 +349,7 @@ pub const RenderSession = struct {
             self.ctx,
             self.writer,
             paragraph.children,
-            .{ .fg = self.ctx.palette.body },
+            style,
         );
 
         try self.popPrefix();
