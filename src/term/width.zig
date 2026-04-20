@@ -183,29 +183,27 @@ pub fn displayWidth(text: []const u8, ambiguous: AmbiguousWidth) usize {
             continue;
         }
 
-        const len = std.unicode.utf8ByteSequenceLength(text[i]) catch {
-            i += 1;
-            continue;
+        const decoded = switch (nextCodepoint(text, i)) {
+            .ok => |d| d,
+            .invalid => {
+                i += 1;
+                continue;
+            },
+            .incomplete => break,
         };
-        if (i + len > text.len) break;
-
-        const cp = std.unicode.utf8Decode(text[i..][0..len]) catch {
-            i += 1;
-            continue;
-        };
-        i += len;
+        i += decoded.len;
 
         if (suppress_next_emoji) {
             suppress_next_emoji = false;
-            if (isEmoji(cp)) continue;
+            if (isEmoji(decoded.cp)) continue;
         }
 
-        if (cp == ZWJ) {
+        if (decoded.cp == ZWJ) {
             suppress_next_emoji = true;
             continue;
         }
 
-        w += codepointWidth(cp, ambiguous);
+        w += codepointWidth(decoded.cp, ambiguous);
     }
     return w;
 }
@@ -219,21 +217,19 @@ fn sliceToWidth(text: []const u8, max_width: usize, ambiguous: AmbiguousWidth) [
             continue;
         }
 
-        const len = std.unicode.utf8ByteSequenceLength(text[i]) catch {
-            i += 1;
-            continue;
-        };
-        if (i + len > text.len) break;
-
-        const cp = std.unicode.utf8Decode(text[i..][0..len]) catch {
-            i += 1;
-            continue;
+        const decoded = switch (nextCodepoint(text, i)) {
+            .ok => |d| d,
+            .invalid => {
+                i += 1;
+                continue;
+            },
+            .incomplete => break,
         };
 
-        const cw = codepointWidth(cp, ambiguous);
+        const cw = codepointWidth(decoded.cp, ambiguous);
         if (width + cw > max_width) break;
         width += cw;
-        i += len;
+        i += decoded.len;
     }
     return text[0..i];
 }
@@ -257,37 +253,34 @@ fn sliceToWidthAlloc(
             continue;
         }
 
-        const len = std.unicode.utf8ByteSequenceLength(text[i]) catch {
-            i += 1;
-            w += 1;
-            continue;
-        };
-        if (i + len > text.len) break;
-
-        const cp = std.unicode.utf8Decode(text[i..][0..len]) catch {
-            i += 1;
-            w += 1;
-            continue;
+        const decoded = switch (nextCodepoint(text, i)) {
+            .ok => |d| d,
+            .invalid => {
+                i += 1;
+                w += 1;
+                continue;
+            },
+            .incomplete => break,
         };
 
         if (suppress_next_emoji) {
             suppress_next_emoji = false;
-            if (isEmoji(cp)) {
-                i += len;
+            if (isEmoji(decoded.cp)) {
+                i += decoded.len;
                 continue;
             }
         }
 
-        if (cp == ZWJ) {
+        if (decoded.cp == ZWJ) {
             suppress_next_emoji = true;
-            i += len;
+            i += decoded.len;
             continue;
         }
 
-        const cw = codepointWidth(cp, ambiguous);
+        const cw = codepointWidth(decoded.cp, ambiguous);
         if (w + cw > max_width) break;
         w += cw;
-        i += len;
+        i += decoded.len;
     }
 
     const truncated = i < text.len;
@@ -574,23 +567,22 @@ pub const WrapWriter = struct {
                 continue;
             }
 
-            const len = std.unicode.utf8ByteSequenceLength(bytes[i]) catch {
-                try self.appendCharAdvance(bytes[i..][0..1], 1);
-                i += 1;
-                continue;
+            const decoded = switch (nextCodepoint(bytes, i)) {
+                .ok => |d| d,
+                .invalid => {
+                    try self.appendCharAdvance(bytes[i..][0..1], 1);
+                    i += 1;
+                    continue;
+                },
+                .incomplete => {
+                    const remaining: u5 = @intCast(bytes.len - i);
+                    @memcpy(self.pending[0..remaining], bytes[i..]);
+                    self.pending_len = remaining;
+                    break;
+                },
             };
-            if (i + len > bytes.len) {
-                const remaining: u5 = @intCast(bytes.len - i);
-                @memcpy(self.pending[0..remaining], bytes[i..]);
-                self.pending_len = remaining;
-                break;
-            }
-
-            const cp = std.unicode.utf8Decode(bytes[i..][0..len]) catch {
-                try self.appendCharAdvance(bytes[i..][0..1], 1);
-                i += 1;
-                continue;
-            };
+            const len = decoded.len;
+            const cp = decoded.cp;
 
             if (self.suppress_next_emoji) {
                 self.suppress_next_emoji = false;
@@ -1017,54 +1009,82 @@ fn isEastAsianAmbiguous(cp: u21) bool {
     return false;
 }
 
-fn codepointWidth(cp: u21, ambiguous: AmbiguousWidth) usize {
-    if (cp >= 0x20 and cp < 0x7F) return 1;
+pub const DecodeResult = union(enum) {
+    ok: struct { cp: u21, len: usize },
+    invalid,
+    incomplete,
+};
 
-    if (cp < 0x20) return 0;
-    if (cp == 0x7f) return 0;
+pub fn nextCodepoint(bytes: []const u8, i: usize) DecodeResult {
+    if (i >= bytes.len) return .incomplete;
+    const first = bytes[i];
+    if (first < 0x80) return .{ .ok = .{ .cp = first, .len = 1 } };
+    const len = std.unicode.utf8ByteSequenceLength(first) catch return .invalid;
+    if (i + len > bytes.len) return .incomplete;
+    const cp = std.unicode.utf8Decode(bytes[i..][0..len]) catch return .invalid;
+    return .{ .ok = .{ .cp = cp, .len = len } };
+}
+
+const CodepointRange = [2]u21;
+
+const zero_width_ranges = [_]CodepointRange{
+    .{ 0x0300, 0x036F },
+    .{ 0x0E31, 0x0E3A },
+    .{ 0x0E47, 0x0E4E },
+    .{ 0x1AB0, 0x1AFF },
+    .{ 0x1DC0, 0x1DFF },
+    .{ 0x20D0, 0x20FF },
+    .{ 0xFE00, 0xFE0F },
+    .{ 0xFE20, 0xFE2F },
+    .{ 0x1F3FB, 0x1F3FF },
+    .{ 0xE0100, 0xE01EF },
+};
+
+const wide_ranges = [_]CodepointRange{
+    .{ 0x1100, 0x115F },
+    .{ 0x2329, 0x232A },
+    .{ 0x2E80, 0x30FF },
+    .{ 0x31F0, 0x31FF },
+    .{ 0x3200, 0x32FF },
+    .{ 0x3300, 0x33FF },
+    .{ 0x3400, 0x4DBF },
+    .{ 0x4E00, 0x9FFF },
+    .{ 0xAC00, 0xD7A3 },
+    .{ 0xF900, 0xFAFF },
+    .{ 0xFF01, 0xFF60 },
+    .{ 0xFFE0, 0xFFE6 },
+    .{ 0x1F300, 0x1F9FF },
+    .{ 0x1FA00, 0x1FA6F },
+    .{ 0x1FA70, 0x1FAFF },
+    .{ 0x20000, 0x2FA1F },
+};
+
+fn rangeCompare(cp: u21, range: CodepointRange) std.math.Order {
+    if (cp < range[0]) return .lt;
+    if (cp > range[1]) return .gt;
+    return .eq;
+}
+
+fn inSortedRanges(cp: u21, ranges: []const CodepointRange) bool {
+    return std.sort.binarySearch(CodepointRange, ranges, cp, rangeCompare) != null;
+}
+
+fn codepointWidth(cp: u21, ambiguous: AmbiguousWidth) usize {
+    if (cp < 0x100) {
+        if (cp < 0x20) return 0;
+        if (cp == 0x7F) return 0;
+        if (cp >= 0x80 and cp <= 0x9F) return 0;
+        if (cp == SOFT_HYPHEN) return 0;
+        return 1;
+    }
 
     switch (cp) {
-        ZWSP, ZWNJ, ZWJ, WORD_JOINER, BOM, SOFT_HYPHEN => return 0,
+        ZWSP, ZWNJ, ZWJ, WORD_JOINER, BOM => return 0,
         else => {},
     }
 
-    if (cp >= 0xFE00 and cp <= 0xFE0F) return 0;
-    if (cp >= 0xE0100 and cp <= 0xE01EF) return 0;
-
-    if (cp >= 0x0300 and cp <= 0x036F) return 0;
-    if (cp >= 0x1AB0 and cp <= 0x1AFF) return 0;
-    if (cp >= 0x1DC0 and cp <= 0x1DFF) return 0;
-    if (cp >= 0x20D0 and cp <= 0x20FF) return 0;
-    if (cp >= 0xFE20 and cp <= 0xFE2F) return 0;
-    if (cp >= 0x0E31 and cp <= 0x0E3A) return 0;
-    if (cp >= 0x0E47 and cp <= 0x0E4E) return 0;
-
-    // Skin tone modifiers (Fitzpatrick) — modify preceding emoji
-    if (cp >= 0x1F3FB and cp <= 0x1F3FF) return 0;
-
-    if (cp >= 0x20DD and cp <= 0x20E0) return 0;
-    if (cp >= 0x20E2 and cp <= 0x20E4) return 0;
-
-    if (cp >= 0x4E00 and cp <= 0x9FFF) return 2;
-    if (cp >= 0x3400 and cp <= 0x4DBF) return 2;
-    if (cp >= 0xF900 and cp <= 0xFAFF) return 2;
-    if (cp >= 0x20000 and cp <= 0x2FA1F) return 2;
-
-    if (cp >= 0x2E80 and cp <= 0x30FF) return 2;
-    if (cp >= 0x31F0 and cp <= 0x31FF) return 2;
-    if (cp >= 0x3200 and cp <= 0x32FF) return 2;
-    if (cp >= 0x3300 and cp <= 0x33FF) return 2;
-
-    if (cp >= 0xFF01 and cp <= 0xFF60) return 2;
-    if (cp >= 0xFFE0 and cp <= 0xFFE6) return 2;
-
-    if (cp >= 0xAC00 and cp <= 0xD7A3) return 2;
-    if (cp >= 0x1100 and cp <= 0x115F) return 2;
-    if (cp >= 0x2329 and cp <= 0x232A) return 2;
-
-    if (cp >= 0x1F300 and cp <= 0x1F9FF) return 2;
-    if (cp >= 0x1FA00 and cp <= 0x1FA6F) return 2;
-    if (cp >= 0x1FA70 and cp <= 0x1FAFF) return 2;
+    if (inSortedRanges(cp, &zero_width_ranges)) return 0;
+    if (inSortedRanges(cp, &wide_ranges)) return 2;
 
     if (isEastAsianAmbiguous(cp)) {
         return if (ambiguous == .wide) 2 else 1;
@@ -1076,6 +1096,34 @@ fn codepointWidth(cp: u21, ambiguous: AmbiguousWidth) usize {
 test "ASCII string width" {
     try std.testing.expectEqual(@as(usize, 5), displayWidth("hello", .narrow));
     try std.testing.expectEqual(@as(usize, 0), displayWidth("", .narrow));
+}
+
+test "nextCodepoint fast-paths ASCII with length one" {
+    const result = nextCodepoint("a", 0);
+    try std.testing.expect(result == .ok);
+    try std.testing.expectEqual(@as(u21, 'a'), result.ok.cp);
+    try std.testing.expectEqual(@as(usize, 1), result.ok.len);
+}
+
+test "nextCodepoint decodes multi-byte UTF-8" {
+    const result = nextCodepoint("日", 0);
+    try std.testing.expect(result == .ok);
+    try std.testing.expectEqual(@as(u21, 0x65E5), result.ok.cp);
+    try std.testing.expectEqual(@as(usize, 3), result.ok.len);
+}
+
+test "nextCodepoint reports incomplete at end of buffer" {
+    const result = nextCodepoint("日"[0..2], 0);
+    try std.testing.expect(result == .incomplete);
+}
+
+test "nextCodepoint reports invalid for a bare continuation byte" {
+    const bytes = [_]u8{0x80};
+    try std.testing.expect(nextCodepoint(&bytes, 0) == .invalid);
+}
+
+test "nextCodepoint returns incomplete when starting past the end" {
+    try std.testing.expect(nextCodepoint("abc", 3) == .incomplete);
 }
 
 test "CJK characters are width 2" {
