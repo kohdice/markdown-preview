@@ -249,6 +249,50 @@ fn writeDecimal(buf: []u8, val: u8) usize {
     }
 }
 
+pub const StyledState = struct {
+    current: ?TextStyle = null,
+};
+
+pub fn writeStyledRun(
+    writer: *std.io.Writer,
+    enabled: bool,
+    state: *StyledState,
+    style: TextStyle,
+    text: []const u8,
+) !void {
+    if (!enabled or style.isPlain()) {
+        try flushStyle(writer, state);
+        if (text.len > 0) try writeSanitized(writer, text);
+        return;
+    }
+    if (state.current) |current| {
+        if (stylesEqual(current, style)) {
+            if (text.len > 0) try writeSanitized(writer, text);
+            return;
+        }
+        try writer.writeAll(reset_sequence);
+    }
+    try applyStyle(writer, style);
+    if (text.len > 0) try writeSanitized(writer, text);
+    state.current = style;
+}
+
+pub fn flushStyle(writer: *std.io.Writer, state: *StyledState) !void {
+    if (state.current == null) return;
+    try writer.writeAll(reset_sequence);
+    state.current = null;
+}
+
+fn stylesEqual(a: TextStyle, b: TextStyle) bool {
+    if (a.bold != b.bold or a.dim != b.dim or a.italic != b.italic) return false;
+    if (a.underline != b.underline or a.strikethrough != b.strikethrough) return false;
+    if (a.fg == null and b.fg == null) return true;
+    if (a.fg == null or b.fg == null) return false;
+    const af = a.fg.?;
+    const bf = b.fg.?;
+    return af.r == bf.r and af.g == bf.g and af.b == bf.b;
+}
+
 pub fn writeStyled(
     writer: *std.io.Writer,
     enabled: bool,
@@ -386,6 +430,62 @@ test "detectColorMode returns none when NO_COLOR is set" {
         .{ "COLORTERM", "truecolor" },
     });
     try testing.expectEqual(ColorMode.none, detectColorMode(env));
+}
+
+test "writeStyledRun first call emits prefix and text, no reset" {
+    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    var state: StyledState = .{};
+    const style: TextStyle = .{ .fg = .{ .r = 255, .g = 0, .b = 0 } };
+    try writeStyledRun(&buf.writer, true, &state, style, "hello");
+    try testing.expectEqualStrings("\x1b[38;2;255;0;0mhello", buf.writer.buffered());
+    try testing.expect(state.current != null);
+}
+
+test "writeStyledRun second call with same style skips prefix and reset" {
+    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    var state: StyledState = .{};
+    const style: TextStyle = .{ .fg = .{ .r = 255, .g = 0, .b = 0 } };
+    try writeStyledRun(&buf.writer, true, &state, style, "A");
+    try writeStyledRun(&buf.writer, true, &state, style, "B");
+    try testing.expectEqualStrings("\x1b[38;2;255;0;0mAB", buf.writer.buffered());
+}
+
+test "writeStyledRun different style emits reset and new prefix" {
+    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    var state: StyledState = .{};
+    const red: TextStyle = .{ .fg = .{ .r = 255, .g = 0, .b = 0 } };
+    const blue: TextStyle = .{ .fg = .{ .r = 0, .g = 0, .b = 255 } };
+    try writeStyledRun(&buf.writer, true, &state, red, "X");
+    try writeStyledRun(&buf.writer, true, &state, blue, "Y");
+    try testing.expectEqualStrings(
+        "\x1b[38;2;255;0;0mX\x1b[0m\x1b[38;2;0;0;255mY",
+        buf.writer.buffered(),
+    );
+}
+
+test "flushStyle emits reset when state is set and nothing when cleared" {
+    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    var state: StyledState = .{};
+    const red: TextStyle = .{ .fg = .{ .r = 255, .g = 0, .b = 0 } };
+    try writeStyledRun(&buf.writer, true, &state, red, "Z");
+    try flushStyle(&buf.writer, &state);
+    try flushStyle(&buf.writer, &state);
+    try testing.expectEqualStrings("\x1b[38;2;255;0;0mZ\x1b[0m", buf.writer.buffered());
+    try testing.expectEqual(@as(?TextStyle, null), state.current);
+}
+
+test "writeStyledRun with ansi disabled emits plain text only" {
+    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    var state: StyledState = .{};
+    const style: TextStyle = .{ .fg = .{ .r = 255, .g = 0, .b = 0 } };
+    try writeStyledRun(&buf.writer, false, &state, style, "plain");
+    try testing.expectEqualStrings("plain", buf.writer.buffered());
+    try testing.expectEqual(@as(?TextStyle, null), state.current);
 }
 
 test "writeStyled fast path boundary at 256 bytes" {
