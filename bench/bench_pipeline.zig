@@ -2,7 +2,7 @@ const std = @import("std");
 const markdown_preview = @import("markdown_preview");
 const parse = markdown_preview.parse;
 const Renderer = markdown_preview.Renderer;
-const source_loader = @import("source_loader");
+const source_loader = markdown_preview.source_loader;
 const bench = @import("bench_support.zig");
 const fixtures = @import("fixtures");
 

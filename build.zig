@@ -175,13 +175,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const source_loader_mod = b.createModule(.{
-        .root_source_file = b.path("src/source_loader.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    source_loader_mod.addImport("source", source_mod);
-
     const bench_pipeline_mod = b.createModule(.{
         .root_source_file = b.path("bench/bench_pipeline.zig"),
         .target = target,
@@ -189,7 +182,6 @@ pub fn build(b: *std.Build) void {
     });
     attachTreeSitter(bench_pipeline_mod, ts_support);
     bench_pipeline_mod.addImport("fixtures", bench_fixtures_mod);
-    bench_pipeline_mod.addImport("source_loader", source_loader_mod);
 
     const bench_pipeline_exe = b.addExecutable(.{
         .name = "pipeline-bench",
