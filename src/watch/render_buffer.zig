@@ -4,12 +4,13 @@ pub const RenderBuffer = struct {
     allocator: std.mem.Allocator,
     bytes: std.ArrayListUnmanaged(u8) = .empty,
     line_offsets: std.ArrayListUnmanaged(usize) = .empty,
+    row_hashes: std.ArrayListUnmanaged(u64) = .empty,
     pending_newline: bool = false,
     writer: std.io.Writer,
 
     const vtable: std.io.Writer.VTable = .{
         .drain = drain,
-        .flush = flushFn,
+        .flush = std.io.Writer.noopFlush,
         .rebase = std.io.Writer.failingRebase,
     };
 
@@ -26,11 +27,13 @@ pub const RenderBuffer = struct {
     pub fn deinit(self: *RenderBuffer) void {
         self.bytes.deinit(self.allocator);
         self.line_offsets.deinit(self.allocator);
+        self.row_hashes.deinit(self.allocator);
     }
 
     pub fn reset(self: *RenderBuffer) void {
         self.bytes.clearRetainingCapacity();
         self.line_offsets.clearRetainingCapacity();
+        self.row_hashes.clearRetainingCapacity();
         self.pending_newline = false;
     }
 
@@ -46,6 +49,32 @@ pub const RenderBuffer = struct {
         return self.line_offsets.items.len;
     }
 
+    pub fn row(self: *const RenderBuffer, idx: usize) []const u8 {
+        const offsets = self.line_offsets.items;
+        const data = self.bytes.items;
+        if (idx >= offsets.len) return &.{};
+        const start = offsets[idx];
+        const end = if (idx + 1 < offsets.len) offsets[idx + 1] else data.len;
+        var line = data[start..end];
+        if (line.len > 0 and line[line.len - 1] == '\n') line = line[0 .. line.len - 1];
+        return line;
+    }
+
+    pub fn rowHash(self: *const RenderBuffer, idx: usize) u64 {
+        if (idx < self.row_hashes.items.len) return self.row_hashes.items[idx];
+        return std.hash.XxHash3.hash(0, self.row(idx));
+    }
+
+    pub fn finalize(self: *RenderBuffer) !void {
+        const total = self.totalLines();
+        self.row_hashes.clearRetainingCapacity();
+        try self.row_hashes.ensureTotalCapacity(self.allocator, total);
+        var i: usize = 0;
+        while (i < total) : (i += 1) {
+            self.row_hashes.appendAssumeCapacity(std.hash.XxHash3.hash(0, self.row(i)));
+        }
+    }
+
     fn drain(w: *std.io.Writer, data: []const []const u8, splat: usize) std.io.Writer.Error!usize {
         const self: *RenderBuffer = @fieldParentPtr("writer", w);
         var total: usize = 0;
@@ -57,10 +86,6 @@ pub const RenderBuffer = struct {
             }
         }
         return total;
-    }
-
-    fn flushFn(w: *std.io.Writer) std.io.Writer.Error!void {
-        _ = w;
     }
 
     fn appendSlice(self: *RenderBuffer, slice: []const u8) !void {
@@ -158,6 +183,71 @@ test "RenderBuffer treats three lines with trailing newline as three lines" {
     try std.testing.expectEqual(@as(usize, 0), rb.lineOffsets()[0]);
     try std.testing.expectEqual(@as(usize, 2), rb.lineOffsets()[1]);
     try std.testing.expectEqual(@as(usize, 4), rb.lineOffsets()[2]);
+}
+
+test "RenderBuffer.rowHash changes with content and matches for identical content" {
+    var rb_a = RenderBuffer.init(std.testing.allocator);
+    defer rb_a.deinit();
+    var rb_b = RenderBuffer.init(std.testing.allocator);
+    defer rb_b.deinit();
+
+    try rb_a.writer.writeAll("hello\nworld\n");
+    try rb_a.writer.flush();
+    try rb_b.writer.writeAll("hello\nworld\n");
+    try rb_b.writer.flush();
+
+    try std.testing.expectEqual(rb_a.rowHash(0), rb_b.rowHash(0));
+    try std.testing.expectEqual(rb_a.rowHash(1), rb_b.rowHash(1));
+    try std.testing.expect(rb_a.rowHash(0) != rb_a.rowHash(1));
+}
+
+test "RenderBuffer.finalize populates rowHash cache so subsequent reads are O(1)" {
+    var rb = RenderBuffer.init(std.testing.allocator);
+    defer rb.deinit();
+
+    try rb.writer.writeAll("alpha\nbeta\ngamma\n");
+    try rb.finalize();
+
+    try std.testing.expectEqual(@as(usize, 3), rb.row_hashes.items.len);
+    try std.testing.expectEqual(rb.row_hashes.items[0], rb.rowHash(0));
+    try std.testing.expectEqual(rb.row_hashes.items[1], rb.rowHash(1));
+    try std.testing.expectEqual(rb.row_hashes.items[2], rb.rowHash(2));
+}
+
+test "RenderBuffer.flush does not populate rowHash cache" {
+    var rb = RenderBuffer.init(std.testing.allocator);
+    defer rb.deinit();
+
+    try rb.writer.writeAll("alpha\nbeta\n");
+    try rb.writer.flush();
+
+    try std.testing.expectEqual(@as(usize, 0), rb.row_hashes.items.len);
+    try std.testing.expectEqual(@as(usize, 2), rb.totalLines());
+}
+
+test "RenderBuffer.reset clears the rowHash cache" {
+    var rb = RenderBuffer.init(std.testing.allocator);
+    defer rb.deinit();
+
+    try rb.writer.writeAll("alpha\nbeta\n");
+    try rb.finalize();
+    try std.testing.expectEqual(@as(usize, 2), rb.row_hashes.items.len);
+
+    rb.reset();
+    try std.testing.expectEqual(@as(usize, 0), rb.row_hashes.items.len);
+}
+
+test "RenderBuffer.row returns bytes of the requested line without its trailing newline" {
+    var rb = RenderBuffer.init(std.testing.allocator);
+    defer rb.deinit();
+
+    try rb.writer.writeAll("alpha\nbeta\ngamma");
+    try rb.writer.flush();
+
+    try std.testing.expectEqualStrings("alpha", rb.row(0));
+    try std.testing.expectEqualStrings("beta", rb.row(1));
+    try std.testing.expectEqualStrings("gamma", rb.row(2));
+    try std.testing.expectEqualStrings("", rb.row(3));
 }
 
 test "RenderBuffer reset retains capacity and reproduces offsets" {

@@ -31,6 +31,7 @@ pub fn eventLoop(
     wrap_width: *?usize,
     scroll_offset: *usize,
     hash: *content_hash.ContentHash,
+    pgr: *pager.Pager,
 ) ExitReason {
     const watcher_idx: usize = 0;
     const stdin_idx: usize = 1;
@@ -60,6 +61,7 @@ pub fn eventLoop(
                     scroll_offset.* = 0;
                     debounce.clear();
                     hash.reset();
+                    pgr.invalidate();
                     _ = pipeline.renderTo(opts.cwd, opts.path, renderer, cycle_arena, buffer, wrap_width.*, hash);
                     needs_redisplay = true;
                 } else {
@@ -95,7 +97,7 @@ pub fn eventLoop(
         }
 
         if (needs_redisplay) {
-            pager.displayPage(opts.stdout, buffer, scroll_offset.*, term_size.rows, opts.enable_ansi);
+            pgr.displayPage(opts.stdout, buffer, scroll_offset.*, term_size.rows, opts.enable_ansi);
         }
     }
 }
