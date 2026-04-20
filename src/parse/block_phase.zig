@@ -4,11 +4,18 @@ const block_cursor = @import("block_cursor.zig");
 const parse_block = @import("block.zig");
 const parse_link = @import("link.zig");
 const parse_table = @import("table.zig");
-const raw = @import("raw.zig");
+const inline_work_mod = @import("inline_work.zig");
 
 const BlockCursor = block_cursor.BlockCursor;
+const InlineWork = inline_work_mod.InlineWork;
 
-pub fn buildRawDocument(allocator: std.mem.Allocator, source: []const u8) !raw.RawDocument {
+pub const BlockDocument = struct {
+    blocks: []ast.BlockNode,
+    inline_work: []const InlineWork,
+    link_defs: ast.LinkDefMap,
+};
+
+pub fn buildBlockDocument(allocator: std.mem.Allocator, source: []const u8) !BlockDocument {
     var walker = Walker{
         .allocator = allocator,
         .link_defs = .{},
@@ -20,6 +27,7 @@ pub fn buildRawDocument(allocator: std.mem.Allocator, source: []const u8) !raw.R
 
     return .{
         .blocks = blocks,
+        .inline_work = walker.inline_work.items,
         .link_defs = walker.link_defs,
     };
 }
@@ -27,9 +35,10 @@ pub fn buildRawDocument(allocator: std.mem.Allocator, source: []const u8) !raw.R
 const Walker = struct {
     allocator: std.mem.Allocator,
     link_defs: ast.LinkDefMap,
+    inline_work: std.ArrayListUnmanaged(InlineWork) = .empty,
     link_definition_scratch: std.ArrayListUnmanaged(u8) = .empty,
     link_label_scratch: std.ArrayListUnmanaged(u8) = .empty,
-    paragraph_lines: std.ArrayListUnmanaged(raw.TextSpan) = .empty,
+    paragraph_lines: std.ArrayListUnmanaged([]const u8) = .empty,
     code_lines: std.ArrayListUnmanaged([]const u8) = .empty,
 
     fn deinitScratch(self: *Walker) void {
@@ -39,8 +48,8 @@ const Walker = struct {
         self.code_lines.deinit(self.allocator);
     }
 
-    fn parseBlocks(self: *Walker, cursor: *BlockCursor) anyerror![]raw.RawBlock {
-        var blocks: std.ArrayListUnmanaged(raw.RawBlock) = .empty;
+    fn parseBlocks(self: *Walker, cursor: *BlockCursor) anyerror![]ast.BlockNode {
+        var blocks: std.ArrayListUnmanaged(ast.BlockNode) = .empty;
 
         while (cursor.peekLine()) |line| {
             if (block_cursor.isBlankLine(line)) {
@@ -81,12 +90,13 @@ const Walker = struct {
 
             if (parse_block.heading(line)) |heading| {
                 cursor.advanceLine();
-                const lines_buf = try self.allocator.alloc(raw.TextSpan, 1);
+                const lines_buf = try self.allocator.alloc([]const u8, 1);
                 lines_buf[0] = heading.content;
                 try blocks.append(self.allocator, .{
                     .heading = .{
                         .level = heading.level,
-                        .lines = lines_buf,
+                        .children = ast.no_inline,
+                        .pending_lines = lines_buf,
                     },
                 });
                 continue;
@@ -145,7 +155,7 @@ const Walker = struct {
         lazy: bool,
     };
 
-    fn parseParagraph(self: *Walker, cursor: *BlockCursor) anyerror!raw.RawBlock {
+    fn parseParagraph(self: *Walker, cursor: *BlockCursor) anyerror!ast.BlockNode {
         self.paragraph_lines.clearRetainingCapacity();
         var is_first = true;
 
@@ -155,11 +165,12 @@ const Walker = struct {
             if (!is_first) {
                 if (parse_block.setextHeadingUnderline(line)) |underline| {
                     block_cursor.advanceParagraphLine(cursor, paragraph_line.lazy);
-                    const lines_copy = try self.allocator.dupe(raw.TextSpan, self.paragraph_lines.items);
+                    const lines_copy = try self.allocator.dupe([]const u8, self.paragraph_lines.items);
                     return .{
                         .heading = .{
                             .level = underline.level,
-                            .lines = lines_copy,
+                            .children = ast.no_inline,
+                            .pending_lines = lines_copy,
                         },
                     };
                 }
@@ -175,10 +186,11 @@ const Walker = struct {
             is_first = false;
         }
 
-        const lines_copy = try self.allocator.dupe(raw.TextSpan, self.paragraph_lines.items);
+        const lines_copy = try self.allocator.dupe([]const u8, self.paragraph_lines.items);
         return .{
             .paragraph = .{
-                .lines = lines_copy,
+                .children = ast.no_inline,
+                .pending_lines = lines_copy,
             },
         };
     }
@@ -266,7 +278,7 @@ const Walker = struct {
         };
     }
 
-    fn parseIndentedCodeBlock(self: *Walker, cursor: *BlockCursor) anyerror!raw.RawBlock {
+    fn parseIndentedCodeBlock(self: *Walker, cursor: *BlockCursor) anyerror!ast.BlockNode {
         self.code_lines.clearRetainingCapacity();
 
         while (cursor.peekLine()) |line| {
@@ -299,7 +311,7 @@ const Walker = struct {
         };
     }
 
-    fn parseFenceBlock(self: *Walker, cursor: *BlockCursor, fence_info: parse_block.Fence) anyerror!raw.RawBlock {
+    fn parseFenceBlock(self: *Walker, cursor: *BlockCursor, fence_info: parse_block.Fence) anyerror!ast.BlockNode {
         const opener = cursor.peekLine() orelse unreachable;
         cursor.advanceLine();
 
@@ -332,7 +344,7 @@ const Walker = struct {
         };
     }
 
-    fn parseBlockQuoteBlock(self: *Walker, cursor: *BlockCursor, first_bq: parse_block.BlockQuote) anyerror!raw.RawBlock {
+    fn parseBlockQuoteBlock(self: *Walker, cursor: *BlockCursor, first_bq: parse_block.BlockQuote) anyerror!ast.BlockNode {
         const base_indent = cursor.blockIndentBase();
 
         var child_ctx = BlockCursor.initBlockQuote(cursor, first_bq.indent);
@@ -342,7 +354,7 @@ const Walker = struct {
         return .{
             .blockquote = .{
                 .indent = first_bq.indent + base_indent,
-                .children = child_blocks,
+                .blocks = child_blocks,
             },
         };
     }
@@ -377,8 +389,8 @@ const Walker = struct {
         };
     }
 
-    fn parseListBlock(self: *Walker, cursor: *BlockCursor, kind: ast.ListKind) anyerror!raw.RawBlock {
-        var items: std.ArrayListUnmanaged(raw.RawListItem) = .empty;
+    fn parseListBlock(self: *Walker, cursor: *BlockCursor, kind: ast.ListKind) anyerror!ast.BlockNode {
+        var items: std.ArrayListUnmanaged(ast.ListItem) = .empty;
         var min_indent: ?usize = null;
         var prev_child_indent: ?usize = null;
         var list_marker: ?u8 = null;
@@ -417,14 +429,14 @@ const Walker = struct {
             );
             const child_blocks = try self.parseBlocks(&child_ctx);
             cursor.raw_pos = child_ctx.raw_pos;
-            if (block_cursor.itemBlocksMakeListLoose(raw.RawBlock, child_blocks)) loose = true;
+            if (block_cursor.itemBlocksMakeListLoose(ast.BlockNode, child_blocks)) loose = true;
 
             try items.append(self.allocator, .{
                 .indent = item.indent + base_indent,
                 .marker = item.marker,
                 .number = item.number,
                 .checked = item.checked,
-                .children = child_blocks,
+                .blocks = child_blocks,
             });
         }
 
@@ -437,7 +449,7 @@ const Walker = struct {
         };
     }
 
-    fn tryParseTable(self: *Walker, cursor: *BlockCursor) anyerror!?raw.RawBlock {
+    fn tryParseTable(self: *Walker, cursor: *BlockCursor) anyerror!?ast.BlockNode {
         const header_line = cursor.peekLine() orelse return null;
         if (parse_block.indentedCodeContent(header_line) != null) return null;
         if (std.mem.indexOfScalar(u8, header_line, '|') == null) return null;
@@ -456,13 +468,19 @@ const Walker = struct {
             error.UnclosedCodeSpan => return null,
         };
 
-        const header = try self.allocator.alloc(raw.TextSpan, header_count);
+        const header = try self.allocator.alloc(ast.TableCell, header_count);
+        for (header) |*cell| cell.* = .{};
         {
             var iter = parse_table.iterateCells(header_line);
             var i: usize = 0;
             while (iter.nextTrimmed()) |cell_text| {
                 if (i >= header_count) break;
-                header[i] = cell_text;
+                if (cell_text.len > 0) {
+                    try self.inline_work.append(self.allocator, .{
+                        .target = &header[i].children,
+                        .input = .{ .slice = cell_text },
+                    });
+                }
                 i += 1;
             }
             if (iter.invalid) return null;
@@ -471,7 +489,7 @@ const Walker = struct {
         cursor.advanceLine();
         cursor.advanceLine();
 
-        var rows: std.ArrayListUnmanaged([]raw.TextSpan) = .empty;
+        var rows: std.ArrayListUnmanaged([]ast.TableCell) = .empty;
         while (cursor.peekLine()) |row_line| {
             if (block_cursor.isBlankLine(row_line)) break;
             if (parse_block.indentedCodeContent(row_line) != null) break;
@@ -481,12 +499,18 @@ const Walker = struct {
             const row_count = parse_table.countCells(row_line);
             if (row_count == 0) break;
 
-            const row = try self.allocator.alloc(raw.TextSpan, row_count);
+            const row = try self.allocator.alloc(ast.TableCell, row_count);
+            for (row) |*cell| cell.* = .{};
             var iter = parse_table.iterateCells(row_line);
             var i: usize = 0;
             while (iter.nextTrimmed()) |cell_text| {
                 if (i >= row_count) break;
-                row[i] = cell_text;
+                if (cell_text.len > 0) {
+                    try self.inline_work.append(self.allocator, .{
+                        .target = &row[i].children,
+                        .input = .{ .slice = cell_text },
+                    });
+                }
                 i += 1;
             }
             if (iter.invalid) break;
@@ -539,77 +563,73 @@ fn joinLines(allocator: std.mem.Allocator, lines: []const []const u8) ![]const u
     return buffer;
 }
 
-test "buildRawDocument emits paragraph for plain text" {
+test "buildBlockDocument emits paragraph with no_inline placeholder and pending_lines" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const raw_doc = try buildRawDocument(arena.allocator(), "Hello world\n");
-    try std.testing.expectEqual(@as(usize, 1), raw_doc.blocks.len);
-    try std.testing.expect(raw_doc.blocks[0] == .paragraph);
-    try std.testing.expectEqual(@as(usize, 1), raw_doc.blocks[0].paragraph.lines.len);
-    try std.testing.expectEqualStrings("Hello world", raw_doc.blocks[0].paragraph.lines[0]);
+    const block_doc = try buildBlockDocument(arena.allocator(), "Hello world\n");
+    try std.testing.expectEqual(@as(usize, 1), block_doc.blocks.len);
+    try std.testing.expect(block_doc.blocks[0] == .paragraph);
+    try std.testing.expectEqual(ast.no_inline, block_doc.blocks[0].paragraph.children);
+    try std.testing.expectEqual(@as(usize, 1), block_doc.blocks[0].paragraph.pending_lines.len);
+    try std.testing.expectEqualStrings("Hello world", block_doc.blocks[0].paragraph.pending_lines[0]);
+
+    try std.testing.expectEqual(@as(usize, 0), block_doc.inline_work.len);
 }
 
-test "buildRawDocument preserves ATX heading level and trims trailing blank line" {
+test "buildBlockDocument ATX heading emits heading variant with pending_lines" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const raw_doc = try buildRawDocument(arena.allocator(), "## Title\n\nBody\n");
-    try std.testing.expectEqual(@as(usize, 3), raw_doc.blocks.len);
-    try std.testing.expect(raw_doc.blocks[0] == .heading);
-    try std.testing.expectEqual(@as(u8, 2), raw_doc.blocks[0].heading.level);
-    try std.testing.expectEqualStrings("Title", raw_doc.blocks[0].heading.lines[0]);
-    try std.testing.expect(raw_doc.blocks[1] == .blank_line);
-    try std.testing.expect(raw_doc.blocks[2] == .paragraph);
-    try std.testing.expectEqualStrings("Body", raw_doc.blocks[2].paragraph.lines[0]);
+    const block_doc = try buildBlockDocument(arena.allocator(), "## Title\n\nBody\n");
+    try std.testing.expectEqual(@as(usize, 3), block_doc.blocks.len);
+    try std.testing.expect(block_doc.blocks[0] == .heading);
+    try std.testing.expectEqual(@as(u8, 2), block_doc.blocks[0].heading.level);
+    try std.testing.expectEqual(ast.no_inline, block_doc.blocks[0].heading.children);
+    try std.testing.expectEqualStrings("Title", block_doc.blocks[0].heading.pending_lines[0]);
+
+    try std.testing.expect(block_doc.blocks[1] == .blank_line);
+    try std.testing.expect(block_doc.blocks[2] == .paragraph);
+    try std.testing.expectEqualStrings("Body", block_doc.blocks[2].paragraph.pending_lines[0]);
+
+    try std.testing.expectEqual(@as(usize, 0), block_doc.inline_work.len);
 }
 
-test "buildRawDocument collects link definition into link_defs and drops the block" {
+test "buildBlockDocument setext heading pivot sets pending_lines on heading not paragraph" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const raw_doc = try buildRawDocument(arena.allocator(), "[anchor]: /target \"Example\"\n\nTrailing paragraph\n");
-    try std.testing.expectEqual(@as(u32, 1), raw_doc.link_defs.count());
+    const block_doc = try buildBlockDocument(arena.allocator(), "Alpha\nBeta\n====\n");
+    try std.testing.expectEqual(@as(usize, 1), block_doc.blocks.len);
+    try std.testing.expect(block_doc.blocks[0] == .heading);
+    try std.testing.expectEqual(@as(u8, 1), block_doc.blocks[0].heading.level);
+    try std.testing.expectEqual(ast.no_inline, block_doc.blocks[0].heading.children);
 
-    const def = raw_doc.link_defs.get("anchor") orelse return error.TestUnexpected;
-    try std.testing.expectEqualStrings("/target", def.url);
-    try std.testing.expect(def.title != null);
-    try std.testing.expectEqualStrings("Example", def.title.?);
+    try std.testing.expectEqual(@as(usize, 2), block_doc.blocks[0].heading.pending_lines.len);
+    try std.testing.expectEqualStrings("Alpha", block_doc.blocks[0].heading.pending_lines[0]);
+    try std.testing.expectEqualStrings("Beta", block_doc.blocks[0].heading.pending_lines[1]);
 
-    var saw_paragraph_body = false;
-    for (raw_doc.blocks) |b| {
-        if (b == .paragraph) {
-            saw_paragraph_body = true;
-            try std.testing.expectEqualStrings("Trailing paragraph", b.paragraph.lines[0]);
-        }
-    }
-    try std.testing.expect(saw_paragraph_body);
+    try std.testing.expectEqual(@as(usize, 0), block_doc.inline_work.len);
 }
 
-test "buildRawDocument records forward-referencing link definition before its use" {
+test "buildBlockDocument blockquote recursion populates inner paragraph pending_lines" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const raw_doc = try buildRawDocument(arena.allocator(), "See [x][ref] later.\n\n[ref]: /u\n");
-    try std.testing.expect(raw_doc.link_defs.count() == 1);
-    const def = raw_doc.link_defs.get("ref") orelse return error.TestUnexpected;
-    try std.testing.expectEqualStrings("/u", def.url);
+    const block_doc = try buildBlockDocument(arena.allocator(), "> inner one\n> inner two\n");
+    try std.testing.expect(block_doc.blocks[0] == .blockquote);
+    const bq = block_doc.blocks[0].blockquote;
+    try std.testing.expectEqual(@as(usize, 1), bq.blocks.len);
+    try std.testing.expect(bq.blocks[0] == .paragraph);
 
-    try std.testing.expect(raw_doc.blocks[0] == .paragraph);
-    try std.testing.expectEqualStrings("See [x][ref] later.", raw_doc.blocks[0].paragraph.lines[0]);
+    try std.testing.expectEqual(@as(usize, 2), bq.blocks[0].paragraph.pending_lines.len);
+    try std.testing.expectEqualStrings("inner one", bq.blocks[0].paragraph.pending_lines[0]);
+    try std.testing.expectEqualStrings("inner two", bq.blocks[0].paragraph.pending_lines[1]);
+
+    try std.testing.expectEqual(@as(usize, 0), block_doc.inline_work.len);
 }
 
-test "buildRawDocument captures fenced code block with language and content" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    const raw_doc = try buildRawDocument(arena.allocator(), "```zig\nconst x = 1;\n```\n");
-    try std.testing.expect(raw_doc.blocks[0] == .code_fence);
-    try std.testing.expectEqualStrings("zig", raw_doc.blocks[0].code_fence.language);
-    try std.testing.expectEqualStrings("const x = 1;", raw_doc.blocks[0].code_fence.content);
-}
-
-test "buildRawDocument builds table header, alignments, and rows" {
+test "buildBlockDocument table emits TableCell array with per-cell slice work" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
@@ -619,56 +639,104 @@ test "buildRawDocument builds table header, alignments, and rows" {
         \\| 1 | 2 |
         \\
     ;
-    const raw_doc = try buildRawDocument(arena.allocator(), source);
-    try std.testing.expect(raw_doc.blocks[0] == .table);
-    const t = raw_doc.blocks[0].table;
+    const block_doc = try buildBlockDocument(arena.allocator(), source);
+    try std.testing.expect(block_doc.blocks[0] == .table);
+    const t = block_doc.blocks[0].table;
     try std.testing.expectEqual(@as(usize, 2), t.header.len);
-    try std.testing.expectEqualStrings("a", t.header[0]);
-    try std.testing.expectEqualStrings("b", t.header[1]);
+    try std.testing.expectEqual(ast.no_inline, t.header[0].children);
+    try std.testing.expectEqual(ast.no_inline, t.header[1].children);
     try std.testing.expectEqual(ast.Alignment.left, t.alignments[0]);
     try std.testing.expectEqual(ast.Alignment.right, t.alignments[1]);
     try std.testing.expectEqual(@as(usize, 1), t.rows.len);
-    try std.testing.expectEqualStrings("1", t.rows[0][0]);
-    try std.testing.expectEqualStrings("2", t.rows[0][1]);
+    try std.testing.expectEqual(@as(usize, 2), t.rows[0].len);
+
+    try std.testing.expectEqual(@as(usize, 4), block_doc.inline_work.len);
+    try std.testing.expect(block_doc.inline_work[0].input == .slice);
+    try std.testing.expectEqualStrings("a", block_doc.inline_work[0].input.slice);
+    try std.testing.expectEqualStrings("b", block_doc.inline_work[1].input.slice);
+    try std.testing.expectEqualStrings("1", block_doc.inline_work[2].input.slice);
+    try std.testing.expectEqualStrings("2", block_doc.inline_work[3].input.slice);
+    try std.testing.expectEqual(
+        @intFromPtr(&t.header[0].children),
+        @intFromPtr(block_doc.inline_work[0].target),
+    );
+    try std.testing.expectEqual(
+        @intFromPtr(&t.rows[0][1].children),
+        @intFromPtr(block_doc.inline_work[3].target),
+    );
 }
 
-test "buildRawDocument nests blockquote children without inline resolution" {
+test "buildBlockDocument collects link definition into link_defs and drops the block" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const raw_doc = try buildRawDocument(arena.allocator(), "> inner one\n> inner two\n");
-    try std.testing.expect(raw_doc.blocks[0] == .blockquote);
-    const bq = raw_doc.blocks[0].blockquote;
-    try std.testing.expectEqual(@as(usize, 1), bq.children.len);
-    try std.testing.expect(bq.children[0] == .paragraph);
-    try std.testing.expectEqual(@as(usize, 2), bq.children[0].paragraph.lines.len);
+    const block_doc = try buildBlockDocument(arena.allocator(), "[anchor]: /target \"Example\"\n\nTrailing paragraph\n");
+    try std.testing.expectEqual(@as(u32, 1), block_doc.link_defs.count());
+
+    const def = block_doc.link_defs.get("anchor") orelse return error.TestUnexpected;
+    try std.testing.expectEqualStrings("/target", def.url);
+    try std.testing.expect(def.title != null);
+    try std.testing.expectEqualStrings("Example", def.title.?);
+
+    var saw_paragraph = false;
+    for (block_doc.blocks) |b| {
+        if (b == .paragraph) saw_paragraph = true;
+    }
+    try std.testing.expect(saw_paragraph);
+
+    try std.testing.expectEqual(@as(usize, 0), block_doc.inline_work.len);
 }
 
-test "buildRawDocument emits list with per-item raw children" {
+test "buildBlockDocument records forward-referencing link definition before its use" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const raw_doc = try buildRawDocument(arena.allocator(), "- alpha\n- beta\n- gamma\n");
-    try std.testing.expect(raw_doc.blocks[0] == .list);
-    const list = raw_doc.blocks[0].list;
+    const block_doc = try buildBlockDocument(arena.allocator(), "See [x][ref] later.\n\n[ref]: /u\n");
+    try std.testing.expect(block_doc.link_defs.count() == 1);
+    const def = block_doc.link_defs.get("ref") orelse return error.TestUnexpected;
+    try std.testing.expectEqualStrings("/u", def.url);
+
+    try std.testing.expect(block_doc.blocks[0] == .paragraph);
+    try std.testing.expectEqualStrings("See [x][ref] later.", block_doc.blocks[0].paragraph.pending_lines[0]);
+}
+
+test "buildBlockDocument captures fenced code block with language and content" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const block_doc = try buildBlockDocument(arena.allocator(), "```zig\nconst x = 1;\n```\n");
+    try std.testing.expect(block_doc.blocks[0] == .code_fence);
+    try std.testing.expectEqualStrings("zig", block_doc.blocks[0].code_fence.language);
+    try std.testing.expectEqualStrings("const x = 1;", block_doc.blocks[0].code_fence.content);
+    try std.testing.expectEqual(@as(usize, 0), block_doc.inline_work.len);
+}
+
+test "buildBlockDocument emits list with per-item child paragraph pending_lines" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const block_doc = try buildBlockDocument(arena.allocator(), "- alpha\n- beta\n- gamma\n");
+    try std.testing.expect(block_doc.blocks[0] == .list);
+    const list = block_doc.blocks[0].list;
     try std.testing.expectEqual(ast.ListKind.unordered, list.kind);
     try std.testing.expectEqual(@as(usize, 3), list.items.len);
 
+    try std.testing.expectEqual(@as(usize, 0), block_doc.inline_work.len);
     for (list.items, [_][]const u8{ "alpha", "beta", "gamma" }) |item, expected_text| {
         try std.testing.expectEqual(@as(u8, '-'), item.marker);
-        try std.testing.expectEqual(@as(usize, 1), item.children.len);
-        try std.testing.expect(item.children[0] == .paragraph);
-        try std.testing.expectEqualStrings(expected_text, item.children[0].paragraph.lines[0]);
+        try std.testing.expectEqual(@as(usize, 1), item.blocks.len);
+        try std.testing.expect(item.blocks[0] == .paragraph);
+        try std.testing.expectEqualStrings(expected_text, item.blocks[0].paragraph.pending_lines[0]);
     }
 }
 
-test "buildRawDocument preserves ordered list number and nested task-list checkbox" {
+test "buildBlockDocument preserves ordered list number and nested task-list checkbox" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const raw_doc = try buildRawDocument(arena.allocator(), "1. [x] done\n2. [ ] todo\n");
-    try std.testing.expect(raw_doc.blocks[0] == .list);
-    const list = raw_doc.blocks[0].list;
+    const block_doc = try buildBlockDocument(arena.allocator(), "1. [x] done\n2. [ ] todo\n");
+    try std.testing.expect(block_doc.blocks[0] == .list);
+    const list = block_doc.blocks[0].list;
     try std.testing.expectEqual(ast.ListKind.ordered, list.kind);
     try std.testing.expectEqual(@as(usize, 2), list.items.len);
 
@@ -683,7 +751,7 @@ test "buildRawDocument preserves ordered list number and nested task-list checkb
     try std.testing.expect(!list.items[1].checked.?);
 }
 
-test "buildRawDocument does NOT treat link-definition-like line inside fenced code as a link def" {
+test "buildBlockDocument does NOT treat link-definition-like line inside fenced code as a link def" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
@@ -697,23 +765,33 @@ test "buildRawDocument does NOT treat link-definition-like line inside fenced co
         \\See [x][real].
         \\
     ;
-    const raw_doc = try buildRawDocument(arena.allocator(), source);
+    const block_doc = try buildBlockDocument(arena.allocator(), source);
 
-    try std.testing.expect(raw_doc.blocks[0] == .code_fence);
-    try std.testing.expectEqualStrings("[not-a-ref]: /fake", raw_doc.blocks[0].code_fence.content);
+    try std.testing.expect(block_doc.blocks[0] == .code_fence);
+    try std.testing.expectEqualStrings("[not-a-ref]: /fake", block_doc.blocks[0].code_fence.content);
 
-    try std.testing.expectEqual(@as(u32, 1), raw_doc.link_defs.count());
-    try std.testing.expect(raw_doc.link_defs.get("not-a-ref") == null);
-    const real = raw_doc.link_defs.get("real") orelse return error.TestUnexpected;
+    try std.testing.expectEqual(@as(u32, 1), block_doc.link_defs.count());
+    try std.testing.expect(block_doc.link_defs.get("not-a-ref") == null);
+    const real = block_doc.link_defs.get("real") orelse return error.TestUnexpected;
     try std.testing.expectEqualStrings("/target", real.url);
 }
 
-test "buildRawDocument emits thematic break and blank line variants" {
+test "buildBlockDocument emits thematic break and blank line variants" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const raw_doc = try buildRawDocument(arena.allocator(), "text\n\n---\n");
-    try std.testing.expect(raw_doc.blocks[0] == .paragraph);
-    try std.testing.expect(raw_doc.blocks[1] == .blank_line);
-    try std.testing.expect(raw_doc.blocks[2] == .thematic_break);
+    const block_doc = try buildBlockDocument(arena.allocator(), "text\n\n---\n");
+    try std.testing.expect(block_doc.blocks[0] == .paragraph);
+    try std.testing.expect(block_doc.blocks[1] == .blank_line);
+    try std.testing.expect(block_doc.blocks[2] == .thematic_break);
+}
+
+test "buildBlockDocument empty input yields empty blocks and empty work" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const block_doc = try buildBlockDocument(arena.allocator(), "");
+    try std.testing.expectEqual(@as(usize, 0), block_doc.blocks.len);
+    try std.testing.expectEqual(@as(usize, 0), block_doc.inline_work.len);
+    try std.testing.expectEqual(@as(u32, 0), block_doc.link_defs.count());
 }

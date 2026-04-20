@@ -31,8 +31,8 @@ fn buildDocument(
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
 
-    const raw_doc = try block_phase.buildRawDocument(arena.allocator(), bytes);
-    const resolved = try inline_phase.resolveInlines(arena.allocator(), raw_doc);
+    const block_doc = try block_phase.buildBlockDocument(arena.allocator(), bytes);
+    const resolved = try inline_phase.resolveInlines(arena.allocator(), block_doc);
     return .{
         .source = bytes,
         .source_storage = storage,
@@ -50,8 +50,8 @@ test {
     _ = @import("parse/block_phase.zig");
     _ = @import("parse/document_test.zig");
     _ = @import("parse/inline_phase.zig");
+    _ = @import("parse/inline_work.zig");
     _ = @import("parse/lifecycle_test.zig");
-    _ = @import("parse/raw.zig");
 }
 
 test "parse builds a document for a single paragraph" {
