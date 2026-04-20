@@ -193,7 +193,7 @@ pub fn writeTable(
     const col_widths = scratch.col_widths.items;
     const bytes = scratch.bytes_buf.items;
 
-    try writeBorder(writer, col_widths, .top, ctx.enable_ansi, ctx.ambiguous_width, ctx.palette);
+    try writeBorder(writer, col_widths, .top, ctx.enable_ansi, ctx.color_mode, ctx.ambiguous_width, ctx.palette);
     try writer.writeByte('\n');
 
     try writeRowFromScratch(
@@ -206,7 +206,7 @@ pub fn writeTable(
     );
     try writer.writeByte('\n');
 
-    try writeBorder(writer, col_widths, .middle, ctx.enable_ansi, ctx.ambiguous_width, ctx.palette);
+    try writeBorder(writer, col_widths, .middle, ctx.enable_ansi, ctx.color_mode, ctx.ambiguous_width, ctx.palette);
 
     for (0..table.rows.len) |i| {
         const row_start = scratch.row_offsets.items[i];
@@ -223,12 +223,12 @@ pub fn writeTable(
 
         if (i + 1 < table.rows.len) {
             try writer.writeByte('\n');
-            try writeBorder(writer, col_widths, .middle, ctx.enable_ansi, ctx.ambiguous_width, ctx.palette);
+            try writeBorder(writer, col_widths, .middle, ctx.enable_ansi, ctx.color_mode, ctx.ambiguous_width, ctx.palette);
         }
     }
 
     try writer.writeByte('\n');
-    try writeBorder(writer, col_widths, .bottom, ctx.enable_ansi, ctx.ambiguous_width, ctx.palette);
+    try writeBorder(writer, col_widths, .bottom, ctx.enable_ansi, ctx.color_mode, ctx.ambiguous_width, ctx.palette);
 }
 
 fn writeRowFromScratch(
@@ -245,7 +245,7 @@ fn writeRowFromScratch(
     const cell_separator = border.cell_pad ++ border.vertical ++ border.cell_pad;
     const row_close = border.cell_pad ++ border.vertical;
 
-    try ansi.writeStyled(writer, ctx.enable_ansi, bar_style, row_open);
+    try ansi.writeStyled(writer, ctx.enable_ansi, ctx.color_mode, bar_style, row_open);
     for (0..col_widths.len) |c| {
         const record: ?CellRecord = if (c < records.len) records[c] else null;
         const cell_width: usize = if (record) |r| r.display_width else 0;
@@ -267,10 +267,10 @@ fn writeRowFromScratch(
         try writer.splatByteAll(' ', right_pad);
 
         if (c + 1 < col_widths.len) {
-            try ansi.writeStyled(writer, ctx.enable_ansi, bar_style, cell_separator);
+            try ansi.writeStyled(writer, ctx.enable_ansi, ctx.color_mode, bar_style, cell_separator);
         }
     }
-    try ansi.writeStyled(writer, ctx.enable_ansi, bar_style, row_close);
+    try ansi.writeStyled(writer, ctx.enable_ansi, ctx.color_mode, bar_style, row_close);
 }
 
 fn writeBorder(
@@ -278,6 +278,7 @@ fn writeBorder(
     col_widths: []const usize,
     kind: BorderKind,
     enable_ansi: bool,
+    color_mode: ansi.ColorMode,
     ambiguous_width: width.AmbiguousWidth,
     palette: theme.Palette,
 ) !void {
@@ -323,21 +324,21 @@ fn writeBorder(
         }
         @memcpy(buf[pos..][0..right.len], right);
         pos += right.len;
-        try ansi.writeStyled(writer, enable_ansi, style, buf[0..pos]);
+        try ansi.writeStyled(writer, enable_ansi, color_mode, style, buf[0..pos]);
     } else {
         var sgr_state: ansi.StyledState = .{};
-        try ansi.writeStyledRun(writer, enable_ansi, &sgr_state, style, left);
+        try ansi.writeStyledRun(writer, enable_ansi, color_mode, &sgr_state, style, left);
         for (0..col_widths.len) |c| {
             const segment_width = col_widths[c] + 2;
             const glyph_count = segment_width / glyph_w;
             for (0..glyph_count) |_| {
-                try ansi.writeStyledRun(writer, enable_ansi, &sgr_state, style, border.horizontal);
+                try ansi.writeStyledRun(writer, enable_ansi, color_mode, &sgr_state, style, border.horizontal);
             }
             if (c + 1 < col_widths.len) {
-                try ansi.writeStyledRun(writer, enable_ansi, &sgr_state, style, join);
+                try ansi.writeStyledRun(writer, enable_ansi, color_mode, &sgr_state, style, join);
             }
         }
-        try ansi.writeStyledRun(writer, enable_ansi, &sgr_state, style, right);
+        try ansi.writeStyledRun(writer, enable_ansi, color_mode, &sgr_state, style, right);
         try ansi.flushStyle(writer, &sgr_state);
     }
 }

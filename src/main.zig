@@ -30,6 +30,7 @@ pub fn main() !u8 {
 
     const wrap_width = if (enable_ansi) terminal.getTerminalWidth(stdout_file.handle) else null;
     const ambiguous_default = terminal.detectAmbiguousWidthFromProcess();
+    const color_mode = terminal.detectColorModeFromProcess();
 
     const exit_code = cli.run(.{
         .allocator = allocator,
@@ -42,6 +43,7 @@ pub fn main() !u8 {
         .enable_ansi = enable_ansi,
         .wrap_width = wrap_width,
         .ambiguous_width = ambiguous_default,
+        .color_mode = color_mode,
     }) catch |err| return unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
 
     stdout_stream.interface.flush() catch |err| return unwrapWriteError(err, stdout_stream.err, stderr_stream.err);

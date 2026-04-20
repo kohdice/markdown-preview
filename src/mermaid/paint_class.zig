@@ -3,6 +3,7 @@ const types = @import("types.zig");
 const canvas_mod = @import("canvas.zig");
 const compile_mod = @import("compile.zig");
 const route_mod = @import("route.zig");
+const ansi_mod = @import("../term/ansi.zig");
 const width_mod = @import("../term/width.zig");
 
 pub const RenderError = error{
@@ -16,6 +17,7 @@ pub const Options = struct {
     wrap_width: ?usize,
     ambiguous_width: width_mod.AmbiguousWidth,
     enable_ansi: bool = false,
+    color_mode: ansi_mod.ColorMode = .truecolor,
 };
 
 const StyleKind = enum { static_, abstract_ };
@@ -92,7 +94,7 @@ pub fn paintClass(
         error.OutOfMemory => return error.OutOfMemory,
     };
 
-    if (opts.enable_ansi and spans.items.len > 0) {
+    if (opts.enable_ansi and opts.color_mode != .none and spans.items.len > 0) {
         try writeCanvasWithSpans(writer, allocator, &canvas, spans.items, opts);
     } else {
         canvas_mod.writeCanvas(writer, &canvas, opts.wrap_width, opts.ambiguous_width) catch return error.WriteFailed;
@@ -863,6 +865,30 @@ test "paintClass emits no SGR when enable_ansi is false" {
     var sink: std.io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = false });
+
+    const out = sink.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[") == null);
+}
+
+test "paintClass under color_mode=.none emits no SGR even with enable_ansi=true" {
+    const alloc = std.testing.allocator;
+    var diagram = try compile_mod.compile(alloc,
+        \\classDiagram
+        \\    class C {
+        \\        +count$
+        \\        +run()*
+        \\    }
+    );
+    defer diagram.deinit();
+
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+    try paintClass(&sink.writer, alloc, &diagram.class_, .{
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+        .enable_ansi = true,
+        .color_mode = .none,
+    });
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[") == null);

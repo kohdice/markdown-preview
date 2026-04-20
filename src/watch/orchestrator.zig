@@ -46,6 +46,7 @@ pub fn run(opts: WatchOptions) !u8 {
     renderer.init(state_arena.allocator(), .{
         .enable_ansi = opts.enable_ansi,
         .ambiguous_width = opts.ambiguous_width,
+        .color_mode = opts.color_mode,
     });
     defer renderer.deinit();
 
@@ -71,7 +72,7 @@ pub fn run(opts: WatchOptions) !u8 {
     defer pgr.deinit();
 
     _ = pipeline.renderTo(opts.cwd, opts.path, &renderer, &cycle_arena, &buffer, wrap_width, &hash);
-    pgr.displayPage(opts.stdout, &buffer, scroll_offset, term_size.rows, opts.enable_ansi);
+    pgr.displayPage(opts.stdout, &buffer, scroll_offset, term_size.rows, opts.enable_ansi, opts.color_mode);
 
     var watcher = file_watcher.FileWatcher.init(dir_z, name_z) catch |err| {
         try opts.stderr.print("mp: unable to watch '{s}': {s}\n", .{ opts.path, @errorName(err) });

@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const ansi = @import("ansi.zig");
 const width = @import("width.zig");
 
 pub const AmbiguousWidth = width.AmbiguousWidth;
@@ -50,6 +51,20 @@ pub fn detectAmbiguousWidthFromProcess() width.AmbiguousWidth {
         }
     };
     return width.detectAmbiguousWidth(process_env);
+}
+
+pub fn detectColorModeFromProcess() ansi.ColorMode {
+    if (builtin.os.tag == .windows) {
+        if (std.process.hasNonEmptyEnvVarConstant("NO_COLOR")) return .none;
+        return .truecolor;
+    }
+
+    const process_env = struct {
+        pub fn get(name: []const u8) ?[]const u8 {
+            return std.posix.getenv(name);
+        }
+    };
+    return ansi.detectColorMode(process_env);
 }
 
 test "classifyWindowsCodePage wide for classic CJK code pages" {

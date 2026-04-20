@@ -73,6 +73,7 @@ fn InlineVisitor(comptime measure: bool) type {
             try ansi.writeStyledRun(
                 self.writer,
                 self.ctx.enable_ansi,
+                self.ctx.color_mode,
                 self.sgr_state,
                 .{ .fg = self.ctx.palette.inline_code },
                 content,
@@ -84,6 +85,7 @@ fn InlineVisitor(comptime measure: bool) type {
             try ansi.writeStyledRun(
                 self.writer,
                 self.ctx.enable_ansi,
+                self.ctx.color_mode,
                 self.sgr_state,
                 self.current_style.merge(.{ .fg = self.ctx.palette.link, .underline = true }),
                 url,
@@ -124,15 +126,15 @@ fn InlineVisitor(comptime measure: bool) type {
                 const title_style: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .dim = true, .italic = true };
                 self.addWidth(link_title_separator);
                 self.addWidth(t);
-                try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, title_style, link_title_separator);
-                try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, title_style, t);
+                try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, self.sgr_state, title_style, link_title_separator);
+                try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, self.sgr_state, title_style, t);
             }
         }
 
         pub fn onImage(self: *Self, doc: *const ast.Document, img: ast.ImageInline) Error!void {
             const img_style: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .italic = true };
             self.addWidth(image_alt_prefix);
-            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, img_style, image_alt_prefix);
+            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, self.sgr_state, img_style, image_alt_prefix);
 
             const saved = self.current_style;
             self.current_style = img_style;
@@ -140,15 +142,15 @@ fn InlineVisitor(comptime measure: bool) type {
             self.current_style = saved;
 
             self.addWidth(image_alt_suffix);
-            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, img_style, image_alt_suffix);
+            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, self.sgr_state, img_style, image_alt_suffix);
             const muted_dim: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .dim = true };
             try writeUrlDisplay(self, muted_dim, img.url);
             if (img.title) |t| {
                 const title_style: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .dim = true, .italic = true };
                 self.addWidth(link_title_separator);
                 self.addWidth(t);
-                try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, title_style, link_title_separator);
-                try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, title_style, t);
+                try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, self.sgr_state, title_style, link_title_separator);
+                try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, self.sgr_state, title_style, t);
             }
         }
 
@@ -156,15 +158,15 @@ fn InlineVisitor(comptime measure: bool) type {
             self.addWidth(link_url_open);
             self.addWidth(url);
             self.addWidth(link_url_close);
-            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, style, link_url_open);
-            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, style, url);
-            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, style, link_url_close);
+            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, self.sgr_state, style, link_url_open);
+            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, self.sgr_state, style, url);
+            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, self.sgr_state, style, link_url_close);
         }
 
         fn writeTextWithEntities(self: *Self, content: []const u8, style: ansi.TextStyle) Error!void {
             if (std.mem.indexOfScalar(u8, content, '&') == null) {
                 self.addWidth(content);
-                try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, style, content);
+                try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, self.sgr_state, style, content);
                 return;
             }
 
@@ -177,11 +179,11 @@ fn InlineVisitor(comptime measure: bool) type {
                         if (plain_start < pos) {
                             const plain = content[plain_start..pos];
                             self.addWidth(plain);
-                            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, style, plain);
+                            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, self.sgr_state, style, plain);
                         }
                         const decoded = result.bytes[0..result.len];
                         self.addWidth(decoded);
-                        try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, style, decoded);
+                        try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, self.sgr_state, style, decoded);
                         pos = result.end;
                         plain_start = pos;
                         continue;
@@ -193,7 +195,7 @@ fn InlineVisitor(comptime measure: bool) type {
             if (plain_start < content.len) {
                 const tail = content[plain_start..];
                 self.addWidth(tail);
-                try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.sgr_state, style, tail);
+                try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, self.sgr_state, style, tail);
             }
         }
     };

@@ -4,6 +4,7 @@ const render = @import("render.zig");
 const term = @import("term.zig");
 const watch = @import("watch.zig");
 const source_loader = @import("source_loader.zig");
+const ansi = term.ansi;
 const width = term.width;
 
 const exit_success: u8 = 0;
@@ -20,6 +21,7 @@ pub const RunOptions = struct {
     enable_ansi: bool,
     wrap_width: ?usize,
     ambiguous_width: width.AmbiguousWidth,
+    color_mode: ansi.ColorMode = .truecolor,
 };
 
 const usage_message =
@@ -87,6 +89,7 @@ pub fn run(opts: RunOptions) !u8 {
             .stdin_handle = opts.stdin_handle,
             .enable_ansi = opts.enable_ansi,
             .ambiguous_width = opts.ambiguous_width,
+            .color_mode = opts.color_mode,
         });
     }
 
@@ -102,6 +105,7 @@ pub fn run(opts: RunOptions) !u8 {
     renderer.init(opts.allocator, .{
         .enable_ansi = opts.enable_ansi,
         .ambiguous_width = opts.ambiguous_width,
+        .color_mode = opts.color_mode,
     });
     defer renderer.deinit();
 

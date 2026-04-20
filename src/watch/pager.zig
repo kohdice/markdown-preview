@@ -1,5 +1,6 @@
 const std = @import("std");
 const actions = @import("actions.zig");
+const ansi = @import("../term/ansi.zig");
 const render_buffer_mod = @import("render_buffer.zig");
 
 pub fn applyAction(action: actions.KeyAction, scroll_offset: *usize, total_lines: usize, term_rows: usize) bool {
@@ -57,6 +58,7 @@ pub const Pager = struct {
     prev_row_hashes: std.ArrayListUnmanaged(u64) = .empty,
     prev_scroll: ?usize = null,
     prev_enable_ansi: ?bool = null,
+    prev_color_mode: ?ansi.ColorMode = null,
     prev_content_rows: ?usize = null,
 
     pub fn init(allocator: std.mem.Allocator) Pager {
@@ -71,6 +73,7 @@ pub const Pager = struct {
         self.prev_row_hashes.clearRetainingCapacity();
         self.prev_scroll = null;
         self.prev_enable_ansi = null;
+        self.prev_color_mode = null;
         self.prev_content_rows = null;
     }
 
@@ -89,14 +92,16 @@ pub const Pager = struct {
         scroll_offset: usize,
         visible_rows: usize,
         enable_ansi: bool,
+        color_mode: ansi.ColorMode,
     ) void {
         const content_rows = if (visible_rows > 1) visible_rows - 1 else 1;
 
         const can_diff = blk: {
             const ps = self.prev_scroll orelse break :blk false;
             const pa = self.prev_enable_ansi orelse break :blk false;
+            const pm = self.prev_color_mode orelse break :blk false;
             const pc = self.prev_content_rows orelse break :blk false;
-            break :blk ps == scroll_offset and pa == enable_ansi and pc == content_rows;
+            break :blk ps == scroll_offset and pa == enable_ansi and pm == color_mode and pc == content_rows;
         };
 
         const visible = visibleRows(buffer, scroll_offset, content_rows);
@@ -127,7 +132,7 @@ pub const Pager = struct {
             }
         }
 
-        writeStatusLine(stdout, scroll_offset, content_rows, buffer.totalLines(), enable_ansi);
+        writeStatusLine(stdout, scroll_offset, content_rows, buffer.totalLines(), enable_ansi, color_mode);
         stdout.flush() catch {};
 
         self.captureRows(visible) catch {
@@ -136,6 +141,7 @@ pub const Pager = struct {
         };
         self.prev_scroll = scroll_offset;
         self.prev_enable_ansi = enable_ansi;
+        self.prev_color_mode = color_mode;
         self.prev_content_rows = content_rows;
     }
 
@@ -183,13 +189,15 @@ fn writeStatusLine(
     content_rows: usize,
     total_lines: usize,
     enable_ansi: bool,
+    color_mode: ansi.ColorMode,
 ) void {
     stdout.print("\x1b[{d};1H\x1b[2K", .{content_rows + 1}) catch return;
 
+    const emit_sgr = enable_ansi and color_mode != .none;
     if (total_lines <= content_rows or scroll_offset + content_rows >= total_lines) {
-        if (enable_ansi) stdout.writeAll("\x1b[7m") catch return;
+        if (emit_sgr) stdout.writeAll("\x1b[7m") catch return;
         stdout.writeAll("(END)") catch return;
-        if (enable_ansi) stdout.writeAll("\x1b[0m") catch return;
+        if (emit_sgr) stdout.writeAll("\x1b[0m") catch return;
     } else {
         stdout.writeAll(":") catch return;
     }
@@ -270,13 +278,13 @@ test "Pager reuses capacity across repaints without unbounded growth" {
     var out: std.io.Writer.Allocating = .init(allocator);
     defer out.deinit();
 
-    pgr.displayPage(&out.writer, &rb, 0, 3, false);
+    pgr.displayPage(&out.writer, &rb, 0, 3, false, .truecolor);
     const first_cap = pgr.prev_row_hashes.capacity;
     out.clearRetainingCapacity();
 
     var i: usize = 0;
     while (i < 20) : (i += 1) {
-        pgr.displayPage(&out.writer, &rb, 0, 3, false);
+        pgr.displayPage(&out.writer, &rb, 0, 3, false, .truecolor);
         out.clearRetainingCapacity();
     }
     try std.testing.expectEqual(first_cap, pgr.prev_row_hashes.capacity);
@@ -295,16 +303,77 @@ test "Pager diffing skips emission for unchanged rows" {
     var out: std.io.Writer.Allocating = .init(allocator);
     defer out.deinit();
 
-    pgr.displayPage(&out.writer, &rb, 0, 4, false);
+    pgr.displayPage(&out.writer, &rb, 0, 4, false, .truecolor);
     const first_bytes = try allocator.dupe(u8, out.writer.buffered());
     defer allocator.free(first_bytes);
 
     out.clearRetainingCapacity();
-    pgr.displayPage(&out.writer, &rb, 0, 4, false);
+    pgr.displayPage(&out.writer, &rb, 0, 4, false, .truecolor);
     const second_bytes = out.writer.buffered();
 
     try std.testing.expect(first_bytes.len > second_bytes.len);
     try std.testing.expect(std.mem.indexOf(u8, second_bytes, "\x1b[H\x1b[J") == null);
+}
+
+test "Pager (END) status line under color_mode=.none emits no reverse-video SGR" {
+    const allocator = std.testing.allocator;
+    var pgr = Pager.init(allocator);
+    defer pgr.deinit();
+
+    var rb = render_buffer_mod.RenderBuffer.init(allocator);
+    defer rb.deinit();
+    try rb.writer.writeAll("one\ntwo\n");
+    try rb.writer.flush();
+
+    var out: std.io.Writer.Allocating = .init(allocator);
+    defer out.deinit();
+
+    pgr.displayPage(&out.writer, &rb, 0, 5, true, .none);
+
+    const bytes = out.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "\x1b[7m") == null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "(END)") != null);
+}
+
+test "Pager (END) status line under color_mode=.ansi16 emits reverse-video SGR" {
+    const allocator = std.testing.allocator;
+    var pgr = Pager.init(allocator);
+    defer pgr.deinit();
+
+    var rb = render_buffer_mod.RenderBuffer.init(allocator);
+    defer rb.deinit();
+    try rb.writer.writeAll("one\ntwo\n");
+    try rb.writer.flush();
+
+    var out: std.io.Writer.Allocating = .init(allocator);
+    defer out.deinit();
+
+    pgr.displayPage(&out.writer, &rb, 0, 5, true, .ansi16);
+
+    const bytes = out.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "\x1b[7m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "(END)") != null);
+}
+
+test "Pager diff forces full repaint when color_mode changes" {
+    const allocator = std.testing.allocator;
+    var pgr = Pager.init(allocator);
+    defer pgr.deinit();
+
+    var rb = render_buffer_mod.RenderBuffer.init(allocator);
+    defer rb.deinit();
+    try rb.writer.writeAll("alpha\nbeta\n");
+    try rb.writer.flush();
+
+    var out: std.io.Writer.Allocating = .init(allocator);
+    defer out.deinit();
+
+    pgr.displayPage(&out.writer, &rb, 0, 4, true, .truecolor);
+    out.clearRetainingCapacity();
+
+    pgr.displayPage(&out.writer, &rb, 0, 4, true, .ansi16);
+    const bytes = out.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "\x1b[H\x1b[J") != null);
 }
 
 test "Pager full repaint when scroll changes" {
@@ -320,10 +389,10 @@ test "Pager full repaint when scroll changes" {
     var out: std.io.Writer.Allocating = .init(allocator);
     defer out.deinit();
 
-    pgr.displayPage(&out.writer, &rb, 0, 3, false);
+    pgr.displayPage(&out.writer, &rb, 0, 3, false, .truecolor);
     out.clearRetainingCapacity();
 
-    pgr.displayPage(&out.writer, &rb, 1, 3, false);
+    pgr.displayPage(&out.writer, &rb, 1, 3, false, .truecolor);
     const bytes = out.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, bytes, "\x1b[H\x1b[J") != null);
 }

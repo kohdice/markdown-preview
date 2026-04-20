@@ -242,10 +242,11 @@ pub const Highlighter = struct {
         source: []const u8,
         lang: Language,
         syn_palette: theme.SyntaxPalette,
+        mode: ansi.ColorMode,
     ) !void {
         if (source.len == 0) return;
         if (source.len > highlight_max_bytes) {
-            try ansi.writeStyled(writer, true, .{ .fg = syn_palette.plain }, source);
+            try ansi.writeStyled(writer, true, mode, .{ .fg = syn_palette.plain }, source);
             return;
         }
 
@@ -335,7 +336,7 @@ pub const Highlighter = struct {
                 const name = config.query.captureNameForId(cur) orelse "";
                 break :blk captureToStyle(name, syn_palette);
             };
-            try ansi.writeStyledRun(writer, true, &state, style, slice);
+            try ansi.writeStyledRun(writer, true, mode, &state, style, slice);
             run_start = run_end;
         }
         try ansi.flushStyle(writer, &state);
@@ -974,7 +975,7 @@ test "Highlighter: writes styled zig source" {
     defer buf.deinit();
 
     const source = "const x: u32 = 42;";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette, .truecolor);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1010,7 +1011,7 @@ test "Highlighter: highlights every supported language end-to-end" {
         var buf: std.io.Writer.Allocating = .init(allocator);
         defer buf.deinit();
 
-        try hl.writeHighlightedBlock(allocator, &buf.writer, case.source, case.lang, theme.default_syntax_palette);
+        try hl.writeHighlightedBlock(allocator, &buf.writer, case.source, case.lang, theme.default_syntax_palette, .truecolor);
 
         var list = buf.toArrayList();
         defer list.deinit(allocator);
@@ -1035,7 +1036,7 @@ test "Highlighter: later @function pattern overrides generic @variable on fn dec
     defer buf.deinit();
 
     const source = "fn greet() void {}";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette, .truecolor);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1055,7 +1056,7 @@ test "Highlighter: uncaptured whitespace renders with plain color" {
     defer buf.deinit();
 
     const source = "const x = 1;";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette, .truecolor);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1075,7 +1076,7 @@ test "Highlighter: @string captures survive a #set! directive on the pattern" {
     defer buf.deinit();
 
     const source = "const msg = \"hi\";";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette, .truecolor);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1096,7 +1097,7 @@ test "Highlighter: lua-match highlights Zig type identifiers" {
     defer buf.deinit();
 
     const source = "const value: MyType = undefined;";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette, .truecolor);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1116,7 +1117,7 @@ test "Highlighter: javascript require is builtin when not shadowed" {
     defer buf.deinit();
 
     const source = "require('fs');";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .javascript, theme.default_syntax_palette);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .javascript, theme.default_syntax_palette, .truecolor);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1135,7 +1136,7 @@ test "Highlighter: javascript local require does not use builtin styling" {
     defer buf.deinit();
 
     const source = "function demo(require) { return require; }";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .javascript, theme.default_syntax_palette);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .javascript, theme.default_syntax_palette, .truecolor);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1154,7 +1155,7 @@ test "Highlighter: @spell meta capture does not override @comment italic" {
     defer buf.deinit();
 
     const source = "// hello world";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette, .truecolor);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1178,7 +1179,7 @@ test "Highlighter: forced .failed returns QueryUnavailable" {
 
     try std.testing.expectError(
         error.QueryUnavailable,
-        hl.writeHighlightedBlock(allocator, &buf.writer, "const x = 1;", .zig, theme.default_syntax_palette),
+        hl.writeHighlightedBlock(allocator, &buf.writer, "const x = 1;", .zig, theme.default_syntax_palette, .truecolor),
     );
 }
 
@@ -1194,7 +1195,7 @@ test "Highlighter: .failed is sticky across repeated calls" {
     for (0..3) |_| {
         try std.testing.expectError(
             error.QueryUnavailable,
-            hl.writeHighlightedBlock(allocator, &buf.writer, "x", .zig, theme.default_syntax_palette),
+            hl.writeHighlightedBlock(allocator, &buf.writer, "x", .zig, theme.default_syntax_palette, .truecolor),
         );
     }
     switch (hl.languages[Language.zig.index()]) {
@@ -1232,7 +1233,7 @@ fn renderHighlightedForTest(
 ) ![]u8 {
     var buf: std.io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, lang, theme.default_syntax_palette);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, lang, theme.default_syntax_palette, .truecolor);
     var list = buf.toArrayList();
     defer list.deinit(allocator);
     return try list.toOwnedSlice(allocator);

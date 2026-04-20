@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const parse = @import("parse.zig");
 const term = @import("term.zig");
+const ansi = term.ansi;
 const highlight = term.highlight;
 const theme = term.theme;
 const width = term.width;
@@ -14,6 +15,7 @@ const mermaid = @import("mermaid.zig");
 pub const RenderOptions = struct {
     enable_ansi: bool = false,
     ambiguous_width: width.AmbiguousWidth = .narrow,
+    color_mode: ansi.ColorMode = .truecolor,
 };
 
 pub const Renderer = struct {
@@ -73,6 +75,7 @@ pub const Renderer = struct {
             .ambiguous_width = self.opts.ambiguous_width,
             .palette = self.palette,
             .syn_palette = self.syn_palette,
+            .color_mode = self.opts.color_mode,
         };
         var session: render_block.RenderSession = .{
             .ctx = &ctx,
@@ -106,4 +109,6 @@ test {
     _ = @import("render/code_test.zig");
     _ = @import("render/mermaid_cache_test.zig");
     _ = @import("render/paragraph_bypass_parity_test.zig");
+    _ = @import("render/highlight_color_bypass_parity_test.zig");
+    _ = @import("render/color_mode_propagation_test.zig");
 }

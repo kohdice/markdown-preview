@@ -27,6 +27,7 @@ const list_bullet = struct {
 fn writeRawLines(
     writer: *std.io.Writer,
     enable_ansi: bool,
+    color_mode: ansi.ColorMode,
     raw_lines: []const []const u8,
     base_style: ansi.TextStyle,
 ) !void {
@@ -37,7 +38,7 @@ fn writeRawLines(
             try writer.writeByte('\n');
         }
         const content = if (idx + 1 < raw_lines.len) trimTrailingSpaces(line) else line;
-        try ansi.writeStyledRun(writer, enable_ansi, &state, base_style, content);
+        try ansi.writeStyledRun(writer, enable_ansi, color_mode, &state, base_style, content);
     }
     try ansi.flushStyle(writer, &state);
 }
@@ -54,6 +55,13 @@ fn bulletForDepth(depth: usize) []const u8 {
         1 => list_bullet.level1,
         2 => list_bullet.level2,
         else => unreachable,
+    };
+}
+
+fn canHighlight(mode: ansi.ColorMode) bool {
+    return switch (mode) {
+        .ansi256, .truecolor => true,
+        .none, .ansi16 => false,
     };
 }
 
@@ -101,7 +109,7 @@ pub const RenderSession = struct {
             if (marker.len == 0) break :blk marker;
             if (!self.ctx.enable_ansi or style.isPlain()) break :blk marker;
             var tmp: std.io.Writer.Allocating = .init(self.scratch);
-            try ansi.writeStyled(&tmp.writer, self.ctx.enable_ansi, style, marker);
+            try ansi.writeStyled(&tmp.writer, self.ctx.enable_ansi, self.ctx.color_mode, style, marker);
             break :blk tmp.written();
         };
         try self.pushSegment(.{ .indent = indent, .marker = rendered_marker });
@@ -157,10 +165,10 @@ pub const RenderSession = struct {
             else
                 1;
             self.wrap_writer.reset(self.writer, available);
-            try writeRawLines(&self.wrap_writer.writer, self.ctx.enable_ansi, raw_lines, base_style);
+            try writeRawLines(&self.wrap_writer.writer, self.ctx.enable_ansi, self.ctx.color_mode, raw_lines, base_style);
             try self.wrap_writer.finish();
         } else {
-            try writeRawLines(self.writer, self.ctx.enable_ansi, raw_lines, base_style);
+            try writeRawLines(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, raw_lines, base_style);
         }
     }
 
@@ -197,7 +205,7 @@ pub const RenderSession = struct {
     }
 
     fn writeThematicBreak(self: *RenderSession) !void {
-        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, .{
+        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, .{
             .fg = self.ctx.palette.muted,
         }, thematic_break_display);
     }
@@ -261,14 +269,14 @@ pub const RenderSession = struct {
         var content_col: usize = item.indent;
         if (item.number) |number| {
             var sgr_state: ansi.StyledState = .{};
-            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, &sgr_state, marker_style, number);
+            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, &sgr_state, marker_style, number);
             const marker_buf: [2]u8 = .{ item.marker, ' ' };
-            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, &sgr_state, marker_style, &marker_buf);
+            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, &sgr_state, marker_style, &marker_buf);
             try ansi.flushStyle(self.writer, &sgr_state);
             content_col += width.displayWidth(number, self.ctx.ambiguous_width) + width.displayWidth(&marker_buf, self.ctx.ambiguous_width);
         } else {
             const marker_text = bulletForDepth(depth);
-            try ansi.writeStyled(self.writer, self.ctx.enable_ansi, marker_style, marker_text);
+            try ansi.writeStyled(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, marker_style, marker_text);
             content_col += width.displayWidth(marker_text, self.ctx.ambiguous_width);
         }
         content_col += checkboxWidth(item.checked, self.ctx.ambiguous_width);
@@ -332,7 +340,7 @@ pub const RenderSession = struct {
 
             try self.pushIndent(content_col);
             errdefer self.popPrefix() catch {};
-            try writeRawLines(self.writer, self.ctx.enable_ansi, paragraph.raw_lines, style);
+            try writeRawLines(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, paragraph.raw_lines, style);
             try self.popPrefix();
             return;
         }
@@ -357,7 +365,7 @@ pub const RenderSession = struct {
 
     fn writeCodeFence(self: *RenderSession, code_fence: ast.CodeFence) !void {
         const fence_style: ansi.TextStyle = .{ .fg = self.ctx.palette.code_fence, .dim = true };
-        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, fence_style, code_fence.opener);
+        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, fence_style, code_fence.opener);
 
         if (std.ascii.eqlIgnoreCase(code_fence.language, "mermaid")) {
             if (code_fence.content.len > 0) {
@@ -369,7 +377,7 @@ pub const RenderSession = struct {
             }
             if (code_fence.closer) |closer| {
                 try self.writer.writeByte('\n');
-                try ansi.writeStyled(self.writer, self.ctx.enable_ansi, fence_style, closer);
+                try ansi.writeStyled(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, fence_style, closer);
             }
             return;
         }
@@ -382,7 +390,7 @@ pub const RenderSession = struct {
 
         if (code_fence.closer) |closer| {
             try self.writer.writeByte('\n');
-            try ansi.writeStyled(self.writer, self.ctx.enable_ansi, fence_style, closer);
+            try ansi.writeStyled(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, fence_style, closer);
         }
     }
 
@@ -391,6 +399,7 @@ pub const RenderSession = struct {
             .enable_ansi = self.ctx.enable_ansi,
             .wrap_width = self.wrap_width,
             .ambiguous_width = self.ctx.ambiguous_width,
+            .color_mode = self.ctx.color_mode,
         };
         const key = std.hash.XxHash3.hash(0, content);
         const diagram_ptr = if (self.mermaid_cache.getPtr(key)) |cached|
@@ -411,7 +420,7 @@ pub const RenderSession = struct {
             error.InvalidMermaid => "[mermaid: parse error]\n",
             else => "[mermaid: render error]\n",
         };
-        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, .{
+        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, .{
             .fg = self.ctx.palette.inline_code,
         }, label);
         try self.writeFenceBody(content, null);
@@ -419,33 +428,36 @@ pub const RenderSession = struct {
 
     fn writeFenceBody(self: *RenderSession, content: []const u8, language: ?highlight.Language) !void {
         if (language) |lang| {
-            if (self.ctx.enable_ansi) {
+            if (self.ctx.enable_ansi and canHighlight(self.ctx.color_mode)) {
                 self.highlighter.writeHighlightedBlock(
                     self.scratch,
                     self.writer,
                     content,
                     lang,
                     self.ctx.syn_palette,
+                    self.ctx.color_mode,
                 ) catch |err| switch (err) {
                     error.QueryUnavailable => {
-                        try ansi.writeStyled(self.writer, true, .{ .fg = self.ctx.palette.inline_code }, content);
+                        try ansi.writeStyled(self.writer, true, self.ctx.color_mode, .{ .fg = self.ctx.palette.inline_code }, content);
                     },
                     else => return err,
                 };
                 return;
             }
 
-            try ansi.writeStyled(self.writer, false, .{}, content);
-            return;
+            if (!self.ctx.enable_ansi) {
+                try ansi.writeStyled(self.writer, false, self.ctx.color_mode, .{}, content);
+                return;
+            }
         }
 
-        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, .{
+        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, .{
             .fg = self.ctx.palette.inline_code,
         }, content);
     }
 
     fn writeCodeBlock(self: *RenderSession, code_block: ast.CodeBlock) !void {
-        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, .{
+        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, .{
             .fg = self.ctx.palette.inline_code,
         }, code_block.content);
     }
@@ -453,11 +465,11 @@ pub const RenderSession = struct {
     fn writeCheckbox(self: *RenderSession, checked: ?bool) !void {
         if (checked) |is_checked| {
             if (is_checked) {
-                try ansi.writeStyled(self.writer, self.ctx.enable_ansi, .{
+                try ansi.writeStyled(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, .{
                     .fg = self.ctx.palette.list_marker,
                 }, checkbox_checked);
             } else {
-                try ansi.writeStyled(self.writer, self.ctx.enable_ansi, .{
+                try ansi.writeStyled(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, .{
                     .fg = self.ctx.palette.muted,
                     .dim = true,
                 }, checkbox_unchecked);

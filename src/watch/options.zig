@@ -1,5 +1,7 @@
 const std = @import("std");
-const width = @import("../term.zig").width;
+const term = @import("../term.zig");
+const ansi = term.ansi;
+const width = term.width;
 
 pub const WatchOptions = struct {
     cwd: std.fs.Dir,
@@ -10,4 +12,5 @@ pub const WatchOptions = struct {
     stdin_handle: std.posix.fd_t,
     enable_ansi: bool,
     ambiguous_width: width.AmbiguousWidth,
+    color_mode: ansi.ColorMode = .truecolor,
 };

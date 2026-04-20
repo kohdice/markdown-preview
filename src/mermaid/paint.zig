@@ -6,6 +6,7 @@ const paint_flowchart = @import("paint_flowchart.zig");
 const paint_git = @import("paint_git.zig");
 const paint_sequence = @import("paint_sequence.zig");
 const paint_xychart = @import("paint_xychart.zig");
+const ansi_mod = @import("../term/ansi.zig");
 const width_mod = @import("../term/width.zig");
 
 pub const PaintError = error{
@@ -20,6 +21,7 @@ pub const PaintOptions = struct {
     enable_ansi: bool,
     wrap_width: ?usize,
     ambiguous_width: width_mod.AmbiguousWidth,
+    color_mode: ansi_mod.ColorMode = .truecolor,
 };
 
 pub fn paint(
@@ -39,6 +41,7 @@ pub fn paint(
             .wrap_width = opts.wrap_width,
             .ambiguous_width = opts.ambiguous_width,
             .enable_ansi = opts.enable_ansi,
+            .color_mode = opts.color_mode,
         }) catch |err| mapRenderError(err),
         .er => |*d| paint_er.paintEr(writer, allocator, d, .{
             .wrap_width = opts.wrap_width,
@@ -48,11 +51,13 @@ pub fn paint(
             .wrap_width = opts.wrap_width,
             .ambiguous_width = opts.ambiguous_width,
             .enable_ansi = opts.enable_ansi,
+            .color_mode = opts.color_mode,
         }) catch |err| mapRenderError(err),
         .xychart => |*d| paint_xychart.paintXyChart(writer, allocator, d, .{
             .wrap_width = opts.wrap_width,
             .ambiguous_width = opts.ambiguous_width,
             .enable_ansi = opts.enable_ansi,
+            .color_mode = opts.color_mode,
         }) catch |err| mapRenderError(err),
     };
 }

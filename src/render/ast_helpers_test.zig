@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../ast.zig");
 const render = @import("../render.zig");
+const ansi = @import("../term/ansi.zig");
 const width = @import("../term/width.zig");
 
 pub const FixtureError = error{
@@ -346,6 +347,7 @@ pub const TestRenderOptions = struct {
     enable_ansi: bool = false,
     wrap_width: ?usize = null,
     ambiguous_width: width.AmbiguousWidth = .narrow,
+    color_mode: ansi.ColorMode = .truecolor,
 };
 
 pub fn renderDocumentToOwnedSlice(
@@ -360,6 +362,7 @@ pub fn renderDocumentToOwnedSlice(
     renderer.init(allocator, .{
         .enable_ansi = opts.enable_ansi,
         .ambiguous_width = opts.ambiguous_width,
+        .color_mode = opts.color_mode,
     });
     defer renderer.deinit();
     try renderer.render(&output.writer, doc, opts.wrap_width);

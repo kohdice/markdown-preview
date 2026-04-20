@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("types.zig");
 const canvas_mod = @import("canvas.zig");
 const compile_mod = @import("compile.zig");
+const ansi_mod = @import("../term/ansi.zig");
 const theme = @import("../term/theme.zig");
 const width_mod = @import("../term/width.zig");
 
@@ -16,6 +17,7 @@ pub const Options = struct {
     wrap_width: ?usize,
     ambiguous_width: width_mod.AmbiguousWidth,
     enable_ansi: bool = false,
+    color_mode: ansi_mod.ColorMode = .truecolor,
 };
 
 const lane_h: usize = 2;
@@ -129,7 +131,7 @@ pub fn paintGit(
     }
 
     if (opts.enable_ansi) {
-        canvas_mod.writeCanvasAnsi(writer, &canvas, opts.wrap_width, opts.ambiguous_width, &theme.default_lane_palette, .truecolor) catch return error.WriteFailed;
+        canvas_mod.writeCanvasAnsi(writer, &canvas, opts.wrap_width, opts.ambiguous_width, &theme.default_lane_palette, opts.color_mode) catch return error.WriteFailed;
     } else {
         canvas_mod.writeCanvas(writer, &canvas, opts.wrap_width, opts.ambiguous_width) catch return error.WriteFailed;
     }

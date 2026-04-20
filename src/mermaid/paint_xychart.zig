@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("types.zig");
 const canvas_mod = @import("canvas.zig");
 const compile_mod = @import("compile.zig");
+const ansi_mod = @import("../term/ansi.zig");
 const theme = @import("../term/theme.zig");
 const width_mod = @import("../term/width.zig");
 
@@ -17,6 +18,7 @@ pub const Options = struct {
     ambiguous_width: width_mod.AmbiguousWidth,
     enable_ansi: bool,
     use_ascii: bool = false,
+    color_mode: ansi_mod.ColorMode = .truecolor,
 };
 
 fn seriesRole(idx: usize) u8 {
@@ -243,7 +245,7 @@ fn writeVertical(
     }
 
     if (opts.enable_ansi and chart.series.len > 0) {
-        canvas_mod.writeCanvasAnsi(writer, &canvas, opts.wrap_width, opts.ambiguous_width, &theme.default_series_palette, .truecolor) catch return error.WriteFailed;
+        canvas_mod.writeCanvasAnsi(writer, &canvas, opts.wrap_width, opts.ambiguous_width, &theme.default_series_palette, opts.color_mode) catch return error.WriteFailed;
     } else {
         canvas_mod.writeCanvas(writer, &canvas, opts.wrap_width, opts.ambiguous_width) catch return error.WriteFailed;
     }
@@ -403,7 +405,7 @@ fn writeHorizontal(
     }
 
     if (opts.enable_ansi and chart.series.len > 0) {
-        canvas_mod.writeCanvasAnsi(writer, &canvas, opts.wrap_width, opts.ambiguous_width, &theme.default_series_palette, .truecolor) catch return error.WriteFailed;
+        canvas_mod.writeCanvasAnsi(writer, &canvas, opts.wrap_width, opts.ambiguous_width, &theme.default_series_palette, opts.color_mode) catch return error.WriteFailed;
     } else {
         canvas_mod.writeCanvas(writer, &canvas, opts.wrap_width, opts.ambiguous_width) catch return error.WriteFailed;
     }
