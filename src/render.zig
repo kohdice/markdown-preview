@@ -105,4 +105,5 @@ test {
     _ = @import("render/table_test.zig");
     _ = @import("render/code_test.zig");
     _ = @import("render/mermaid_cache_test.zig");
+    _ = @import("render/paragraph_bypass_parity_test.zig");
 }

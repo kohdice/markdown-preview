@@ -8,7 +8,14 @@ const fast_triggers: []const u8 = "\\`*_~<!&][";
 
 const bare_url_marker: []const u8 = "://";
 
+// Test-only escape hatch so conformance tests can force the slow path on
+// inputs that would otherwise be bypassed, then byte-compare the two
+// renderings. Production callers never flip this. Guard defaults to false.
+pub var disable_bypass: bool = false;
+
 pub fn isTrivial(lines: []const []const u8) bool {
+    if (disable_bypass) return false;
+
     for (lines, 0..) |line, idx| {
         if (std.mem.indexOfAny(u8, line, fast_triggers) != null) return false;
 
