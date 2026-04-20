@@ -9,6 +9,7 @@ const render_block = @import("render/block.zig");
 const render_table = @import("render/table.zig");
 const render_context = @import("render/context.zig");
 const prefix_writer_mod = @import("render/prefix_writer.zig");
+const mermaid = @import("mermaid.zig");
 
 pub const RenderOptions = struct {
     enable_ansi: bool = false,
@@ -24,6 +25,7 @@ pub const Renderer = struct {
     table_scratch: render_table.TableScratch = .{},
     wrap_line_buf: std.ArrayListUnmanaged(u8) = .empty,
     scratch: std.heap.ArenaAllocator,
+    mermaid_cache: std.AutoHashMapUnmanaged(u64, mermaid.Diagram) = .empty,
 
     pub fn init(self: *Renderer, persistent_allocator: std.mem.Allocator, opts: RenderOptions) void {
         self.* = .{
@@ -35,10 +37,14 @@ pub const Renderer = struct {
             .table_scratch = .{},
             .wrap_line_buf = .empty,
             .scratch = std.heap.ArenaAllocator.init(persistent_allocator),
+            .mermaid_cache = .empty,
         };
     }
 
     pub fn deinit(self: *Renderer) void {
+        var it = self.mermaid_cache.valueIterator();
+        while (it.next()) |diagram| diagram.deinit();
+        self.mermaid_cache.deinit(self.persistent_allocator);
         self.highlighter.deinit();
         self.table_scratch.deinit(self.persistent_allocator);
         self.wrap_line_buf.deinit(self.persistent_allocator);
@@ -78,6 +84,7 @@ pub const Renderer = struct {
             .highlighter = &self.highlighter,
             .table_scratch = &self.table_scratch,
             .wrap_writer = &wrap_writer,
+            .mermaid_cache = &self.mermaid_cache,
         };
 
         try session.write(doc.blocks);
@@ -97,4 +104,5 @@ test {
     _ = @import("render/block_test.zig");
     _ = @import("render/table_test.zig");
     _ = @import("render/code_test.zig");
+    _ = @import("render/mermaid_cache_test.zig");
 }

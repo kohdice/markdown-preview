@@ -54,6 +54,7 @@ pub const RenderSession = struct {
     wrap_writer: *width.WrapWriter,
     wrap_width: ?usize,
     highlighter: *highlight.Highlighter,
+    mermaid_cache: *std.AutoHashMapUnmanaged(u64, mermaid.Diagram),
 
     fn pushSegment(self: *RenderSession, segment: prefix_writer.PrefixStack.Segment) !void {
         try self.writer.flush();
@@ -202,9 +203,11 @@ pub const RenderSession = struct {
 
         var content_col: usize = item.indent;
         if (item.number) |number| {
-            try ansi.writeStyled(self.writer, self.ctx.enable_ansi, marker_style, number);
+            var sgr_state: ansi.StyledState = .{};
+            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, &sgr_state, marker_style, number);
             const marker_buf: [2]u8 = .{ item.marker, ' ' };
-            try ansi.writeStyled(self.writer, self.ctx.enable_ansi, marker_style, &marker_buf);
+            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, &sgr_state, marker_style, &marker_buf);
+            try ansi.flushStyle(self.writer, &sgr_state);
             content_col += width.displayWidth(number, self.ctx.ambiguous_width) + width.displayWidth(&marker_buf, self.ctx.ambiguous_width);
         } else {
             const marker_text = bulletForDepth(depth);
@@ -317,9 +320,16 @@ pub const RenderSession = struct {
             .wrap_width = self.wrap_width,
             .ambiguous_width = self.ctx.ambiguous_width,
         };
-        var diagram = try mermaid.compile(self.scratch, content);
-        defer diagram.deinit();
-        try mermaid.paint(self.writer, self.scratch, &diagram, opts);
+        const key = std.hash.XxHash3.hash(0, content);
+        const diagram_ptr = if (self.mermaid_cache.getPtr(key)) |cached|
+            cached
+        else blk: {
+            var compiled = try mermaid.compile(self.persistent_allocator, content);
+            errdefer compiled.deinit();
+            try self.mermaid_cache.put(self.persistent_allocator, key, compiled);
+            break :blk self.mermaid_cache.getPtr(key).?;
+        };
+        try mermaid.paint(self.writer, self.scratch, diagram_ptr, opts);
     }
 
     fn writeMermaidFallback(self: *RenderSession, content: []const u8, err: mermaid.PaintError) !void {
@@ -430,6 +440,9 @@ test "RenderSession.write renders heading content without document trailing newl
         .palette = theme.default_palette,
         .syn_palette = theme.default_syntax_palette,
     };
+    var cache: std.AutoHashMapUnmanaged(u64, mermaid.Diagram) = .empty;
+    defer cache.deinit(allocator);
+
     var session: RenderSession = .{
         .ctx = &ctx,
         .writer = &prefix_w.writer,
@@ -440,6 +453,7 @@ test "RenderSession.write renders heading content without document trailing newl
         .wrap_writer = &wrap,
         .wrap_width = null,
         .highlighter = &highlighter,
+        .mermaid_cache = &cache,
     };
 
     try session.write(doc.blocks);
