@@ -121,6 +121,7 @@ pub const BlockNode = union(enum) {
 pub const Paragraph = struct {
     children: InlineRef = no_inline,
     pending_lines: []const []const u8 = &.{},
+    raw_lines: []const []const u8 = &.{},
 };
 
 pub const Heading = struct {

@@ -50,6 +50,7 @@ test {
     _ = @import("parse/block_phase.zig");
     _ = @import("parse/document_test.zig");
     _ = @import("parse/inline_phase.zig");
+    _ = @import("parse/inline_trigger.zig");
     _ = @import("parse/inline_work.zig");
     _ = @import("parse/lifecycle_test.zig");
 }
