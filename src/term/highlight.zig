@@ -178,7 +178,9 @@ const PredicateContext = struct {
     locals: ?*const Locals = null,
 };
 
-const no_style: u32 = std.math.maxInt(u32);
+const StyleIdx = u16;
+const no_style: StyleIdx = std.math.maxInt(StyleIdx);
+const highlight_max_bytes: usize = 64 * 1024;
 
 const CaptureSpan = struct {
     start: usize,
@@ -242,6 +244,10 @@ pub const Highlighter = struct {
         syn_palette: theme.SyntaxPalette,
     ) !void {
         if (source.len == 0) return;
+        if (source.len > highlight_max_bytes) {
+            try ansi.writeStyled(writer, true, .{ .fg = syn_palette.plain }, source);
+            return;
+        }
 
         const config = self.getOrInitConfig(lang) orelse return error.QueryUnavailable;
 
@@ -307,14 +313,16 @@ pub const Highlighter = struct {
 
         std.mem.sort(CaptureSpan, caps.items, {}, CaptureSpan.lessThanByPattern);
 
-        const styles = try allocator.alloc(u32, source.len);
+        const styles = try allocator.alloc(StyleIdx, source.len);
         defer allocator.free(styles);
         @memset(styles, no_style);
         for (caps.items) |c| {
-            @memset(styles[c.start..c.end], c.capture_index);
+            if (c.capture_index >= no_style) continue;
+            @memset(styles[c.start..c.end], @intCast(c.capture_index));
         }
 
         var run_start: usize = 0;
+        var state: ansi.StyledState = .{};
         while (run_start < source.len) {
             const cur = styles[run_start];
             var run_end = run_start + 1;
@@ -327,9 +335,10 @@ pub const Highlighter = struct {
                 const name = config.query.captureNameForId(cur) orelse "";
                 break :blk captureToStyle(name, syn_palette);
             };
-            try ansi.writeStyled(writer, true, style, slice);
+            try ansi.writeStyledRun(writer, true, &state, style, slice);
             run_start = run_end;
         }
+        try ansi.flushStyle(writer, &state);
     }
 
     pub fn forceLanguageFailedForTesting(self: *Highlighter, lang: Language) void {
@@ -1364,4 +1373,20 @@ test "Highlighter: tsx local require does not use builtin styling" {
     defer allocator.free(rendered);
 
     try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, func_ansi ++ "require"));
+}
+
+test "Highlighter: large fenced block above threshold falls back to plain style" {
+    var hl = Highlighter.init();
+    defer hl.deinit();
+
+    const allocator = std.testing.allocator;
+    const big = try allocator.alloc(u8, highlight_max_bytes + 1);
+    defer allocator.free(big);
+    @memset(big, 'a');
+
+    const rendered = try renderHighlightedForTest(&hl, allocator, big, .zig);
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, plain_ansi));
+    try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, keyword_ansi));
 }
