@@ -103,8 +103,9 @@ fn printRun(name: []const u8, run: Run) void {
 
 fn printFixtureRuns(name: []const u8, cold: Run, warm: Run) void {
     const kib = @as(f64, @floatFromInt(cold.input_bytes)) / 1024.0;
+    const parse_peak_kib = @as(f64, @floatFromInt(cold.parse_counts.peak_bytes)) / 1024.0;
     std.debug.print(
-        "{s}: in={d:.1}KiB  cold(read={d:.3}ms parse={d:.3}ms render={d:.3}ms)  warm(read={d:.3}ms parse={d:.3}ms render={d:.3}ms)  parse_allocs={d}  render_allocs={d}  out={d}B\n",
+        "{s}: in={d:.1}KiB  cold(read={d:.3}ms parse={d:.3}ms render={d:.3}ms)  warm(read={d:.3}ms parse={d:.3}ms render={d:.3}ms)  parse_allocs={d}  parse_peak={d:.1}KiB  render_allocs={d}  out={d}B\n",
         .{
             name,
             kib,
@@ -115,6 +116,7 @@ fn printFixtureRuns(name: []const u8, cold: Run, warm: Run) void {
             nsToMs(warm.parse_ns),
             nsToMs(warm.render_ns),
             cold.parse_counts.alloc_count,
+            parse_peak_kib,
             cold.render_counts.alloc_count,
             cold.output_bytes,
         },
