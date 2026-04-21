@@ -227,7 +227,7 @@ pub fn isBlankLine(line: []const u8) bool {
 }
 
 pub fn normalizeParagraphLine(line: []const u8) []const u8 {
-    return std.mem.trimLeft(u8, line, parse_block.horizontal_whitespace);
+    return std.mem.trimStart(u8, line, parse_block.horizontal_whitespace);
 }
 
 pub fn countInterveningCodeBlankLines(cursor: *const BlockCursor) usize {
