@@ -1,13 +1,13 @@
 const std = @import("std");
 const helpers = @import("../helpers/render_from_source.zig");
-const markdown_preview = @import("markdown_preview");
+const internals = @import("internals");
 
 fn renderFence(allocator: std.mem.Allocator, source: []const u8, enable_ansi: bool) ![]u8 {
     var output: std.io.Writer.Allocating = .init(allocator);
     defer output.deinit();
-    var doc = try markdown_preview.parse(allocator, .{ .borrowed = source });
+    var doc = try internals.parse.parse(allocator, .{ .borrowed = source });
     defer doc.deinit();
-    var renderer = markdown_preview.Renderer.init(allocator, .{
+    var renderer = internals.render.Renderer.init(allocator, .{
         .enable_ansi = enable_ansi,
         .ambiguous_width = .narrow,
     });

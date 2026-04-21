@@ -1,7 +1,7 @@
 const std = @import("std");
-const markdown_preview = @import("markdown_preview");
-const parse = markdown_preview.parse;
-const Renderer = markdown_preview.Renderer;
+const internals = @import("internals");
+const parse = internals.parse.parse;
+const Renderer = internals.render.Renderer;
 const bench = @import("bench_support.zig");
 
 const Scenario = struct {

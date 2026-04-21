@@ -1,12 +1,12 @@
 const std = @import("std");
-const markdown_preview = @import("markdown_preview");
-const parse = markdown_preview.parse;
-const Renderer = markdown_preview.Renderer;
+const internals = @import("internals");
+const parse = internals.parse.parse;
+const Renderer = internals.render.Renderer;
 
 pub const TestRenderOptions = struct {
     enable_ansi: bool = false,
     wrap_width: ?usize = null,
-    ambiguous_width: markdown_preview.terminal.AmbiguousWidth = .narrow,
+    ambiguous_width: internals.term.width.AmbiguousWidth = .narrow,
 };
 
 pub fn renderToOwnedSlice(

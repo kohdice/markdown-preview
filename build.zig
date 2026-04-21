@@ -206,17 +206,22 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const markdown_preview_mod = b.createModule(.{
-        .root_source_file = b.path("src/lib.zig"),
+    // Internal aggregation module exposing parse/render/source_loader/term
+    // plus the public `facade` (src/lib.zig) for bench harnesses and
+    // integration tests. External callers still use the facade directly
+    // via src/lib.zig; the re-export here only lets tests exercise both
+    // the facade contract and lower-level helpers from a single module.
+    const internals_mod = b.createModule(.{
+        .root_source_file = b.path("src/internals.zig"),
         .target = target,
         .optimize = optimize,
     });
-    attachTreeSitter(markdown_preview_mod, ts_support);
-    markdown_preview_mod.addImport("source", source_mod);
+    attachTreeSitter(internals_mod, ts_support);
+    internals_mod.addImport("source", source_mod);
 
-    bench_mod.addImport("markdown_preview", markdown_preview_mod);
-    bench_render_mod.addImport("markdown_preview", markdown_preview_mod);
-    bench_pipeline_mod.addImport("markdown_preview", markdown_preview_mod);
+    bench_mod.addImport("internals", internals_mod);
+    bench_render_mod.addImport("internals", internals_mod);
+    bench_pipeline_mod.addImport("internals", internals_mod);
 
     const run_step = b.step("run", "Run the app");
     const run_cmd = b.addRunArtifact(exe);
@@ -261,6 +266,7 @@ pub fn build(b: *std.Build) void {
     }{
         .{ .path = "src/parse.zig", .needs_tree_sitter = false },
         .{ .path = "src/render.zig", .needs_tree_sitter = true },
+        .{ .path = "src/lib.zig", .needs_tree_sitter = true },
         .{ .path = "test/test.zig", .needs_tree_sitter = true },
         .{ .path = "src/cli.zig", .needs_tree_sitter = true },
         .{ .path = "src/term/terminal.zig", .needs_tree_sitter = false },
@@ -291,7 +297,7 @@ pub fn build(b: *std.Build) void {
         test_mod.addImport("bench_support", bench_support_mod);
         test_mod.addImport("source", source_mod);
         if (std.mem.eql(u8, test_root.path, "test/test.zig")) {
-            test_mod.addImport("markdown_preview", markdown_preview_mod);
+            test_mod.addImport("internals", internals_mod);
         }
 
         const unit_tests = b.addTest(.{

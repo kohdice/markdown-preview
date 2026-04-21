@@ -1,7 +1,7 @@
 const std = @import("std");
 
 pub const cache_dir = ".bench-cache";
-pub const large_fixture_path = ".bench-fixtures/large.md";
+pub const large_fixture_path = ".bench-cache/large.md";
 
 pub const Spec = struct {
     path: []const u8,
