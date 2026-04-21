@@ -3,11 +3,16 @@ const theme = @import("theme.zig");
 
 pub const reset_sequence = "\x1b[0m";
 
+pub const italic_on = "\x1b[3m";
+pub const italic_off = "\x1b[23m";
+pub const underline_on = "\x1b[4m";
+pub const underline_off = "\x1b[24m";
+
 const sgr = struct {
     const bold = "\x1b[1m";
     const dim = "\x1b[2m";
-    const italic = "\x1b[3m";
-    const underline = "\x1b[4m";
+    const italic = italic_on;
+    const underline = underline_on;
     const strikethrough = "\x1b[9m";
     const fg_truecolor_fmt = "\x1b[38;2;{};{};{}m";
 };

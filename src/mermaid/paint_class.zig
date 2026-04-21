@@ -187,16 +187,16 @@ fn spanEndsAt(spans: []const StyledSpan, row: usize, col: usize, kind: StyleKind
 
 fn writeStyleOpen(writer: *std.io.Writer, kind: StyleKind) RenderError!void {
     const seq: []const u8 = switch (kind) {
-        .static_ => "\x1b[4m",
-        .abstract_ => "\x1b[3m",
+        .static_ => ansi_mod.underline_on,
+        .abstract_ => ansi_mod.italic_on,
     };
     writer.writeAll(seq) catch return error.WriteFailed;
 }
 
 fn writeStyleClose(writer: *std.io.Writer, kind: StyleKind) RenderError!void {
     const seq: []const u8 = switch (kind) {
-        .static_ => "\x1b[24m",
-        .abstract_ => "\x1b[23m",
+        .static_ => ansi_mod.underline_off,
+        .abstract_ => ansi_mod.italic_off,
     };
     writer.writeAll(seq) catch return error.WriteFailed;
 }

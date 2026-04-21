@@ -286,8 +286,6 @@ test "graph BT output is canvas vertical flip of graph TD" {
     const td_out = sink_td.writer.buffered();
     const bt_out = sink_bt.writer.buffered();
 
-    // BT output must be byte-for-byte the canvas-level vertical flip of TD:
-    // lines reversed plus directional glyph remap.
     const td_flipped = try flipOutputForTest(alloc, td_out);
     defer alloc.free(td_flipped);
     try std.testing.expectEqualStrings(td_flipped, bt_out);
