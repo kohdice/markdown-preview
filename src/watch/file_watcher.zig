@@ -142,7 +142,7 @@ const InotifyWatcher = struct {
 
     pub fn init(dir_path: [*:0]const u8, file_name: [*:0]const u8) !Self {
         const init_rc = std.os.linux.inotify_init1(std.os.linux.IN.NONBLOCK | std.os.linux.IN.CLOEXEC);
-        switch (std.os.linux.E.init(init_rc)) {
+        switch (std.os.linux.errno(init_rc)) {
             .SUCCESS => {},
             else => return error.InotifyInit,
         }
@@ -150,7 +150,7 @@ const InotifyWatcher = struct {
         errdefer std.Io.Threaded.closeFd(inotify_fd);
 
         const dir_wd_rc = std.os.linux.inotify_add_watch(inotify_fd, dir_path, dir_mask);
-        switch (std.os.linux.E.init(dir_wd_rc)) {
+        switch (std.os.linux.errno(dir_wd_rc)) {
             .SUCCESS => {},
             else => return error.InotifyAddWatch,
         }
@@ -160,7 +160,7 @@ const InotifyWatcher = struct {
         const full_path = buildFullPath(&full_path_buf, dir_path, file_name) orelse return error.NameTooLong;
 
         const file_wd_rc = std.os.linux.inotify_add_watch(inotify_fd, full_path, file_mask);
-        const file_wd: ?i32 = switch (std.os.linux.E.init(file_wd_rc)) {
+        const file_wd: ?i32 = switch (std.os.linux.errno(file_wd_rc)) {
             .SUCCESS => @intCast(file_wd_rc),
             else => null,
         };
@@ -231,7 +231,7 @@ const InotifyWatcher = struct {
         var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const full_path = buildFullPath(&full_path_buf, self.dir_path, self.file_name) orelse return;
         const rc = std.os.linux.inotify_add_watch(self.inotify_fd, full_path, file_mask);
-        self.file_wd = switch (std.os.linux.E.init(rc)) {
+        self.file_wd = switch (std.os.linux.errno(rc)) {
             .SUCCESS => @intCast(rc),
             else => null,
         };
