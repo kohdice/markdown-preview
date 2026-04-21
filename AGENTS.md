@@ -6,7 +6,7 @@ This file provides guidance to AI agents and agentic coding tools when working w
 
 markdown-preview is a command to preview Markdown.
 
-- Zig version: 0.15.2 (`minimum_zig_version` in build.zig.zon)
+- Zig version: 0.16.0 (`minimum_zig_version` in build.zig.zon)
 
 ## CORE PRINCIPLES
 
