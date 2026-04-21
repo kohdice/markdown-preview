@@ -29,7 +29,11 @@ pub const Backing = union(Kind) {
     pub fn allocator(self: *Backing) std.mem.Allocator {
         return switch (self.*) {
             .debug => |*gpa| gpa.allocator(),
-            .c => std.heap.c_allocator,
+            // `std.heap.c_allocator` triggers `@compileError` when libc is not
+            // linked. Guard the reference with a comptime branch so semantic
+            // analysis skips it on builds without libc (pickKind never returns
+            // `.c` in that configuration, so the runtime arm is unreachable).
+            .c => if (comptime builtin.link_libc) std.heap.c_allocator else unreachable,
             .smp => std.heap.smp_allocator,
         };
     }
