@@ -3,11 +3,10 @@ const fixtures_mod = @import("fixtures");
 
 const mp_flag = "--mp=";
 
-pub fn main() !void {
-    const allocator = std.heap.smp_allocator;
-
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
 
     var mp_path: ?[]const u8 = null;
     var positional = std.ArrayListUnmanaged([]const u8).empty;
@@ -25,19 +24,19 @@ pub fn main() !void {
         std.debug.print("error: missing --mp=<path>; build.zig must pin the release binary.\n", .{});
         return error.MissingMpPath;
     };
-    if (!exists(mp_binary)) {
+    if (!exists(io, mp_binary)) {
         std.debug.print("error: {s} not found.\n", .{mp_binary});
         return error.MissingBinary;
     }
 
-    try ensureHyperfine(allocator);
+    try ensureHyperfine(io);
 
     var default_fixtures: std.ArrayListUnmanaged([]const u8) = .empty;
     defer default_fixtures.deinit(allocator);
 
     if (positional.items.len == 0) {
         for (fixtures_mod.all) |spec| {
-            try fixtures_mod.ensure(allocator, spec);
+            try fixtures_mod.ensure(allocator, io, spec);
             try default_fixtures.append(allocator, spec.path);
         }
     }
@@ -48,37 +47,40 @@ pub fn main() !void {
         default_fixtures.items;
 
     for (fixtures) |path| {
-        if (!exists(path)) {
+        if (!exists(io, path)) {
             std.debug.print("{s}: missing\n", .{path});
             continue;
         }
-        try runHyperfine(allocator, mp_binary, path);
+        try runHyperfine(allocator, io, mp_binary, path);
     }
 }
 
-fn ensureHyperfine(allocator: std.mem.Allocator) !void {
-    var child = std.process.Child.init(&.{ "hyperfine", "--version" }, allocator);
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-    const ok = blk: {
-        child.spawn() catch break :blk false;
-        const term = child.wait() catch break :blk false;
-        switch (term) {
-            .Exited => |code| break :blk code == 0,
-            else => break :blk false,
-        }
-    };
-    if (!ok) {
+fn ensureHyperfine(io: std.Io) !void {
+    const argv = [_][]const u8{ "hyperfine", "--version" };
+    var child = std.process.spawn(io, .{
+        .argv = &argv,
+        .stdout = .ignore,
+        .stderr = .ignore,
+    }) catch {
         std.debug.print(
             "error: hyperfine not found on PATH. Install it (e.g. `brew install hyperfine`) and retry.\n",
             .{},
         );
         return error.HyperfineMissing;
+    };
+    const term = child.wait(io) catch |err| {
+        std.debug.print("error: hyperfine wait failed: {s}\n", .{@errorName(err)});
+        return error.HyperfineMissing;
+    };
+    switch (term) {
+        .Exited => |code| if (code != 0) return error.HyperfineMissing,
+        else => return error.HyperfineMissing,
     }
 }
 
 fn runHyperfine(
     allocator: std.mem.Allocator,
+    io: std.Io,
     mp_binary: []const u8,
     path: []const u8,
 ) !void {
@@ -89,7 +91,7 @@ fn runHyperfine(
 
     std.debug.print("\n=== {s} ===\n", .{path});
 
-    var child = std.process.Child.init(&.{
+    const argv = [_][]const u8{
         "hyperfine",
         "--warmup",
         "3",
@@ -103,12 +105,14 @@ fn runHyperfine(
         "--command-name",
         "mp",
         mp_cmd,
-    }, allocator);
-    child.stdout_behavior = .Inherit;
-    child.stderr_behavior = .Inherit;
+    };
 
-    try child.spawn();
-    const term = try child.wait();
+    var child = try std.process.spawn(io, .{
+        .argv = &argv,
+        .stdout = .inherit,
+        .stderr = .inherit,
+    });
+    const term = try child.wait(io);
     switch (term) {
         .Exited => |code| if (code != 0) {
             std.debug.print("hyperfine exited with status {d} for {s}\n", .{ code, path });
@@ -121,7 +125,7 @@ fn runHyperfine(
     }
 }
 
-fn exists(path: []const u8) bool {
-    std.fs.cwd().access(path, .{}) catch return false;
+fn exists(io: std.Io, path: []const u8) bool {
+    std.Io.Dir.cwd().access(io, path, .{}) catch return false;
     return true;
 }

@@ -41,13 +41,13 @@ pub fn main() !void {
 }
 
 fn runScenario(scenario: Scenario) !void {
-    var parse_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var parse_gpa = std.heap.DebugAllocator(.{}){};
     defer _ = parse_gpa.deinit();
 
     var doc = try parse(parse_gpa.allocator(), .{ .borrowed = scenario.input });
     defer doc.deinit();
 
-    var render_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var render_gpa = std.heap.DebugAllocator(.{}){};
     defer _ = render_gpa.deinit();
 
     var counting = bench.CountingAllocator.init(render_gpa.allocator());
@@ -83,7 +83,7 @@ fn renderOnce(
     counting: *const bench.CountingAllocator,
 ) !RenderResult {
     var sink: [512]u8 = undefined;
-    var discarding: std.io.Writer.Discarding = .init(&sink);
+    var discarding: std.Io.Writer.Discarding = .init(&sink);
     const before = counting.snapshot();
     var timer = try std.time.Timer.start();
     try renderer.render(&discarding.writer, doc, null);

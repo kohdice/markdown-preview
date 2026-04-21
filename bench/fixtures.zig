@@ -22,24 +22,25 @@ pub const mid_cjk: Spec = .{
 
 pub const all = [_]Spec{ small_ascii, mid_cjk };
 
-pub fn ensure(allocator: std.mem.Allocator, spec: Spec) !void {
-    try std.fs.cwd().makePath(cache_dir);
+pub fn ensure(allocator: std.mem.Allocator, io: std.Io, spec: Spec) !void {
+    const cwd = std.Io.Dir.cwd();
+    try cwd.createDirPath(io, cache_dir);
 
     const expected = try spec.generator(allocator, spec.target_bytes);
     defer allocator.free(expected);
 
-    if (std.fs.cwd().readFileAlloc(allocator, spec.path, 1 << 28)) |actual| {
+    if (cwd.readFileAlloc(io, spec.path, allocator, .limited(1 << 28))) |actual| {
         defer allocator.free(actual);
         if (std.mem.eql(u8, actual, expected)) return;
     } else |_| {}
 
-    const file = try std.fs.cwd().createFile(spec.path, .{});
-    defer file.close();
-    try file.writeAll(expected);
+    var file = try cwd.createFile(io, spec.path, .{});
+    defer file.close(io);
+    try file.writeStreamingAll(io, expected);
 }
 
-pub fn ensureAll(allocator: std.mem.Allocator) !void {
-    for (all) |spec| try ensure(allocator, spec);
+pub fn ensureAll(allocator: std.mem.Allocator, io: std.Io) !void {
+    for (all) |spec| try ensure(allocator, io, spec);
 }
 
 pub fn makeAsciiProse(allocator: std.mem.Allocator, approx_size: usize) anyerror![]u8 {

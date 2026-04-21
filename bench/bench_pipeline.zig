@@ -24,11 +24,10 @@ const Run = struct {
     render_counts: bench.CounterSnapshot,
 };
 
-pub fn main() !void {
-    const allocator = std.heap.smp_allocator;
-
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
 
     const table = [_]Fixture{
         .{ .name = "small-8KiB-ascii", .spec = fixtures.small_ascii, .ambiguous = .narrow },
@@ -57,16 +56,16 @@ pub fn main() !void {
             break :blk .narrow;
         };
         std.debug.print("pipeline benchmark (single fixture: {s}, ambiguous={s})\n", .{ path, @tagName(ambiguous) });
-        const run = try runOnce(allocator, path, ambiguous);
+        const run = try runOnce(allocator, io, path, ambiguous);
         printRun("custom", run);
         return;
     }
 
     std.debug.print("pipeline benchmark (file -> parse -> render -> Discarding)\n", .{});
     for (table) |f| {
-        try fixtures.ensure(allocator, f.spec);
-        const cold = try runOnce(allocator, f.spec.path, f.ambiguous);
-        const warm = try runOnce(allocator, f.spec.path, f.ambiguous);
+        try fixtures.ensure(allocator, io, f.spec);
+        const cold = try runOnce(allocator, io, f.spec.path, f.ambiguous);
+        const warm = try runOnce(allocator, io, f.spec.path, f.ambiguous);
         printFixtureRuns(f.name, cold, warm);
     }
 }
@@ -112,11 +111,12 @@ fn printFixtureRuns(name: []const u8, cold: Run, warm: Run) void {
 
 fn runOnce(
     allocator: std.mem.Allocator,
+    io: std.Io,
     path: []const u8,
     ambiguous: AmbiguousWidth,
 ) !Run {
     var read_timer = try std.time.Timer.start();
-    const source = try source_loader.loadFile(allocator, std.fs.cwd(), path);
+    const source = try source_loader.loadFile(allocator, io, std.Io.Dir.cwd(), path);
     const read_ns = read_timer.read();
     const input_bytes = source.bytes().len;
 
@@ -133,7 +133,7 @@ fn runOnce(
     defer renderer.deinit();
 
     var sink: [4096]u8 = undefined;
-    var discarding: std.io.Writer.Discarding = .init(&sink);
+    var discarding: std.Io.Writer.Discarding = .init(&sink);
 
     const render_before = render_counting.snapshot();
     var render_timer = try std.time.Timer.start();
