@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const enter_alt_screen = "\x1b[?1049h";
 const exit_alt_screen = "\x1b[?1049l";
@@ -94,7 +95,11 @@ fn signalHandler(sig: std.posix.SIG) callconv(.c) void {
     const fd = signal_pipe_write;
     if (fd < 0) return;
     const byte = [_]u8{@intCast(@intFromEnum(sig))};
-    _ = std.c.write(fd, &byte, 1);
+    if (comptime builtin.os.tag == .linux) {
+        _ = std.os.linux.write(fd, &byte, 1);
+    } else {
+        _ = std.c.write(fd, &byte, 1);
+    }
 }
 
 fn isStdinTty() bool {
