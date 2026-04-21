@@ -106,7 +106,7 @@ fn parseFromOwned(allocator: std.mem.Allocator, owned_source: []u8) ParseError!t
     var header_seen = false;
     var it = std.mem.splitScalar(u8, owned_source, '\n');
     while (it.next()) |raw| {
-        const stripped_cr = std.mem.trimRight(u8, raw, "\r");
+        const stripped_cr = std.mem.trimEnd(u8, raw, "\r");
         const trimmed = std.mem.trim(u8, stripped_cr, " \t");
         if (trimmed.len == 0) continue;
         if (std.mem.startsWith(u8, trimmed, "%%")) continue;
@@ -304,7 +304,7 @@ fn tryParseElseAnd(parser: *Parser, line: []const u8) ParseError!bool {
 fn tryParseNote(parser: *Parser, line: []const u8) ParseError!bool {
     if (!std.ascii.startsWithIgnoreCase(line, "note ")) return false;
 
-    var rest = std.mem.trimLeft(u8, line["note ".len..], " \t");
+    var rest = std.mem.trimStart(u8, line["note ".len..], " \t");
 
     var placement: types.NotePlacement = undefined;
     if (std.ascii.startsWithIgnoreCase(rest, "right of ")) {
@@ -394,8 +394,8 @@ fn tryParseParticipant(parser: *Parser, line: []const u8) ParticipantError!void 
 
     const as_marker = " as ";
     if (std.mem.indexOf(u8, trimmed, as_marker)) |idx| {
-        const id_text = std.mem.trimRight(u8, trimmed[0..idx], " \t");
-        const raw_label = std.mem.trimLeft(u8, trimmed[idx + as_marker.len ..], " \t");
+        const id_text = std.mem.trimEnd(u8, trimmed[0..idx], " \t");
+        const raw_label = std.mem.trimStart(u8, trimmed[idx + as_marker.len ..], " \t");
         if (id_text.len == 0 or raw_label.len == 0) return error.InvalidMermaid;
         try validateSequenceActorId(id_text);
         try validateLabel(raw_label);
@@ -466,7 +466,7 @@ fn parseMessage(parser: *Parser, line: []const u8) ParseError!void {
 
     var activate = false;
     var deactivate = false;
-    const lead = std.mem.trimLeft(u8, after_arrow, " \t");
+    const lead = std.mem.trimStart(u8, after_arrow, " \t");
     if (lead.len > 0 and lead[0] == '+') {
         activate = true;
         const ws_len = after_arrow.len - lead.len;

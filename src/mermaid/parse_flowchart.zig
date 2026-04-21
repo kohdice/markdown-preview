@@ -139,7 +139,7 @@ fn parseFromOwned(allocator: std.mem.Allocator, owned_source: []u8) ParseError!t
     var direction: ?types.Direction = null;
     var it = std.mem.splitScalar(u8, owned_source, '\n');
     while (it.next()) |raw_line| {
-        const stripped_cr = std.mem.trimRight(u8, raw_line, "\r");
+        const stripped_cr = std.mem.trimEnd(u8, raw_line, "\r");
         const trimmed = std.mem.trim(u8, stripped_cr, " \t");
         if (trimmed.len == 0) continue;
         if (std.mem.startsWith(u8, trimmed, "%%")) continue;
@@ -254,7 +254,7 @@ fn startsWithKeyword(line: []const u8, kw: []const u8) ?[]const u8 {
     if (line.len == kw.len) return null;
     const c = line[kw.len];
     if (c != ' ' and c != '\t') return null;
-    return std.mem.trimLeft(u8, line[kw.len..], " \t");
+    return std.mem.trimStart(u8, line[kw.len..], " \t");
 }
 
 fn pushSubgraph(parser: *Parser, line: []const u8) ParseError!void {
@@ -436,7 +436,7 @@ fn parseContentLine(parser: *Parser, trimmed: []const u8) ParseError!void {
         return;
     };
 
-    const lhs_text = std.mem.trimRight(u8, trimmed[0..first_arrow.start], " \t");
+    const lhs_text = std.mem.trimEnd(u8, trimmed[0..first_arrow.start], " \t");
     if (lhs_text.len == 0) return error.InvalidMermaid;
 
     var current_ids = try parseNodeSpecList(parser, lhs_text);
@@ -452,7 +452,7 @@ fn parseContentLine(parser: *Parser, trimmed: []const u8) ParseError!void {
         const rhs_text = if (next_arrow) |na|
             std.mem.trim(u8, after_arrow[0..na.start], " \t")
         else
-            std.mem.trimLeft(u8, after_arrow, " \t");
+            std.mem.trimStart(u8, after_arrow, " \t");
         if (rhs_text.len == 0) return error.InvalidMermaid;
 
         const rhs_ids = try parseNodeSpecList(parser, rhs_text);

@@ -10,7 +10,7 @@ pub const PaintError = paint_mod.PaintError;
 pub const Options = paint_mod.PaintOptions;
 
 pub fn paintMermaidGraph(
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     allocator: std.mem.Allocator,
     graph: *const @import("types.zig").MermaidGraph,
     opts: Options,

@@ -42,7 +42,7 @@ fn parseFromOwned(allocator: std.mem.Allocator, owned_source: []u8) ParseError!t
     var header_seen = false;
     var it = std.mem.splitScalar(u8, owned_source, '\n');
     while (it.next()) |raw| {
-        const no_cr = std.mem.trimRight(u8, raw, "\r");
+        const no_cr = std.mem.trimEnd(u8, raw, "\r");
         const trimmed = std.mem.trim(u8, no_cr, " \t");
         if (trimmed.len == 0) continue;
         if (std.mem.startsWith(u8, trimmed, "%%")) continue;

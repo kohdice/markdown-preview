@@ -142,7 +142,7 @@ fn parseFromOwned(allocator: std.mem.Allocator, owned_source: []u8) ParseError!t
     var top_direction: types.Direction = .top_down;
     var it = std.mem.splitScalar(u8, owned_source, '\n');
     while (it.next()) |raw| {
-        const stripped_cr = std.mem.trimRight(u8, raw, "\r");
+        const stripped_cr = std.mem.trimEnd(u8, raw, "\r");
         const trimmed = std.mem.trim(u8, stripped_cr, " \t");
         if (trimmed.len == 0) continue;
         if (std.mem.startsWith(u8, trimmed, "%%")) continue;
@@ -248,7 +248,7 @@ fn dispatchLine(
     }
 
     if (std.ascii.startsWithIgnoreCase(line, "linkStyle ")) {
-        return parseLinkStyleLine(parser, std.mem.trimLeft(u8, line["linkStyle".len..], " \t"));
+        return parseLinkStyleLine(parser, std.mem.trimStart(u8, line["linkStyle".len..], " \t"));
     }
 
     if (isSilentlySkipped(line)) return;
@@ -326,7 +326,7 @@ fn normalizeLabel(parser: *Parser, text: []const u8) ParseError![]const u8 {
 
 fn parseLine(parser: *Parser, line: []const u8) ParseError!void {
     if (std.mem.startsWith(u8, line, "state ") or std.mem.eql(u8, line, "state")) {
-        return parseStateDeclaration(parser, std.mem.trimLeft(u8, line[5..], " \t"));
+        return parseStateDeclaration(parser, std.mem.trimStart(u8, line[5..], " \t"));
     }
 
     if (std.mem.indexOf(u8, line, "-->")) |arrow_idx| {
@@ -366,7 +366,7 @@ fn parseStateDeclaration(parser: *Parser, rest: []const u8) ParseError!void {
         var ident_tail = std.mem.trim(u8, after[as_kw.len..], " \t");
         const opens_composite = ident_tail.len > 0 and ident_tail[ident_tail.len - 1] == '{';
         if (opens_composite) {
-            ident_tail = std.mem.trimRight(u8, ident_tail[0 .. ident_tail.len - 1], " \t");
+            ident_tail = std.mem.trimEnd(u8, ident_tail[0 .. ident_tail.len - 1], " \t");
         }
         validateIdentDeclaration(ident_tail) catch return;
         validateLabel(raw_label) catch return;
@@ -385,7 +385,7 @@ fn parseStateDeclaration(parser: *Parser, rest: []const u8) ParseError!void {
     }
 
     if (trimmed.len > 0 and trimmed[trimmed.len - 1] == '{') {
-        const ident = std.mem.trimRight(u8, trimmed[0 .. trimmed.len - 1], " \t");
+        const ident = std.mem.trimEnd(u8, trimmed[0 .. trimmed.len - 1], " \t");
         if (ident.len == 0) return;
         validateIdentDeclaration(ident) catch return;
         const id = try parser.internKeyed(ident, ident, ident, .stadium);
@@ -419,8 +419,8 @@ fn parseStateDescription(parser: *Parser, line: []const u8, colon: usize) ParseE
 
 fn parseTransition(parser: *Parser, line: []const u8, arrow_idx: usize) ParseError!void {
     const arrow = "-->";
-    const lhs_text = std.mem.trimRight(u8, line[0..arrow_idx], " \t");
-    var rhs_with_label = std.mem.trimLeft(u8, line[arrow_idx + arrow.len ..], " \t");
+    const lhs_text = std.mem.trimEnd(u8, line[0..arrow_idx], " \t");
+    var rhs_with_label = std.mem.trimStart(u8, line[arrow_idx + arrow.len ..], " \t");
     if (lhs_text.len == 0 or rhs_with_label.len == 0) return error.InvalidMermaid;
 
     var label: ?[]const u8 = null;
@@ -430,7 +430,7 @@ fn parseTransition(parser: *Parser, line: []const u8, arrow_idx: usize) ParseErr
             try validateLabel(label_slice);
             label = try normalizeLabel(parser, label_slice);
         }
-        rhs_with_label = std.mem.trimRight(u8, rhs_with_label[0..colon], " \t");
+        rhs_with_label = std.mem.trimEnd(u8, rhs_with_label[0..colon], " \t");
     }
 
     const from_id = try internState(parser, lhs_text, .from);

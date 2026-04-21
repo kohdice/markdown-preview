@@ -45,7 +45,7 @@ const stereotype_wrapper_width: usize = 2;
 const stereotype_format_buf_size: usize = 96;
 
 pub fn paintClass(
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     allocator: std.mem.Allocator,
     diagram_ptr: *const types.ClassDiagram,
     opts: Options,
@@ -102,13 +102,13 @@ pub fn paintClass(
 }
 
 fn writeCanvasWithSpans(
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     allocator: std.mem.Allocator,
     canvas: *const canvas_mod.Canvas,
     spans: []const StyledSpan,
     opts: Options,
 ) RenderError!void {
-    var sink: std.io.Writer.Allocating = .init(allocator);
+    var sink: std.Io.Writer.Allocating = .init(allocator);
     defer sink.deinit();
     canvas_mod.writeCanvas(&sink.writer, canvas, opts.wrap_width, opts.ambiguous_width) catch return error.WriteFailed;
 
@@ -125,7 +125,7 @@ fn writeCanvasWithSpans(
 }
 
 fn writeLineWithSpans(
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     line: []const u8,
     row: usize,
     spans: []const StyledSpan,
@@ -185,7 +185,7 @@ fn spanEndsAt(spans: []const StyledSpan, row: usize, col: usize, kind: StyleKind
     return false;
 }
 
-fn writeStyleOpen(writer: *std.io.Writer, kind: StyleKind) RenderError!void {
+fn writeStyleOpen(writer: *std.Io.Writer, kind: StyleKind) RenderError!void {
     const seq: []const u8 = switch (kind) {
         .static_ => ansi_mod.underline_on,
         .abstract_ => ansi_mod.italic_on,
@@ -193,7 +193,7 @@ fn writeStyleOpen(writer: *std.io.Writer, kind: StyleKind) RenderError!void {
     writer.writeAll(seq) catch return error.WriteFailed;
 }
 
-fn writeStyleClose(writer: *std.io.Writer, kind: StyleKind) RenderError!void {
+fn writeStyleClose(writer: *std.Io.Writer, kind: StyleKind) RenderError!void {
     const seq: []const u8 = switch (kind) {
         .static_ => ansi_mod.underline_off,
         .abstract_ => ansi_mod.italic_off,
@@ -683,7 +683,7 @@ test "paintClass renders class box with attribute type and method params" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -698,7 +698,7 @@ test "paintClass collapses multi-whitespace and tabs in attribute name" {
     var diagram = try compile_mod.compile(alloc, "classDiagram\n    class C {\n        +int retry   count\n        +bool is\tready\n    }\n");
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -717,7 +717,7 @@ test "paintClass renders inheritance with triangle head" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -733,7 +733,7 @@ test "paintClass renders composition with filled diamond" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -749,7 +749,7 @@ test "paintClass renders aggregation with empty diamond" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -765,7 +765,7 @@ test "paintClass association arrow head points toward target (upward)" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -784,7 +784,7 @@ test "paintClass shows literal star in abstract method type label" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -802,7 +802,7 @@ test "paintClass wraps static member with SGR underline when enable_ansi" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = true });
 
@@ -821,7 +821,7 @@ test "paintClass wraps static and abstract method with both SGR when enable_ansi
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = true });
 
@@ -842,7 +842,7 @@ test "paintClass wraps abstract method with SGR italic when enable_ansi" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = true });
 
@@ -862,7 +862,7 @@ test "paintClass emits no SGR when enable_ansi is false" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = false });
 
@@ -881,7 +881,7 @@ test "paintClass under color_mode=.none emits no SGR even with enable_ansi=true"
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintClass(&sink.writer, alloc, &diagram.class_, .{
         .wrap_width = null,
@@ -904,7 +904,7 @@ test "paintClass hides stripped dollar on static attribute" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -924,7 +924,7 @@ test "paintClass separates attributes and methods with a divider" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -950,7 +950,7 @@ test "paintClass renders namespace frame with name" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -968,7 +968,7 @@ test "paintClass marker_at from places triangle at source end" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -1004,7 +1004,7 @@ test "paintClass bare -- renders as association with arrow" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 

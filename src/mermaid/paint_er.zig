@@ -18,7 +18,7 @@ pub const Options = struct {
 };
 
 pub fn paintEr(
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     allocator: std.mem.Allocator,
     diagram_ptr: *const types.ErDiagram,
     opts: Options,
@@ -385,7 +385,7 @@ test "paintEr renders entity box with attributes" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintEr(&sink.writer, alloc, &diagram.er, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -403,7 +403,7 @@ test "paintEr renders one-to-many with circle and crow glyphs" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintEr(&sink.writer, alloc, &diagram.er, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -425,7 +425,7 @@ test "paintEr renders identifying vs non-identifying distinctly" {
         \\    A ||--|| B : r
     );
     defer ident_diagram.deinit();
-    var ident_sink: std.io.Writer.Allocating = .init(alloc);
+    var ident_sink: std.Io.Writer.Allocating = .init(alloc);
     defer ident_sink.deinit();
     try paintEr(&ident_sink.writer, alloc, &ident_diagram.er, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -434,7 +434,7 @@ test "paintEr renders identifying vs non-identifying distinctly" {
         \\    A ||..|| B : r
     );
     defer dotted_diagram.deinit();
-    var dotted_sink: std.io.Writer.Allocating = .init(alloc);
+    var dotted_sink: std.Io.Writer.Allocating = .init(alloc);
     defer dotted_sink.deinit();
     try paintEr(&dotted_sink.writer, alloc, &dotted_diagram.er, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -452,7 +452,7 @@ test "paintEr renders relation label on the routed path" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintEr(&sink.writer, alloc, &diagram.er, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -468,7 +468,7 @@ test "paintEr handles empty entity block" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintEr(&sink.writer, alloc, &diagram.er, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
