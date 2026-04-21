@@ -12,12 +12,13 @@ const exit_failure: u8 = 1;
 
 pub const RunOptions = struct {
     allocator: std.mem.Allocator,
-    cwd: std.fs.Dir,
+    io: std.Io,
+    cwd: std.Io.Dir,
     args: []const [:0]const u8,
-    stdout: *std.io.Writer,
-    stderr: *std.io.Writer,
-    stdout_handle: std.posix.fd_t,
-    stdin_handle: std.posix.fd_t,
+    stdout: *std.Io.Writer,
+    stderr: *std.Io.Writer,
+    stdout_file: std.Io.File,
+    stdin_file: std.Io.File,
     enable_ansi: bool,
     wrap_width: ?usize,
     ambiguous_width: width.AmbiguousWidth,
@@ -89,12 +90,13 @@ pub fn run(opts: RunOptions) !u8 {
 pub fn executeCommand(opts: RunOptions, command: Command) !u8 {
     return switch (command) {
         .watch => |cmd| watch.run(.{
+            .io = opts.io,
             .cwd = opts.cwd,
             .path = cmd.path,
             .stdout = opts.stdout,
             .stderr = opts.stderr,
-            .stdout_handle = opts.stdout_handle,
-            .stdin_handle = opts.stdin_handle,
+            .stdout_file = opts.stdout_file,
+            .stdin_file = opts.stdin_file,
             .enable_ansi = opts.enable_ansi,
             .ambiguous_width = opts.ambiguous_width,
             .color_mode = opts.color_mode,
@@ -104,7 +106,7 @@ pub fn executeCommand(opts: RunOptions, command: Command) !u8 {
 }
 
 fn renderOnce(opts: RunOptions, path: []const u8) !u8 {
-    const source = source_loader.loadFile(opts.allocator, opts.cwd, path) catch |err| {
+    const source = source_loader.loadFile(opts.allocator, opts.io, opts.cwd, path) catch |err| {
         try opts.stderr.print("mp: unable to read '{s}': {s}\n", .{ path, @errorName(err) });
         return exit_failure;
     };
@@ -122,6 +124,11 @@ fn renderOnce(opts: RunOptions, path: []const u8) !u8 {
     try renderer.render(opts.stdout, &output, opts.wrap_width);
     return exit_success;
 }
+
+const invalid_file: std.Io.File = .{
+    .handle = -1,
+    .flags = .{ .nonblocking = false },
+};
 
 test "parseArgs returns render command for plain positional path" {
     const args = [_][:0]const u8{ "mp", "foo.md" };
@@ -184,19 +191,20 @@ test "parseArgs with -- sentinel still rejects duplicate positional" {
 }
 
 test "run reports usage errors" {
-    var stdout: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer stdout.deinit();
-    var stderr: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer stderr.deinit();
 
     const exit_code = try run(.{
         .allocator = std.testing.allocator,
-        .cwd = std.fs.cwd(),
+        .io = std.testing.io,
+        .cwd = std.Io.Dir.cwd(),
         .args = &.{"mp"},
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
-        .stdout_handle = -1,
-        .stdin_handle = -1,
+        .stdout_file = invalid_file,
+        .stdin_file = invalid_file,
         .enable_ansi = false,
         .wrap_width = null,
         .ambiguous_width = .narrow,
@@ -217,22 +225,24 @@ test "run reports usage errors" {
 }
 
 test "run reports missing files" {
+    const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    var stdout: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer stdout.deinit();
-    var stderr: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer stderr.deinit();
 
     const exit_code = try run(.{
         .allocator = std.testing.allocator,
+        .io = io,
         .cwd = tmp.dir,
         .args = &.{ "mp", "missing.md" },
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
-        .stdout_handle = -1,
-        .stdin_handle = -1,
+        .stdout_file = invalid_file,
+        .stdin_file = invalid_file,
         .enable_ansi = false,
         .wrap_width = null,
         .ambiguous_width = .narrow,
@@ -244,10 +254,11 @@ test "run reports missing files" {
 }
 
 test "run renders markdown files" {
+    const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.writeFile(.{
+    try tmp.dir.writeFile(io, .{
         .sub_path = "example.md",
         .data =
         \\# Hello
@@ -256,19 +267,20 @@ test "run renders markdown files" {
         ,
     });
 
-    var stdout: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer stdout.deinit();
-    var stderr: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer stderr.deinit();
 
     const exit_code = try run(.{
         .allocator = std.testing.allocator,
+        .io = io,
         .cwd = tmp.dir,
         .args = &.{ "mp", "example.md" },
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
-        .stdout_handle = -1,
-        .stdin_handle = -1,
+        .stdout_file = invalid_file,
+        .stdin_file = invalid_file,
         .enable_ansi = false,
         .wrap_width = null,
         .ambiguous_width = .narrow,
@@ -286,27 +298,29 @@ test "run renders markdown files" {
 }
 
 test "run threads ambiguous_width through to the renderer" {
+    const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.writeFile(.{
+    try tmp.dir.writeFile(io, .{
         .sub_path = "cont.md",
         .data = "- first line\n  continued\n",
     });
 
-    var stdout: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer stdout.deinit();
-    var stderr: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer stderr.deinit();
 
     const exit_code = try run(.{
         .allocator = std.testing.allocator,
+        .io = io,
         .cwd = tmp.dir,
         .args = &.{ "mp", "cont.md" },
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
-        .stdout_handle = -1,
-        .stdin_handle = -1,
+        .stdout_file = invalid_file,
+        .stdin_file = invalid_file,
         .enable_ansi = false,
         .wrap_width = null,
         .ambiguous_width = .wide,
@@ -320,7 +334,8 @@ test "run threads ambiguous_width through to the renderer" {
 }
 
 test "run frees the file buffer carried by the source loader" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const io = std.testing.io;
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer {
         const status = gpa.deinit();
         std.testing.expect(status == .ok) catch @panic("gpa leak");
@@ -329,24 +344,25 @@ test "run frees the file buffer carried by the source loader" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.writeFile(.{
+    try tmp.dir.writeFile(io, .{
         .sub_path = "owned.md",
         .data = "# Owned\n",
     });
 
-    var stdout: std.io.Writer.Allocating = .init(gpa.allocator());
+    var stdout: std.Io.Writer.Allocating = .init(gpa.allocator());
     defer stdout.deinit();
-    var stderr: std.io.Writer.Allocating = .init(gpa.allocator());
+    var stderr: std.Io.Writer.Allocating = .init(gpa.allocator());
     defer stderr.deinit();
 
     const exit_code = try run(.{
         .allocator = gpa.allocator(),
+        .io = io,
         .cwd = tmp.dir,
         .args = &.{ "mp", "owned.md" },
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
-        .stdout_handle = -1,
-        .stdin_handle = -1,
+        .stdout_file = invalid_file,
+        .stdin_file = invalid_file,
         .enable_ansi = false,
         .wrap_width = null,
         .ambiguous_width = .narrow,

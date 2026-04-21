@@ -6,13 +6,14 @@ const mmap_threshold: u64 = 64 * 1024;
 
 pub fn loadFile(
     allocator: std.mem.Allocator,
-    dir: std.fs.Dir,
+    io: std.Io,
+    dir: std.Io.Dir,
     path: []const u8,
 ) !source_mod.Source {
-    var file = try dir.openFile(path, .{});
-    defer file.close();
+    var file = try dir.openFile(io, path, .{});
+    defer file.close(io);
 
-    const stat = try file.stat();
+    const stat = try file.stat(io);
     const size = stat.size;
 
     if (shouldMmap(size)) {
@@ -22,7 +23,7 @@ pub fn loadFile(
         } else |_| {}
     }
 
-    return readFile(allocator, file, size);
+    return readFile(allocator, io, file, size);
 }
 
 fn shouldMmap(size: u64) bool {
@@ -36,7 +37,7 @@ fn mapFile(fd: std.posix.fd_t, size: u64) ![]align(std.heap.page_size_min) const
     return std.posix.mmap(
         null,
         len,
-        std.posix.PROT.READ,
+        .{ .READ = true },
         .{ .TYPE = .PRIVATE },
         fd,
         0,
@@ -50,22 +51,23 @@ fn madviseSequential(bytes: []align(std.heap.page_size_min) const u8) void {
 
 fn readFile(
     allocator: std.mem.Allocator,
-    file: std.fs.File,
+    io: std.Io,
+    file: std.Io.File,
     size: u64,
 ) !source_mod.Source {
     if (size > std.math.maxInt(usize)) return error.FileTooLarge;
     const len: usize = @intCast(size);
-    var buffer = try allocator.alloc(u8, len);
-    errdefer allocator.free(buffer);
 
     adviseSequential(file.handle, len);
 
-    var filled: usize = 0;
-    while (filled < len) {
-        const n = try file.read(buffer[filled..]);
-        if (n == 0) break;
-        filled += n;
-    }
+    var buffer = try allocator.alloc(u8, len);
+    errdefer allocator.free(buffer);
+
+    var read_buf: [8 * 1024]u8 = undefined;
+    var file_reader = file.reader(io, &read_buf);
+    const filled = file_reader.interface.readSliceShort(buffer) catch |err| switch (err) {
+        error.ReadFailed => return file_reader.err.?,
+    };
 
     if (filled < len) {
         buffer = try allocator.realloc(buffer, filled);
@@ -81,13 +83,14 @@ fn adviseSequential(fd: std.posix.fd_t, len: usize) void {
 }
 
 test "loadFile returns owned source for small files" {
+    const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
     const data = "Hello, source_loader!\n";
-    try tmp.dir.writeFile(.{ .sub_path = "small.md", .data = data });
+    try tmp.dir.writeFile(io, .{ .sub_path = "small.md", .data = data });
 
-    const source = try loadFile(std.testing.allocator, tmp.dir, "small.md");
+    const source = try loadFile(std.testing.allocator, io, tmp.dir, "small.md");
     defer source.owned.allocator.free(source.owned.buffer);
 
     try std.testing.expect(source == .owned);
@@ -97,6 +100,7 @@ test "loadFile returns owned source for small files" {
 test "loadFile returns mapped source at or above mmap threshold" {
     if (builtin.os.tag == .windows) return;
 
+    const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -105,9 +109,9 @@ test "loadFile returns mapped source at or above mmap threshold" {
     @memset(data, 'a');
     data[data.len - 1] = '\n';
 
-    try tmp.dir.writeFile(.{ .sub_path = "big.md", .data = data });
+    try tmp.dir.writeFile(io, .{ .sub_path = "big.md", .data = data });
 
-    const source = try loadFile(std.testing.allocator, tmp.dir, "big.md");
+    const source = try loadFile(std.testing.allocator, io, tmp.dir, "big.md");
     defer std.posix.munmap(source.mapped.bytes);
 
     try std.testing.expect(source == .mapped);
