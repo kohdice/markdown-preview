@@ -54,7 +54,7 @@ fn headingStyle(level: u8, p: theme.Palette) ansi.TextStyle {
 
 pub const RenderSession = struct {
     ctx: *const RenderContext,
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     prefix_stack: *prefix_writer.PrefixStack,
     scratch: std.mem.Allocator,
     persistent_allocator: std.mem.Allocator,
@@ -105,7 +105,7 @@ pub const RenderSession = struct {
         const rendered_marker: []const u8 = blk: {
             if (marker.len == 0) break :blk marker;
             if (!self.ctx.enable_ansi or style.isPlain()) break :blk marker;
-            var tmp: std.io.Writer.Allocating = .init(self.scratch);
+            var tmp: std.Io.Writer.Allocating = .init(self.scratch);
             try ansi.writeStyled(&tmp.writer, self.ctx.enable_ansi, self.ctx.color_mode, style, marker);
             break :blk tmp.written();
         };
@@ -169,7 +169,7 @@ pub const RenderSession = struct {
 
     fn writeBody(
         self: *RenderSession,
-        writer: *std.io.Writer,
+        writer: *std.Io.Writer,
         paragraph: *const ast.Paragraph,
         trivial_lines: ?parse_mod.TrivialRun.Lines,
         base_style: ansi.TextStyle,
@@ -469,7 +469,7 @@ test "RenderSession.write renders heading content without document trailing newl
         .has_trailing_newline = false,
     };
 
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
     var table_scratch: render_table.TableScratch = .{};
     defer table_scratch.deinit(allocator);

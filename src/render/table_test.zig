@@ -46,7 +46,7 @@ test "table renderer accepts ast.no_inline cells and preserves layout" {
 }
 
 test "table renderer reuses scratch on repeated render of the same table-only document" {
-    var parse_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var parse_gpa = std.heap.DebugAllocator(.{}){};
     defer _ = parse_gpa.deinit();
 
     var doc = try parse.parse(parse_gpa.allocator(), .{ .borrowed = "| A | B | C |\n" ++
@@ -55,7 +55,7 @@ test "table renderer reuses scratch on repeated render of the same table-only do
         "| 4 | 5 | 6 |\n" });
     defer doc.deinit();
 
-    var render_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var render_gpa = std.heap.DebugAllocator(.{}){};
     defer _ = render_gpa.deinit();
 
     var counting = bench.CountingAllocator.init(render_gpa.allocator());
@@ -71,7 +71,7 @@ test "table renderer reuses scratch on repeated render of the same table-only do
 }
 
 test "table renderer reuses grown scratch when rendering small-large-small table-only documents" {
-    var parse_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var parse_gpa = std.heap.DebugAllocator(.{}){};
     defer _ = parse_gpa.deinit();
 
     var small_doc = try parse.parse(parse_gpa.allocator(), .{ .borrowed = "| A | B |\n" ++
@@ -86,7 +86,7 @@ test "table renderer reuses grown scratch when rendering small-large-small table
         "| 9 | 10 | 11 | 12 |\n" });
     defer large_doc.deinit();
 
-    var render_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var render_gpa = std.heap.DebugAllocator(.{}){};
     defer _ = render_gpa.deinit();
 
     var counting = bench.CountingAllocator.init(render_gpa.allocator());
@@ -105,9 +105,9 @@ test "table renderer reuses grown scratch when rendering small-large-small table
 test "wide table border near 2048-byte batch threshold produces correct output" {
     const allocator = std.testing.allocator;
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    defer buf.deinit(allocator);
-    var writer = buf.writer(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
+    defer buf.deinit();
+    const writer = &buf.writer;
 
     try writer.writeAll("|");
     for (0..60) |c| {
@@ -127,7 +127,8 @@ test "wide table border near 2048-byte batch threshold produces correct output" 
     }
     try writer.writeByte('\n');
 
-    const source = try buf.toOwnedSlice(allocator);
+    var list = buf.toArrayList();
+    const source = try list.toOwnedSlice(allocator);
     defer allocator.free(source);
 
     var doc = try parse.parse(allocator, .{ .borrowed = source });
@@ -152,7 +153,7 @@ fn renderWithDiscarding(
     counting: *const bench.CountingAllocator,
 ) !bench.CounterSnapshot {
     var sink: [256]u8 = undefined;
-    var discarding: std.io.Writer.Discarding = .init(&sink);
+    var discarding: std.Io.Writer.Discarding = .init(&sink);
     const before = counting.snapshot();
     try renderer.render(&discarding.writer, output, null);
     const after = counting.snapshot();

@@ -22,7 +22,7 @@ test "Rendering a mermaid block populates the cache" {
     var renderer = render.Renderer.init(allocator, .{});
     defer renderer.deinit();
 
-    var discarding: std.io.Writer.Discarding = .init(&.{});
+    var discarding: std.Io.Writer.Discarding = .init(&.{});
     try renderer.render(&discarding.writer, try fixture.document(), null);
 
     try std.testing.expectEqual(@as(usize, 1), renderer.mermaid_cache.count());
@@ -39,7 +39,7 @@ test "Rendering identical mermaid twice keeps cache size at one" {
     var renderer = render.Renderer.init(allocator, .{});
     defer renderer.deinit();
 
-    var discarding: std.io.Writer.Discarding = .init(&.{});
+    var discarding: std.Io.Writer.Discarding = .init(&.{});
     const doc = try fixture.document();
     try renderer.render(&discarding.writer, doc, null);
     try renderer.render(&discarding.writer, doc, null);
@@ -59,7 +59,7 @@ test "Distinct mermaid contents produce distinct cache entries" {
     var renderer = render.Renderer.init(allocator, .{});
     defer renderer.deinit();
 
-    var discarding: std.io.Writer.Discarding = .init(&.{});
+    var discarding: std.Io.Writer.Discarding = .init(&.{});
     try renderer.render(&discarding.writer, try fixture.document(), null);
 
     try std.testing.expectEqual(@as(usize, 2), renderer.mermaid_cache.count());
@@ -76,7 +76,7 @@ test "Invalid mermaid does not populate cache" {
     var renderer = render.Renderer.init(allocator, .{});
     defer renderer.deinit();
 
-    var discarding: std.io.Writer.Discarding = .init(&.{});
+    var discarding: std.Io.Writer.Discarding = .init(&.{});
     try renderer.render(&discarding.writer, try fixture.document(), null);
 
     try std.testing.expectEqual(@as(usize, 0), renderer.mermaid_cache.count());

@@ -52,7 +52,7 @@ fn InlineVisitor(comptime measure: bool) type {
         const Self = @This();
 
         ctx: *const RenderContext,
-        writer: *std.io.Writer,
+        writer: *std.Io.Writer,
         sgr_state: *ansi.StyledState,
         current_style: ansi.TextStyle,
         width_total: if (measure) usize else void,
@@ -206,7 +206,7 @@ const MeasureWriteVisitor = InlineVisitor(true);
 
 pub fn writeInlineChain(
     ctx: *const RenderContext,
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     first: ast.InlineRef,
     base_style: ansi.TextStyle,
 ) !void {
@@ -231,7 +231,7 @@ pub fn writeInlineChain(
 /// trimmed.
 pub fn writePlainLines(
     ctx: *const RenderContext,
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     lines: []const []const u8,
     base_style: ansi.TextStyle,
 ) !void {
@@ -261,7 +261,7 @@ fn trimTrivialTrailingSpaces(line: []const u8) []const u8 {
 
 pub fn writeAndMeasureInlineChain(
     ctx: *const RenderContext,
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     first: ast.InlineRef,
     base_style: ansi.TextStyle,
     ambiguous: width_mod.AmbiguousWidth,
@@ -294,7 +294,7 @@ fn testDoc(inline_nodes: []const ast.InlineNode, inline_next: []const ast.Inline
 
 fn measureOnly(doc: *const ast.Document, first: ast.InlineRef, ambiguous: width_mod.AmbiguousWidth) !usize {
     var sink: [256]u8 = undefined;
-    var discarding: std.io.Writer.Discarding = .init(&sink);
+    var discarding: std.Io.Writer.Discarding = .init(&sink);
     const ctx: RenderContext = .{
         .doc = doc,
         .enable_ansi = false,
@@ -379,7 +379,7 @@ test "writeAndMeasureInlineChain width equals displayWidth of rendered bytes" {
     const next = [_]ast.InlineRef{ 1, 2, ast.no_inline, ast.no_inline, ast.no_inline };
     const doc = testDoc(&nodes, &next);
 
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
 
     const ctx: RenderContext = .{

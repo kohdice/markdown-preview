@@ -55,7 +55,7 @@ pub const Renderer = struct {
 
     pub fn render(
         self: *Renderer,
-        writer: *std.io.Writer,
+        writer: *std.Io.Writer,
         output: *const parse.ParseOutput,
         wrap_width: ?usize,
     ) !void {
