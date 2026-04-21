@@ -1,6 +1,8 @@
 const std = @import("std");
 const ast = @import("../ast.zig");
+const parse = @import("../parse.zig");
 const render = @import("../render.zig");
+const ansi = @import("../term/ansi.zig");
 const width = @import("../term/width.zig");
 
 pub const FixtureError = error{
@@ -15,10 +17,14 @@ pub const RenderFixture = struct {
     inline_nodes: std.ArrayListUnmanaged(ast.InlineNode) = .empty,
     inline_next: std.ArrayListUnmanaged(ast.InlineRef) = .empty,
     blocks: std.ArrayListUnmanaged(ast.BlockNode) = .empty,
-    doc: ast.Document = .{
-        .blocks = &.{},
-        .link_defs = .{},
-        .has_trailing_newline = false,
+    output: parse.ParseOutput = .{
+        .parsed = .{
+            .document = .{
+                .blocks = &.{},
+                .link_defs = .{},
+                .has_trailing_newline = false,
+            },
+        },
     },
 
     const State = enum {
@@ -37,7 +43,7 @@ pub const RenderFixture = struct {
             .building => {
                 if (self.arena) |*arena| arena.deinit();
             },
-            .finished => self.doc.deinit(),
+            .finished => self.output.deinit(),
         }
 
         self.* = undefined;
@@ -316,22 +322,27 @@ pub const RenderFixture = struct {
         const arena = self.arena.?;
         self.arena = null;
 
-        self.doc = .{
-            .source = "",
-            .source_storage = .borrowed,
-            .inline_nodes = inline_nodes,
-            .inline_next = inline_next,
-            .blocks = blocks,
-            .link_defs = .{},
-            .has_trailing_newline = has_trailing_newline,
-            .storage = .{ .arena = arena },
+        self.output = .{
+            .parsed = .{
+                .document = .{
+                    .source = "",
+                    .source_storage = .borrowed,
+                    .inline_nodes = inline_nodes,
+                    .inline_next = inline_next,
+                    .blocks = blocks,
+                    .link_defs = .{},
+                    .has_trailing_newline = has_trailing_newline,
+                    .storage = .{ .arena = arena },
+                },
+            },
+            .trivial_runs = &.{},
         };
         self.state = .finished;
     }
 
-    pub fn document(self: *const RenderFixture) FixtureError!*const ast.Document {
+    pub fn document(self: *const RenderFixture) FixtureError!*const parse.ParseOutput {
         if (self.state != .finished) return error.FixtureNotFinished;
-        return &self.doc;
+        return &self.output;
     }
 
     fn buildingAllocator(
@@ -346,11 +357,12 @@ pub const TestRenderOptions = struct {
     enable_ansi: bool = false,
     wrap_width: ?usize = null,
     ambiguous_width: width.AmbiguousWidth = .narrow,
+    color_mode: ansi.ColorMode = .truecolor,
 };
 
 pub fn renderDocumentToOwnedSlice(
     allocator: std.mem.Allocator,
-    doc: *const ast.Document,
+    parse_output: *const parse.ParseOutput,
     opts: TestRenderOptions,
 ) ![]u8 {
     var output: std.io.Writer.Allocating = .init(allocator);
@@ -359,9 +371,10 @@ pub fn renderDocumentToOwnedSlice(
     var renderer = render.Renderer.init(allocator, .{
         .enable_ansi = opts.enable_ansi,
         .ambiguous_width = opts.ambiguous_width,
+        .color_mode = opts.color_mode,
     });
     defer renderer.deinit();
-    try renderer.renderDocument(&output.writer, doc, opts.wrap_width, allocator);
+    try renderer.render(&output.writer, parse_output, opts.wrap_width);
     var list = output.toArrayList();
     return list.toOwnedSlice(allocator);
 }
@@ -391,7 +404,7 @@ test "RenderFixture supports empty inline chains via ast.no_inline" {
     try fixture.appendBlock(.{ .paragraph = .{ .children = ast.no_inline } });
     try fixture.finish(false);
 
-    const doc = try fixture.document();
-    try std.testing.expectEqual(@as(usize, 0), doc.inline_nodes.len);
-    try std.testing.expectEqual(ast.no_inline, doc.blocks[0].paragraph.children);
+    const rendered = try fixture.document();
+    try std.testing.expectEqual(@as(usize, 0), rendered.parsed.document.inline_nodes.len);
+    try std.testing.expectEqual(ast.no_inline, rendered.parsed.document.blocks[0].paragraph.children);
 }

@@ -1,13 +1,10 @@
 const std = @import("std");
 
-// HTML5 spec: named entities are at most 31 characters long
 const max_entity_len = 32;
-const max_hex_digits = 6; // per CommonMark spec
-const max_decimal_digits = 7; // per CommonMark spec
+const max_hex_digits = 6;
+const max_decimal_digits = 7;
 
-/// Unicode Scalar Value upper bound (Unicode §3.9 D76).
 const max_unicode_codepoint: u32 = 0x10FFFF;
-/// UTF-16 surrogate range: U+D800..U+DFFF. Invalid as standalone scalar values.
 const surrogate_min: u32 = 0xD800;
 const surrogate_max: u32 = 0xDFFF;
 
@@ -17,10 +14,19 @@ pub const DecodeResult = struct {
     end: usize,
 };
 
-/// Decode an HTML entity at the given position in text.
-/// Expects `text[start]` to be '&'.
-/// Returns the decoded UTF-8 bytes and the end position (past the ';'),
-/// or null if no valid entity is found.
+pub const Codepoint = struct {
+    cp: u21,
+    len: usize,
+};
+
+pub fn nextCodepoint(bytes: []const u8, pos: usize) ?Codepoint {
+    if (pos >= bytes.len) return null;
+    const len = std.unicode.utf8ByteSequenceLength(bytes[pos]) catch return null;
+    if (pos + len > bytes.len) return null;
+    const cp = std.unicode.utf8Decode(bytes[pos..][0..len]) catch return null;
+    return .{ .cp = cp, .len = len };
+}
+
 pub fn decode(text: []const u8, start: usize) ?DecodeResult {
     if (start >= text.len or text[start] != '&') return null;
 
@@ -46,7 +52,6 @@ pub fn decode(text: []const u8, start: usize) ?DecodeResult {
 fn decodeNumeric(body: []const u8, end: usize) ?DecodeResult {
     if (body.len == 0) return null;
 
-    // Use u32 to accumulate without overflow risk, then validate range
     var codepoint: u32 = 0;
 
     if (body[0] == 'x' or body[0] == 'X') {

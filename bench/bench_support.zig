@@ -6,6 +6,8 @@ pub const CounterSnapshot = struct {
     free_count: usize,
     bytes_allocated: usize,
     bytes_freed: usize,
+    live_bytes: usize,
+    peak_bytes: usize,
 
     pub fn diff(after: CounterSnapshot, before: CounterSnapshot) CounterSnapshot {
         return .{
@@ -14,6 +16,8 @@ pub const CounterSnapshot = struct {
             .free_count = after.free_count - before.free_count,
             .bytes_allocated = after.bytes_allocated - before.bytes_allocated,
             .bytes_freed = after.bytes_freed - before.bytes_freed,
+            .live_bytes = after.live_bytes -| before.live_bytes,
+            .peak_bytes = after.peak_bytes - before.peak_bytes,
         };
     }
 };
@@ -25,6 +29,8 @@ pub const CountingAllocator = struct {
     free_count: usize = 0,
     bytes_allocated: usize = 0,
     bytes_freed: usize = 0,
+    live_bytes: usize = 0,
+    peak_bytes: usize = 0,
 
     const vtable: std.mem.Allocator.VTable = .{
         .alloc = alloc,
@@ -51,14 +57,27 @@ pub const CountingAllocator = struct {
             .free_count = self.free_count,
             .bytes_allocated = self.bytes_allocated,
             .bytes_freed = self.bytes_freed,
+            .live_bytes = self.live_bytes,
+            .peak_bytes = self.peak_bytes,
         };
+    }
+
+    fn recordGrow(self: *CountingAllocator, delta: usize) void {
+        self.bytes_allocated += delta;
+        self.live_bytes += delta;
+        if (self.live_bytes > self.peak_bytes) self.peak_bytes = self.live_bytes;
+    }
+
+    fn recordShrink(self: *CountingAllocator, delta: usize) void {
+        self.bytes_freed += delta;
+        self.live_bytes -|= delta;
     }
 
     fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
         const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
         const ptr = self.child.rawAlloc(len, alignment, ret_addr) orelse return null;
         self.alloc_count += 1;
-        self.bytes_allocated += len;
+        self.recordGrow(len);
         return ptr;
     }
 
@@ -74,9 +93,9 @@ pub const CountingAllocator = struct {
         if (ok) {
             self.resize_count += 1;
             if (new_len > memory.len) {
-                self.bytes_allocated += new_len - memory.len;
+                self.recordGrow(new_len - memory.len);
             } else {
-                self.bytes_freed += memory.len - new_len;
+                self.recordShrink(memory.len - new_len);
             }
         }
         return ok;
@@ -93,9 +112,9 @@ pub const CountingAllocator = struct {
         const ptr = self.child.rawRemap(memory, alignment, new_len, ret_addr) orelse return null;
         self.resize_count += 1;
         if (new_len > memory.len) {
-            self.bytes_allocated += new_len - memory.len;
+            self.recordGrow(new_len - memory.len);
         } else {
-            self.bytes_freed += memory.len - new_len;
+            self.recordShrink(memory.len - new_len);
         }
         return ptr;
     }
@@ -103,7 +122,7 @@ pub const CountingAllocator = struct {
     fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
         const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
         self.free_count += 1;
-        self.bytes_freed += memory.len;
+        self.recordShrink(memory.len);
         self.child.rawFree(memory, alignment, ret_addr);
     }
 };

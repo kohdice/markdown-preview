@@ -135,7 +135,6 @@ pub fn detectAmbiguousWidth(env: anytype) AmbiguousWidth {
     return .narrow;
 }
 
-/// ANSI CSI parameter byte range (0x20–0x3f per ECMA-48 §5.4)
 fn isCsiParamByte(byte: u8) bool {
     return byte >= 0x20 and byte <= 0x3f;
 }
@@ -164,7 +163,6 @@ fn isAsciiPrintable(text: []const u8) bool {
     return true;
 }
 
-/// Calculate the display width of a UTF-8 string in terminal columns.
 /// ASCII printable characters are width 1, CJK characters are width 2,
 /// ANSI escape sequences are width 0, control characters are width 0.
 /// Combining characters and variation selectors are width 0.
@@ -185,35 +183,31 @@ pub fn displayWidth(text: []const u8, ambiguous: AmbiguousWidth) usize {
             continue;
         }
 
-        const len = std.unicode.utf8ByteSequenceLength(text[i]) catch {
-            i += 1;
-            continue;
+        const decoded = switch (nextCodepoint(text, i)) {
+            .ok => |d| d,
+            .invalid => {
+                i += 1;
+                continue;
+            },
+            .incomplete => break,
         };
-        if (i + len > text.len) break;
-
-        const cp = std.unicode.utf8Decode(text[i..][0..len]) catch {
-            i += 1;
-            continue;
-        };
-        i += len;
+        i += decoded.len;
 
         if (suppress_next_emoji) {
             suppress_next_emoji = false;
-            if (isEmoji(cp)) continue;
+            if (isEmoji(decoded.cp)) continue;
         }
 
-        if (cp == ZWJ) {
+        if (decoded.cp == ZWJ) {
             suppress_next_emoji = true;
             continue;
         }
 
-        w += codepointWidth(cp, ambiguous);
+        w += codepointWidth(decoded.cp, ambiguous);
     }
     return w;
 }
 
-/// Slice a string to fit within max_width display columns.
-/// Preserves ANSI escape sequences and respects UTF-8 byte boundaries.
 fn sliceToWidth(text: []const u8, max_width: usize, ambiguous: AmbiguousWidth) []const u8 {
     var width: usize = 0;
     var i: usize = 0;
@@ -223,28 +217,23 @@ fn sliceToWidth(text: []const u8, max_width: usize, ambiguous: AmbiguousWidth) [
             continue;
         }
 
-        const len = std.unicode.utf8ByteSequenceLength(text[i]) catch {
-            i += 1;
-            continue;
-        };
-        if (i + len > text.len) break;
-
-        const cp = std.unicode.utf8Decode(text[i..][0..len]) catch {
-            i += 1;
-            continue;
+        const decoded = switch (nextCodepoint(text, i)) {
+            .ok => |d| d,
+            .invalid => {
+                i += 1;
+                continue;
+            },
+            .incomplete => break,
         };
 
-        const cw = codepointWidth(cp, ambiguous);
+        const cw = codepointWidth(decoded.cp, ambiguous);
         if (width + cw > max_width) break;
         width += cw;
-        i += len;
+        i += decoded.len;
     }
     return text[0..i];
 }
 
-/// Like sliceToWidth but returns an allocated slice that appends an ANSI reset
-/// sequence (\x1b[0m) if the text was truncated inside an active ANSI style.
-/// This prevents style leakage into subsequent terminal output.
 fn sliceToWidthAlloc(
     allocator: std.mem.Allocator,
     text: []const u8,
@@ -264,37 +253,34 @@ fn sliceToWidthAlloc(
             continue;
         }
 
-        const len = std.unicode.utf8ByteSequenceLength(text[i]) catch {
-            i += 1;
-            w += 1;
-            continue;
-        };
-        if (i + len > text.len) break;
-
-        const cp = std.unicode.utf8Decode(text[i..][0..len]) catch {
-            i += 1;
-            w += 1;
-            continue;
+        const decoded = switch (nextCodepoint(text, i)) {
+            .ok => |d| d,
+            .invalid => {
+                i += 1;
+                w += 1;
+                continue;
+            },
+            .incomplete => break,
         };
 
         if (suppress_next_emoji) {
             suppress_next_emoji = false;
-            if (isEmoji(cp)) {
-                i += len;
+            if (isEmoji(decoded.cp)) {
+                i += decoded.len;
                 continue;
             }
         }
 
-        if (cp == ZWJ) {
+        if (decoded.cp == ZWJ) {
             suppress_next_emoji = true;
-            i += len;
+            i += decoded.len;
             continue;
         }
 
-        const cw = codepointWidth(cp, ambiguous);
+        const cw = codepointWidth(decoded.cp, ambiguous);
         if (w + cw > max_width) break;
         w += cw;
-        i += len;
+        i += decoded.len;
     }
 
     const truncated = i < text.len;
@@ -307,9 +293,6 @@ fn sliceToWidthAlloc(
     return try allocator.dupe(u8, text[0..i]);
 }
 
-/// Wrap text to fit within max_width display columns.
-/// Preserves ANSI escape sequences. Breaks at word boundaries (spaces) when possible.
-/// Falls back to hard-breaking at the column limit if no space is found.
 fn wrapText(
     allocator: std.mem.Allocator,
     text: []const u8,
@@ -413,7 +396,7 @@ fn wrapText(
 
 pub const WrapWriter = struct {
     parent: *std.io.Writer,
-    line_buf: std.ArrayListUnmanaged(u8),
+    line_buf: *std.ArrayListUnmanaged(u8),
     col: usize,
     last_space_buf: ?usize,
     col_after_last_space: usize,
@@ -423,17 +406,23 @@ pub const WrapWriter = struct {
     suppress_next_emoji: bool,
     pending: [24]u8,
     pending_len: u5,
+    writer_buf: [writer_buffer_size]u8,
     writer: std.io.Writer,
 
+    const writer_buffer_size = 512;
+
     pub fn init(
+        self: *WrapWriter,
         parent: *std.io.Writer,
         max_width: usize,
         ambiguous: AmbiguousWidth,
         allocator: std.mem.Allocator,
-    ) WrapWriter {
-        return .{
+        line_buf: *std.ArrayListUnmanaged(u8),
+    ) void {
+        line_buf.clearRetainingCapacity();
+        self.* = .{
             .parent = parent,
-            .line_buf = .{},
+            .line_buf = line_buf,
             .col = 0,
             .last_space_buf = null,
             .col_after_last_space = 0,
@@ -443,8 +432,9 @@ pub const WrapWriter = struct {
             .suppress_next_emoji = false,
             .pending = undefined,
             .pending_len = 0,
+            .writer_buf = undefined,
             .writer = .{
-                .buffer = &.{},
+                .buffer = &self.writer_buf,
                 .vtable = &wrap_vtable,
             },
         };
@@ -463,13 +453,15 @@ pub const WrapWriter = struct {
         self.suppress_next_emoji = false;
         self.pending_len = 0;
         self.line_buf.clearRetainingCapacity();
+        self.writer.end = 0;
     }
 
     pub fn deinit(self: *WrapWriter) void {
-        self.line_buf.deinit(self.allocator);
+        _ = self;
     }
 
     pub fn finish(self: *WrapWriter) std.io.Writer.Error!void {
+        try self.writer.flush();
         if (self.pending_len > 0) {
             if (self.pending[0] == ESC) {
                 self.line_buf.appendSlice(self.allocator, self.pending[0..self.pending_len]) catch
@@ -491,6 +483,11 @@ pub const WrapWriter = struct {
 
     fn wrapFlush(w: *std.io.Writer) std.io.Writer.Error!void {
         const self: *WrapWriter = @fieldParentPtr("writer", w);
+        const buffered = w.buffered();
+        if (buffered.len > 0) {
+            self.processBytes(buffered) catch return error.WriteFailed;
+            w.end = 0;
+        }
         if (self.line_buf.items.len > 0) {
             try self.parent.writeAll(self.line_buf.items);
             self.line_buf.clearRetainingCapacity();
@@ -500,8 +497,14 @@ pub const WrapWriter = struct {
 
     fn wrapDrain(w: *std.io.Writer, data: []const []const u8, splat: usize) std.io.Writer.Error!usize {
         const self: *WrapWriter = @fieldParentPtr("writer", w);
-        var total: usize = 0;
 
+        const buffered = w.buffered();
+        if (buffered.len > 0) {
+            self.processBytes(buffered) catch return error.WriteFailed;
+            w.end = 0;
+        }
+
+        var total: usize = 0;
         for (data, 0..) |slice, idx| {
             const repeat: usize = if (idx == data.len - 1) splat else 1;
             for (0..repeat) |_| {
@@ -564,23 +567,22 @@ pub const WrapWriter = struct {
                 continue;
             }
 
-            const len = std.unicode.utf8ByteSequenceLength(bytes[i]) catch {
-                try self.appendCharAdvance(bytes[i..][0..1], 1);
-                i += 1;
-                continue;
+            const decoded = switch (nextCodepoint(bytes, i)) {
+                .ok => |d| d,
+                .invalid => {
+                    try self.appendCharAdvance(bytes[i..][0..1], 1);
+                    i += 1;
+                    continue;
+                },
+                .incomplete => {
+                    const remaining: u5 = @intCast(bytes.len - i);
+                    @memcpy(self.pending[0..remaining], bytes[i..]);
+                    self.pending_len = remaining;
+                    break;
+                },
             };
-            if (i + len > bytes.len) {
-                const remaining: u5 = @intCast(bytes.len - i);
-                @memcpy(self.pending[0..remaining], bytes[i..]);
-                self.pending_len = remaining;
-                break;
-            }
-
-            const cp = std.unicode.utf8Decode(bytes[i..][0..len]) catch {
-                try self.appendCharAdvance(bytes[i..][0..1], 1);
-                i += 1;
-                continue;
-            };
+            const len = decoded.len;
+            const cp = decoded.cp;
 
             if (self.suppress_next_emoji) {
                 self.suppress_next_emoji = false;
@@ -803,357 +805,287 @@ pub const WrapWriter = struct {
 fn isEmoji(cp: u21) bool {
     if (cp >= 0x1F300 and cp <= 0x1F9FF) return true;
     if (cp >= 0x1FA00 and cp <= 0x1FAFF) return true;
-    if (cp >= 0x2600 and cp <= 0x26FF) return true; // Miscellaneous Symbols
-    if (cp >= 0x2700 and cp <= 0x27BF) return true; // Dingbats
+    if (cp >= 0x2600 and cp <= 0x26FF) return true;
+    if (cp >= 0x2700 and cp <= 0x27BF) return true;
     return false;
 }
 
-/// Returns true for code points that should render as 2 columns when
-/// the caller selects `AmbiguousWidth.wide`.
-///
-/// The primary source is Unicode 15.1 `EastAsianWidth.txt` category
-/// `A` (Ambiguous). That catches the UAX #11 formal set — Greek,
-/// Cyrillic, box drawing, most Misc Symbols, and the Private Use
-/// Area.
-///
-/// On top of the formal set, the function also returns true for a
-/// small group of **project glyphs** that UAX #11 classifies as
-/// Neutral (`N`) but that the renderer intentionally uses in list,
-/// checkbox, and bullet positions. Neutral characters are always
-/// width 1 per the strict standard, but CJK-legacy terminal modes
-/// (Apple Terminal east-asian-wide, Vim `set ambiwidth=double` in
-/// the CJK font families that ship these glyphs as double-wide)
-/// display them as 2 columns. Without the override, opting into
-/// wide ambiguous rendering would fix top-level `•` bullets and
-/// `│` gutters but leave `◦` / `▪` / `☐` / `☑` misaligned, which
-/// defeats the feature's stated user goal.
-///
-/// Project-glyph overrides (formally N, pragmatically widened):
-/// - U+25AA ▪ BLACK SMALL SQUARE (depth-2 list bullet)
-/// - U+25E6 ◦ WHITE BULLET (depth-1 list bullet)
-/// - U+2610 ☐ BALLOT BOX (unchecked task checkbox)
-/// - U+2611 ☑ BALLOT BOX WITH CHECK (checked task checkbox)
-///
-/// Earlier short-circuit rules in `codepointWidth` already handle
-/// combining marks (U+0300..U+036F → 0), variation selectors
-/// (U+FE00..U+FE0F, U+E0100..U+E01EF → 0), and CJK ranges
-/// (U+3200..U+32FF, U+F900..U+FAFF → 2), so those ranges are
-/// deliberately omitted from this check to keep the list focused
-/// on code points that actually need mode-dependent behavior.
-///
-/// When bumping the target Unicode version, diff the new
-/// `EastAsianWidth.txt` against the ranges below and add or remove
-/// entries as needed. Historical evidence shows A-category changes
-/// are rare (typically 0–5 codepoints per Unicode release), so a
-/// full regeneration is not necessary. Keep the project-glyph
-/// override section intact across bumps.
+const eaw_ambiguous_ranges = [_][2]u21{
+    .{ 0x00A1, 0x00A1 },
+    .{ 0x00A4, 0x00A4 },
+    .{ 0x00A7, 0x00A8 },
+    .{ 0x00AA, 0x00AA },
+    .{ 0x00AD, 0x00AE },
+    .{ 0x00B0, 0x00B4 },
+    .{ 0x00B6, 0x00BA },
+    .{ 0x00BC, 0x00BF },
+    .{ 0x00C6, 0x00C6 },
+    .{ 0x00D0, 0x00D0 },
+    .{ 0x00D7, 0x00D8 },
+    .{ 0x00DE, 0x00E1 },
+    .{ 0x00E6, 0x00E6 },
+    .{ 0x00E8, 0x00EA },
+    .{ 0x00EC, 0x00ED },
+    .{ 0x00F0, 0x00F0 },
+    .{ 0x00F2, 0x00F3 },
+    .{ 0x00F7, 0x00FA },
+    .{ 0x00FC, 0x00FC },
+    .{ 0x00FE, 0x00FE },
+    .{ 0x0101, 0x0101 },
+    .{ 0x0111, 0x0111 },
+    .{ 0x0113, 0x0113 },
+    .{ 0x011B, 0x011B },
+    .{ 0x0126, 0x0127 },
+    .{ 0x012B, 0x012B },
+    .{ 0x0131, 0x0133 },
+    .{ 0x0138, 0x0138 },
+    .{ 0x013F, 0x0142 },
+    .{ 0x0144, 0x0144 },
+    .{ 0x0148, 0x014B },
+    .{ 0x014D, 0x014D },
+    .{ 0x0152, 0x0153 },
+    .{ 0x0166, 0x0167 },
+    .{ 0x016B, 0x016B },
+    .{ 0x01CE, 0x01CE },
+    .{ 0x01D0, 0x01D0 },
+    .{ 0x01D2, 0x01D2 },
+    .{ 0x01D4, 0x01D4 },
+    .{ 0x01D6, 0x01D6 },
+    .{ 0x01D8, 0x01D8 },
+    .{ 0x01DA, 0x01DA },
+    .{ 0x01DC, 0x01DC },
+    .{ 0x0251, 0x0251 },
+    .{ 0x0261, 0x0261 },
+    .{ 0x02C4, 0x02C4 },
+    .{ 0x02C7, 0x02C7 },
+    .{ 0x02C9, 0x02CB },
+    .{ 0x02CD, 0x02CD },
+    .{ 0x02D0, 0x02D0 },
+    .{ 0x02D8, 0x02DB },
+    .{ 0x02DD, 0x02DD },
+    .{ 0x02DF, 0x02DF },
+    .{ 0x0391, 0x03A1 },
+    .{ 0x03A3, 0x03A9 },
+    .{ 0x03B1, 0x03C1 },
+    .{ 0x03C3, 0x03C9 },
+    .{ 0x0401, 0x0401 },
+    .{ 0x0410, 0x044F },
+    .{ 0x0451, 0x0451 },
+    .{ 0x2010, 0x2010 },
+    .{ 0x2013, 0x2016 },
+    .{ 0x2018, 0x2019 },
+    .{ 0x201C, 0x201D },
+    .{ 0x2020, 0x2022 },
+    .{ 0x2024, 0x2027 },
+    .{ 0x2030, 0x2030 },
+    .{ 0x2032, 0x2033 },
+    .{ 0x2035, 0x2035 },
+    .{ 0x203B, 0x203B },
+    .{ 0x203E, 0x203E },
+    .{ 0x2074, 0x2074 },
+    .{ 0x207F, 0x207F },
+    .{ 0x2081, 0x2084 },
+    .{ 0x20AC, 0x20AC },
+    .{ 0x2103, 0x2103 },
+    .{ 0x2105, 0x2105 },
+    .{ 0x2109, 0x2109 },
+    .{ 0x2113, 0x2113 },
+    .{ 0x2116, 0x2116 },
+    .{ 0x2121, 0x2122 },
+    .{ 0x2126, 0x2126 },
+    .{ 0x212B, 0x212B },
+    .{ 0x2153, 0x2154 },
+    .{ 0x215B, 0x215E },
+    .{ 0x2160, 0x216B },
+    .{ 0x2170, 0x2179 },
+    .{ 0x2189, 0x2189 },
+    .{ 0x2190, 0x2199 },
+    .{ 0x21B8, 0x21B9 },
+    .{ 0x21D2, 0x21D2 },
+    .{ 0x21D4, 0x21D4 },
+    .{ 0x21E7, 0x21E7 },
+    .{ 0x2200, 0x2200 },
+    .{ 0x2202, 0x2203 },
+    .{ 0x2207, 0x2208 },
+    .{ 0x220B, 0x220B },
+    .{ 0x220F, 0x220F },
+    .{ 0x2211, 0x2211 },
+    .{ 0x2215, 0x2215 },
+    .{ 0x221A, 0x221A },
+    .{ 0x221D, 0x2220 },
+    .{ 0x2223, 0x2223 },
+    .{ 0x2225, 0x2225 },
+    .{ 0x2227, 0x222C },
+    .{ 0x222E, 0x222E },
+    .{ 0x2234, 0x2237 },
+    .{ 0x223C, 0x223D },
+    .{ 0x2248, 0x2248 },
+    .{ 0x224C, 0x224C },
+    .{ 0x2252, 0x2252 },
+    .{ 0x2260, 0x2261 },
+    .{ 0x2264, 0x2267 },
+    .{ 0x226A, 0x226B },
+    .{ 0x226E, 0x226F },
+    .{ 0x2282, 0x2283 },
+    .{ 0x2286, 0x2287 },
+    .{ 0x2295, 0x2295 },
+    .{ 0x2299, 0x2299 },
+    .{ 0x22A5, 0x22A5 },
+    .{ 0x22BF, 0x22BF },
+    .{ 0x2312, 0x2312 },
+    .{ 0x2460, 0x24E9 },
+    .{ 0x24EB, 0x254B },
+    .{ 0x2550, 0x2573 },
+    .{ 0x2580, 0x258F },
+    .{ 0x2592, 0x2595 },
+    .{ 0x25A0, 0x25A1 },
+    .{ 0x25A3, 0x25AA },
+    .{ 0x25B2, 0x25B3 },
+    .{ 0x25B6, 0x25B7 },
+    .{ 0x25BC, 0x25BD },
+    .{ 0x25C0, 0x25C1 },
+    .{ 0x25C6, 0x25C8 },
+    .{ 0x25CB, 0x25CB },
+    .{ 0x25CE, 0x25D1 },
+    .{ 0x25E2, 0x25E6 },
+    .{ 0x25EF, 0x25EF },
+    .{ 0x2605, 0x2606 },
+    .{ 0x2609, 0x2609 },
+    .{ 0x260E, 0x260F },
+    .{ 0x2610, 0x2611 },
+    .{ 0x261C, 0x261C },
+    .{ 0x261E, 0x261E },
+    .{ 0x2640, 0x2640 },
+    .{ 0x2642, 0x2642 },
+    .{ 0x2660, 0x2661 },
+    .{ 0x2663, 0x2665 },
+    .{ 0x2667, 0x266A },
+    .{ 0x266C, 0x266D },
+    .{ 0x266F, 0x266F },
+    .{ 0x269E, 0x269F },
+    .{ 0x26BF, 0x26BF },
+    .{ 0x26C6, 0x26CD },
+    .{ 0x26CF, 0x26D3 },
+    .{ 0x26D5, 0x26E1 },
+    .{ 0x26E3, 0x26E3 },
+    .{ 0x26E8, 0x26E9 },
+    .{ 0x26EB, 0x26F1 },
+    .{ 0x26F4, 0x26F4 },
+    .{ 0x26F6, 0x26F9 },
+    .{ 0x26FB, 0x26FC },
+    .{ 0x26FE, 0x26FF },
+    .{ 0x273D, 0x273D },
+    .{ 0x2776, 0x277F },
+    .{ 0x2B56, 0x2B59 },
+    .{ 0xE000, 0xF8FF },
+    .{ 0xFFFD, 0xFFFD },
+    .{ 0x1F100, 0x1F10A },
+    .{ 0x1F110, 0x1F12D },
+    .{ 0x1F130, 0x1F169 },
+    .{ 0x1F170, 0x1F18D },
+    .{ 0x1F18F, 0x1F190 },
+    .{ 0x1F19B, 0x1F1AC },
+    .{ 0xF0000, 0xFFFFD },
+    .{ 0x100000, 0x10FFFD },
+};
+
 fn isEastAsianAmbiguous(cp: u21) bool {
-    if (cp < 0x00A1) return false;
+    if (cp < eaw_ambiguous_ranges[0][0]) return false;
+    if (cp > eaw_ambiguous_ranges[eaw_ambiguous_ranges.len - 1][1]) return false;
 
-    // Latin-1 Supplement
-    if (cp == 0x00A1) return true;
-    if (cp == 0x00A4) return true;
-    if (cp >= 0x00A7 and cp <= 0x00A8) return true;
-    if (cp == 0x00AA) return true;
-    if (cp >= 0x00AD and cp <= 0x00AE) return true;
-    if (cp >= 0x00B0 and cp <= 0x00B4) return true;
-    if (cp >= 0x00B6 and cp <= 0x00BA) return true;
-    if (cp >= 0x00BC and cp <= 0x00BF) return true;
-    if (cp == 0x00C6) return true;
-    if (cp == 0x00D0) return true;
-    if (cp >= 0x00D7 and cp <= 0x00D8) return true;
-    if (cp >= 0x00DE and cp <= 0x00E1) return true;
-    if (cp == 0x00E6) return true;
-    if (cp >= 0x00E8 and cp <= 0x00EA) return true;
-    if (cp >= 0x00EC and cp <= 0x00ED) return true;
-    if (cp == 0x00F0) return true;
-    if (cp >= 0x00F2 and cp <= 0x00F3) return true;
-    if (cp >= 0x00F7 and cp <= 0x00FA) return true;
-    if (cp == 0x00FC) return true;
-    if (cp == 0x00FE) return true;
-
-    // Latin Extended-A
-    if (cp == 0x0101) return true;
-    if (cp == 0x0111) return true;
-    if (cp == 0x0113) return true;
-    if (cp == 0x011B) return true;
-    if (cp >= 0x0126 and cp <= 0x0127) return true;
-    if (cp == 0x012B) return true;
-    if (cp >= 0x0131 and cp <= 0x0133) return true;
-    if (cp == 0x0138) return true;
-    if (cp >= 0x013F and cp <= 0x0142) return true;
-    if (cp == 0x0144) return true;
-    if (cp >= 0x0148 and cp <= 0x014B) return true;
-    if (cp == 0x014D) return true;
-    if (cp >= 0x0152 and cp <= 0x0153) return true;
-    if (cp >= 0x0166 and cp <= 0x0167) return true;
-    if (cp == 0x016B) return true;
-
-    // Latin Extended-B
-    if (cp == 0x01CE) return true;
-    if (cp == 0x01D0) return true;
-    if (cp == 0x01D2) return true;
-    if (cp == 0x01D4) return true;
-    if (cp == 0x01D6) return true;
-    if (cp == 0x01D8) return true;
-    if (cp == 0x01DA) return true;
-    if (cp == 0x01DC) return true;
-
-    // IPA Extensions
-    if (cp == 0x0251) return true;
-    if (cp == 0x0261) return true;
-
-    // Spacing Modifier Letters
-    if (cp == 0x02C4) return true;
-    if (cp == 0x02C7) return true;
-    if (cp >= 0x02C9 and cp <= 0x02CB) return true;
-    if (cp == 0x02CD) return true;
-    if (cp == 0x02D0) return true;
-    if (cp >= 0x02D8 and cp <= 0x02DB) return true;
-    if (cp == 0x02DD) return true;
-    if (cp == 0x02DF) return true;
-
-    // Greek and Coptic
-    if (cp >= 0x0391 and cp <= 0x03A1) return true;
-    if (cp >= 0x03A3 and cp <= 0x03A9) return true;
-    if (cp >= 0x03B1 and cp <= 0x03C1) return true;
-    if (cp >= 0x03C3 and cp <= 0x03C9) return true;
-
-    // Cyrillic
-    if (cp == 0x0401) return true;
-    if (cp >= 0x0410 and cp <= 0x044F) return true;
-    if (cp == 0x0451) return true;
-
-    if (cp < 0x2010) return false;
-
-    // General Punctuation
-    if (cp == 0x2010) return true;
-    if (cp >= 0x2013 and cp <= 0x2016) return true;
-    if (cp >= 0x2018 and cp <= 0x2019) return true;
-    if (cp >= 0x201C and cp <= 0x201D) return true;
-    if (cp >= 0x2020 and cp <= 0x2022) return true;
-    if (cp >= 0x2024 and cp <= 0x2027) return true;
-    if (cp == 0x2030) return true;
-    if (cp >= 0x2032 and cp <= 0x2033) return true;
-    if (cp == 0x2035) return true;
-    if (cp == 0x203B) return true;
-    if (cp == 0x203E) return true;
-
-    // Superscripts and Subscripts
-    if (cp == 0x2074) return true;
-    if (cp == 0x207F) return true;
-    if (cp >= 0x2081 and cp <= 0x2084) return true;
-
-    // Currency Symbols
-    if (cp == 0x20AC) return true;
-
-    // Letterlike Symbols
-    if (cp == 0x2103) return true;
-    if (cp == 0x2105) return true;
-    if (cp == 0x2109) return true;
-    if (cp == 0x2113) return true;
-    if (cp == 0x2116) return true;
-    if (cp >= 0x2121 and cp <= 0x2122) return true;
-    if (cp == 0x2126) return true;
-    if (cp == 0x212B) return true;
-
-    // Number Forms
-    if (cp >= 0x2153 and cp <= 0x2154) return true;
-    if (cp >= 0x215B and cp <= 0x215E) return true;
-    if (cp >= 0x2160 and cp <= 0x216B) return true;
-    if (cp >= 0x2170 and cp <= 0x2179) return true;
-    if (cp == 0x2189) return true;
-
-    // Arrows
-    if (cp >= 0x2190 and cp <= 0x2199) return true;
-    if (cp >= 0x21B8 and cp <= 0x21B9) return true;
-    if (cp == 0x21D2) return true;
-    if (cp == 0x21D4) return true;
-    if (cp == 0x21E7) return true;
-
-    // Mathematical Operators
-    if (cp == 0x2200) return true;
-    if (cp >= 0x2202 and cp <= 0x2203) return true;
-    if (cp >= 0x2207 and cp <= 0x2208) return true;
-    if (cp == 0x220B) return true;
-    if (cp == 0x220F) return true;
-    if (cp == 0x2211) return true;
-    if (cp == 0x2215) return true;
-    if (cp == 0x221A) return true;
-    if (cp >= 0x221D and cp <= 0x2220) return true;
-    if (cp == 0x2223) return true;
-    if (cp == 0x2225) return true;
-    if (cp >= 0x2227 and cp <= 0x222C) return true;
-    if (cp == 0x222E) return true;
-    if (cp >= 0x2234 and cp <= 0x2237) return true;
-    if (cp >= 0x223C and cp <= 0x223D) return true;
-    if (cp == 0x2248) return true;
-    if (cp == 0x224C) return true;
-    if (cp == 0x2252) return true;
-    if (cp >= 0x2260 and cp <= 0x2261) return true;
-    if (cp >= 0x2264 and cp <= 0x2267) return true;
-    if (cp >= 0x226A and cp <= 0x226B) return true;
-    if (cp >= 0x226E and cp <= 0x226F) return true;
-    if (cp >= 0x2282 and cp <= 0x2283) return true;
-    if (cp >= 0x2286 and cp <= 0x2287) return true;
-    if (cp == 0x2295) return true;
-    if (cp == 0x2299) return true;
-    if (cp == 0x22A5) return true;
-    if (cp == 0x22BF) return true;
-
-    // Miscellaneous Technical
-    if (cp == 0x2312) return true;
-
-    // Enclosed Alphanumerics
-    if (cp >= 0x2460 and cp <= 0x24E9) return true;
-    if (cp >= 0x24EB and cp <= 0x254B) return true;
-
-    // Box Drawing
-    if (cp >= 0x2550 and cp <= 0x2573) return true;
-
-    // Block Elements
-    if (cp >= 0x2580 and cp <= 0x258F) return true;
-    if (cp >= 0x2592 and cp <= 0x2595) return true;
-
-    // Geometric Shapes
-    if (cp >= 0x25A0 and cp <= 0x25A1) return true;
-    if (cp >= 0x25A3 and cp <= 0x25A9) return true;
-    if (cp == 0x25AA) return true; // project override: depth-2 list bullet
-    if (cp >= 0x25B2 and cp <= 0x25B3) return true;
-    if (cp >= 0x25B6 and cp <= 0x25B7) return true;
-    if (cp >= 0x25BC and cp <= 0x25BD) return true;
-    if (cp >= 0x25C0 and cp <= 0x25C1) return true;
-    if (cp >= 0x25C6 and cp <= 0x25C8) return true;
-    if (cp == 0x25CB) return true;
-    if (cp >= 0x25CE and cp <= 0x25D1) return true;
-    if (cp >= 0x25E2 and cp <= 0x25E5) return true;
-    if (cp == 0x25E6) return true; // project override: depth-1 list bullet
-    if (cp == 0x25EF) return true;
-
-    // Miscellaneous Symbols
-    if (cp >= 0x2605 and cp <= 0x2606) return true;
-    if (cp == 0x2609) return true;
-    if (cp >= 0x260E and cp <= 0x260F) return true;
-    if (cp >= 0x2610 and cp <= 0x2611) return true; // project override: task checkboxes ☐ ☑
-    if (cp == 0x261C) return true;
-    if (cp == 0x261E) return true;
-    if (cp == 0x2640) return true;
-    if (cp == 0x2642) return true;
-    if (cp >= 0x2660 and cp <= 0x2661) return true;
-    if (cp >= 0x2663 and cp <= 0x2665) return true;
-    if (cp >= 0x2667 and cp <= 0x266A) return true;
-    if (cp >= 0x266C and cp <= 0x266D) return true;
-    if (cp == 0x266F) return true;
-    if (cp >= 0x269E and cp <= 0x269F) return true;
-    if (cp == 0x26BF) return true;
-    if (cp >= 0x26C6 and cp <= 0x26CD) return true;
-    if (cp >= 0x26CF and cp <= 0x26D3) return true;
-    if (cp >= 0x26D5 and cp <= 0x26E1) return true;
-    if (cp == 0x26E3) return true;
-    if (cp >= 0x26E8 and cp <= 0x26E9) return true;
-    if (cp >= 0x26EB and cp <= 0x26F1) return true;
-    if (cp == 0x26F4) return true;
-    if (cp >= 0x26F6 and cp <= 0x26F9) return true;
-    if (cp >= 0x26FB and cp <= 0x26FC) return true;
-    if (cp >= 0x26FE and cp <= 0x26FF) return true;
-
-    // Dingbats
-    if (cp == 0x273D) return true;
-    if (cp >= 0x2776 and cp <= 0x277F) return true;
-
-    // Miscellaneous Symbols and Arrows
-    if (cp >= 0x2B56 and cp <= 0x2B59) return true;
-
-    // Private Use Area
-    if (cp >= 0xE000 and cp <= 0xF8FF) return true;
-
-    // Specials
-    if (cp == 0xFFFD) return true;
-
-    // Enclosed Alphanumeric Supplement (subset flagged A)
-    if (cp >= 0x1F100 and cp <= 0x1F10A) return true;
-    if (cp >= 0x1F110 and cp <= 0x1F12D) return true;
-    if (cp >= 0x1F130 and cp <= 0x1F169) return true;
-    if (cp >= 0x1F170 and cp <= 0x1F18D) return true;
-    if (cp >= 0x1F18F and cp <= 0x1F190) return true;
-    if (cp >= 0x1F19B and cp <= 0x1F1AC) return true;
-
-    // Supplementary Private Use Area-A and Area-B
-    if (cp >= 0xF0000 and cp <= 0xFFFFD) return true;
-    if (cp >= 0x100000 and cp <= 0x10FFFD) return true;
-
+    var lo: usize = 0;
+    var hi: usize = eaw_ambiguous_ranges.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        const r = eaw_ambiguous_ranges[mid];
+        if (cp < r[0]) {
+            hi = mid;
+        } else if (cp > r[1]) {
+            lo = mid + 1;
+        } else {
+            return true;
+        }
+    }
     return false;
+}
+
+pub const DecodeResult = union(enum) {
+    ok: struct { cp: u21, len: usize },
+    invalid,
+    incomplete,
+};
+
+pub fn nextCodepoint(bytes: []const u8, i: usize) DecodeResult {
+    if (i >= bytes.len) return .incomplete;
+    const first = bytes[i];
+    if (first < 0x80) return .{ .ok = .{ .cp = first, .len = 1 } };
+    const len = std.unicode.utf8ByteSequenceLength(first) catch return .invalid;
+    if (i + len > bytes.len) return .incomplete;
+    const cp = std.unicode.utf8Decode(bytes[i..][0..len]) catch return .invalid;
+    return .{ .ok = .{ .cp = cp, .len = len } };
+}
+
+const CodepointRange = [2]u21;
+
+const zero_width_ranges = [_]CodepointRange{
+    .{ 0x0300, 0x036F },
+    .{ 0x0E31, 0x0E3A },
+    .{ 0x0E47, 0x0E4E },
+    .{ 0x1AB0, 0x1AFF },
+    .{ 0x1DC0, 0x1DFF },
+    .{ 0x20D0, 0x20FF },
+    .{ 0xFE00, 0xFE0F },
+    .{ 0xFE20, 0xFE2F },
+    .{ 0x1F3FB, 0x1F3FF },
+    .{ 0xE0100, 0xE01EF },
+};
+
+const wide_ranges = [_]CodepointRange{
+    .{ 0x1100, 0x115F },
+    .{ 0x2329, 0x232A },
+    .{ 0x2E80, 0x30FF },
+    .{ 0x31F0, 0x31FF },
+    .{ 0x3200, 0x32FF },
+    .{ 0x3300, 0x33FF },
+    .{ 0x3400, 0x4DBF },
+    .{ 0x4E00, 0x9FFF },
+    .{ 0xAC00, 0xD7A3 },
+    .{ 0xF900, 0xFAFF },
+    .{ 0xFF01, 0xFF60 },
+    .{ 0xFFE0, 0xFFE6 },
+    .{ 0x1F300, 0x1F9FF },
+    .{ 0x1FA00, 0x1FA6F },
+    .{ 0x1FA70, 0x1FAFF },
+    .{ 0x20000, 0x2FA1F },
+};
+
+fn rangeCompare(cp: u21, range: CodepointRange) std.math.Order {
+    if (cp < range[0]) return .lt;
+    if (cp > range[1]) return .gt;
+    return .eq;
+}
+
+fn inSortedRanges(cp: u21, ranges: []const CodepointRange) bool {
+    return std.sort.binarySearch(CodepointRange, ranges, cp, rangeCompare) != null;
 }
 
 fn codepointWidth(cp: u21, ambiguous: AmbiguousWidth) usize {
-    if (cp < 0x20) return 0;
-    if (cp == 0x7f) return 0;
+    if (cp < 0x100) {
+        if (cp < 0x20) return 0;
+        if (cp == 0x7F) return 0;
+        if (cp >= 0x80 and cp <= 0x9F) return 0;
+        if (cp == SOFT_HYPHEN) return 0;
+        return 1;
+    }
 
     switch (cp) {
-        ZWSP, ZWNJ, ZWJ, WORD_JOINER, BOM, SOFT_HYPHEN => return 0,
+        ZWSP, ZWNJ, ZWJ, WORD_JOINER, BOM => return 0,
         else => {},
     }
 
-    // Variation Selectors
-    if (cp >= 0xFE00 and cp <= 0xFE0F) return 0;
-    if (cp >= 0xE0100 and cp <= 0xE01EF) return 0;
+    if (inSortedRanges(cp, &zero_width_ranges)) return 0;
+    if (inSortedRanges(cp, &wide_ranges)) return 2;
 
-    // Combining Diacritical Marks
-    if (cp >= 0x0300 and cp <= 0x036F) return 0;
-    // Combining Diacritical Marks Extended
-    if (cp >= 0x1AB0 and cp <= 0x1AFF) return 0;
-    // Combining Diacritical Marks Supplement
-    if (cp >= 0x1DC0 and cp <= 0x1DFF) return 0;
-    // Combining Diacritical Marks for Symbols
-    if (cp >= 0x20D0 and cp <= 0x20FF) return 0;
-    // Combining Half Marks
-    if (cp >= 0xFE20 and cp <= 0xFE2F) return 0;
-    // Thai combining marks
-    if (cp >= 0x0E31 and cp <= 0x0E3A) return 0;
-    if (cp >= 0x0E47 and cp <= 0x0E4E) return 0;
-
-    // Skin tone modifiers (Fitzpatrick) — modify preceding emoji
-    if (cp >= 0x1F3FB and cp <= 0x1F3FF) return 0;
-
-    // Enclosing marks
-    if (cp >= 0x20DD and cp <= 0x20E0) return 0;
-    if (cp >= 0x20E2 and cp <= 0x20E4) return 0;
-
-    // CJK Unified Ideographs
-    if (cp >= 0x4E00 and cp <= 0x9FFF) return 2;
-    // CJK Unified Ideographs Extension A
-    if (cp >= 0x3400 and cp <= 0x4DBF) return 2;
-    // CJK Compatibility Ideographs
-    if (cp >= 0xF900 and cp <= 0xFAFF) return 2;
-    // CJK Unified Ideographs Extension B-F
-    if (cp >= 0x20000 and cp <= 0x2FA1F) return 2;
-
-    // CJK Symbols and Punctuation, Hiragana, and Katakana
-    if (cp >= 0x2E80 and cp <= 0x30FF) return 2;
-    // Katakana Phonetic Extensions
-    if (cp >= 0x31F0 and cp <= 0x31FF) return 2;
-    // Enclosed CJK Letters and Months
-    if (cp >= 0x3200 and cp <= 0x32FF) return 2;
-    // CJK Compatibility
-    if (cp >= 0x3300 and cp <= 0x33FF) return 2;
-
-    // Fullwidth Forms
-    if (cp >= 0xFF01 and cp <= 0xFF60) return 2;
-    // Fullwidth currency and punctuation variants
-    if (cp >= 0xFFE0 and cp <= 0xFFE6) return 2;
-
-    // Hangul Syllables
-    if (cp >= 0xAC00 and cp <= 0xD7A3) return 2;
-    // Hangul Jamo
-    if (cp >= 0x1100 and cp <= 0x115F) return 2;
-    if (cp >= 0x2329 and cp <= 0x232A) return 2;
-
-    // Emoji ranges treated as double-width
-    if (cp >= 0x1F300 and cp <= 0x1F9FF) return 2;
-    if (cp >= 0x1FA00 and cp <= 0x1FA6F) return 2;
-    if (cp >= 0x1FA70 and cp <= 0x1FAFF) return 2;
-
-    // East Asian Width Ambiguous; interpretation depends on terminal mode.
     if (isEastAsianAmbiguous(cp)) {
         return if (ambiguous == .wide) 2 else 1;
     }
@@ -1164,6 +1096,34 @@ fn codepointWidth(cp: u21, ambiguous: AmbiguousWidth) usize {
 test "ASCII string width" {
     try std.testing.expectEqual(@as(usize, 5), displayWidth("hello", .narrow));
     try std.testing.expectEqual(@as(usize, 0), displayWidth("", .narrow));
+}
+
+test "nextCodepoint fast-paths ASCII with length one" {
+    const result = nextCodepoint("a", 0);
+    try std.testing.expect(result == .ok);
+    try std.testing.expectEqual(@as(u21, 'a'), result.ok.cp);
+    try std.testing.expectEqual(@as(usize, 1), result.ok.len);
+}
+
+test "nextCodepoint decodes multi-byte UTF-8" {
+    const result = nextCodepoint("日", 0);
+    try std.testing.expect(result == .ok);
+    try std.testing.expectEqual(@as(u21, 0x65E5), result.ok.cp);
+    try std.testing.expectEqual(@as(usize, 3), result.ok.len);
+}
+
+test "nextCodepoint reports incomplete at end of buffer" {
+    const result = nextCodepoint("日"[0..2], 0);
+    try std.testing.expect(result == .incomplete);
+}
+
+test "nextCodepoint reports invalid for a bare continuation byte" {
+    const bytes = [_]u8{0x80};
+    try std.testing.expect(nextCodepoint(&bytes, 0) == .invalid);
+}
+
+test "nextCodepoint returns incomplete when starting past the end" {
+    try std.testing.expect(nextCodepoint("abc", 3) == .incomplete);
 }
 
 test "CJK characters are width 2" {
@@ -1616,7 +1576,10 @@ fn wrapWriterCollect(input: []const u8, max_w: usize, ambiguous: AmbiguousWidth)
     var buf: std.io.Writer.Allocating = .init(allocator);
     errdefer buf.deinit();
 
-    var ww = WrapWriter.init(&buf.writer, max_w, ambiguous, allocator);
+    var line_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer line_buf.deinit(allocator);
+    var ww: WrapWriter = undefined;
+    ww.init(&buf.writer, max_w, ambiguous, allocator, &line_buf);
     defer ww.deinit();
     try ww.writer.writeAll(input);
     try ww.finish();
@@ -1680,7 +1643,10 @@ test "WrapWriter styled fragment boundaries" {
     var buf: std.io.Writer.Allocating = .init(allocator);
     errdefer buf.deinit();
 
-    var ww = WrapWriter.init(&buf.writer, 10, .narrow, allocator);
+    var line_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer line_buf.deinit(allocator);
+    var ww: WrapWriter = undefined;
+    ww.init(&buf.writer, 10, .narrow, allocator, &line_buf);
     defer ww.deinit();
 
     try ww.writer.writeAll("\x1b[1m");
@@ -1735,7 +1701,10 @@ test "WrapWriter split ANSI CSI across writes" {
     var buf: std.io.Writer.Allocating = .init(allocator);
     errdefer buf.deinit();
 
-    var ww = WrapWriter.init(&buf.writer, 10, .narrow, allocator);
+    var line_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer line_buf.deinit(allocator);
+    var ww: WrapWriter = undefined;
+    ww.init(&buf.writer, 10, .narrow, allocator, &line_buf);
     defer ww.deinit();
 
     try ww.writer.writeAll("\x1b");
@@ -1758,7 +1727,10 @@ test "WrapWriter split ANSI ESC+[ across writes" {
     var buf: std.io.Writer.Allocating = .init(allocator);
     errdefer buf.deinit();
 
-    var ww = WrapWriter.init(&buf.writer, 10, .narrow, allocator);
+    var line_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer line_buf.deinit(allocator);
+    var ww: WrapWriter = undefined;
+    ww.init(&buf.writer, 10, .narrow, allocator, &line_buf);
     defer ww.deinit();
 
     try ww.writer.writeAll("\x1b[");
@@ -1784,7 +1756,10 @@ test "WrapWriter split UTF-8 across writes" {
     var buf: std.io.Writer.Allocating = .init(allocator);
     errdefer buf.deinit();
 
-    var ww = WrapWriter.init(&buf.writer, 10, .narrow, allocator);
+    var line_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer line_buf.deinit(allocator);
+    var ww: WrapWriter = undefined;
+    ww.init(&buf.writer, 10, .narrow, allocator, &line_buf);
     defer ww.deinit();
     try ww.writer.writeAll(full[0..1]);
     try ww.writer.writeAll(full[1..]);

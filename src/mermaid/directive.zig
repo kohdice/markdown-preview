@@ -1,4 +1,7 @@
 const std = @import("std");
+const source_mod = @import("source.zig");
+
+pub const Source = source_mod.Source;
 
 pub const Error = error{
     InvalidDirective,
@@ -10,11 +13,15 @@ pub fn stripInitDirectives(
     allocator: std.mem.Allocator,
     source: []const u8,
     unsafe_keys: []const []const u8,
-) Error![]u8 {
+) Error!Source {
+    const first = firstDirectiveStart(source) orelse return .{ .borrowed = source };
+
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     errdefer buf.deinit(allocator);
 
-    var cursor: usize = 0;
+    try buf.appendSlice(allocator, source[0..first]);
+
+    var cursor: usize = first;
     while (cursor < source.len) {
         const line_start = cursor;
         const nl = std.mem.indexOfScalarPos(u8, source, cursor, '\n');
@@ -43,23 +50,53 @@ pub fn stripInitDirectives(
         try buf.appendSlice(allocator, source[line_start..line_inclusive_end]);
         cursor = line_inclusive_end;
     }
-    return buf.toOwnedSlice(allocator);
+    return .{ .owned = try buf.toOwnedSlice(allocator) };
 }
 
-test "stripInitDirectives passes through source without directives" {
-    const out = try stripInitDirectives(std.testing.allocator, "graph TD\n    A --> B\n", &.{});
-    defer std.testing.allocator.free(out);
-    try std.testing.expectEqualStrings("graph TD\n    A --> B\n", out);
+fn firstDirectiveStart(source: []const u8) ?usize {
+    var cursor: usize = 0;
+    while (cursor < source.len) {
+        const line_start = cursor;
+        const nl = std.mem.indexOfScalarPos(u8, source, cursor, '\n');
+        const line_end = nl orelse source.len;
+
+        var i = line_start;
+        while (i < line_end and (source[i] == ' ' or source[i] == '\t')) : (i += 1) {}
+
+        if (line_end - i >= 3 and source[i] == '%' and source[i + 1] == '%' and source[i + 2] == '{') {
+            return line_start;
+        }
+
+        cursor = if (nl != null) line_end + 1 else line_end;
+    }
+    return null;
+}
+
+fn freeStripped(allocator: std.mem.Allocator, result: Source) void {
+    switch (result) {
+        .borrowed => {},
+        .owned => |b| allocator.free(b),
+    }
+}
+
+test "stripInitDirectives returns borrowed for source without directives" {
+    const src = "graph TD\n    A --> B\n";
+    const result = try stripInitDirectives(std.testing.allocator, src, &.{});
+    defer freeStripped(std.testing.allocator, result);
+    try std.testing.expect(result == .borrowed);
+    try std.testing.expectEqual(@as([*]const u8, src.ptr), result.borrowed.ptr);
+    try std.testing.expectEqualStrings(src, result.bytes());
 }
 
 test "stripInitDirectives strips a leading single-line block" {
-    const out = try stripInitDirectives(
+    const result = try stripInitDirectives(
         std.testing.allocator,
         "%%{init: { \"theme\": \"dark\" }}%%\ngraph TD\n",
         &.{},
     );
-    defer std.testing.allocator.free(out);
-    try std.testing.expectEqualStrings("graph TD\n", out);
+    defer freeStripped(std.testing.allocator, result);
+    try std.testing.expect(result == .owned);
+    try std.testing.expectEqualStrings("graph TD\n", result.bytes());
 }
 
 test "stripInitDirectives strips a multi-line block" {
@@ -69,16 +106,18 @@ test "stripInitDirectives strips a multi-line block" {
         \\}}%%
         \\graph TD
     ;
-    const out = try stripInitDirectives(std.testing.allocator, src, &.{});
-    defer std.testing.allocator.free(out);
-    try std.testing.expectEqualStrings("graph TD", out);
+    const result = try stripInitDirectives(std.testing.allocator, src, &.{});
+    defer freeStripped(std.testing.allocator, result);
+    try std.testing.expect(result == .owned);
+    try std.testing.expectEqualStrings("graph TD", result.bytes());
 }
 
-test "stripInitDirectives keeps %%{...}%% embedded in labels" {
+test "stripInitDirectives keeps %%{...}%% embedded in labels as borrowed" {
     const src = "sequenceDiagram\n    Alice->>Bob: %%{x}%%\n";
-    const out = try stripInitDirectives(std.testing.allocator, src, &.{});
-    defer std.testing.allocator.free(out);
-    try std.testing.expectEqualStrings(src, out);
+    const result = try stripInitDirectives(std.testing.allocator, src, &.{});
+    defer freeStripped(std.testing.allocator, result);
+    try std.testing.expect(result == .borrowed);
+    try std.testing.expectEqualStrings(src, result.bytes());
 }
 
 test "stripInitDirectives rejects directive matching any unsafe key" {
@@ -98,11 +137,12 @@ test "stripInitDirectives rejects unclosed directive" {
 }
 
 test "stripInitDirectives ignores unsafe key when caller did not register it" {
-    const out = try stripInitDirectives(
+    const result = try stripInitDirectives(
         std.testing.allocator,
         "%%{init: { \"flowchart\": { \"curve\": \"basis\" } }}%%\nsequenceDiagram\n",
         &.{"\"sequence\""},
     );
-    defer std.testing.allocator.free(out);
-    try std.testing.expectEqualStrings("sequenceDiagram\n", out);
+    defer freeStripped(std.testing.allocator, result);
+    try std.testing.expect(result == .owned);
+    try std.testing.expectEqualStrings("sequenceDiagram\n", result.bytes());
 }

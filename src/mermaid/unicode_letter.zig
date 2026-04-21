@@ -710,48 +710,38 @@ test "ASCII letters are not in the non-ASCII table" {
 }
 
 test "Latin Extended letter" {
-    // U+00C0 LATIN CAPITAL LETTER A WITH GRAVE (Lu)
     try std.testing.expect(isLetter(0x00C0));
 }
 
 test "CJK ideograph" {
-    // U+4E00 CJK UNIFIED IDEOGRAPH-4E00 (Lo)
     try std.testing.expect(isLetter(0x4E00));
 }
 
 test "Hiragana" {
-    // U+3042 HIRAGANA LETTER A (Lo)
     try std.testing.expect(isLetter(0x3042));
 }
 
 test "Adlam letter" {
-    // U+1E900 ADLAM CAPITAL LETTER ALIF (Lu)
     try std.testing.expect(isLetter(0x1E900));
-    // U+1E943 ADLAM SMALL LETTER SHA (Ll)
     try std.testing.expect(isLetter(0x1E943));
 }
 
 test "Deseret letter" {
-    // U+10400 DESERET CAPITAL LETTER LONG I (Lu)
     try std.testing.expect(isLetter(0x10400));
 }
 
 test "emoji is not a letter" {
-    // U+1F680 ROCKET (So)
     try std.testing.expect(!isLetter(0x1F680));
 }
 
 test "Katakana Middle Dot is not a letter" {
-    // U+30FB KATAKANA MIDDLE DOT (Po)
     try std.testing.expect(!isLetter(0x30FB));
 }
 
 test "Mende Kikakui letter" {
-    // U+1E800 MENDE KIKAKUI SYLLABLE M001 KI (Lo)
     try std.testing.expect(isLetter(0x1E800));
 }
 
 test "Tangut ideograph" {
-    // U+17000 TANGUT IDEOGRAPH (Lo)
     try std.testing.expect(isLetter(0x17000));
 }

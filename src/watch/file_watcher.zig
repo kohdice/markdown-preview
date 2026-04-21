@@ -3,6 +3,8 @@ const builtin = @import("builtin");
 
 pub const WatchEvent = enum { none, modified, recreated };
 
+const kevent_batch_size: usize = 8;
+
 pub const FileWatcher = switch (builtin.os.tag) {
     .macos, .freebsd, .netbsd, .openbsd => KqueueWatcher,
     .linux => InotifyWatcher,
@@ -50,7 +52,7 @@ const KqueueWatcher = struct {
     }
 
     pub fn consumeEvents(self: *Self) !WatchEvent {
-        var events: [8]std.posix.Kevent = undefined;
+        var events: [kevent_batch_size]std.posix.Kevent = undefined;
         const timeout = std.posix.timespec{ .sec = 0, .nsec = 0 };
         const count = try std.posix.kevent(self.kq, &.{}, &events, &timeout);
 

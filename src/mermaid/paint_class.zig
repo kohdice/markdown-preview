@@ -1,8 +1,9 @@
 const std = @import("std");
 const types = @import("types.zig");
-const parse = @import("parse_class.zig");
 const canvas_mod = @import("canvas.zig");
+const compile_mod = @import("compile.zig");
 const route_mod = @import("route.zig");
+const ansi_mod = @import("../term/ansi.zig");
 const width_mod = @import("../term/width.zig");
 
 pub const RenderError = error{
@@ -16,6 +17,7 @@ pub const Options = struct {
     wrap_width: ?usize,
     ambiguous_width: width_mod.AmbiguousWidth,
     enable_ansi: bool = false,
+    color_mode: ansi_mod.ColorMode = .truecolor,
 };
 
 const StyleKind = enum { static_, abstract_ };
@@ -27,18 +29,28 @@ const StyledSpan = struct {
     kind: StyleKind,
 };
 
-pub fn writeClass(
+const empty_class_box_height: usize = 3;
+const populated_class_box_base_height: usize = 4;
+const class_box_min_width: usize = 6;
+const class_box_border_columns: usize = 2;
+const class_box_side_spacing: usize = 4;
+const class_box_content_offset: usize = 2;
+const member_visibility_prefix_width: usize = 2;
+const method_parenthesis_width: usize = 2;
+const type_separator_width: usize = 2;
+const namespace_outer_padding: usize = 2;
+const namespace_frame_padding: usize = 1;
+const cardinality_label_gap: usize = 2;
+const stereotype_wrapper_width: usize = 2;
+const stereotype_format_buf_size: usize = 96;
+
+pub fn paintClass(
     writer: *std.io.Writer,
     allocator: std.mem.Allocator,
-    source: []const u8,
+    diagram_ptr: *const types.ClassDiagram,
     opts: Options,
 ) RenderError!void {
-    var diagram = parse.parseSource(allocator, source) catch |err| switch (err) {
-        error.InvalidMermaid, error.TooManyClasses => return error.InvalidMermaid,
-        error.UnsupportedFeature => return error.UnsupportedFeature,
-        error.OutOfMemory => return error.OutOfMemory,
-    };
-    defer diagram.deinit();
+    const diagram = diagram_ptr.*;
 
     if (diagram.classes.len == 0) return;
 
@@ -82,7 +94,7 @@ pub fn writeClass(
         error.OutOfMemory => return error.OutOfMemory,
     };
 
-    if (opts.enable_ansi and spans.items.len > 0) {
+    if (opts.enable_ansi and opts.color_mode != .none and spans.items.len > 0) {
         try writeCanvasWithSpans(writer, allocator, &canvas, spans.items, opts);
     } else {
         canvas_mod.writeCanvas(writer, &canvas, opts.wrap_width, opts.ambiguous_width) catch return error.WriteFailed;
@@ -175,16 +187,16 @@ fn spanEndsAt(spans: []const StyledSpan, row: usize, col: usize, kind: StyleKind
 
 fn writeStyleOpen(writer: *std.io.Writer, kind: StyleKind) RenderError!void {
     const seq: []const u8 = switch (kind) {
-        .static_ => "\x1b[4m",
-        .abstract_ => "\x1b[3m",
+        .static_ => ansi_mod.underline_on,
+        .abstract_ => ansi_mod.italic_on,
     };
     writer.writeAll(seq) catch return error.WriteFailed;
 }
 
 fn writeStyleClose(writer: *std.io.Writer, kind: StyleKind) RenderError!void {
     const seq: []const u8 = switch (kind) {
-        .static_ => "\x1b[24m",
-        .abstract_ => "\x1b[23m",
+        .static_ => ansi_mod.underline_off,
+        .abstract_ => ansi_mod.italic_off,
     };
     writer.writeAll(seq) catch return error.WriteFailed;
 }
@@ -255,7 +267,7 @@ fn computeClassLayout(
         .cols = cols,
         .cell_w = computeRequiredBoxWidth(diagram, ambiguous),
         .cell_h = computeRequiredBoxHeight(diagram),
-        .outer_pad = if (diagram.namespaces.len > 0) 2 else 0,
+        .outer_pad = if (diagram.namespaces.len > 0) namespace_outer_padding else 0,
     };
 }
 
@@ -301,7 +313,7 @@ fn assignClassLevels(
 }
 
 fn computeRequiredBoxHeight(diagram: *const types.ClassDiagram) usize {
-    var max_h: usize = 3;
+    var max_h: usize = empty_class_box_height;
     for (diagram.classes) |c| max_h = @max(max_h, actualBoxHeight(&c));
     return max_h;
 }
@@ -311,24 +323,24 @@ fn computeRequiredBoxWidth(diagram: *const types.ClassDiagram, ambiguous: width_
     for (diagram.classes) |c| {
         max_w = @max(max_w, width_mod.displayWidth(c.label, ambiguous));
         if (c.annotation) |st| {
-            max_w = @max(max_w, width_mod.displayWidth(st, ambiguous) + 2);
+            max_w = @max(max_w, width_mod.displayWidth(st, ambiguous) + stereotype_wrapper_width);
         }
         for (c.attributes) |m| max_w = @max(max_w, memberDisplayWidth(&m, false, ambiguous));
         for (c.methods) |m| max_w = @max(max_w, memberDisplayWidth(&m, true, ambiguous));
     }
-    return @max(max_w + 4, 6);
+    return @max(max_w + class_box_side_spacing, class_box_min_width);
 }
 
 fn memberDisplayWidth(member: *const types.ClassMember, is_method: bool, ambiguous: width_mod.AmbiguousWidth) usize {
     var w: usize = 0;
-    if (member.visibility != .unknown) w += 2;
+    if (member.visibility != .unknown) w += member_visibility_prefix_width;
     w += width_mod.displayWidth(member.name, ambiguous);
     if (is_method) {
-        w += 2;
+        w += method_parenthesis_width;
         if (member.params) |p| w += width_mod.displayWidth(p, ambiguous);
     }
     if (member.type_text) |t| {
-        w += 2;
+        w += type_separator_width;
         w += width_mod.displayWidth(t, ambiguous);
     }
     return w;
@@ -348,7 +360,7 @@ fn drawNamespaceFrame(
     var max_row: usize = 0;
     var min_col: usize = std.math.maxInt(usize);
     var max_col: usize = 0;
-    var max_h_in_row: usize = 3;
+    var max_h_in_row: usize = empty_class_box_height;
 
     for (ns.class_ids) |id| {
         if (id >= diagram.classes.len) continue;
@@ -367,7 +379,7 @@ fn drawNamespaceFrame(
     const inner_bottom = route_mod.boxTop(layout, max_row) + max_h_in_row;
     const inner_right = route_mod.boxLeft(layout, max_col) + layout.cell_w;
 
-    const pad: usize = 1;
+    const pad: usize = namespace_frame_padding;
     const top = if (inner_top >= pad + 1) inner_top - pad - 1 else 0;
     const left = if (inner_left >= pad + 1) inner_left - pad - 1 else 0;
     const bottom_raw = inner_bottom + pad;
@@ -381,8 +393,8 @@ fn drawNamespaceFrame(
     canvas.drawRect(top, left, h, w, glyphs);
 
     const name_w = width_mod.displayWidth(ns.name, ambiguous);
-    if (w > name_w + 4) {
-        const title_col = left + 2;
+    if (w > name_w + class_box_side_spacing) {
+        const title_col = left + class_box_content_offset;
         canvas.drawLabel(top, title_col, ns.name, ambiguous);
     }
 }
@@ -401,11 +413,11 @@ fn drawClassBox(
 ) RenderError!void {
     canvas.drawRect(top, left, height, width, glyphs);
 
-    const inner_w = width - 2;
+    const inner_w = width - class_box_border_columns;
     var name_row = top + 1;
 
     if (cls.annotation) |st| {
-        var buf: [96]u8 = undefined;
+        var buf: [stereotype_format_buf_size]u8 = undefined;
         const wrapped = std.fmt.bufPrint(&buf, "«{s}»", .{st}) catch st;
         const stereo_w = width_mod.displayWidth(wrapped, ambiguous);
         const stereo_off = if (inner_w > stereo_w) (inner_w - stereo_w) / 2 else 0;
@@ -466,7 +478,7 @@ fn drawMember(
     ambiguous: width_mod.AmbiguousWidth,
     spans: ?*std.ArrayListUnmanaged(StyledSpan),
 ) RenderError!void {
-    var col = left + 2;
+    var col = left + class_box_content_offset;
     if (visibilitySigil(member.visibility)) |s| {
         canvas.setGlyph(row, col, s);
         col += 1;
@@ -517,9 +529,9 @@ fn visibilitySigil(v: types.Visibility) ?u21 {
 
 fn actualBoxHeight(cls: *const types.ClassNode) usize {
     const annotation_rows: usize = if (cls.annotation != null) 1 else 0;
-    if (cls.attributes.len == 0 and cls.methods.len == 0) return 3 + annotation_rows;
+    if (cls.attributes.len == 0 and cls.methods.len == 0) return empty_class_box_height + annotation_rows;
     const extra_divider: usize = if (cls.attributes.len > 0 and cls.methods.len > 0) 1 else 0;
-    return 4 + annotation_rows + cls.attributes.len + cls.methods.len + extra_divider;
+    return populated_class_box_base_height + annotation_rows + cls.attributes.len + cls.methods.len + extra_divider;
 }
 
 fn drawRelation(
@@ -585,7 +597,7 @@ fn drawCardinalityLabel(
 ) void {
     if (text.len == 0) return;
     const text_w = width_mod.displayWidth(text, ambiguous);
-    const col = endpoint_col + 2;
+    const col = endpoint_col + cardinality_label_gap;
     if (col + text_w > canvas.cols) return;
 
     const row = switch (side) {
@@ -661,17 +673,19 @@ fn relationHead(kind: types.ClassRelationKind, glyphs: *const canvas_mod.GlyphSe
     };
 }
 
-test "writeClass renders class box with attribute type and method params" {
+test "paintClass renders class box with attribute type and method params" {
     const alloc = std.testing.allocator;
-    var sink: std.io.Writer.Allocating = .init(alloc);
-    defer sink.deinit();
-
-    try writeClass(&sink.writer, alloc,
+    var diagram = try compile_mod.compile(alloc,
         \\classDiagram
         \\    class Animal
         \\    Animal : +str name
         \\    Animal : +save(entity) Result
-    , .{ .wrap_width = null, .ambiguous_width = .narrow });
+    );
+    defer diagram.deinit();
+
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+    try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "Animal") != null);
@@ -679,12 +693,14 @@ test "writeClass renders class box with attribute type and method params" {
     try std.testing.expect(std.mem.indexOf(u8, out, "+ save(entity): Result") != null);
 }
 
-test "writeClass collapses multi-whitespace and tabs in attribute name" {
+test "paintClass collapses multi-whitespace and tabs in attribute name" {
     const alloc = std.testing.allocator;
+    var diagram = try compile_mod.compile(alloc, "classDiagram\n    class C {\n        +int retry   count\n        +bool is\tready\n    }\n");
+    defer diagram.deinit();
+
     var sink: std.io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
-
-    try writeClass(&sink.writer, alloc, "classDiagram\n    class C {\n        +int retry   count\n        +bool is\tready\n    }\n", .{ .wrap_width = null, .ambiguous_width = .narrow });
+    try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "+ retry count: int") != null);
@@ -693,107 +709,121 @@ test "writeClass collapses multi-whitespace and tabs in attribute name" {
     try std.testing.expect(std.mem.indexOf(u8, out, "is\tready") == null);
 }
 
-test "writeClass renders inheritance with triangle head" {
+test "paintClass renders inheritance with triangle head" {
     const alloc = std.testing.allocator;
-    var sink: std.io.Writer.Allocating = .init(alloc);
-    defer sink.deinit();
-
-    try writeClass(&sink.writer, alloc,
+    var diagram = try compile_mod.compile(alloc,
         \\classDiagram
         \\    Animal <|-- Dog
-    , .{ .wrap_width = null, .ambiguous_width = .narrow });
+    );
+    defer diagram.deinit();
+
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+    try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "△") != null);
 }
 
-test "writeClass renders composition with filled diamond" {
+test "paintClass renders composition with filled diamond" {
     const alloc = std.testing.allocator;
-    var sink: std.io.Writer.Allocating = .init(alloc);
-    defer sink.deinit();
-
-    try writeClass(&sink.writer, alloc,
+    var diagram = try compile_mod.compile(alloc,
         \\classDiagram
         \\    Car *-- Engine
-    , .{ .wrap_width = null, .ambiguous_width = .narrow });
+    );
+    defer diagram.deinit();
+
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+    try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "◆") != null);
 }
 
-test "writeClass renders aggregation with empty diamond" {
+test "paintClass renders aggregation with empty diamond" {
     const alloc = std.testing.allocator;
-    var sink: std.io.Writer.Allocating = .init(alloc);
-    defer sink.deinit();
-
-    try writeClass(&sink.writer, alloc,
+    var diagram = try compile_mod.compile(alloc,
         \\classDiagram
         \\    Library o-- Book
-    , .{ .wrap_width = null, .ambiguous_width = .narrow });
+    );
+    defer diagram.deinit();
+
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+    try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "◇") != null);
 }
 
-test "writeClass association arrow head points toward target (upward)" {
+test "paintClass association arrow head points toward target (upward)" {
     const alloc = std.testing.allocator;
-    var sink: std.io.Writer.Allocating = .init(alloc);
-    defer sink.deinit();
-
-    try writeClass(&sink.writer, alloc,
+    var diagram = try compile_mod.compile(alloc,
         \\classDiagram
         \\    A --> B
-    , .{ .wrap_width = null, .ambiguous_width = .narrow });
+    );
+    defer diagram.deinit();
+
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+    try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "▲") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "▼") == null);
 }
 
-test "writeClass shows literal star in abstract method type label" {
+test "paintClass shows literal star in abstract method type label" {
     const alloc = std.testing.allocator;
-    var sink: std.io.Writer.Allocating = .init(alloc);
-    defer sink.deinit();
-
-    try writeClass(&sink.writer, alloc,
+    var diagram = try compile_mod.compile(alloc,
         \\classDiagram
         \\    class C {
         \\        +run()*
         \\    }
-    , .{ .wrap_width = null, .ambiguous_width = .narrow });
+    );
+    defer diagram.deinit();
+
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+    try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "run(): *") != null);
 }
 
-test "writeClass wraps static member with SGR underline when enable_ansi" {
+test "paintClass wraps static member with SGR underline when enable_ansi" {
     const alloc = std.testing.allocator;
-    var sink: std.io.Writer.Allocating = .init(alloc);
-    defer sink.deinit();
-
-    try writeClass(&sink.writer, alloc,
+    var diagram = try compile_mod.compile(alloc,
         \\classDiagram
         \\    class C {
         \\        +count$
         \\    }
-    , .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = true });
+    );
+    defer diagram.deinit();
+
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+    try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = true });
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[4m") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[24m") != null);
 }
 
-test "writeClass wraps static and abstract method with both SGR when enable_ansi" {
+test "paintClass wraps static and abstract method with both SGR when enable_ansi" {
     const alloc = std.testing.allocator;
-    var sink: std.io.Writer.Allocating = .init(alloc);
-    defer sink.deinit();
-
-    try writeClass(&sink.writer, alloc,
+    var diagram = try compile_mod.compile(alloc,
         \\classDiagram
         \\    class C {
         \\        +run$()*
         \\    }
-    , .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = true });
+    );
+    defer diagram.deinit();
+
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+    try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = true });
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[4m") != null);
@@ -802,69 +832,101 @@ test "writeClass wraps static and abstract method with both SGR when enable_ansi
     try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[23m") != null);
 }
 
-test "writeClass wraps abstract method with SGR italic when enable_ansi" {
+test "paintClass wraps abstract method with SGR italic when enable_ansi" {
     const alloc = std.testing.allocator;
-    var sink: std.io.Writer.Allocating = .init(alloc);
-    defer sink.deinit();
-
-    try writeClass(&sink.writer, alloc,
+    var diagram = try compile_mod.compile(alloc,
         \\classDiagram
         \\    class C {
         \\        +run()*
         \\    }
-    , .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = true });
+    );
+    defer diagram.deinit();
+
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+    try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = true });
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[3m") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[23m") != null);
 }
 
-test "writeClass emits no SGR when enable_ansi is false" {
+test "paintClass emits no SGR when enable_ansi is false" {
     const alloc = std.testing.allocator;
-    var sink: std.io.Writer.Allocating = .init(alloc);
-    defer sink.deinit();
-
-    try writeClass(&sink.writer, alloc,
+    var diagram = try compile_mod.compile(alloc,
         \\classDiagram
         \\    class C {
         \\        +count$
         \\        +run()*
         \\    }
-    , .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = false });
+    );
+    defer diagram.deinit();
+
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+    try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = false });
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[") == null);
 }
 
-test "writeClass hides stripped dollar on static attribute" {
+test "paintClass under color_mode=.none emits no SGR even with enable_ansi=true" {
     const alloc = std.testing.allocator;
+    var diagram = try compile_mod.compile(alloc,
+        \\classDiagram
+        \\    class C {
+        \\        +count$
+        \\        +run()*
+        \\    }
+    );
+    defer diagram.deinit();
+
     var sink: std.io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
+    try paintClass(&sink.writer, alloc, &diagram.class_, .{
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+        .enable_ansi = true,
+        .color_mode = .none,
+    });
 
-    try writeClass(&sink.writer, alloc,
+    const out = sink.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[") == null);
+}
+
+test "paintClass hides stripped dollar on static attribute" {
+    const alloc = std.testing.allocator;
+    var diagram = try compile_mod.compile(alloc,
         \\classDiagram
         \\    class C {
         \\        +count$
         \\    }
-    , .{ .wrap_width = null, .ambiguous_width = .narrow });
+    );
+    defer diagram.deinit();
+
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+    try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "count") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "$") == null);
 }
 
-test "writeClass separates attributes and methods with a divider" {
+test "paintClass separates attributes and methods with a divider" {
     const alloc = std.testing.allocator;
-    var sink: std.io.Writer.Allocating = .init(alloc);
-    defer sink.deinit();
-
-    try writeClass(&sink.writer, alloc,
+    var diagram = try compile_mod.compile(alloc,
         \\classDiagram
         \\    class Animal {
         \\        +str name
         \\        +eat()
         \\    }
-    , .{ .wrap_width = null, .ambiguous_width = .narrow });
+    );
+    defer diagram.deinit();
+
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+    try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
 
@@ -877,18 +939,20 @@ test "writeClass separates attributes and methods with a divider" {
     try std.testing.expect(tee_l_count >= 2);
 }
 
-test "writeClass renders namespace frame with name" {
+test "paintClass renders namespace frame with name" {
     const alloc = std.testing.allocator;
-    var sink: std.io.Writer.Allocating = .init(alloc);
-    defer sink.deinit();
-
-    try writeClass(&sink.writer, alloc,
+    var diagram = try compile_mod.compile(alloc,
         \\classDiagram
         \\    namespace Shapes {
         \\        class Circle
         \\        class Square
         \\    }
-    , .{ .wrap_width = null, .ambiguous_width = .narrow });
+    );
+    defer diagram.deinit();
+
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+    try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "Shapes") != null);
@@ -896,15 +960,17 @@ test "writeClass renders namespace frame with name" {
     try std.testing.expect(std.mem.indexOf(u8, out, "Square") != null);
 }
 
-test "writeClass marker_at from places triangle at source end" {
+test "paintClass marker_at from places triangle at source end" {
     const alloc = std.testing.allocator;
-    var sink: std.io.Writer.Allocating = .init(alloc);
-    defer sink.deinit();
-
-    try writeClass(&sink.writer, alloc,
+    var diagram = try compile_mod.compile(alloc,
         \\classDiagram
         \\    Animal <|-- Dog
-    , .{ .wrap_width = null, .ambiguous_width = .narrow });
+    );
+    defer diagram.deinit();
+
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+    try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
 
@@ -930,15 +996,17 @@ test "writeClass marker_at from places triangle at source end" {
     try std.testing.expect(dist_to_animal < dist_to_dog);
 }
 
-test "writeClass bare -- renders as association with arrow" {
+test "paintClass bare -- renders as association with arrow" {
     const alloc = std.testing.allocator;
-    var sink: std.io.Writer.Allocating = .init(alloc);
-    defer sink.deinit();
-
-    try writeClass(&sink.writer, alloc,
+    var diagram = try compile_mod.compile(alloc,
         \\classDiagram
         \\    A -- B
-    , .{ .wrap_width = null, .ambiguous_width = .narrow });
+    );
+    defer diagram.deinit();
+
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+    try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "▲") != null);
@@ -946,13 +1014,14 @@ test "writeClass bare -- renders as association with arrow" {
 
 test "computeClassLayout places single class at origin with rows=cols=1" {
     const alloc = std.testing.allocator;
-    var diagram = try parse.parseSource(alloc,
+    var compiled = try compile_mod.compile(alloc,
         \\classDiagram
         \\    class Animal
     );
-    defer diagram.deinit();
+    defer compiled.deinit();
+    const diagram = &compiled.class_;
 
-    var layout = try computeClassLayout(alloc, &diagram, .narrow);
+    var layout = try computeClassLayout(alloc, diagram, .narrow);
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), layout.positions.len);
@@ -964,15 +1033,16 @@ test "computeClassLayout places single class at origin with rows=cols=1" {
 
 test "computeClassLayout sets outer_pad to 2 when namespaces exist" {
     const alloc = std.testing.allocator;
-    var diagram = try parse.parseSource(alloc,
+    var compiled = try compile_mod.compile(alloc,
         \\classDiagram
         \\    namespace Shapes {
         \\        class Circle
         \\    }
     );
-    defer diagram.deinit();
+    defer compiled.deinit();
+    const diagram = &compiled.class_;
 
-    var layout = try computeClassLayout(alloc, &diagram, .narrow);
+    var layout = try computeClassLayout(alloc, diagram, .narrow);
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 2), layout.outer_pad);
@@ -980,13 +1050,14 @@ test "computeClassLayout sets outer_pad to 2 when namespaces exist" {
 
 test "computeClassLayout stacks two-class inheritance as bottom_up rows" {
     const alloc = std.testing.allocator;
-    var diagram = try parse.parseSource(alloc,
+    var compiled = try compile_mod.compile(alloc,
         \\classDiagram
         \\    Animal <|-- Dog
     );
-    defer diagram.deinit();
+    defer compiled.deinit();
+    const diagram = &compiled.class_;
 
-    var layout = try computeClassLayout(alloc, &diagram, .narrow);
+    var layout = try computeClassLayout(alloc, diagram, .narrow);
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 2), layout.positions.len);
@@ -1004,14 +1075,15 @@ test "computeClassLayout stacks two-class inheritance as bottom_up rows" {
 
 test "computeClassLayout 1-parent 2-children branch separates siblings across columns" {
     const alloc = std.testing.allocator;
-    var diagram = try parse.parseSource(alloc,
+    var compiled = try compile_mod.compile(alloc,
         \\classDiagram
         \\    Animal <|-- Dog
         \\    Animal <|-- Cat
     );
-    defer diagram.deinit();
+    defer compiled.deinit();
+    const diagram = &compiled.class_;
 
-    var layout = try computeClassLayout(alloc, &diagram, .narrow);
+    var layout = try computeClassLayout(alloc, diagram, .narrow);
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 3), layout.positions.len);
@@ -1040,14 +1112,15 @@ test "computeClassLayout 1-parent 2-children branch separates siblings across co
 
 test "computeClassLayout 2-parents 1-child merge stacks parents in bottom row" {
     const alloc = std.testing.allocator;
-    var diagram = try parse.parseSource(alloc,
+    var compiled = try compile_mod.compile(alloc,
         \\classDiagram
         \\    Vehicle <|-- Car
         \\    Trackable <|-- Car
     );
-    defer diagram.deinit();
+    defer compiled.deinit();
+    const diagram = &compiled.class_;
 
-    var layout = try computeClassLayout(alloc, &diagram, .narrow);
+    var layout = try computeClassLayout(alloc, diagram, .narrow);
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 3), layout.positions.len);

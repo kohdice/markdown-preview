@@ -3,9 +3,10 @@ const parse = @import("parse.zig");
 const render = @import("render.zig");
 const term = @import("term.zig");
 const watch = @import("watch.zig");
+const source_loader = @import("source_loader.zig");
+const ansi = term.ansi;
 const width = term.width;
 
-const max_file_bytes = 10 * 1024 * 1024;
 const exit_success: u8 = 0;
 const exit_failure: u8 = 1;
 
@@ -20,6 +21,7 @@ pub const RunOptions = struct {
     enable_ansi: bool,
     wrap_width: ?usize,
     ambiguous_width: width.AmbiguousWidth,
+    color_mode: ansi.ColorMode = .truecolor,
 };
 
 const usage_message =
@@ -31,9 +33,12 @@ const usage_message =
     \\
 ;
 
-const ParsedArgs = struct {
-    path: []const u8,
-    watch: bool,
+pub const Command = union(enum) {
+    render: RenderCommand,
+    watch: WatchCommand,
+
+    pub const RenderCommand = struct { path: []const u8 };
+    pub const WatchCommand = struct { path: []const u8 };
 };
 
 const ParseError = error{
@@ -42,7 +47,7 @@ const ParseError = error{
     UnknownFlag,
 };
 
-fn parseArgs(args: []const [:0]const u8) ParseError!ParsedArgs {
+pub fn parseArgs(args: []const [:0]const u8) ParseError!Command {
     var path: ?[]const u8 = null;
     var positional_only = false;
     var watch_flag = false;
@@ -67,90 +72,83 @@ fn parseArgs(args: []const [:0]const u8) ParseError!ParsedArgs {
         path = arg;
     }
 
-    if (path) |p| return .{ .path = p, .watch = watch_flag };
-    return error.MissingPath;
-}
-
-pub fn unwrapWriteError(
-    err: anyerror,
-    stdout_err: ?anyerror,
-    stderr_err: ?anyerror,
-) anyerror {
-    if (err == error.WriteFailed) {
-        if (stdout_err) |underlying| return underlying;
-        if (stderr_err) |underlying| return underlying;
-    }
-    return err;
+    const resolved_path = path orelse return error.MissingPath;
+    if (watch_flag) return .{ .watch = .{ .path = resolved_path } };
+    return .{ .render = .{ .path = resolved_path } };
 }
 
 pub fn run(opts: RunOptions) !u8 {
-    const parsed = parseArgs(opts.args) catch {
+    const command = parseArgs(opts.args) catch {
         try opts.stderr.writeAll(usage_message);
         return exit_failure;
     };
 
-    if (parsed.watch) {
-        return watch.run(.{
-            .allocator = opts.allocator,
+    return executeCommand(opts, command);
+}
+
+pub fn executeCommand(opts: RunOptions, command: Command) !u8 {
+    return switch (command) {
+        .watch => |cmd| watch.run(.{
             .cwd = opts.cwd,
-            .path = parsed.path,
+            .path = cmd.path,
             .stdout = opts.stdout,
             .stderr = opts.stderr,
             .stdout_handle = opts.stdout_handle,
             .stdin_handle = opts.stdin_handle,
             .enable_ansi = opts.enable_ansi,
-            .wrap_width = opts.wrap_width,
             .ambiguous_width = opts.ambiguous_width,
-        });
-    }
+            .color_mode = opts.color_mode,
+        }),
+        .render => |cmd| renderOnce(opts, cmd.path),
+    };
+}
 
-    const source = opts.cwd.readFileAlloc(opts.allocator, parsed.path, max_file_bytes) catch |err| {
-        try opts.stderr.print("mp: unable to read '{s}': {s}\n", .{ parsed.path, @errorName(err) });
+fn renderOnce(opts: RunOptions, path: []const u8) !u8 {
+    const source = source_loader.loadFile(opts.allocator, opts.cwd, path) catch |err| {
+        try opts.stderr.print("mp: unable to read '{s}': {s}\n", .{ path, @errorName(err) });
         return exit_failure;
     };
 
-    var doc = try parse.parseOwned(opts.allocator, .{
-        .allocator = opts.allocator,
-        .buffer = source,
-    });
-    defer doc.deinit();
+    var output = try parse.parse(opts.allocator, source);
+    defer output.deinit();
 
     var renderer = render.Renderer.init(opts.allocator, .{
         .enable_ansi = opts.enable_ansi,
         .ambiguous_width = opts.ambiguous_width,
+        .color_mode = opts.color_mode,
     });
     defer renderer.deinit();
 
-    try renderer.renderDocument(opts.stdout, &doc, opts.wrap_width, opts.allocator);
+    try renderer.render(opts.stdout, &output, opts.wrap_width);
     return exit_success;
 }
 
-test "parseArgs accepts plain positional path" {
+test "parseArgs returns render command for plain positional path" {
     const args = [_][:0]const u8{ "mp", "foo.md" };
     const parsed = try parseArgs(&args);
-    try std.testing.expectEqualStrings("foo.md", parsed.path);
-    try std.testing.expect(!parsed.watch);
+    try std.testing.expect(parsed == .render);
+    try std.testing.expectEqualStrings("foo.md", parsed.render.path);
 }
 
-test "parseArgs accepts --watch before path" {
+test "parseArgs returns watch command when --watch precedes path" {
     const args = [_][:0]const u8{ "mp", "--watch", "foo.md" };
     const parsed = try parseArgs(&args);
-    try std.testing.expectEqualStrings("foo.md", parsed.path);
-    try std.testing.expect(parsed.watch);
+    try std.testing.expect(parsed == .watch);
+    try std.testing.expectEqualStrings("foo.md", parsed.watch.path);
 }
 
-test "parseArgs accepts --watch after path" {
+test "parseArgs returns watch command when --watch follows path" {
     const args = [_][:0]const u8{ "mp", "foo.md", "--watch" };
     const parsed = try parseArgs(&args);
-    try std.testing.expectEqualStrings("foo.md", parsed.path);
-    try std.testing.expect(parsed.watch);
+    try std.testing.expect(parsed == .watch);
+    try std.testing.expectEqualStrings("foo.md", parsed.watch.path);
 }
 
-test "parseArgs accepts --watch with -- sentinel" {
+test "parseArgs returns watch command when --watch precedes -- sentinel" {
     const args = [_][:0]const u8{ "mp", "--watch", "--", "--notes.md" };
     const parsed = try parseArgs(&args);
-    try std.testing.expectEqualStrings("--notes.md", parsed.path);
-    try std.testing.expect(parsed.watch);
+    try std.testing.expect(parsed == .watch);
+    try std.testing.expectEqualStrings("--notes.md", parsed.watch.path);
 }
 
 test "parseArgs rejects --watch without path" {
@@ -176,7 +174,8 @@ test "parseArgs rejects no positional args" {
 test "parseArgs with -- sentinel treats following arg as positional even if it starts with --" {
     const args = [_][:0]const u8{ "mp", "--", "--notes.md" };
     const parsed = try parseArgs(&args);
-    try std.testing.expectEqualStrings("--notes.md", parsed.path);
+    try std.testing.expect(parsed == .render);
+    try std.testing.expectEqualStrings("--notes.md", parsed.render.path);
 }
 
 test "parseArgs with -- sentinel still rejects duplicate positional" {
@@ -320,7 +319,7 @@ test "run threads ambiguous_width through to the renderer" {
     );
 }
 
-test "run frees the file buffer via parseOwned" {
+test "run frees the file buffer carried by the source loader" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer {
         const status = gpa.deinit();
@@ -356,32 +355,4 @@ test "run frees the file buffer via parseOwned" {
     try std.testing.expectEqual(exit_success, exit_code);
     try std.testing.expectEqualStrings("Owned\n", stdout.writer.buffered());
     try std.testing.expectEqualStrings("", stderr.writer.buffered());
-}
-
-test "unwrapWriteError passes through errors other than WriteFailed" {
-    try std.testing.expectEqual(
-        @as(anyerror, error.OutOfMemory),
-        unwrapWriteError(error.OutOfMemory, error.AccessDenied, error.AccessDenied),
-    );
-}
-
-test "unwrapWriteError surfaces stdout underlying error and prefers it over stderr" {
-    try std.testing.expectEqual(
-        @as(anyerror, error.NoSpaceLeft),
-        unwrapWriteError(error.WriteFailed, error.NoSpaceLeft, error.AccessDenied),
-    );
-}
-
-test "unwrapWriteError falls back to stderr underlying error when stdout has none" {
-    try std.testing.expectEqual(
-        @as(anyerror, error.AccessDenied),
-        unwrapWriteError(error.WriteFailed, null, error.AccessDenied),
-    );
-}
-
-test "unwrapWriteError returns WriteFailed unchanged when both underlying errors are null" {
-    try std.testing.expectEqual(
-        @as(anyerror, error.WriteFailed),
-        unwrapWriteError(error.WriteFailed, null, null),
-    );
 }

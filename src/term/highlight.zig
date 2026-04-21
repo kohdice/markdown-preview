@@ -68,9 +68,6 @@ pub const Language = enum {
 
 const language_count = @typeInfo(Language).@"enum".fields.len;
 
-/// Three-state lazy language initialization.
-/// Distinguishes "not yet tried" from "tried and failed" so the Highlighter
-/// does not repeatedly reattempt a broken query.
 const LanguageState = union(enum) {
     uninitialized,
     failed,
@@ -99,9 +96,6 @@ const LocalDefinition = struct {
     name: []const u8,
 };
 
-/// Language-agnostic local-variable scope analysis built from a
-/// `@local.scope` / `@local.definition` query. Used by the `#is-not? local`
-/// predicate to suppress builtin captures when an identifier is shadowed.
 const Locals = struct {
     scopes: []ScopeRef,
     definitions: []LocalDefinition,
@@ -184,14 +178,10 @@ const PredicateContext = struct {
     locals: ?*const Locals = null,
 };
 
-/// Sentinel stored in the per-byte style array to mark "no capture covers
-/// this byte". `u32` maps directly onto Tree-sitter's capture index type
-/// returned by `QueryCursor.nextCapture()`.
-const no_style: u32 = std.math.maxInt(u32);
+const StyleIdx = u16;
+const no_style: StyleIdx = std.math.maxInt(StyleIdx);
+const highlight_max_bytes: usize = 64 * 1024;
 
-/// A single capture's byte range, paired with its owning pattern index.
-/// Stored during capture collection so the apply step can sort by
-/// `pattern_index` and let later patterns overwrite earlier ones.
 const CaptureSpan = struct {
     start: usize,
     end: usize,
@@ -206,9 +196,6 @@ const CaptureSpan = struct {
 pub const Highlighter = struct {
     parser: *ts.Parser,
     languages: [language_count]LanguageState,
-    /// Per-language locals queries. Only the slots for languages with a
-    /// matching `localsSpec` (currently javascript, typescript, tsx) ever
-    /// transition out of `.uninitialized`.
     locals_queries: [language_count]QueryState,
 
     pub fn init() Highlighter {
@@ -235,8 +222,6 @@ pub const Highlighter = struct {
         self.parser.destroy();
     }
 
-    /// Highlight `source` and write ANSI-styled output to `writer`.
-    ///
     /// Overlap semantics: "later pattern wins". Captures are collected, sorted
     /// by `pattern_index` ascending, then applied to a per-byte style-index
     /// array via `@memset`. Since a later `@memset` overwrites an earlier one,
@@ -257,8 +242,13 @@ pub const Highlighter = struct {
         source: []const u8,
         lang: Language,
         syn_palette: theme.SyntaxPalette,
+        mode: ansi.ColorMode,
     ) !void {
         if (source.len == 0) return;
+        if (source.len > highlight_max_bytes) {
+            try ansi.writeStyled(writer, true, mode, .{ .fg = syn_palette.plain }, source);
+            return;
+        }
 
         const config = self.getOrInitConfig(lang) orelse return error.QueryUnavailable;
 
@@ -288,8 +278,6 @@ pub const Highlighter = struct {
         defer cursor.destroy();
         cursor.exec(config.query, tree.rootNode());
 
-        // 1. Collect every capture whose pattern's predicates all pass and
-        //    whose name is not a visual-editor meta capture.
         // Tree-sitter's C runtime intentionally does not evaluate predicates
         // such as `#eq?`, `#match?`, `#any-of?`, or `#lua-match?`. The caller
         // is expected to filter matches itself. Without this filtering, every
@@ -324,22 +312,18 @@ pub const Highlighter = struct {
             });
         }
 
-        // 2. Sort by pattern_index ascending so later patterns overwrite earlier
-        //    ones during the @memset pass.
         std.mem.sort(CaptureSpan, caps.items, {}, CaptureSpan.lessThanByPattern);
 
-        // 3. Build a per-byte style-index array. Sentinel NO_STYLE means
-        //    "no capture covers this byte — render as plain".
-        const styles = try allocator.alloc(u32, source.len);
+        const styles = try allocator.alloc(StyleIdx, source.len);
         defer allocator.free(styles);
         @memset(styles, no_style);
         for (caps.items) |c| {
-            @memset(styles[c.start..c.end], c.capture_index);
+            if (c.capture_index >= no_style) continue;
+            @memset(styles[c.start..c.end], @intCast(c.capture_index));
         }
 
-        // 4. Emit runs of consecutive bytes sharing the same style. Every write
-        //    goes through ansi.writeStyled, keeping the sanitization invariant.
         var run_start: usize = 0;
+        var state: ansi.StyledState = .{};
         while (run_start < source.len) {
             const cur = styles[run_start];
             var run_end = run_start + 1;
@@ -352,14 +336,12 @@ pub const Highlighter = struct {
                 const name = config.query.captureNameForId(cur) orelse "";
                 break :blk captureToStyle(name, syn_palette);
             };
-            try ansi.writeStyled(writer, true, style, slice);
+            try ansi.writeStyledRun(writer, true, mode, &state, style, slice);
             run_start = run_end;
         }
+        try ansi.flushStyle(writer, &state);
     }
 
-    /// Test-only hook: force a language into `.failed` so callers can
-    /// verify the `error.QueryUnavailable` fallback path without relying
-    /// on a real broken `highlights.scm`.
     pub fn forceLanguageFailedForTesting(self: *Highlighter, lang: Language) void {
         const slot = &self.languages[lang.index()];
         switch (slot.*) {
@@ -486,10 +468,6 @@ const LocalsSpec = struct {
     source: []const u8,
 };
 
-/// Languages that ship a locals query and whose highlights reference
-/// `#is-not? local`. Returning null disables locals tracking entirely,
-/// which matches upstream tree-sitter.json for every language outside
-/// the javascript family.
 fn localsSpec(lang: Language) ?LocalsSpec {
     return switch (lang) {
         .javascript => .{
@@ -673,8 +651,6 @@ fn classContainsPositive(spec: []const u8, byte: u8) bool {
     return false;
 }
 
-/// Evaluate the predicates attached to a query pattern against one match.
-///
 /// Tree-sitter's C runtime does not apply query predicates. This helper walks
 /// the raw predicate token stream and implements the subset used by the
 /// shipped highlight queries.
@@ -810,10 +786,6 @@ fn predIsNot(
     return !locals.isLocal(match.captures[0].node, ctx.source);
 }
 
-/// Resolve a single `PredicateStep` to a `[]const u8`:
-///   - `.capture` → the text slice of a capture bound in this match
-///   - `.string`  → the literal stored in the query
-///   - `.done`    → error (null)
 fn resolvePredicateText(
     step: ts.Query.PredicateStep,
     query: *const ts.Query,
@@ -834,9 +806,6 @@ fn resolvePredicateText(
     }
 }
 
-/// Map a Tree-sitter capture name (possibly dotted, e.g. `keyword.control`)
-/// to a terminal text style using prefix matching. Unknown capture names
-/// fall back to `syn_palette.plain`.
 fn captureToStyle(name: []const u8, sp: theme.SyntaxPalette) ansi.TextStyle {
     if (startsWith(name, "keyword")) return .{ .fg = sp.keyword, .bold = true };
     if (startsWith(name, "type")) return .{ .fg = sp.type_name };
@@ -1006,7 +975,7 @@ test "Highlighter: writes styled zig source" {
     defer buf.deinit();
 
     const source = "const x: u32 = 42;";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette, .truecolor);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1042,7 +1011,7 @@ test "Highlighter: highlights every supported language end-to-end" {
         var buf: std.io.Writer.Allocating = .init(allocator);
         defer buf.deinit();
 
-        try hl.writeHighlightedBlock(allocator, &buf.writer, case.source, case.lang, theme.default_syntax_palette);
+        try hl.writeHighlightedBlock(allocator, &buf.writer, case.source, case.lang, theme.default_syntax_palette, .truecolor);
 
         var list = buf.toArrayList();
         defer list.deinit(allocator);
@@ -1067,7 +1036,7 @@ test "Highlighter: later @function pattern overrides generic @variable on fn dec
     defer buf.deinit();
 
     const source = "fn greet() void {}";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette, .truecolor);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1087,7 +1056,7 @@ test "Highlighter: uncaptured whitespace renders with plain color" {
     defer buf.deinit();
 
     const source = "const x = 1;";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette, .truecolor);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1107,7 +1076,7 @@ test "Highlighter: @string captures survive a #set! directive on the pattern" {
     defer buf.deinit();
 
     const source = "const msg = \"hi\";";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette, .truecolor);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1128,7 +1097,7 @@ test "Highlighter: lua-match highlights Zig type identifiers" {
     defer buf.deinit();
 
     const source = "const value: MyType = undefined;";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette, .truecolor);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1148,7 +1117,7 @@ test "Highlighter: javascript require is builtin when not shadowed" {
     defer buf.deinit();
 
     const source = "require('fs');";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .javascript, theme.default_syntax_palette);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .javascript, theme.default_syntax_palette, .truecolor);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1167,7 +1136,7 @@ test "Highlighter: javascript local require does not use builtin styling" {
     defer buf.deinit();
 
     const source = "function demo(require) { return require; }";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .javascript, theme.default_syntax_palette);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .javascript, theme.default_syntax_palette, .truecolor);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1186,7 +1155,7 @@ test "Highlighter: @spell meta capture does not override @comment italic" {
     defer buf.deinit();
 
     const source = "// hello world";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette, .truecolor);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1210,7 +1179,7 @@ test "Highlighter: forced .failed returns QueryUnavailable" {
 
     try std.testing.expectError(
         error.QueryUnavailable,
-        hl.writeHighlightedBlock(allocator, &buf.writer, "const x = 1;", .zig, theme.default_syntax_palette),
+        hl.writeHighlightedBlock(allocator, &buf.writer, "const x = 1;", .zig, theme.default_syntax_palette, .truecolor),
     );
 }
 
@@ -1226,7 +1195,7 @@ test "Highlighter: .failed is sticky across repeated calls" {
     for (0..3) |_| {
         try std.testing.expectError(
             error.QueryUnavailable,
-            hl.writeHighlightedBlock(allocator, &buf.writer, "x", .zig, theme.default_syntax_palette),
+            hl.writeHighlightedBlock(allocator, &buf.writer, "x", .zig, theme.default_syntax_palette, .truecolor),
         );
     }
     switch (hl.languages[Language.zig.index()]) {
@@ -1264,7 +1233,7 @@ fn renderHighlightedForTest(
 ) ![]u8 {
     var buf: std.io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, lang, theme.default_syntax_palette);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, lang, theme.default_syntax_palette, .truecolor);
     var list = buf.toArrayList();
     defer list.deinit(allocator);
     return try list.toOwnedSlice(allocator);
@@ -1313,8 +1282,6 @@ test "Highlighter: html colors tag names via the tag prefix branch" {
     const rendered = try renderHighlightedForTest(&hl, allocator, "<p>hello</p>\n", .html);
     defer allocator.free(rendered);
 
-    // @tag shares sp.keyword's color but emits no bold prefix, so the
-    // foreground escape matches `keyword_ansi` exactly.
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, keyword_ansi ++ "p"));
 }
 
@@ -1359,8 +1326,6 @@ test "Highlighter: javascript highlights jsx tag when used as jsx alias" {
     defer hl.deinit();
 
     const allocator = std.testing.allocator;
-    // Mirrors how the renderer handles a ```jsx fence: fromString("jsx")
-    // returns .javascript, which must have the jsx highlights baked in.
     const rendered = try renderHighlightedForTest(&hl, allocator, "const el = <span>hi</span>;\n", .javascript);
     defer allocator.free(rendered);
 
@@ -1375,9 +1340,6 @@ test "Highlighter: typescript require is builtin when not shadowed" {
     const rendered = try renderHighlightedForTest(&hl, allocator, "require('fs');", .typescript);
     defer allocator.free(rendered);
 
-    // Without per-language locals, the javascript `(#is-not? local)`
-    // predicate fails and require stays plain. This test guards the
-    // Locals generalization.
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, func_ansi ++ "require"));
 }
 
@@ -1412,4 +1374,20 @@ test "Highlighter: tsx local require does not use builtin styling" {
     defer allocator.free(rendered);
 
     try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, func_ansi ++ "require"));
+}
+
+test "Highlighter: large fenced block above threshold falls back to plain style" {
+    var hl = Highlighter.init();
+    defer hl.deinit();
+
+    const allocator = std.testing.allocator;
+    const big = try allocator.alloc(u8, highlight_max_bytes + 1);
+    defer allocator.free(big);
+    @memset(big, 'a');
+
+    const rendered = try renderHighlightedForTest(&hl, allocator, big, .zig);
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, plain_ansi));
+    try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, keyword_ansi));
 }

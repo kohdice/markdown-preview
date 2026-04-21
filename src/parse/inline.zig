@@ -2,19 +2,12 @@ const std = @import("std");
 const ast = @import("../ast.zig");
 const parse_block = @import("block.zig");
 const parse_link = @import("link.zig");
+const text_mod = @import("../text.zig");
 
 const DefMap = ast.LinkDefMap;
 
-/// CommonMark §6.2: delimiter runs of length 1/2/3 map to emphasis, strong,
-/// and strong+emphasis; the same value drives the multiple-of-three
-/// rejection rule in the closer search.
 const max_emphasis_delim_run: usize = 3;
-
-/// Accept both `~text~` and `~~text~~`; longer runs fall through as literal
-/// tildes.
 const max_strikethrough_delim_run: usize = 2;
-
-/// RFC 3629 §3: a UTF-8 continuation byte has the bit pattern `10xxxxxx`.
 const utf8_continuation_mask: u8 = 0xC0;
 const utf8_continuation_tag: u8 = 0x80;
 
@@ -22,8 +15,6 @@ const scheme_separator: []const u8 = "://";
 const http_scheme: []const u8 = "http://";
 const https_scheme: []const u8 = "https://";
 
-/// CommonMark §6.7: a hard line break is signaled by a backslash or by
-/// at least two trailing spaces at the end of a line.
 const min_hard_break_spaces: usize = 2;
 
 pub const InlineBuilder = struct {
@@ -40,6 +31,15 @@ pub const InlineBuilder = struct {
         return .{
             .allocator = allocator,
         };
+    }
+
+    /// Pre-size `nodes` / `next` for workloads dominated by non-trivial
+    /// paragraphs (emphasis / links / code spans). Trivial-paragraph heavy
+    /// inputs skip the reserve via `estimateInlineNodeCapacity`'s threshold.
+    pub fn reserve(self: *InlineBuilder, capacity: usize) !void {
+        if (capacity == 0) return;
+        try self.nodes.ensureTotalCapacityPrecise(self.allocator, capacity);
+        try self.next.ensureTotalCapacityPrecise(self.allocator, capacity);
     }
 
     pub const Storage = struct {
@@ -77,35 +77,6 @@ pub const InlineBuilder = struct {
         defer parser.deinit();
 
         return try parser.parse();
-    }
-
-    fn appendText(self: *InlineBuilder, chain: *InlineChain, content: []const u8) !void {
-        if (content.len == 0) return;
-        try self.appendNode(chain, .{ .text = content });
-    }
-
-    fn appendNode(self: *InlineBuilder, chain: *InlineChain, node: ast.InlineNode) !void {
-        const ref = try self.allocNode(node);
-        self.appendRef(chain, ref);
-    }
-
-    fn allocNode(self: *InlineBuilder, node: ast.InlineNode) !ast.InlineRef {
-        const ref = std.math.cast(ast.InlineRef, self.nodes.items.len) orelse return error.Overflow;
-        try self.nodes.append(self.allocator, node);
-        try self.next.append(self.allocator, ast.no_inline);
-        return ref;
-    }
-
-    fn appendRef(self: *InlineBuilder, chain: *InlineChain, ref: ast.InlineRef) void {
-        if (!ast.hasInline(chain.head)) {
-            chain.head = ref;
-            chain.tail = ref;
-            return;
-        }
-
-        const tail_index: usize = @intCast(chain.tail);
-        self.next.items[tail_index] = ref;
-        chain.tail = ref;
     }
 };
 
@@ -910,16 +881,14 @@ fn prevCodepoint(text: []const u8, pos: usize) ?u21 {
     var start = pos - 1;
     while (start > 0 and text[start] & utf8_continuation_mask == utf8_continuation_tag) : (start -= 1) {}
     if (text[start] & utf8_continuation_mask == utf8_continuation_tag) return null;
-    const len = std.unicode.utf8ByteSequenceLength(text[start]) catch return null;
-    if (start + len != pos) return null;
-    return std.unicode.utf8Decode(text[start..][0..len]) catch null;
+    const step = text_mod.nextCodepoint(text, start) orelse return null;
+    if (start + step.len != pos) return null;
+    return step.cp;
 }
 
 fn nextCodepoint(text: []const u8, pos: usize) ?u21 {
-    if (pos >= text.len) return null;
-    const len = std.unicode.utf8ByteSequenceLength(text[pos]) catch return null;
-    if (pos + len > text.len) return null;
-    return std.unicode.utf8Decode(text[pos..][0..len]) catch null;
+    const step = text_mod.nextCodepoint(text, pos) orelse return null;
+    return step.cp;
 }
 
 fn cpClass(cp: ?u21) CharClass {

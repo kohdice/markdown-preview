@@ -1,24 +1,26 @@
 const std = @import("std");
+const backing_allocator = @import("backing_allocator.zig");
 const cli = @import("cli.zig");
+const stdout_buffer_mod = @import("stdout_buffer.zig");
 const term = @import("term.zig");
 const terminal = term.terminal;
 
-const stdout_buffer_size = 64 * 1024;
 const stderr_buffer_size = 1024;
 
-pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+pub fn main() !u8 {
+    var backing: backing_allocator.Backing = .init;
+    defer _ = backing.deinit();
+    const allocator = backing.allocator();
     const raw_args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, raw_args);
 
     const stdout_file = std.fs.File.stdout();
     const stderr_file = std.fs.File.stderr();
 
-    var stdout_buffer: [stdout_buffer_size]u8 = undefined;
+    const stdout_buffer = try allocator.alloc(u8, stdout_buffer_mod.sizeFor(stdout_file));
+    defer allocator.free(stdout_buffer);
     var stderr_buffer: [stderr_buffer_size]u8 = undefined;
-    var stdout_stream = stdout_file.writer(&stdout_buffer);
+    var stdout_stream = stdout_file.writer(stdout_buffer);
     var stderr_stream = stderr_file.writer(&stderr_buffer);
 
     const enable_ansi = switch (std.io.tty.Config.detect(stdout_file)) {
@@ -28,6 +30,7 @@ pub fn main() !void {
 
     const wrap_width = if (enable_ansi) terminal.getTerminalWidth(stdout_file.handle) else null;
     const ambiguous_default = terminal.detectAmbiguousWidthFromProcess();
+    const color_mode = terminal.detectColorModeFromProcess();
 
     const exit_code = cli.run(.{
         .allocator = allocator,
@@ -40,9 +43,23 @@ pub fn main() !void {
         .enable_ansi = enable_ansi,
         .wrap_width = wrap_width,
         .ambiguous_width = ambiguous_default,
-    }) catch |err| return cli.unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
+        .color_mode = color_mode,
+    }) catch |err| return unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
 
-    stdout_stream.interface.flush() catch |err| return cli.unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
-    stderr_stream.interface.flush() catch |err| return cli.unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
-    if (exit_code != 0) std.process.exit(exit_code);
+    stdout_stream.interface.flush() catch |err| return unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
+    stderr_stream.interface.flush() catch |err| return unwrapWriteError(err, stdout_stream.err, stderr_stream.err);
+
+    return exit_code;
+}
+
+fn unwrapWriteError(
+    err: anyerror,
+    stdout_err: ?anyerror,
+    stderr_err: ?anyerror,
+) anyerror {
+    if (err == error.WriteFailed) {
+        if (stdout_err) |underlying| return underlying;
+        if (stderr_err) |underlying| return underlying;
+    }
+    return err;
 }

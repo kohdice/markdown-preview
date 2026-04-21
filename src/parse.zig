@@ -1,185 +1,128 @@
 const std = @import("std");
 const ast = @import("ast.zig");
-const parse_document = @import("parse/document.zig");
+const block_phase = @import("parse/block_phase.zig");
+const inline_phase = @import("parse/inline_phase.zig");
+const parse_inline = @import("parse/inline.zig");
+const source_mod = @import("source");
 
-pub fn parseBorrowed(allocator: std.mem.Allocator, source: []const u8) !ast.Document {
-    const has_trailing_newline = source.len > 0 and source[source.len - 1] == '\n';
+pub const Document = ast.Document;
+pub const Source = source_mod.Source;
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    errdefer arena.deinit();
+/// Raw-lines side channel for trigger-free paragraphs. The renderer walks
+/// `blocks` in block-phase emission order and advances a cursor in this
+/// slice; when the paragraph pointer matches the cursor's entry, it
+/// renders the lines directly without ever materialising an inline chain.
+/// The public `ast.Paragraph` stays `{ children = no_inline }` for these
+/// blocks, so external consumers see a uniform semantic shape. Headings
+/// always go through the full inline parser; benchmark evidence does not
+/// justify extending this bypass to them.
+pub const TrivialRun = struct {
+    paragraph: *const ast.Paragraph,
+    lines: Lines,
 
-    const parsed = try parse_document.parse(arena.allocator(), source);
-    return .{
-        .source = source,
-        .source_storage = .borrowed,
-        .inline_nodes = parsed.inline_nodes,
-        .inline_next = parsed.inline_next,
-        .blocks = parsed.blocks,
-        .link_defs = parsed.link_defs,
-        .has_trailing_newline = has_trailing_newline,
-        .storage = .{ .arena = arena },
+    /// Single-line entries store the line inline to avoid a per-entry slice
+    /// header allocation; multi-line entries reuse the `paragraph_lines`
+    /// dupe that block_phase already had to allocate for setext detection.
+    pub const Lines = union(enum) {
+        single: []const u8,
+        multi: []const []const u8,
     };
+};
+
+pub const ParsedDocument = struct {
+    document: Document,
+
+    pub fn deinit(self: *ParsedDocument) void {
+        self.document.deinit();
+    }
+};
+
+/// Bundle emitted by `parse()` that the renderer consumes. The public AST
+/// lives at `parsed.document`; `trivial_runs` is an internal render-only
+/// side channel (paragraph pointer → raw lines for trigger-free paragraphs)
+/// that exists solely to let the renderer skip materialising a text +
+/// soft_break chain. External callers interested only in the AST should
+/// access `parsed.document` and ignore `trivial_runs`.
+pub const ParseOutput = struct {
+    parsed: ParsedDocument,
+    trivial_runs: []const TrivialRun = &.{},
+
+    pub fn deinit(self: *ParseOutput) void {
+        self.parsed.deinit();
+    }
+};
+
+fn estimateInlineNodeCapacity(bytes: []const u8) usize {
+    // Scale the reserve with block boundaries (`\n\n`), not total line
+    // count: a boundary is a reasonable proxy for the number of
+    // parseSlice / parseLines calls that reach the builder after the
+    // trivial-bypass path has claimed trigger-free content. This keeps
+    // single-paragraph inputs with many internal soft breaks from
+    // pre-allocating builder slots the bypass would leave unused.
+    const separator_count = std.mem.count(u8, bytes, "\n\n");
+    if (separator_count < 256) return 0;
+    return @min(separator_count, 8192);
 }
 
-pub fn parseOwned(allocator: std.mem.Allocator, source: ast.Document.OwnedSource) !ast.Document {
-    errdefer source.allocator.free(source.buffer);
+pub fn parse(allocator: std.mem.Allocator, src: Source) !ParseOutput {
+    switch (src) {
+        .borrowed => |bytes| return buildDocument(allocator, bytes, .borrowed),
+        .owned => |o| {
+            errdefer o.allocator.free(o.buffer);
+            return buildDocument(allocator, o.buffer, .{ .owned = o });
+        },
+        .mapped => |m| {
+            errdefer std.posix.munmap(m.bytes);
+            return buildDocument(allocator, m.bytes, .{ .mapped = m });
+        },
+    }
+}
 
-    const has_trailing_newline = source.buffer.len > 0 and source.buffer[source.buffer.len - 1] == '\n';
+fn buildDocument(
+    allocator: std.mem.Allocator,
+    bytes: []const u8,
+    storage: ast.Document.SourceStorage,
+) !ParseOutput {
+    const has_trailing_newline = bytes.len > 0 and bytes[bytes.len - 1] == '\n';
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
 
-    const parsed = try parse_document.parse(arena.allocator(), source.buffer);
+    var builder = parse_inline.InlineBuilder.init(arena.allocator());
+    try builder.reserve(estimateInlineNodeCapacity(bytes));
+    const block_doc = try block_phase.buildBlockDocument(arena.allocator(), &builder, bytes);
+    const resolved = try inline_phase.resolveInlines(arena.allocator(), &builder, block_doc);
     return .{
-        .source = source.buffer,
-        .source_storage = .{ .owned = source },
-        .inline_nodes = parsed.inline_nodes,
-        .inline_next = parsed.inline_next,
-        .blocks = parsed.blocks,
-        .link_defs = parsed.link_defs,
-        .has_trailing_newline = has_trailing_newline,
-        .storage = .{ .arena = arena },
+        .parsed = .{
+            .document = .{
+                .source = bytes,
+                .source_storage = storage,
+                .inline_nodes = resolved.inline_nodes,
+                .inline_next = resolved.inline_next,
+                .blocks = resolved.blocks,
+                .link_defs = resolved.link_defs,
+                .has_trailing_newline = has_trailing_newline,
+                .storage = .{ .arena = arena },
+            },
+        },
+        .trivial_runs = resolved.trivial_runs,
     };
 }
 
 test {
+    _ = @import("parse/block_cursor.zig");
+    _ = @import("parse/block_phase.zig");
     _ = @import("parse/document_test.zig");
+    _ = @import("parse/inline_phase.zig");
+    _ = @import("parse/inline_trigger.zig");
+    _ = @import("parse/inline_work.zig");
+    _ = @import("parse/lifecycle_test.zig");
 }
 
-test "parseBorrowed builds a document for a single paragraph" {
-    var doc = try parseBorrowed(std.testing.allocator, "Hello\n");
-    defer doc.deinit();
+test "parse builds a document for a single paragraph" {
+    var output = try parse(std.testing.allocator, .{ .borrowed = "Hello\n" });
+    defer output.deinit();
 
-    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
-    try std.testing.expect(doc.has_trailing_newline);
-}
-
-const TrackingAllocator = struct {
-    child: std.mem.Allocator,
-    tracked_ptr: ?[*]u8 = null,
-    tracked_len: usize = 0,
-    tracked_freed: bool = false,
-
-    const vtable: std.mem.Allocator.VTable = .{
-        .alloc = alloc,
-        .resize = resize,
-        .remap = remap,
-        .free = free,
-    };
-
-    fn init(child: std.mem.Allocator) TrackingAllocator {
-        return .{ .child = child };
-    }
-
-    fn allocator(self: *TrackingAllocator) std.mem.Allocator {
-        return .{
-            .ptr = self,
-            .vtable = &vtable,
-        };
-    }
-
-    fn track(self: *TrackingAllocator, buffer: []u8) void {
-        self.tracked_ptr = buffer.ptr;
-        self.tracked_len = buffer.len;
-        self.tracked_freed = false;
-    }
-
-    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
-        const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
-        return self.child.rawAlloc(len, alignment, ret_addr);
-    }
-
-    fn resize(
-        ctx: *anyopaque,
-        memory: []u8,
-        alignment: std.mem.Alignment,
-        new_len: usize,
-        ret_addr: usize,
-    ) bool {
-        const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
-        return self.child.rawResize(memory, alignment, new_len, ret_addr);
-    }
-
-    fn remap(
-        ctx: *anyopaque,
-        memory: []u8,
-        alignment: std.mem.Alignment,
-        new_len: usize,
-        ret_addr: usize,
-    ) ?[*]u8 {
-        const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
-        return self.child.rawRemap(memory, alignment, new_len, ret_addr);
-    }
-
-    fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
-        const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
-        if (self.tracked_ptr) |tracked_ptr| {
-            if (tracked_ptr == memory.ptr and self.tracked_len == memory.len) {
-                self.tracked_freed = true;
-            }
-        }
-        self.child.rawFree(memory, alignment, ret_addr);
-    }
-};
-
-test "parseBorrowed does not free the caller-owned source buffer on deinit" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-
-    var tracking = TrackingAllocator.init(gpa.allocator());
-    const allocator = tracking.allocator();
-
-    const source = try allocator.dupe(u8, "Hello\n");
-    defer if (!tracking.tracked_freed) allocator.free(source);
-    tracking.track(source);
-
-    var doc = try parseBorrowed(allocator, source);
-    doc.deinit();
-
-    try std.testing.expect(!tracking.tracked_freed);
-
-    allocator.free(source);
-    try std.testing.expect(tracking.tracked_freed);
-}
-
-test "parseOwned frees the source buffer on deinit" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-
-    var tracking = TrackingAllocator.init(gpa.allocator());
-    const allocator = tracking.allocator();
-
-    const source = try allocator.dupe(u8, "Hello\n");
-    tracking.track(source);
-
-    var doc = try parseOwned(allocator, .{
-        .allocator = allocator,
-        .buffer = source,
-    });
-    try std.testing.expect(!tracking.tracked_freed);
-    doc.deinit();
-    try std.testing.expect(tracking.tracked_freed);
-}
-
-test "parseOwned can free source with a different allocator than AST storage" {
-    var ast_gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = ast_gpa.deinit();
-
-    var source_gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = source_gpa.deinit();
-
-    var source_tracking = TrackingAllocator.init(source_gpa.allocator());
-    const source_allocator = source_tracking.allocator();
-
-    const source = try source_allocator.dupe(u8, "Hello\n");
-    source_tracking.track(source);
-
-    var doc = try parseOwned(ast_gpa.allocator(), .{
-        .allocator = source_allocator,
-        .buffer = source,
-    });
-
-    try std.testing.expect(!source_tracking.tracked_freed);
-    doc.deinit();
-    try std.testing.expect(source_tracking.tracked_freed);
+    try std.testing.expectEqual(@as(usize, 1), output.parsed.document.blocks.len);
+    try std.testing.expect(output.parsed.document.has_trailing_newline);
 }

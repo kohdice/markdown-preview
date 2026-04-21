@@ -1,4 +1,5 @@
 const std = @import("std");
+const source_mod = @import("source");
 
 pub const LinkDef = struct {
     url: []const u8,
@@ -47,14 +48,13 @@ pub const TableCell = struct {
 };
 
 pub const Document = struct {
-    pub const OwnedSource = struct {
-        allocator: std.mem.Allocator,
-        buffer: []u8,
-    };
+    pub const OwnedSource = source_mod.Source.Owned;
+    pub const MappedSource = source_mod.Source.Mapped;
 
     pub const SourceStorage = union(enum) {
         borrowed,
         owned: OwnedSource,
+        mapped: MappedSource,
     };
 
     pub const Storage = union(enum) {
@@ -80,6 +80,7 @@ pub const Document = struct {
         switch (self.source_storage) {
             .borrowed => {},
             .owned => |owned| owned.allocator.free(owned.buffer),
+            .mapped => |mapped| std.posix.munmap(mapped.bytes),
         }
 
         self.* = .{
@@ -141,7 +142,6 @@ pub const List = struct {
 
 pub const ListItem = struct {
     indent: usize,
-    /// `-`, `*`, `+` for unordered; `.` or `)` for ordered.
     marker: u8,
     number: ?[]const u8 = null,
     /// `null` means the item is not a task item; `false` means unchecked.

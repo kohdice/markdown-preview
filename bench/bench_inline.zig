@@ -1,7 +1,7 @@
 const std = @import("std");
-const markdown_preview = @import("markdown_preview");
-const parse = markdown_preview.parse;
-const render = markdown_preview.render;
+const internals = @import("internals");
+const parse = internals.parse.parse;
+const Renderer = internals.render.Renderer;
 const bench = @import("bench_support.zig");
 
 const Scenario = struct {
@@ -44,19 +44,19 @@ fn runScenario(scenario: Scenario) !void {
 
     const before_parse = counting.snapshot();
     var timer = try std.time.Timer.start();
-    var doc = try parse.parseBorrowed(allocator, scenario.input);
+    var doc = try parse(allocator, .{ .borrowed = scenario.input });
     defer doc.deinit();
     const parse_elapsed_ns = timer.read();
     const after_parse = counting.snapshot();
 
     const wrap_width: ?usize = scenario.wrap_width orelse 80;
-    var renderer = render.Renderer.init(allocator, .{ .enable_ansi = scenario.enable_ansi });
+    var renderer = Renderer.init(allocator, .{ .enable_ansi = scenario.enable_ansi });
     defer renderer.deinit();
 
     var sink: [512]u8 = undefined;
     var discarding: std.io.Writer.Discarding = .init(&sink);
     timer.reset();
-    try renderer.renderDocument(&discarding.writer, &doc, wrap_width, allocator);
+    try renderer.render(&discarding.writer, &doc, wrap_width);
     const render_elapsed_ns = timer.read();
     const after_render = counting.snapshot();
 

@@ -1,7 +1,8 @@
 const std = @import("std");
 const types = @import("types.zig");
-const parse = @import("parse_xychart.zig");
 const canvas_mod = @import("canvas.zig");
+const compile_mod = @import("compile.zig");
+const ansi_mod = @import("../term/ansi.zig");
 const theme = @import("../term/theme.zig");
 const width_mod = @import("../term/width.zig");
 
@@ -17,6 +18,7 @@ pub const Options = struct {
     ambiguous_width: width_mod.AmbiguousWidth,
     enable_ansi: bool,
     use_ascii: bool = false,
+    color_mode: ansi_mod.ColorMode = .truecolor,
 };
 
 fn seriesRole(idx: usize) u8 {
@@ -76,18 +78,13 @@ pub const ASCII_GLYPHS: XyGlyphs = .{
     .corner_br = '+',
 };
 
-pub fn writeXyChart(
+pub fn paintXyChart(
     writer: *std.io.Writer,
     allocator: std.mem.Allocator,
-    source: []const u8,
+    chart_ptr: *const types.XyChart,
     opts: Options,
 ) RenderError!void {
-    var chart = parse.parseSource(allocator, source) catch |err| switch (err) {
-        error.InvalidMermaid => return error.InvalidMermaid,
-        error.UnsupportedFeature => return error.UnsupportedFeature,
-        error.OutOfMemory => return error.OutOfMemory,
-    };
-    defer chart.deinit();
+    const chart = chart_ptr.*;
 
     for (chart.series) |s| {
         if (s.data.len > MAX_SERIES_POINTS) return error.UnsupportedFeature;
@@ -248,7 +245,7 @@ fn writeVertical(
     }
 
     if (opts.enable_ansi and chart.series.len > 0) {
-        canvas_mod.writeCanvasAnsi(writer, &canvas, opts.wrap_width, opts.ambiguous_width, &theme.default_series_palette, .truecolor) catch return error.WriteFailed;
+        canvas_mod.writeCanvasAnsi(writer, &canvas, opts.wrap_width, opts.ambiguous_width, &theme.default_series_palette, opts.color_mode) catch return error.WriteFailed;
     } else {
         canvas_mod.writeCanvas(writer, &canvas, opts.wrap_width, opts.ambiguous_width) catch return error.WriteFailed;
     }
@@ -408,7 +405,7 @@ fn writeHorizontal(
     }
 
     if (opts.enable_ansi and chart.series.len > 0) {
-        canvas_mod.writeCanvasAnsi(writer, &canvas, opts.wrap_width, opts.ambiguous_width, &theme.default_series_palette, .truecolor) catch return error.WriteFailed;
+        canvas_mod.writeCanvasAnsi(writer, &canvas, opts.wrap_width, opts.ambiguous_width, &theme.default_series_palette, opts.color_mode) catch return error.WriteFailed;
     } else {
         canvas_mod.writeCanvas(writer, &canvas, opts.wrap_width, opts.ambiguous_width) catch return error.WriteFailed;
     }
@@ -780,10 +777,10 @@ fn lineColVertical(
     return plot_left + i * (plot_w - 1) / (n - 1);
 }
 
-fn renderToString(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
+fn renderToString(allocator: std.mem.Allocator, chart: *const types.XyChart) ![]u8 {
     var sink: std.io.Writer.Allocating = .init(allocator);
     errdefer sink.deinit();
-    try writeXyChart(&sink.writer, allocator, source, .{
+    try paintXyChart(&sink.writer, allocator, chart, .{
         .wrap_width = null,
         .ambiguous_width = .narrow,
         .enable_ansi = false,
@@ -873,11 +870,13 @@ test "formatTickValue(99.7) rounds up to \"100\"" {
     try std.testing.expectEqualStrings("100", formatTickValue(&buf, 99.7));
 }
 
-test "writeXyChart renders empty chart (title only) as bare plot frame" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart renders empty chart (title only) as bare plot frame" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\title "Demo"
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "Demo") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "│") != null);
@@ -885,23 +884,27 @@ test "writeXyChart renders empty chart (title only) as bare plot frame" {
     try std.testing.expect(std.mem.indexOf(u8, out, "─") != null);
 }
 
-test "writeXyChart renders vertical bar chart with category x-axis" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart renders vertical bar chart with category x-axis" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\x-axis [a, b, c]
         \\bar [1, 2, 3]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "█") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "│") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "┼") != null);
 }
 
-test "writeXyChart renders vertical line chart across 4 data points" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart renders vertical line chart across 4 data points" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\line [1, 2, 3, 4]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "╯") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "╭") != null);
@@ -909,123 +912,149 @@ test "writeXyChart renders vertical line chart across 4 data points" {
     try std.testing.expect(std.mem.indexOf(u8, out, "┼") != null);
 }
 
-test "writeXyChart places title text on the top row" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart places title text on the top row" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\title "Hello"
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     const nl = std.mem.indexOfScalar(u8, out, '\n') orelse out.len;
     try std.testing.expectEqualStrings("Hello", out[0..nl]);
 }
 
-test "writeXyChart falls back to 0..100 range when no series present" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart falls back to 0..100 range when no series present" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\title "T"
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "100") != null);
 }
 
-test "writeXyChart pads auto-range for bar [50, 100] to span 45..105" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart pads auto-range for bar [50, 100] to span 45..105" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\bar [50, 100]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "50") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "100") != null);
 }
 
-test "writeXyChart does not floor auto-range when min >= span * 0.5" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart does not floor auto-range when min >= span * 0.5" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\bar [1, 2]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "0") == null);
 }
 
-test "writeXyChart preserves negative values in auto-range for bar [-10, 10]" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart preserves negative values in auto-range for bar [-10, 10]" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\bar [-10, 10]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "-10") != null);
 }
 
-test "writeXyChart emits y-axis nice tick labels for explicit range 0-->100" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart emits y-axis nice tick labels for explicit range 0-->100" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\y-axis 0 --> 100
         \\bar [50]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "20") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "40") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "100") != null);
 }
 
-test "writeXyChart does not emit old fixed-interval tick labels for 0-->100" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart does not emit old fixed-interval tick labels for 0-->100" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\y-axis 0 --> 100
         \\bar [50]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "33.3") == null);
     try std.testing.expect(std.mem.indexOf(u8, out, "66.7") == null);
 }
 
-test "writeXyChart does not clip overlong category labels with ellipsis" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart does not clip overlong category labels with ellipsis" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\x-axis ["VeryLongCategoryLabel1", "B", "C"]
         \\bar [1, 2, 3]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "…") == null);
     try std.testing.expect(std.mem.indexOf(u8, out, "VeryLongCategoryLab") != null);
 }
 
-test "writeXyChart renders x-axis title below category labels" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart renders x-axis title below category labels" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\x-axis "Months" [Jan, Feb]
         \\bar [1, 2]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     const jan_pos = std.mem.indexOf(u8, out, "Jan") orelse return error.TestUnexpectedResult;
     const months_pos = std.mem.indexOf(u8, out, "Months") orelse return error.TestUnexpectedResult;
     try std.testing.expect(months_pos > jan_pos);
 }
 
-test "writeXyChart adds exactly one row for x-axis title vs no title" {
-    const titled = try renderToString(std.testing.allocator,
+test "paintXyChart adds exactly one row for x-axis title vs no title" {
+    var titled_diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\x-axis "Months" [a, b]
         \\bar [1, 2]
     );
+    defer titled_diagram.deinit();
+    const titled = try renderToString(std.testing.allocator, &titled_diagram.xychart);
     defer std.testing.allocator.free(titled);
-    const untitled = try renderToString(std.testing.allocator,
+
+    var untitled_diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\x-axis [a, b]
         \\bar [1, 2]
     );
+    defer untitled_diagram.deinit();
+    const untitled = try renderToString(std.testing.allocator, &untitled_diagram.xychart);
     defer std.testing.allocator.free(untitled);
+
     const titled_nl = std.mem.count(u8, titled, "\n");
     const untitled_nl = std.mem.count(u8, untitled, "\n");
     try std.testing.expectEqual(untitled_nl + 1, titled_nl);
 }
 
-test "writeXyChart horizontal renders y-axis title on last row" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart horizontal renders y-axis title on last row" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart horizontal
         \\y-axis "Revenue" 0 --> 100
         \\bar [10, 20, 30]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     const trimmed = std.mem.trimRight(u8, out, "\n");
     const nl = std.mem.lastIndexOfScalar(u8, trimmed, '\n');
@@ -1033,33 +1062,39 @@ test "writeXyChart horizontal renders y-axis title on last row" {
     try std.testing.expect(std.mem.indexOf(u8, last_line, "Revenue") != null);
 }
 
-test "writeXyChart auto-ranges y-axis from series data when range absent" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart auto-ranges y-axis from series data when range absent" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\bar [5, 10, 15]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "10") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "16") != null);
 }
 
-test "writeXyChart differentiates two line series with ascending and descending staircase" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart differentiates two line series with ascending and descending staircase" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\line [1, 2, 3]
         \\line [3, 2, 1]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "╯") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "╰") != null);
 }
 
-test "writeXyChart horizontal places category labels on the left of y-axis" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart horizontal places category labels on the left of y-axis" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart horizontal
         \\x-axis [alpha, beta, gamma]
         \\bar [1, 2, 3]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "alpha") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "beta") != null);
@@ -1072,12 +1107,14 @@ test "writeXyChart horizontal places category labels on the left of y-axis" {
     }
 }
 
-test "writeXyChart horizontal renders tick labels on the bottom" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart horizontal renders tick labels on the bottom" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart horizontal
         \\y-axis 0 --> 100
         \\bar [50]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     const trimmed = std.mem.trimRight(u8, out, "\n");
     const nl = std.mem.lastIndexOfScalar(u8, trimmed, '\n');
@@ -1086,25 +1123,29 @@ test "writeXyChart horizontal renders tick labels on the bottom" {
     try std.testing.expect(std.mem.indexOf(u8, last_line, "100") != null);
 }
 
-test "writeXyChart horizontal 2-series places legend on top" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart horizontal 2-series places legend on top" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart horizontal
         \\x-axis [a, b, c]
         \\bar [1, 2, 3]
         \\bar [3, 2, 1]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     var it = std.mem.splitScalar(u8, out, '\n');
     const first_line = it.next() orelse "";
     try std.testing.expect(std.mem.indexOf(u8, first_line, "Bar 1") != null);
 }
 
-test "writeXyChart horizontal renders x-axis title below tick labels" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart horizontal renders x-axis title below tick labels" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart horizontal
         \\x-axis "Months" [Jan, Feb, Mar]
         \\bar [1, 2, 3]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "Months") != null);
     const months_pos = std.mem.indexOf(u8, out, "Months").?;
@@ -1112,13 +1153,15 @@ test "writeXyChart horizontal renders x-axis title below tick labels" {
     try std.testing.expect(months_pos > tick_pos);
 }
 
-test "writeXyChart horizontal renders both x-axis and y-axis titles in correct order" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart horizontal renders both x-axis and y-axis titles in correct order" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart horizontal
         \\x-axis "Months" [Jan, Feb]
         \\y-axis "Revenue"
         \\bar [10, 20]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "Months") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Revenue") != null);
@@ -1127,58 +1170,74 @@ test "writeXyChart horizontal renders both x-axis and y-axis titles in correct o
     try std.testing.expect(revenue_pos > months_pos);
 }
 
-test "writeXyChart horizontal without x-axis title has no spurious row" {
-    const with_title = try renderToString(std.testing.allocator,
+test "paintXyChart horizontal without x-axis title has no spurious row" {
+    var with_title_diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart horizontal
         \\x-axis "T" [a, b]
         \\bar [1, 2]
     );
+    defer with_title_diagram.deinit();
+    const with_title = try renderToString(std.testing.allocator, &with_title_diagram.xychart);
     defer std.testing.allocator.free(with_title);
-    const without_title = try renderToString(std.testing.allocator,
+
+    var without_title_diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart horizontal
         \\x-axis [a, b]
         \\bar [1, 2]
     );
+    defer without_title_diagram.deinit();
+    const without_title = try renderToString(std.testing.allocator, &without_title_diagram.xychart);
     defer std.testing.allocator.free(without_title);
+
     const with_nl = std.mem.count(u8, with_title, "\n");
     const without_nl = std.mem.count(u8, without_title, "\n");
     try std.testing.expectEqual(with_nl, without_nl + 1);
 }
 
-test "writeXyChart horizontal with only x-axis title adds one row vs neither" {
-    const with_x = try renderToString(std.testing.allocator,
+test "paintXyChart horizontal with only x-axis title adds one row vs neither" {
+    var with_x_diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart horizontal
         \\x-axis "X" [a, b]
         \\bar [1, 2]
     );
+    defer with_x_diagram.deinit();
+    const with_x = try renderToString(std.testing.allocator, &with_x_diagram.xychart);
     defer std.testing.allocator.free(with_x);
-    const neither = try renderToString(std.testing.allocator,
+
+    var neither_diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart horizontal
         \\x-axis [a, b]
         \\bar [1, 2]
     );
+    defer neither_diagram.deinit();
+    const neither = try renderToString(std.testing.allocator, &neither_diagram.xychart);
     defer std.testing.allocator.free(neither);
+
     const with_x_nl = std.mem.count(u8, with_x, "\n");
     const neither_nl = std.mem.count(u8, neither, "\n");
     try std.testing.expectEqual(with_x_nl, neither_nl + 1);
 }
 
-test "writeXyChart horizontal bar with negative values stays crash-free" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart horizontal bar with negative values stays crash-free" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart horizontal
         \\y-axis 0 --> 10
         \\bar [-5, 0, 5]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "█") != null);
 }
 
-test "writeXyChart horizontal bar chart renders category, tick, bar, and origin" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart horizontal bar chart renders category, tick, bar, and origin" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart horizontal
         \\x-axis [a, b, c]
         \\bar [1, 2, 3]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "a") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "█") != null);
@@ -1186,89 +1245,105 @@ test "writeXyChart horizontal bar chart renders category, tick, bar, and origin"
     try std.testing.expect(std.mem.indexOf(u8, out, "█████") != null);
 }
 
-test "writeXyChart horizontal ascending line contains staircase corners" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart horizontal ascending line contains staircase corners" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart horizontal
         \\line [1, 4]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "╰") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "╮") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "●") == null);
 }
 
-test "writeXyChart horizontal descending line contains opposite corners" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart horizontal descending line contains opposite corners" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart horizontal
         \\line [4, 1]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "╯") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "╭") != null);
 }
 
-test "writeXyChart horizontal single-point line renders without dot marker" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart horizontal single-point line renders without dot marker" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart horizontal
         \\line [42]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "●") == null);
     try std.testing.expect(std.mem.indexOf(u8, out, "│") != null);
 }
 
-test "writeXyChart legend uses Bar N / Line N naming for mixed series" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart legend uses Bar N / Line N naming for mixed series" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\bar [1, 2, 3]
         \\line [3, 2, 1]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "Bar 1") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Line 1") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "series") == null);
 }
 
-test "writeXyChart omits legend for single series" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart omits legend for single series" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\bar [1, 2, 3]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "Bar") == null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Line") == null);
 }
 
-test "writeXyChart legend shows Line 1 when first series is line" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart legend shows Line 1 when first series is line" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\line [1, 2, 3]
         \\bar [3, 2, 1]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "Line 1") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Bar 1") != null);
 }
 
-test "writeXyChart legend numbers per-kind for bar+line+bar series" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart legend numbers per-kind for bar+line+bar series" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\bar [1, 2, 3]
         \\line [2, 2, 2]
         \\bar [3, 2, 1]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "Bar 1") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Line 1") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Bar 2") != null);
 }
 
-test "writeXyChart places legend on row 0 when no title" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart places legend on row 0 when no title" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\bar [1, 2, 3]
         \\line [3, 2, 1]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     var it = std.mem.splitScalar(u8, out, '\n');
     const first_line = it.next() orelse "";
@@ -1276,13 +1351,15 @@ test "writeXyChart places legend on row 0 when no title" {
     try std.testing.expect(std.mem.indexOf(u8, first_line, "Line 1") != null);
 }
 
-test "writeXyChart places legend on row 1 just below title row 0" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart places legend on row 1 just below title row 0" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\title "T"
         \\bar [1, 2, 3]
         \\line [3, 2, 1]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     var it = std.mem.splitScalar(u8, out, '\n');
     const line0 = it.next() orelse "";
@@ -1292,12 +1369,14 @@ test "writeXyChart places legend on row 1 just below title row 0" {
     try std.testing.expect(std.mem.indexOf(u8, line1, "Bar 1") != null);
 }
 
-test "writeXyChart centers legend horizontally within totalW" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart centers legend horizontally within totalW" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\bar [1, 2, 3]
         \\line [3, 2, 1]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     var it = std.mem.splitScalar(u8, out, '\n');
     const first_line = it.next() orelse "";
@@ -1308,11 +1387,13 @@ test "writeXyChart centers legend horizontally within totalW" {
     try std.testing.expect(bar_col < total_w - 10);
 }
 
-test "writeXyChart allocates at least 60 plot cols regardless of category count" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart allocates at least 60 plot cols regardless of category count" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\x-axis [a, b]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     var max_width: usize = 0;
     var it = std.mem.splitScalar(u8, out, '\n');
@@ -1323,47 +1404,57 @@ test "writeXyChart allocates at least 60 plot cols regardless of category count"
     try std.testing.expect(max_width >= 60);
 }
 
-test "writeXyChart renders ascending line with corner_br ╯" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart renders ascending line with corner_br ╯" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\line [1, 4]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "╯") != null);
 }
 
-test "writeXyChart renders ascending line with corner_tl ╭" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart renders ascending line with corner_tl ╭" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\line [1, 4]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "╭") != null);
 }
 
-test "writeXyChart renders descending line with corner_tr ╮" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart renders descending line with corner_tr ╮" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\line [4, 1]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "╮") != null);
 }
 
-test "writeXyChart renders descending line with corner_bl ╰" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart renders descending line with corner_bl ╰" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\line [4, 1]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "╰") != null);
 }
 
-test "writeXyChart renders flat line with ─ and no corners" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart renders flat line with ─ and no corners" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\line [2, 2, 2]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "─") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "╭") == null);
@@ -1373,58 +1464,68 @@ test "writeXyChart renders flat line with ─ and no corners" {
     try std.testing.expect(std.mem.count(u8, out, "│") <= 21);
 }
 
-test "writeXyChart renders single-point line without dot marker" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart renders single-point line without dot marker" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\line [42]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "─") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "●") == null);
 }
 
-test "writeXyChart vertical line omits dot markers" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart vertical line omits dot markers" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\line [1, 2]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "●") == null);
 }
 
-test "writeXyChart ascending 2-point line draws vertical staircase fill" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart ascending 2-point line draws vertical staircase fill" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\line [1, 2]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.count(u8, out, "│") > 20);
 }
 
-test "writeXyChart draws single bar series with singleBarW >= 8 columns wide" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart draws single bar series with singleBarW >= 8 columns wide" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\x-axis [a, b, c]
         \\bar [3, 3, 3]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "████████") != null);
 }
 
-test "writeXyChart renders clustered 2-bar series with >= 240 block glyphs" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart renders clustered 2-bar series with >= 240 block glyphs" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\x-axis [a, b, c]
         \\bar [3, 3, 3]
         \\bar [3, 3, 3]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     const cnt = std.mem.count(u8, out, "█");
     try std.testing.expect(cnt >= 240);
 }
 
-test "writeXyChart handles 8 bar series clustered without division-by-zero" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart handles 8 bar series clustered without division-by-zero" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\x-axis [a, b, c]
         \\bar [1, 1, 1]
@@ -1436,15 +1537,19 @@ test "writeXyChart handles 8 bar series clustered without division-by-zero" {
         \\bar [1, 1, 1]
         \\bar [1, 1, 1]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "█") != null);
 }
 
-test "writeXyChart widens plot cols with dataCount * 6 when categories exceed PLOT_WIDTH_MIN" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart widens plot cols with dataCount * 6 when categories exceed PLOT_WIDTH_MIN" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\x-axis [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     var max_width: usize = 0;
     var it = std.mem.splitScalar(u8, out, '\n');
@@ -1455,55 +1560,66 @@ test "writeXyChart widens plot cols with dataCount * 6 when categories exceed PL
     try std.testing.expect(max_width >= 90);
 }
 
-test "writeXyChart emits exactly one \xe2\x94\xbc origin glyph at axis corner" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart emits exactly one \xe2\x94\xbc origin glyph at axis corner" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\bar [1, 2, 3]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out, "┼"));
 }
 
-test "writeXyChart draws \xe2\x94\xa4 y-tick glyphs along y-axis" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart draws \xe2\x94\xa4 y-tick glyphs along y-axis" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\y-axis 0 --> 100
         \\bar [50]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "┤") != null);
 }
 
-test "writeXyChart draws \xe2\x94\xac x-tick glyphs at category band centers" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart draws \xe2\x94\xac x-tick glyphs at category band centers" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\x-axis [a, b, c]
         \\bar [1, 2, 3]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, out, "┬"));
 }
 
-test "writeXyChart scatters \xc2\xb7 dot grid across tick rows in plot area" {
-    const out = try renderToString(std.testing.allocator,
+test "paintXyChart scatters \xc2\xb7 dot grid across tick rows in plot area" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\y-axis 0 --> 100
         \\bar [50]
     );
+    defer diagram.deinit();
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "·") != null);
     try std.testing.expect(std.mem.count(u8, out, "·") >= 150);
 }
 
-test "writeXyChart use_ascii=true substitutes +|-#. for unicode drawing glyphs" {
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
-    defer sink.deinit();
-    try writeXyChart(&sink.writer, std.testing.allocator,
+test "paintXyChart use_ascii=true substitutes +|-#. for unicode drawing glyphs" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\x-axis [a, b, c]
         \\y-axis 0 --> 100
         \\bar [50, 50, 50]
-    , .{
+    );
+    defer diagram.deinit();
+
+    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    try paintXyChart(&sink.writer, std.testing.allocator, &diagram.xychart, .{
         .wrap_width = null,
         .ambiguous_width = .narrow,
         .enable_ansi = false,
@@ -1523,7 +1639,7 @@ test "writeXyChart use_ascii=true substitutes +|-#. for unicode drawing glyphs" 
     try std.testing.expect(std.mem.indexOf(u8, out, "·") == null);
 }
 
-test "writeXyChart returns UnsupportedFeature for series exceeding 1024 points" {
+test "paintXyChart returns UnsupportedFeature for series exceeding 1024 points" {
     var source: std.ArrayListUnmanaged(u8) = .empty;
     defer source.deinit(std.testing.allocator);
     try source.appendSlice(std.testing.allocator, "xychart\nline [1");
@@ -1531,19 +1647,20 @@ test "writeXyChart returns UnsupportedFeature for series exceeding 1024 points" 
     while (k < 1024) : (k += 1) try source.appendSlice(std.testing.allocator, ",1");
     try source.appendSlice(std.testing.allocator, "]\n");
 
+    var diagram = try compile_mod.compile(std.testing.allocator, source.items);
+    defer diagram.deinit();
+
     var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
-    try std.testing.expectError(error.UnsupportedFeature, writeXyChart(&sink.writer, std.testing.allocator, source.items, .{
+    try std.testing.expectError(error.UnsupportedFeature, paintXyChart(&sink.writer, std.testing.allocator, &diagram.xychart, .{
         .wrap_width = null,
         .ambiguous_width = .narrow,
         .enable_ansi = false,
     }));
 }
 
-test "writeXyChart wraps series colors modulo 8 (series 0 and series 8 share role)" {
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
-    defer sink.deinit();
-    try writeXyChart(&sink.writer, std.testing.allocator,
+test "paintXyChart wraps series colors modulo 8 (series 0 and series 8 share role)" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
         \\xychart
         \\x-axis [a]
         \\bar [1]
@@ -1555,7 +1672,12 @@ test "writeXyChart wraps series colors modulo 8 (series 0 and series 8 share rol
         \\bar [7]
         \\bar [8]
         \\bar [9]
-    , .{
+    );
+    defer diagram.deinit();
+
+    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    try paintXyChart(&sink.writer, std.testing.allocator, &diagram.xychart, .{
         .wrap_width = null,
         .ambiguous_width = .narrow,
         .enable_ansi = true,
@@ -1596,10 +1718,13 @@ test "writeXyChart wraps series colors modulo 8 (series 0 and series 8 share rol
     try std.testing.expect(saw_double_sgr0);
 }
 
-test "writeXyChart with enable_ansi=true emits truecolor escape for bars" {
+test "paintXyChart with enable_ansi=true emits truecolor escape for bars" {
+    var diagram = try compile_mod.compile(std.testing.allocator, "xychart\nbar [1, 2, 3]\n");
+    defer diagram.deinit();
+
     var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
-    try writeXyChart(&sink.writer, std.testing.allocator, "xychart\nbar [1, 2, 3]\n", .{
+    try paintXyChart(&sink.writer, std.testing.allocator, &diagram.xychart, .{
         .wrap_width = null,
         .ambiguous_width = .narrow,
         .enable_ansi = true,
@@ -1607,10 +1732,13 @@ test "writeXyChart with enable_ansi=true emits truecolor escape for bars" {
     try std.testing.expect(std.mem.indexOf(u8, sink.writer.buffered(), "\x1b[38;2;") != null);
 }
 
-test "writeXyChart with 2 bar series produces two distinct SGR foreground sequences" {
+test "paintXyChart with 2 bar series produces two distinct SGR foreground sequences" {
+    var diagram = try compile_mod.compile(std.testing.allocator, "xychart\nbar [1, 2, 3]\nbar [4, 5, 6]\n");
+    defer diagram.deinit();
+
     var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
-    try writeXyChart(&sink.writer, std.testing.allocator, "xychart\nbar [1, 2, 3]\nbar [4, 5, 6]\n", .{
+    try paintXyChart(&sink.writer, std.testing.allocator, &diagram.xychart, .{
         .wrap_width = null,
         .ambiguous_width = .narrow,
         .enable_ansi = true,
@@ -1635,10 +1763,13 @@ test "writeXyChart with 2 bar series produces two distinct SGR foreground sequen
     try std.testing.expect(distinct_found);
 }
 
-test "writeXyChart with enable_ansi=false (default) emits no SGR escape" {
+test "paintXyChart with enable_ansi=false (default) emits no SGR escape" {
+    var diagram = try compile_mod.compile(std.testing.allocator, "xychart\nbar [1, 2, 3]\n");
+    defer diagram.deinit();
+
     var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
-    try writeXyChart(&sink.writer, std.testing.allocator, "xychart\nbar [1, 2, 3]\n", .{
+    try paintXyChart(&sink.writer, std.testing.allocator, &diagram.xychart, .{
         .wrap_width = null,
         .ambiguous_width = .narrow,
         .enable_ansi = false,
@@ -1647,10 +1778,13 @@ test "writeXyChart with enable_ansi=false (default) emits no SGR escape" {
 }
 
 test "vertical xychart clips each line when wrap_width=30 with enable_ansi=true" {
+    const src = "xychart\nx-axis [a, b, c, d, e, f, g, h, i, j, k, l, m, n, o]\nbar [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]\n";
+    var diagram = try compile_mod.compile(std.testing.allocator, src);
+    defer diagram.deinit();
+
     var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
-    const src = "xychart\nx-axis [a, b, c, d, e, f, g, h, i, j, k, l, m, n, o]\nbar [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]\n";
-    try writeXyChart(&sink.writer, std.testing.allocator, src, .{
+    try paintXyChart(&sink.writer, std.testing.allocator, &diagram.xychart, .{
         .wrap_width = 30,
         .ambiguous_width = .narrow,
         .enable_ansi = true,
@@ -1661,10 +1795,13 @@ test "vertical xychart clips each line when wrap_width=30 with enable_ansi=true"
 }
 
 test "horizontal xychart clips each line when wrap_width=30 with enable_ansi=true" {
+    const src = "xychart horizontal\nx-axis [a, b, c]\nbar [1, 2, 3]\n";
+    var diagram = try compile_mod.compile(std.testing.allocator, src);
+    defer diagram.deinit();
+
     var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
-    const src = "xychart horizontal\nx-axis [a, b, c]\nbar [1, 2, 3]\n";
-    try writeXyChart(&sink.writer, std.testing.allocator, src, .{
+    try paintXyChart(&sink.writer, std.testing.allocator, &diagram.xychart, .{
         .wrap_width = 30,
         .ambiguous_width = .narrow,
         .enable_ansi = true,
@@ -1675,9 +1812,12 @@ test "horizontal xychart clips each line when wrap_width=30 with enable_ansi=tru
 }
 
 test "vertical xychart with wrap_width=null and enable_ansi=true emits no ellipsis" {
+    var diagram = try compile_mod.compile(std.testing.allocator, "xychart\nbar [1, 2, 3]\n");
+    defer diagram.deinit();
+
     var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
-    try writeXyChart(&sink.writer, std.testing.allocator, "xychart\nbar [1, 2, 3]\n", .{
+    try paintXyChart(&sink.writer, std.testing.allocator, &diagram.xychart, .{
         .wrap_width = null,
         .ambiguous_width = .narrow,
         .enable_ansi = true,

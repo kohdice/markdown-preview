@@ -24,7 +24,7 @@ pub const Direction = enum {
 
     /// Normalises for layout: RL → LR (upstream parity). BT is intentionally
     /// not normalised here because it requires a paired canvas flipVertical;
-    /// renderMermaidGraph owns that coupling before calling computeLayout.
+    /// paintMermaidGraph owns that coupling before calling computeLayout.
     pub fn layoutDir(self: Direction) Direction {
         return switch (self) {
             .right_left => .left_right,
@@ -112,12 +112,9 @@ pub const NodeStyle = struct {
 };
 
 pub const Subgraph = struct {
-    /// Explicit id from `subgraph id [title]`, or the slugified id for the
-    /// label-only form.
     id_text: []const u8,
     title: ?[]const u8 = null,
     direction: ?Direction = null,
-    /// Direct members only; nodes owned by `children` are not listed here.
     node_ids: []NodeId = &.{},
     edge_indices: []u32 = &.{},
     children: []Subgraph = &.{},
@@ -140,6 +137,10 @@ pub const MermaidGraph = struct {
     node_styles: []NodeStyle = &.{},
     /// Repeated keys are kept in source order.
     link_styles: []LinkStyle = &.{},
+    /// Owned allocations backing borrowed string slices in nodes, edges,
+    /// subgraphs, etc. Includes a private copy of the (directive-stripped)
+    /// source so labels stay valid for the lifetime of the diagram without
+    /// requiring the caller to keep the original source alive.
     owned_strings: [][]u8 = &.{},
 
     pub fn deinit(self: *MermaidGraph) void {
@@ -232,6 +233,8 @@ pub const SequenceDiagram = struct {
     messages: []SequenceMessage,
     notes: []SequenceNote = &.{},
     blocks: []SequenceBlock = &.{},
+    /// Owns a copy of the (directive-stripped) source plus any allocated
+    /// auxiliary strings. Borrowed slices in messages/notes point into this.
     owned_strings: [][]u8 = &.{},
 
     pub fn deinit(self: *SequenceDiagram) void {
@@ -301,6 +304,8 @@ pub const ClassDiagram = struct {
     classes: []ClassNode,
     relations: []ClassRelation,
     namespaces: []ClassNamespace = &.{},
+    /// Owns a copy of the (directive-stripped) source plus any allocated
+    /// auxiliary labels. Borrowed slices in classes/relations point into this.
     owned_labels: [][]u8 = &.{},
 
     pub fn deinit(self: *ClassDiagram) void {
@@ -368,6 +373,8 @@ pub const ErDiagram = struct {
     allocator: std.mem.Allocator,
     entities: []ErEntity,
     relations: []ErRelation,
+    /// Owns a copy of the (directive-stripped) source plus any allocated
+    /// auxiliary strings. Borrowed slices in entities/relations point into this.
     owned_strings: [][]u8 = &.{},
 
     pub fn deinit(self: *ErDiagram) void {
@@ -403,12 +410,15 @@ pub const GitGraph = struct {
     allocator: std.mem.Allocator,
     branches: []GitBranch,
     commits: []GitCommit,
-    source_buf: ?[]u8 = null,
+    /// Owns a copy of the (directive-stripped) source. Borrowed slices in
+    /// commits/branches point into this.
+    owned_strings: [][]u8 = &.{},
 
     pub fn deinit(self: *GitGraph) void {
         self.allocator.free(self.branches);
         self.allocator.free(self.commits);
-        if (self.source_buf) |b| self.allocator.free(b);
+        for (self.owned_strings) |s| self.allocator.free(s);
+        if (self.owned_strings.len > 0) self.allocator.free(self.owned_strings);
     }
 };
 
@@ -439,6 +449,8 @@ pub const XyChart = struct {
     x_axis: XyAxis = .{},
     y_axis: XyAxis = .{},
     series: []XySeries = &.{},
+    /// Owns a copy of the (directive-stripped) source plus any allocated
+    /// auxiliary strings (titles, category labels, …).
     owned_strings: [][]u8 = &.{},
 
     pub fn deinit(self: *XyChart) void {
@@ -497,19 +509,13 @@ fn brTagLen(text: []const u8, i: usize) ?usize {
 
 pub const GridPos = struct { row: usize, col: usize };
 
-/// Bounding box on the grid for a subgraph, used by the renderer to draw a
-/// surrounding frame. Coordinates are inclusive cell indices in `Layout`.
 pub const SubgraphFrame = struct {
     row_start: usize,
     col_start: usize,
     row_end: usize,
     col_end: usize,
-    /// 0 for top-level subgraphs; +1 per nesting level.
     depth: usize,
     title: ?[]const u8,
-    /// Mirrors `Subgraph.representative_node` so the renderer can look up the
-    /// frame that belongs to a given composite NodeId without re-walking the
-    /// subgraph tree.
     representative_node: ?NodeId = null,
 };
 
@@ -528,9 +534,6 @@ pub const Layout = struct {
     cell_w: usize,
     cell_h: usize,
     subgraph_frames: []SubgraphFrame = &.{},
-    /// Extra rows/columns reserved on every side so subgraph frames and titles
-    /// have space outside node boxes. Set to (max subgraph depth + 1) when
-    /// frames exist, 0 otherwise.
     outer_pad: usize = 0,
 
     /// Returns `.frame` when the node is a composite with a rendered frame,

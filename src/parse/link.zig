@@ -47,7 +47,7 @@ const LinkWhitespace = struct {
     consumed: bool,
 };
 
-pub const max_reference_label_chars = 999;
+const max_reference_label_chars = 999;
 
 pub fn definition(text: []const u8) ?Definition {
     const indent = parse_block.countIndentUpTo(text, parse_block.max_block_indent);
@@ -78,14 +78,6 @@ pub fn definitionNeedsDestinationContinuation(line: []const u8) bool {
     if (!hasReferenceLabelText(label)) return false;
 
     return std.mem.trim(u8, line[close + 2 ..], parse_block.horizontal_whitespace).len == 0;
-}
-
-pub fn normalizeReferenceLabel(allocator: std.mem.Allocator, label: []const u8) ![]const u8 {
-    var normalized: std.ArrayListUnmanaged(u8) = .empty;
-    errdefer normalized.deinit(allocator);
-
-    try appendNormalizedReferenceLabel(&normalized, allocator, label);
-    return try normalized.toOwnedSlice(allocator);
 }
 
 pub fn normalizeReferenceLabelInto(
@@ -169,26 +161,14 @@ fn appendNormalizedReferenceLabel(
             pending_space = false;
         }
 
-        const sequence_len = std.unicode.utf8ByteSequenceLength(label[pos]) catch {
+        const step = text_util.nextCodepoint(label, pos) orelse {
             try normalized.append(allocator, std.ascii.toLower(label[pos]));
             pos += 1;
             continue;
         };
 
-        if (pos + sequence_len > label.len) {
-            try normalized.append(allocator, std.ascii.toLower(label[pos]));
-            pos += 1;
-            continue;
-        }
-
-        const codepoint = std.unicode.utf8Decode(label[pos .. pos + sequence_len]) catch {
-            try normalized.append(allocator, std.ascii.toLower(label[pos]));
-            pos += 1;
-            continue;
-        };
-
-        try unicode_case_fold.appendCaseFoldedCodepoint(normalized, allocator, codepoint);
-        pos += sequence_len;
+        try unicode_case_fold.appendCaseFoldedCodepoint(normalized, allocator, step.cp);
+        pos += step.len;
     }
 }
 
@@ -207,7 +187,7 @@ pub fn parseInlineTarget(allocator: std.mem.Allocator, text: []const u8) !Inline
     };
 }
 
-pub fn materializeLinkText(allocator: std.mem.Allocator, raw: []const u8) ![]const u8 {
+fn materializeLinkText(allocator: std.mem.Allocator, raw: []const u8) ![]const u8 {
     if (!needsLinkMaterialization(raw)) return raw;
 
     var buffer: std.ArrayListUnmanaged(u8) = .empty;
@@ -494,10 +474,8 @@ fn hasReferenceLabelText(label: []const u8) bool {
 }
 
 fn referenceLabelCodepointLen(text: []const u8, start: usize) usize {
-    const sequence_len = std.unicode.utf8ByteSequenceLength(text[start]) catch return 1;
-    if (start + sequence_len > text.len) return 1;
-    _ = std.unicode.utf8Decode(text[start .. start + sequence_len]) catch return 1;
-    return sequence_len;
+    const step = text_util.nextCodepoint(text, start) orelse return 1;
+    return step.len;
 }
 
 fn isReferenceLabelWhitespace(char: u8) bool {

@@ -1,7 +1,7 @@
 const std = @import("std");
 const types = @import("types.zig");
-const parse = @import("parse_er.zig");
 const canvas_mod = @import("canvas.zig");
+const compile_mod = @import("compile.zig");
 const route_mod = @import("route.zig");
 const width_mod = @import("../term/width.zig");
 
@@ -17,18 +17,13 @@ pub const Options = struct {
     ambiguous_width: width_mod.AmbiguousWidth,
 };
 
-pub fn writeEr(
+pub fn paintEr(
     writer: *std.io.Writer,
     allocator: std.mem.Allocator,
-    source: []const u8,
+    diagram_ptr: *const types.ErDiagram,
     opts: Options,
 ) RenderError!void {
-    var diagram = parse.parseSource(allocator, source) catch |err| switch (err) {
-        error.InvalidMermaid, error.TooManyEntities => return error.InvalidMermaid,
-        error.UnsupportedFeature => return error.UnsupportedFeature,
-        error.OutOfMemory => return error.OutOfMemory,
-    };
-    defer diagram.deinit();
+    const diagram = diagram_ptr.*;
 
     if (diagram.entities.len == 0) return;
 
@@ -379,18 +374,20 @@ fn cardinalityGlyph(axis: route_mod.Axis, card: types.ErCardinality) u21 {
     };
 }
 
-test "writeEr renders entity box with attributes" {
+test "paintEr renders entity box with attributes" {
     const alloc = std.testing.allocator;
-    var sink: std.io.Writer.Allocating = .init(alloc);
-    defer sink.deinit();
-
-    try writeEr(&sink.writer, alloc,
+    var diagram = try compile_mod.compile(alloc,
         \\erDiagram
         \\    CUSTOMER {
         \\        string id PK
         \\        string name
         \\    }
-    , .{ .wrap_width = null, .ambiguous_width = .narrow });
+    );
+    defer diagram.deinit();
+
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+    try paintEr(&sink.writer, alloc, &diagram.er, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "CUSTOMER") != null);
@@ -398,15 +395,17 @@ test "writeEr renders entity box with attributes" {
     try std.testing.expect(std.mem.indexOf(u8, out, "string name") != null);
 }
 
-test "writeEr renders one-to-many with circle and crow glyphs" {
+test "paintEr renders one-to-many with circle and crow glyphs" {
     const alloc = std.testing.allocator;
-    var sink: std.io.Writer.Allocating = .init(alloc);
-    defer sink.deinit();
-
-    try writeEr(&sink.writer, alloc,
+    var diagram = try compile_mod.compile(alloc,
         \\erDiagram
         \\    CUSTOMER ||--o{ ORDER : places
-    , .{ .wrap_width = null, .ambiguous_width = .narrow });
+    );
+    defer diagram.deinit();
+
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+    try paintEr(&sink.writer, alloc, &diagram.er, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "CUSTOMER") != null);
@@ -418,22 +417,26 @@ test "writeEr renders one-to-many with circle and crow glyphs" {
         std.mem.indexOf(u8, out, "╬") != null);
 }
 
-test "writeEr renders identifying vs non-identifying distinctly" {
+test "paintEr renders identifying vs non-identifying distinctly" {
     const alloc = std.testing.allocator;
 
-    var ident_sink: std.io.Writer.Allocating = .init(alloc);
-    defer ident_sink.deinit();
-    try writeEr(&ident_sink.writer, alloc,
+    var ident_diagram = try compile_mod.compile(alloc,
         \\erDiagram
         \\    A ||--|| B : r
-    , .{ .wrap_width = null, .ambiguous_width = .narrow });
+    );
+    defer ident_diagram.deinit();
+    var ident_sink: std.io.Writer.Allocating = .init(alloc);
+    defer ident_sink.deinit();
+    try paintEr(&ident_sink.writer, alloc, &ident_diagram.er, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
-    var dotted_sink: std.io.Writer.Allocating = .init(alloc);
-    defer dotted_sink.deinit();
-    try writeEr(&dotted_sink.writer, alloc,
+    var dotted_diagram = try compile_mod.compile(alloc,
         \\erDiagram
         \\    A ||..|| B : r
-    , .{ .wrap_width = null, .ambiguous_width = .narrow });
+    );
+    defer dotted_diagram.deinit();
+    var dotted_sink: std.io.Writer.Allocating = .init(alloc);
+    defer dotted_sink.deinit();
+    try paintEr(&dotted_sink.writer, alloc, &dotted_diagram.er, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const ident = ident_sink.writer.buffered();
     const dotted = dotted_sink.writer.buffered();
@@ -441,29 +444,33 @@ test "writeEr renders identifying vs non-identifying distinctly" {
     try std.testing.expect(std.mem.indexOf(u8, ident, "╎") == null);
 }
 
-test "writeEr renders relation label on the routed path" {
+test "paintEr renders relation label on the routed path" {
     const alloc = std.testing.allocator;
-    var sink: std.io.Writer.Allocating = .init(alloc);
-    defer sink.deinit();
-
-    try writeEr(&sink.writer, alloc,
+    var diagram = try compile_mod.compile(alloc,
         \\erDiagram
         \\    CUSTOMER ||--o{ ORDER : places
-    , .{ .wrap_width = null, .ambiguous_width = .narrow });
+    );
+    defer diagram.deinit();
+
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+    try paintEr(&sink.writer, alloc, &diagram.er, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "places") != null);
 }
 
-test "writeEr handles empty entity block" {
+test "paintEr handles empty entity block" {
     const alloc = std.testing.allocator;
-    var sink: std.io.Writer.Allocating = .init(alloc);
-    defer sink.deinit();
-
-    try writeEr(&sink.writer, alloc,
+    var diagram = try compile_mod.compile(alloc,
         \\erDiagram
         \\    ORDER {}
-    , .{ .wrap_width = null, .ambiguous_width = .narrow });
+    );
+    defer diagram.deinit();
+
+    var sink: std.io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+    try paintEr(&sink.writer, alloc, &diagram.er, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "ORDER") != null);
@@ -471,15 +478,16 @@ test "writeEr handles empty entity block" {
 
 test "computeErLayout places single entity at origin with rows=cols=1" {
     const alloc = std.testing.allocator;
-    var diagram = try parse.parseSource(alloc,
+    var compiled = try compile_mod.compile(alloc,
         \\erDiagram
         \\    CUSTOMER {
         \\        string id
         \\    }
     );
-    defer diagram.deinit();
+    defer compiled.deinit();
+    const diagram = &compiled.er;
 
-    var layout = try computeErLayout(alloc, &diagram, .narrow);
+    var layout = try computeErLayout(alloc, diagram, .narrow);
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), layout.positions.len);
@@ -491,13 +499,14 @@ test "computeErLayout places single entity at origin with rows=cols=1" {
 
 test "computeErLayout has outer_pad 0 (ER has no namespaces)" {
     const alloc = std.testing.allocator;
-    var diagram = try parse.parseSource(alloc,
+    var compiled = try compile_mod.compile(alloc,
         \\erDiagram
         \\    A ||--|| B : r
     );
-    defer diagram.deinit();
+    defer compiled.deinit();
+    const diagram = &compiled.er;
 
-    var layout = try computeErLayout(alloc, &diagram, .narrow);
+    var layout = try computeErLayout(alloc, diagram, .narrow);
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), layout.outer_pad);
@@ -505,13 +514,14 @@ test "computeErLayout has outer_pad 0 (ER has no namespaces)" {
 
 test "computeErLayout stacks two-entity relation as bottom_up rows" {
     const alloc = std.testing.allocator;
-    var diagram = try parse.parseSource(alloc,
+    var compiled = try compile_mod.compile(alloc,
         \\erDiagram
         \\    CUSTOMER ||--o{ ORDER : places
     );
-    defer diagram.deinit();
+    defer compiled.deinit();
+    const diagram = &compiled.er;
 
-    var layout = try computeErLayout(alloc, &diagram, .narrow);
+    var layout = try computeErLayout(alloc, diagram, .narrow);
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 2), layout.positions.len);
@@ -529,14 +539,15 @@ test "computeErLayout stacks two-entity relation as bottom_up rows" {
 
 test "computeErLayout 1-parent 2-children branch separates siblings across columns" {
     const alloc = std.testing.allocator;
-    var diagram = try parse.parseSource(alloc,
+    var compiled = try compile_mod.compile(alloc,
         \\erDiagram
         \\    CUSTOMER ||--o{ ORDER : places
         \\    CUSTOMER ||--o{ INVOICE : receives
     );
-    defer diagram.deinit();
+    defer compiled.deinit();
+    const diagram = &compiled.er;
 
-    var layout = try computeErLayout(alloc, &diagram, .narrow);
+    var layout = try computeErLayout(alloc, diagram, .narrow);
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 3), layout.positions.len);
@@ -565,14 +576,15 @@ test "computeErLayout 1-parent 2-children branch separates siblings across colum
 
 test "computeErLayout 2-parents 1-child merge stacks parents in bottom row" {
     const alloc = std.testing.allocator;
-    var diagram = try parse.parseSource(alloc,
+    var compiled = try compile_mod.compile(alloc,
         \\erDiagram
         \\    CUSTOMER ||--o{ ORDER : places
         \\    SHIPPER ||--o{ ORDER : handles
     );
-    defer diagram.deinit();
+    defer compiled.deinit();
+    const diagram = &compiled.er;
 
-    var layout = try computeErLayout(alloc, &diagram, .narrow);
+    var layout = try computeErLayout(alloc, diagram, .narrow);
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 3), layout.positions.len);

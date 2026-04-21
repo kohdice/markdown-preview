@@ -1,5 +1,8 @@
 const std = @import("std");
+const source_mod = @import("source.zig");
 const types = @import("types.zig");
+
+pub const Source = source_mod.Source;
 
 pub const ParseError = error{
     InvalidMermaid,
@@ -7,7 +10,15 @@ pub const ParseError = error{
     OutOfMemory,
 };
 
-pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!types.XyChart {
+pub fn parseSource(allocator: std.mem.Allocator, source: anytype) ParseError!types.XyChart {
+    const owned_source: []u8 = if (@TypeOf(source) == Source) switch (source) {
+        .borrowed => |s| try allocator.dupe(u8, s),
+        .owned => |s| s,
+    } else try allocator.dupe(u8, source);
+    return parseFromOwned(allocator, owned_source);
+}
+
+fn parseFromOwned(allocator: std.mem.Allocator, owned_source: []u8) ParseError!types.XyChart {
     var chart: types.XyChart = .{ .allocator = allocator };
     errdefer chart.deinit();
 
@@ -17,6 +28,11 @@ pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!
         owned.deinit(allocator);
     }
 
+    {
+        errdefer allocator.free(owned_source);
+        try owned.append(allocator, owned_source);
+    }
+
     var series_list: std.ArrayListUnmanaged(types.XySeries) = .empty;
     errdefer {
         for (series_list.items) |s| if (s.data.len > 0) allocator.free(s.data);
@@ -24,7 +40,7 @@ pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!
     }
 
     var header_seen = false;
-    var it = std.mem.splitScalar(u8, source, '\n');
+    var it = std.mem.splitScalar(u8, owned_source, '\n');
     while (it.next()) |raw| {
         const no_cr = std.mem.trimRight(u8, raw, "\r");
         const trimmed = std.mem.trim(u8, no_cr, " \t");

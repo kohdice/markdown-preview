@@ -1,6 +1,9 @@
 const std = @import("std");
+const source_mod = @import("source.zig");
 const types = @import("types.zig");
 const width_mod = @import("../term/width.zig");
+
+pub const Source = source_mod.Source;
 
 pub const ParseError = error{
     InvalidMermaid,
@@ -100,7 +103,15 @@ fn validateLabel(label: []const u8) ParseError!void {
     }
 }
 
-pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!types.MermaidGraph {
+pub fn parseSource(allocator: std.mem.Allocator, source: anytype) ParseError!types.MermaidGraph {
+    const owned_source: []u8 = if (@TypeOf(source) == Source) switch (source) {
+        .borrowed => |s| try allocator.dupe(u8, s),
+        .owned => |s| s,
+    } else try allocator.dupe(u8, source);
+    return parseFromOwned(allocator, owned_source);
+}
+
+fn parseFromOwned(allocator: std.mem.Allocator, owned_source: []u8) ParseError!types.MermaidGraph {
     var parser: Parser = .{ .allocator = allocator };
     defer parser.interned.deinit(allocator);
     defer parser.ctx_stack.deinit(allocator);
@@ -120,8 +131,13 @@ pub fn parseSource(allocator: std.mem.Allocator, source: []const u8) ParseError!
         parser.owned_strings.deinit(allocator);
     }
 
+    {
+        errdefer allocator.free(owned_source);
+        try parser.owned_strings.append(allocator, owned_source);
+    }
+
     var direction: ?types.Direction = null;
-    var it = std.mem.splitScalar(u8, source, '\n');
+    var it = std.mem.splitScalar(u8, owned_source, '\n');
     while (it.next()) |raw_line| {
         const stripped_cr = std.mem.trimRight(u8, raw_line, "\r");
         const trimmed = std.mem.trim(u8, stripped_cr, " \t");
@@ -287,8 +303,6 @@ fn popSubgraph(parser: *Parser) ParseError!void {
     }
 }
 
-/// Mirrors upstream `rest.replace(/\s+/g, '_').replace(/[^\w]/g, '')`;
-/// case is preserved.
 fn slugify(allocator: std.mem.Allocator, label: []const u8) ParseError![]u8 {
     var out: std.ArrayListUnmanaged(u8) = .empty;
     errdefer out.deinit(allocator);
@@ -1412,13 +1426,6 @@ test "accepts plain CJK and single-codepoint emoji" {
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 2), graph.nodes.len);
     try std.testing.expectEqualStrings("日本語", graph.nodes[0].label);
-
-    const source = "graph TD\n    A[日本語] --> B[\u{1F680}]\n";
-    const label_slice = graph.nodes[0].label;
-    const label_addr = @intFromPtr(label_slice.ptr);
-    const source_start = @intFromPtr(source.ptr);
-    const source_end = source_start + source.len;
-    try std.testing.expect(label_addr >= source_start and label_addr < source_end);
 }
 
 test "parseSource rejects empty source" {

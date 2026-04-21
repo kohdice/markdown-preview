@@ -51,13 +51,8 @@ pub fn computeLayout(
         allocator.free(paths);
     }
 
-    // Phase 1: compute local levels for each subgraph using internal edges
-    // only, so cross-boundary edges do not affect intra-group ordering.
     try reassignLocalLevels(allocator, graph, paths, levels);
 
-    // Phase 2: compose virtual-node levels — treat each subgraph as a single
-    // node whose "size" equals its internal row span. This shifts subsequent
-    // nodes so they sit after the subgraph block, not interleaved with it.
     try composeVirtualNodeLevels(allocator, graph, paths, levels);
 
     var max_level: usize = 0;
@@ -103,9 +98,6 @@ pub fn computeLayout(
             }
             try group_min_levels.append(allocator, min_l);
 
-            // Band width depends on the group's effective direction relative
-            // to the parent: if axes are swapped (e.g. LR inside TD), width
-            // equals the number of occupied levels instead of max-per-level.
             var width: usize = 0;
             if (eff_dir.isHorizontal() != layout_dir.isHorizontal()) {
                 for (level_counts) |c| {
@@ -293,14 +285,10 @@ fn collectNodeBounds(
     sg_id: u32,
 ) void {
     for (sg.node_ids) |id| {
-        // Skip nodes whose ownership was claimed by an earlier subgraph
-        // (first-defined wins; computeNodePaths encodes this into paths).
         const p = paths[id];
         if (p.len < depth + 1 or p[depth] != sg_id) continue;
         expandBBox(bbox, positions[id]);
     }
-    // Children are always included — they are descendants of this subgraph,
-    // and their nodes were already ownership-checked at their own depth.
     for (sg.children) |*child| collectChildBounds(child, positions, bbox);
 }
 
@@ -378,7 +366,6 @@ fn walkSubgraphsForPaths(
         counter.* += 1;
         try stack.append(allocator, counter.*);
         for (sg.node_ids) |id| {
-            // First-defined subgraph wins ownership (upstream deduplication).
             if (paths[id].len == 0) {
                 paths[id] = try allocator.dupe(u32, stack.items);
             }

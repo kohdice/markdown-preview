@@ -1,12 +1,12 @@
 const std = @import("std");
-const markdown_preview = @import("markdown_preview");
-const parse = markdown_preview.parse;
-const render = markdown_preview.render;
+const internals = @import("internals");
+const parse = internals.parse.parse;
+const Renderer = internals.render.Renderer;
 
 pub const TestRenderOptions = struct {
     enable_ansi: bool = false,
     wrap_width: ?usize = null,
-    ambiguous_width: markdown_preview.term.width.AmbiguousWidth = .narrow,
+    ambiguous_width: internals.term.width.AmbiguousWidth = .narrow,
 };
 
 pub fn renderToOwnedSlice(
@@ -17,15 +17,15 @@ pub fn renderToOwnedSlice(
     var output: std.io.Writer.Allocating = .init(allocator);
     defer output.deinit();
 
-    var doc = try parse.parseBorrowed(allocator, input);
+    var doc = try parse(allocator, .{ .borrowed = input });
     defer doc.deinit();
 
-    var renderer = render.Renderer.init(allocator, .{
+    var renderer = Renderer.init(allocator, .{
         .enable_ansi = opts.enable_ansi,
         .ambiguous_width = opts.ambiguous_width,
     });
     defer renderer.deinit();
-    try renderer.renderDocument(&output.writer, &doc, opts.wrap_width, allocator);
+    try renderer.render(&output.writer, &doc, opts.wrap_width);
     var list = output.toArrayList();
     return list.toOwnedSlice(allocator);
 }

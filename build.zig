@@ -46,12 +46,19 @@ pub fn build(b: *std.Build) void {
         .ts_json_dep = ts_json_dep,
     });
 
+    const source_mod = b.createModule(.{
+        .root_source_file = b.path("src/source.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
     attachTreeSitter(exe_mod, ts_support);
+    exe_mod.addImport("source", source_mod);
 
     const exe = b.addExecutable(.{
         .name = "mp",
@@ -59,6 +66,47 @@ pub fn build(b: *std.Build) void {
     });
 
     b.installArtifact(exe);
+
+    const release_ts_dep = b.dependency("tree_sitter", .{
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    const release_ts_zig_dep = b.dependency("tree_sitter_zig", .{
+        .target = target,
+        .optimize = .ReleaseFast,
+        .@"build-shared" = false,
+    });
+
+    const release_ts_support = prepareTreeSitterSupport(b, .{
+        .target = target,
+        .optimize = .ReleaseFast,
+        .ts_dep = release_ts_dep,
+        .ts_zig_dep = release_ts_zig_dep,
+        .ts_c_dep = ts_c_dep,
+        .ts_rust_dep = ts_rust_dep,
+        .ts_go_dep = ts_go_dep,
+        .ts_python_dep = ts_python_dep,
+        .ts_javascript_dep = ts_javascript_dep,
+        .ts_bash_dep = ts_bash_dep,
+        .ts_cpp_dep = ts_cpp_dep,
+        .ts_typescript_dep = ts_typescript_dep,
+        .ts_html_dep = ts_html_dep,
+        .ts_css_dep = ts_css_dep,
+        .ts_json_dep = ts_json_dep,
+    });
+
+    const release_exe_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    attachTreeSitter(release_exe_mod, release_ts_support);
+    release_exe_mod.addImport("source", source_mod);
+
+    const release_exe = b.addExecutable(.{
+        .name = "mp-release",
+        .root_module = release_exe_mod,
+    });
 
     const bench_mod = b.createModule(.{
         .root_source_file = b.path("bench/bench_inline.zig"),
@@ -84,21 +132,96 @@ pub fn build(b: *std.Build) void {
         .root_module = bench_render_mod,
     });
 
+    const mermaid_mod = b.createModule(.{
+        .root_source_file = b.path("src/mermaid.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    mermaid_mod.addImport("source", source_mod);
+
+    const bench_mermaid_mod = b.createModule(.{
+        .root_source_file = b.path("bench/bench_mermaid.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    bench_mermaid_mod.addImport("mermaid", mermaid_mod);
+
+    const bench_mermaid_exe = b.addExecutable(.{
+        .name = "mermaid-bench",
+        .root_module = bench_mermaid_mod,
+    });
+
+    const render_buffer_mod = b.createModule(.{
+        .root_source_file = b.path("src/watch/render_buffer.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const bench_watch_buffer_mod = b.createModule(.{
+        .root_source_file = b.path("bench/bench_watch_buffer.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    bench_watch_buffer_mod.addImport("render_buffer", render_buffer_mod);
+
+    const bench_watch_buffer_exe = b.addExecutable(.{
+        .name = "watch-buffer-bench",
+        .root_module = bench_watch_buffer_mod,
+    });
+
+    const bench_fixtures_mod = b.createModule(.{
+        .root_source_file = b.path("bench/fixtures.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const bench_pipeline_mod = b.createModule(.{
+        .root_source_file = b.path("bench/bench_pipeline.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    attachTreeSitter(bench_pipeline_mod, ts_support);
+    bench_pipeline_mod.addImport("fixtures", bench_fixtures_mod);
+
+    const bench_pipeline_exe = b.addExecutable(.{
+        .name = "pipeline-bench",
+        .root_module = bench_pipeline_mod,
+    });
+
+    const bench_vs_cat_mod = b.createModule(.{
+        .root_source_file = b.path("bench/bench_vs_cat.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    bench_vs_cat_mod.addImport("fixtures", bench_fixtures_mod);
+
+    const bench_vs_cat_exe = b.addExecutable(.{
+        .name = "vs-cat-bench",
+        .root_module = bench_vs_cat_mod,
+    });
+
     const bench_support_mod = b.createModule(.{
         .root_source_file = b.path("bench/bench_support.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    const markdown_preview_mod = b.createModule(.{
-        .root_source_file = b.path("src/lib.zig"),
+    // Internal aggregation module exposing parse/render/source_loader/term
+    // plus the public `facade` (src/lib.zig) for bench harnesses and
+    // integration tests. External callers still use the facade directly
+    // via src/lib.zig; the re-export here only lets tests exercise both
+    // the facade contract and lower-level helpers from a single module.
+    const internals_mod = b.createModule(.{
+        .root_source_file = b.path("src/internals.zig"),
         .target = target,
         .optimize = optimize,
     });
-    attachTreeSitter(markdown_preview_mod, ts_support);
+    attachTreeSitter(internals_mod, ts_support);
+    internals_mod.addImport("source", source_mod);
 
-    bench_mod.addImport("markdown_preview", markdown_preview_mod);
-    bench_render_mod.addImport("markdown_preview", markdown_preview_mod);
+    bench_mod.addImport("internals", internals_mod);
+    bench_render_mod.addImport("internals", internals_mod);
+    bench_pipeline_mod.addImport("internals", internals_mod);
 
     const run_step = b.step("run", "Run the app");
     const run_cmd = b.addRunArtifact(exe);
@@ -117,6 +240,25 @@ pub fn build(b: *std.Build) void {
     const run_bench_render = b.addRunArtifact(bench_render_exe);
     bench_render_step.dependOn(&run_bench_render.step);
 
+    const bench_mermaid_step = b.step("bench-mermaid", "Run Mermaid compile/paint benchmarks");
+    const run_bench_mermaid = b.addRunArtifact(bench_mermaid_exe);
+    bench_mermaid_step.dependOn(&run_bench_mermaid.step);
+
+    const bench_watch_buffer_step = b.step("bench-watch-buffer", "Run RenderBuffer microbenchmark");
+    const run_bench_watch_buffer = b.addRunArtifact(bench_watch_buffer_exe);
+    bench_watch_buffer_step.dependOn(&run_bench_watch_buffer.step);
+
+    const bench_pipeline_step = b.step("bench-pipeline", "Run parse + render pipeline benchmark");
+    const run_bench_pipeline = b.addRunArtifact(bench_pipeline_exe);
+    bench_pipeline_step.dependOn(&run_bench_pipeline.step);
+    if (b.args) |args| run_bench_pipeline.addArgs(args);
+
+    const bench_vs_cat_step = b.step("bench-vs-cat", "Compare mp throughput against cat");
+    const run_bench_vs_cat = b.addRunArtifact(bench_vs_cat_exe);
+    bench_vs_cat_step.dependOn(&run_bench_vs_cat.step);
+    run_bench_vs_cat.addPrefixedFileArg("--mp=", release_exe.getEmittedBin());
+    if (b.args) |args| run_bench_vs_cat.addArgs(args);
+
     const test_step = b.step("test", "Run tests");
     const test_roots = [_]struct {
         path: []const u8,
@@ -124,6 +266,7 @@ pub fn build(b: *std.Build) void {
     }{
         .{ .path = "src/parse.zig", .needs_tree_sitter = false },
         .{ .path = "src/render.zig", .needs_tree_sitter = true },
+        .{ .path = "src/lib.zig", .needs_tree_sitter = true },
         .{ .path = "test/test.zig", .needs_tree_sitter = true },
         .{ .path = "src/cli.zig", .needs_tree_sitter = true },
         .{ .path = "src/term/terminal.zig", .needs_tree_sitter = false },
@@ -132,8 +275,14 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/term/width.zig", .needs_tree_sitter = false },
         .{ .path = "src/term/ansi.zig", .needs_tree_sitter = false },
         .{ .path = "src/watch/file_watcher.zig", .needs_tree_sitter = false },
-        .{ .path = "src/watch/raw_term.zig", .needs_tree_sitter = false },
+        .{ .path = "src/term/raw.zig", .needs_tree_sitter = false },
+        .{ .path = "src/watch/render_buffer.zig", .needs_tree_sitter = false },
+        .{ .path = "src/watch/content_hash.zig", .needs_tree_sitter = false },
+        .{ .path = "src/watch/debounce.zig", .needs_tree_sitter = false },
         .{ .path = "src/mermaid.zig", .needs_tree_sitter = false },
+        .{ .path = "src/source_loader.zig", .needs_tree_sitter = false },
+        .{ .path = "src/backing_allocator.zig", .needs_tree_sitter = false },
+        .{ .path = "src/stdout_buffer.zig", .needs_tree_sitter = false },
     };
 
     for (test_roots) |test_root| {
@@ -146,8 +295,9 @@ pub fn build(b: *std.Build) void {
             attachTreeSitter(test_mod, ts_support);
         }
         test_mod.addImport("bench_support", bench_support_mod);
+        test_mod.addImport("source", source_mod);
         if (std.mem.eql(u8, test_root.path, "test/test.zig")) {
-            test_mod.addImport("markdown_preview", markdown_preview_mod);
+            test_mod.addImport("internals", internals_mod);
         }
 
         const unit_tests = b.addTest(.{
@@ -158,9 +308,6 @@ pub fn build(b: *std.Build) void {
     }
 }
 
-/// Options bundle for `attachTreeSitter`. Keeping the argument list as one
-/// struct avoids a sprawling positional signature and makes each grammar
-/// dependency self-documenting at the call site.
 const TreeSitterAttach = struct {
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
@@ -211,9 +358,6 @@ const TreeSitterSupport = struct {
     json_lib: *std.Build.Step.Compile,
 };
 
-/// Prepare tree-sitter runtime state once, then attach it to any module that
-/// directly imports engine files. This keeps the CLI root module and the
-/// library facade aligned without duplicating grammar compilation steps.
 fn prepareTreeSitterSupport(b: *std.Build, a: TreeSitterAttach) TreeSitterSupport {
     const runtime_module = a.ts_dep.module("tree_sitter");
     const zig_module = a.ts_zig_dep.module("tree-sitter-zig");
@@ -387,8 +531,6 @@ fn compileGrammarLibrary(
     return lib;
 }
 
-/// Attach tree-sitter runtime and grammar assets to a module that directly
-/// compiles engine code.
 fn attachTreeSitter(module: *std.Build.Module, support: TreeSitterSupport) void {
     module.addImport("tree_sitter", support.runtime_module);
     // tree-sitter-zig is still packaged with Zig bindings upstream, so we can

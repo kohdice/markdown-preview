@@ -5,30 +5,12 @@ const max_heading_level = 6;
 const min_fence_len = 3;
 const min_thematic_break_markers = 3;
 const max_ordered_digits = 9;
-/// CommonMark §6.7: a hard line break is signaled by a backslash or by
-/// at least two trailing spaces at the end of a line.
-const min_hard_break_spaces = 2;
-
-/// CommonMark §5.2: unordered list bullet markers.
 const unordered_list_markers = "-*+";
-/// CommonMark §5.2: ordered list number-delimiter characters.
 const ordered_list_markers = ".)";
-/// CommonMark §4.1: thematic break markers.
 const thematic_break_markers = "-_*";
-/// CommonMark §4.5: fenced code block delimiter characters.
 const fence_chars = "`~";
-/// CommonMark §2.1: horizontal tab (U+0009) and space (U+0020).
-/// Excludes line terminators because block-level parsers work line-by-line.
 pub const horizontal_whitespace = " \t";
-
-/// CRLF line-ending normalization trim set. After splitting input on `\n`,
-/// strip a trailing `\r` so Windows (CRLF) and Unix (LF) inputs produce
-/// identical line slices for downstream block parsing.
 pub const carriage_return = "\r";
-
-/// Byte-level predicate counterpart to `horizontal_whitespace`. Use this in
-/// manual loops over `[]const u8` indexes where the trim-set form does not
-/// apply (e.g. while-loops advancing a cursor character by character).
 pub fn isHorizontalWhitespace(c: u8) bool {
     return c == ' ' or c == '\t';
 }
@@ -278,21 +260,6 @@ pub fn isBlockLevelStart(line: []const u8) bool {
     if (fence(line) != null) return true;
     if (isThematicBreak(line)) return true;
     return false;
-}
-
-pub fn stripHardBreak(line: []const u8) []const u8 {
-    if (line.len == 0) return line;
-
-    if (line[line.len - 1] == '\\') {
-        return line[0 .. line.len - 1];
-    }
-
-    var end = line.len;
-    while (end > 0 and line[end - 1] == ' ') : (end -= 1) {}
-    if (line.len - end >= min_hard_break_spaces) {
-        return line[0..end];
-    }
-    return line;
 }
 
 pub fn countIndentUpTo(line: []const u8, max_spaces: usize) usize {
