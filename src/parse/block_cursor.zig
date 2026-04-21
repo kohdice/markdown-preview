@@ -194,13 +194,13 @@ pub fn itemBlocksMakeListLoose(comptime T: type, blocks: []const T) bool {
     return false;
 }
 
-pub fn rawLineAt(source: []const u8, raw_pos: usize) ?[]const u8 {
+fn rawLineAt(source: []const u8, raw_pos: usize) ?[]const u8 {
     if (raw_pos >= source.len) return null;
     const newline_index = std.mem.indexOfScalarPos(u8, source, raw_pos, '\n') orelse source.len;
     return std.mem.trimEnd(u8, source[raw_pos..newline_index], parse_block.carriage_return);
 }
 
-pub fn nextRawLinePos(source: []const u8, raw_pos: usize) usize {
+fn nextRawLinePos(source: []const u8, raw_pos: usize) usize {
     if (raw_pos >= source.len) return source.len;
     const newline_index = std.mem.indexOfScalarPos(u8, source, raw_pos, '\n') orelse return source.len;
     return newline_index + 1;

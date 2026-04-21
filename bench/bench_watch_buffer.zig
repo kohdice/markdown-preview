@@ -59,7 +59,8 @@ pub fn main() !void {
 
 fn runOnce(scenario: Scenario, payload: []const u8) !Run {
     var counting = bench.CountingAllocator.init(std.heap.smp_allocator);
-    var rb = RenderBuffer.init(counting.allocator());
+    var rb: RenderBuffer = undefined;
+    rb.init(counting.allocator());
     defer rb.deinit();
 
     const before = counting.snapshot();

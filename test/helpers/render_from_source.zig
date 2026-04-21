@@ -20,8 +20,7 @@ pub fn renderToOwnedSlice(
     var doc = try parse(allocator, .{ .borrowed = input });
     defer doc.deinit();
 
-    var renderer: Renderer = undefined;
-    renderer.init(allocator, .{
+    var renderer = Renderer.init(allocator, .{
         .enable_ansi = opts.enable_ansi,
         .ambiguous_width = opts.ambiguous_width,
     });

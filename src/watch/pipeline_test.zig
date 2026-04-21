@@ -35,14 +35,14 @@ test "render cycle produces line offsets matching naive newline scan" {
     });
     defer doc.deinit();
 
-    var renderer: render.Renderer = undefined;
-    renderer.init(allocator, .{
+    var renderer = render.Renderer.init(allocator, .{
         .enable_ansi = false,
         .ambiguous_width = .narrow,
     });
     defer renderer.deinit();
 
-    var buffer = render_buffer_mod.RenderBuffer.init(allocator);
+    var buffer: render_buffer_mod.RenderBuffer = undefined;
+    buffer.init(allocator);
     defer buffer.deinit();
 
     try renderer.render(&buffer.writer, &doc, null);
@@ -60,14 +60,14 @@ test "render cycle of empty document produces no line offsets" {
     var doc = try parse.parse(allocator, .{ .borrowed = "" });
     defer doc.deinit();
 
-    var renderer: render.Renderer = undefined;
-    renderer.init(allocator, .{
+    var renderer = render.Renderer.init(allocator, .{
         .enable_ansi = false,
         .ambiguous_width = .narrow,
     });
     defer renderer.deinit();
 
-    var buffer = render_buffer_mod.RenderBuffer.init(allocator);
+    var buffer: render_buffer_mod.RenderBuffer = undefined;
+    buffer.init(allocator);
     defer buffer.deinit();
 
     try renderer.render(&buffer.writer, &doc, null);
@@ -86,14 +86,14 @@ test "pipeline.renderTo returns .rendered on first call" {
     defer tmp.cleanup();
     try tmp.dir.writeFile(.{ .sub_path = "doc.md", .data = "# Hello\n" });
 
-    var renderer: render.Renderer = undefined;
-    renderer.init(allocator, .{ .enable_ansi = false, .ambiguous_width = .narrow });
+    var renderer = render.Renderer.init(allocator, .{ .enable_ansi = false, .ambiguous_width = .narrow });
     defer renderer.deinit();
 
     var cycle_arena = std.heap.ArenaAllocator.init(allocator);
     defer cycle_arena.deinit();
 
-    var buffer = render_buffer_mod.RenderBuffer.init(allocator);
+    var buffer: render_buffer_mod.RenderBuffer = undefined;
+    buffer.init(allocator);
     defer buffer.deinit();
 
     var hash: content_hash.ContentHash = .{};
@@ -110,14 +110,14 @@ test "pipeline.renderTo returns .skipped_unchanged when hash matches" {
     defer tmp.cleanup();
     try tmp.dir.writeFile(.{ .sub_path = "doc.md", .data = "# Hello\n" });
 
-    var renderer: render.Renderer = undefined;
-    renderer.init(allocator, .{ .enable_ansi = false, .ambiguous_width = .narrow });
+    var renderer = render.Renderer.init(allocator, .{ .enable_ansi = false, .ambiguous_width = .narrow });
     defer renderer.deinit();
 
     var cycle_arena = std.heap.ArenaAllocator.init(allocator);
     defer cycle_arena.deinit();
 
-    var buffer = render_buffer_mod.RenderBuffer.init(allocator);
+    var buffer: render_buffer_mod.RenderBuffer = undefined;
+    buffer.init(allocator);
     defer buffer.deinit();
 
     var hash: content_hash.ContentHash = .{};
@@ -138,14 +138,14 @@ test "pipeline.renderTo returns .rendered after hash.reset()" {
     defer tmp.cleanup();
     try tmp.dir.writeFile(.{ .sub_path = "doc.md", .data = "# Hello\n" });
 
-    var renderer: render.Renderer = undefined;
-    renderer.init(allocator, .{ .enable_ansi = false, .ambiguous_width = .narrow });
+    var renderer = render.Renderer.init(allocator, .{ .enable_ansi = false, .ambiguous_width = .narrow });
     defer renderer.deinit();
 
     var cycle_arena = std.heap.ArenaAllocator.init(allocator);
     defer cycle_arena.deinit();
 
-    var buffer = render_buffer_mod.RenderBuffer.init(allocator);
+    var buffer: render_buffer_mod.RenderBuffer = undefined;
+    buffer.init(allocator);
     defer buffer.deinit();
 
     var hash: content_hash.ContentHash = .{};
@@ -163,14 +163,14 @@ test "pipeline.renderTo recovers after read error without stale skip" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    var renderer: render.Renderer = undefined;
-    renderer.init(allocator, .{ .enable_ansi = false, .ambiguous_width = .narrow });
+    var renderer = render.Renderer.init(allocator, .{ .enable_ansi = false, .ambiguous_width = .narrow });
     defer renderer.deinit();
 
     var cycle_arena = std.heap.ArenaAllocator.init(allocator);
     defer cycle_arena.deinit();
 
-    var buffer = render_buffer_mod.RenderBuffer.init(allocator);
+    var buffer: render_buffer_mod.RenderBuffer = undefined;
+    buffer.init(allocator);
     defer buffer.deinit();
 
     var hash: content_hash.ContentHash = .{};

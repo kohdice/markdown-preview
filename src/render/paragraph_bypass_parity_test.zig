@@ -3,12 +3,11 @@ const parse = @import("../parse.zig");
 const render = @import("../render.zig");
 const inline_trigger = @import("../parse/inline_trigger.zig");
 
-// The bypass correctness gate: for any input, Phase 8.2's trivial-paragraph
-// fast path must render byte-identical to the slow (InlineBuilder) path.
-// Phase 6 validates the slow path against 3000+ parser / render tests, so
-// byte-equal-to-slow-path is a transitive conformance check against the
-// CommonMark rendering behaviour we shipped pre-bypass.
-// See `.plans/refactor_phase8.md` §Acceptance (conformance gate).
+// Correctness gate for the trivial-paragraph fast path: for any input, the
+// bypass must render byte-identical to the slow (InlineBuilder) path. The
+// slow path is covered by the full parser / render test suite, so
+// byte-equal-to-slow is a transitive conformance check against CommonMark
+// rendering behaviour.
 
 fn renderOnce(
     allocator: std.mem.Allocator,
@@ -21,8 +20,7 @@ fn renderOnce(
     var output: std.io.Writer.Allocating = .init(allocator);
     defer output.deinit();
 
-    var renderer: render.Renderer = undefined;
-    renderer.init(allocator, .{ .enable_ansi = false });
+    var renderer = render.Renderer.init(allocator, .{ .enable_ansi = false });
     defer renderer.deinit();
 
     try renderer.render(&output.writer, &doc, wrap_width);
@@ -53,8 +51,7 @@ fn expectBypassParityWithAnsi(input: []const u8) !void {
     defer doc_a.deinit();
     var out_a: std.io.Writer.Allocating = .init(allocator);
     defer out_a.deinit();
-    var renderer_a: render.Renderer = undefined;
-    renderer_a.init(allocator, .{ .enable_ansi = true });
+    var renderer_a = render.Renderer.init(allocator, .{ .enable_ansi = true });
     defer renderer_a.deinit();
     try renderer_a.render(&out_a.writer, &doc_a, null);
     var list_a = out_a.toArrayList();
@@ -67,8 +64,7 @@ fn expectBypassParityWithAnsi(input: []const u8) !void {
     defer doc_b.deinit();
     var out_b: std.io.Writer.Allocating = .init(allocator);
     defer out_b.deinit();
-    var renderer_b: render.Renderer = undefined;
-    renderer_b.init(allocator, .{ .enable_ansi = true });
+    var renderer_b = render.Renderer.init(allocator, .{ .enable_ansi = true });
     defer renderer_b.deinit();
     try renderer_b.render(&out_b.writer, &doc_b, null);
     var list_b = out_b.toArrayList();

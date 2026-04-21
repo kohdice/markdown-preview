@@ -26,13 +26,13 @@ fn buildHeadingDocument(fixture: *helpers.RenderFixture) !void {
 fn buildParagraphDocument(fixture: *helpers.RenderFixture) !void {
     const em_inner = try fixture.text("word");
     const em = try fixture.emphasis(em_inner);
-    try fixture.appendBlock(.{ .paragraph = .{ .children = em } });
+    try fixture.appendBlock(helpers.RenderFixture.paragraph(em));
 }
 
 fn buildLinkDocument(fixture: *helpers.RenderFixture) !void {
     const label = try fixture.text("click");
     const link_ref = try fixture.link("https://example.com", null, label);
-    try fixture.appendBlock(.{ .paragraph = .{ .children = link_ref } });
+    try fixture.appendBlock(helpers.RenderFixture.paragraph(link_ref));
 }
 
 test "heading under .none emits zero SGR" {

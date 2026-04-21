@@ -7,8 +7,7 @@ fn renderFence(allocator: std.mem.Allocator, source: []const u8, enable_ansi: bo
     defer output.deinit();
     var doc = try markdown_preview.parse(allocator, .{ .borrowed = source });
     defer doc.deinit();
-    var renderer: markdown_preview.Renderer = undefined;
-    renderer.init(allocator, .{
+    var renderer = markdown_preview.Renderer.init(allocator, .{
         .enable_ansi = enable_ansi,
         .ambiguous_width = .narrow,
     });

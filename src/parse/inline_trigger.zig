@@ -3,14 +3,14 @@ const std = @import("std");
 // `&` is a forward-looking trigger: the current inline parser does not
 // dispatch on entity references (CommonMark 0.31.2 §6.5), but including
 // it here keeps the trivial-paragraph bypass correct if entity support
-// lands later. See `.plans/refactor_phase8.md` §Findings.
+// lands later.
 const fast_triggers: []const u8 = "\\`*_~<!&][";
 
 const bare_url_marker: []const u8 = "://";
 
 // Test-only escape hatch so conformance tests can force the slow path on
 // inputs that would otherwise be bypassed, then byte-compare the two
-// renderings. Production callers never flip this. Guard defaults to false.
+// renderings. Production callers never flip this.
 pub var disable_bypass: bool = false;
 
 pub fn isTrivial(lines: []const []const u8) bool {

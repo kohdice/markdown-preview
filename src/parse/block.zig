@@ -5,7 +5,6 @@ const max_heading_level = 6;
 const min_fence_len = 3;
 const min_thematic_break_markers = 3;
 const max_ordered_digits = 9;
-const min_hard_break_spaces = 2;
 const unordered_list_markers = "-*+";
 const ordered_list_markers = ".)";
 const thematic_break_markers = "-_*";
@@ -261,21 +260,6 @@ pub fn isBlockLevelStart(line: []const u8) bool {
     if (fence(line) != null) return true;
     if (isThematicBreak(line)) return true;
     return false;
-}
-
-pub fn stripHardBreak(line: []const u8) []const u8 {
-    if (line.len == 0) return line;
-
-    if (line[line.len - 1] == '\\') {
-        return line[0 .. line.len - 1];
-    }
-
-    var end = line.len;
-    while (end > 0 and line[end - 1] == ' ') : (end -= 1) {}
-    if (line.len - end >= min_hard_break_spaces) {
-        return line[0..end];
-    }
-    return line;
 }
 
 pub fn countIndentUpTo(line: []const u8, max_spaces: usize) usize {

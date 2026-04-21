@@ -14,6 +14,19 @@ pub const DecodeResult = struct {
     end: usize,
 };
 
+pub const Codepoint = struct {
+    cp: u21,
+    len: usize,
+};
+
+pub fn nextCodepoint(bytes: []const u8, pos: usize) ?Codepoint {
+    if (pos >= bytes.len) return null;
+    const len = std.unicode.utf8ByteSequenceLength(bytes[pos]) catch return null;
+    if (pos + len > bytes.len) return null;
+    const cp = std.unicode.utf8Decode(bytes[pos..][0..len]) catch return null;
+    return .{ .cp = cp, .len = len };
+}
+
 pub fn decode(text: []const u8, start: usize) ?DecodeResult {
     if (start >= text.len or text[start] != '&') return null;
 

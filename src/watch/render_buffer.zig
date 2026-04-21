@@ -10,12 +10,12 @@ pub const RenderBuffer = struct {
 
     const vtable: std.io.Writer.VTable = .{
         .drain = drain,
-        .flush = std.io.Writer.noopFlush,
+        .flush = std.io.Writer.defaultFlush,
         .rebase = std.io.Writer.failingRebase,
     };
 
-    pub fn init(allocator: std.mem.Allocator) RenderBuffer {
-        return .{
+    pub fn init(self: *RenderBuffer, allocator: std.mem.Allocator) void {
+        self.* = .{
             .allocator = allocator,
             .writer = .{
                 .buffer = &.{},
@@ -66,6 +66,7 @@ pub const RenderBuffer = struct {
     }
 
     pub fn finalize(self: *RenderBuffer) !void {
+        try self.writer.flush();
         const total = self.totalLines();
         self.row_hashes.clearRetainingCapacity();
         try self.row_hashes.ensureTotalCapacity(self.allocator, total);
@@ -77,6 +78,7 @@ pub const RenderBuffer = struct {
 
     fn drain(w: *std.io.Writer, data: []const []const u8, splat: usize) std.io.Writer.Error!usize {
         const self: *RenderBuffer = @fieldParentPtr("writer", w);
+
         var total: usize = 0;
         for (data, 0..) |slice, idx| {
             const repeat: usize = if (idx == data.len - 1) splat else 1;
@@ -130,7 +132,8 @@ pub const RenderBuffer = struct {
 };
 
 test "RenderBuffer tracks offsets for two complete lines" {
-    var rb = RenderBuffer.init(std.testing.allocator);
+    var rb: RenderBuffer = undefined;
+    rb.init(std.testing.allocator);
     defer rb.deinit();
 
     try rb.writer.writeAll("abc\ndef\n");
@@ -143,7 +146,8 @@ test "RenderBuffer tracks offsets for two complete lines" {
 }
 
 test "RenderBuffer treats a single line without newline as one line" {
-    var rb = RenderBuffer.init(std.testing.allocator);
+    var rb: RenderBuffer = undefined;
+    rb.init(std.testing.allocator);
     defer rb.deinit();
 
     try rb.writer.writeAll("abc");
@@ -154,7 +158,8 @@ test "RenderBuffer treats a single line without newline as one line" {
 }
 
 test "RenderBuffer reports no lines for empty input" {
-    var rb = RenderBuffer.init(std.testing.allocator);
+    var rb: RenderBuffer = undefined;
+    rb.init(std.testing.allocator);
     defer rb.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), rb.totalLines());
@@ -162,7 +167,8 @@ test "RenderBuffer reports no lines for empty input" {
 }
 
 test "RenderBuffer treats a single newline as one line" {
-    var rb = RenderBuffer.init(std.testing.allocator);
+    var rb: RenderBuffer = undefined;
+    rb.init(std.testing.allocator);
     defer rb.deinit();
 
     try rb.writer.writeAll("\n");
@@ -173,7 +179,8 @@ test "RenderBuffer treats a single newline as one line" {
 }
 
 test "RenderBuffer treats three lines with trailing newline as three lines" {
-    var rb = RenderBuffer.init(std.testing.allocator);
+    var rb: RenderBuffer = undefined;
+    rb.init(std.testing.allocator);
     defer rb.deinit();
 
     try rb.writer.writeAll("a\nb\nc\n");
@@ -186,9 +193,11 @@ test "RenderBuffer treats three lines with trailing newline as three lines" {
 }
 
 test "RenderBuffer.rowHash changes with content and matches for identical content" {
-    var rb_a = RenderBuffer.init(std.testing.allocator);
+    var rb_a: RenderBuffer = undefined;
+    rb_a.init(std.testing.allocator);
     defer rb_a.deinit();
-    var rb_b = RenderBuffer.init(std.testing.allocator);
+    var rb_b: RenderBuffer = undefined;
+    rb_b.init(std.testing.allocator);
     defer rb_b.deinit();
 
     try rb_a.writer.writeAll("hello\nworld\n");
@@ -202,7 +211,8 @@ test "RenderBuffer.rowHash changes with content and matches for identical conten
 }
 
 test "RenderBuffer.finalize populates rowHash cache so subsequent reads are O(1)" {
-    var rb = RenderBuffer.init(std.testing.allocator);
+    var rb: RenderBuffer = undefined;
+    rb.init(std.testing.allocator);
     defer rb.deinit();
 
     try rb.writer.writeAll("alpha\nbeta\ngamma\n");
@@ -215,7 +225,8 @@ test "RenderBuffer.finalize populates rowHash cache so subsequent reads are O(1)
 }
 
 test "RenderBuffer.flush does not populate rowHash cache" {
-    var rb = RenderBuffer.init(std.testing.allocator);
+    var rb: RenderBuffer = undefined;
+    rb.init(std.testing.allocator);
     defer rb.deinit();
 
     try rb.writer.writeAll("alpha\nbeta\n");
@@ -226,7 +237,8 @@ test "RenderBuffer.flush does not populate rowHash cache" {
 }
 
 test "RenderBuffer.reset clears the rowHash cache" {
-    var rb = RenderBuffer.init(std.testing.allocator);
+    var rb: RenderBuffer = undefined;
+    rb.init(std.testing.allocator);
     defer rb.deinit();
 
     try rb.writer.writeAll("alpha\nbeta\n");
@@ -238,7 +250,8 @@ test "RenderBuffer.reset clears the rowHash cache" {
 }
 
 test "RenderBuffer.row returns bytes of the requested line without its trailing newline" {
-    var rb = RenderBuffer.init(std.testing.allocator);
+    var rb: RenderBuffer = undefined;
+    rb.init(std.testing.allocator);
     defer rb.deinit();
 
     try rb.writer.writeAll("alpha\nbeta\ngamma");
@@ -251,7 +264,8 @@ test "RenderBuffer.row returns bytes of the requested line without its trailing 
 }
 
 test "RenderBuffer reset retains capacity and reproduces offsets" {
-    var rb = RenderBuffer.init(std.testing.allocator);
+    var rb: RenderBuffer = undefined;
+    rb.init(std.testing.allocator);
     defer rb.deinit();
 
     try rb.writer.writeAll("alpha\nbeta\n");

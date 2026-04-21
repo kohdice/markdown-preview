@@ -1,9 +1,9 @@
 const std = @import("std");
-const actions = @import("actions.zig");
+const input = @import("input.zig");
 const ansi = @import("../term/ansi.zig");
 const render_buffer_mod = @import("render_buffer.zig");
 
-pub fn applyAction(action: actions.KeyAction, scroll_offset: *usize, total_lines: usize, term_rows: usize) bool {
+pub fn applyAction(action: input.KeyAction, scroll_offset: *usize, total_lines: usize, term_rows: usize) bool {
     const content_rows = if (term_rows > 1) term_rows - 1 else 1;
     const max_offset = if (total_lines > content_rows) total_lines - content_rows else 0;
 
@@ -253,7 +253,8 @@ test "visibleRange empty offsets" {
 
 test "visibleRows strips trailing newlines" {
     const allocator = std.testing.allocator;
-    var rb = render_buffer_mod.RenderBuffer.init(allocator);
+    var rb: render_buffer_mod.RenderBuffer = undefined;
+    rb.init(allocator);
     defer rb.deinit();
     try rb.writer.writeAll("alpha\nbeta\ngamma\n");
     try rb.writer.flush();
@@ -270,7 +271,8 @@ test "Pager reuses capacity across repaints without unbounded growth" {
     var pgr = Pager.init(allocator);
     defer pgr.deinit();
 
-    var rb = render_buffer_mod.RenderBuffer.init(allocator);
+    var rb: render_buffer_mod.RenderBuffer = undefined;
+    rb.init(allocator);
     defer rb.deinit();
     try rb.writer.writeAll("x\ny\nz\n");
     try rb.writer.flush();
@@ -295,7 +297,8 @@ test "Pager diffing skips emission for unchanged rows" {
     var pgr = Pager.init(allocator);
     defer pgr.deinit();
 
-    var rb = render_buffer_mod.RenderBuffer.init(allocator);
+    var rb: render_buffer_mod.RenderBuffer = undefined;
+    rb.init(allocator);
     defer rb.deinit();
     try rb.writer.writeAll("one\ntwo\nthree\n");
     try rb.writer.flush();
@@ -320,7 +323,8 @@ test "Pager (END) status line under color_mode=.none emits no reverse-video SGR"
     var pgr = Pager.init(allocator);
     defer pgr.deinit();
 
-    var rb = render_buffer_mod.RenderBuffer.init(allocator);
+    var rb: render_buffer_mod.RenderBuffer = undefined;
+    rb.init(allocator);
     defer rb.deinit();
     try rb.writer.writeAll("one\ntwo\n");
     try rb.writer.flush();
@@ -340,7 +344,8 @@ test "Pager (END) status line under color_mode=.ansi16 emits reverse-video SGR" 
     var pgr = Pager.init(allocator);
     defer pgr.deinit();
 
-    var rb = render_buffer_mod.RenderBuffer.init(allocator);
+    var rb: render_buffer_mod.RenderBuffer = undefined;
+    rb.init(allocator);
     defer rb.deinit();
     try rb.writer.writeAll("one\ntwo\n");
     try rb.writer.flush();
@@ -360,7 +365,8 @@ test "Pager diff forces full repaint when color_mode changes" {
     var pgr = Pager.init(allocator);
     defer pgr.deinit();
 
-    var rb = render_buffer_mod.RenderBuffer.init(allocator);
+    var rb: render_buffer_mod.RenderBuffer = undefined;
+    rb.init(allocator);
     defer rb.deinit();
     try rb.writer.writeAll("alpha\nbeta\n");
     try rb.writer.flush();
@@ -381,7 +387,8 @@ test "Pager full repaint when scroll changes" {
     var pgr = Pager.init(allocator);
     defer pgr.deinit();
 
-    var rb = render_buffer_mod.RenderBuffer.init(allocator);
+    var rb: render_buffer_mod.RenderBuffer = undefined;
+    rb.init(allocator);
     defer rb.deinit();
     try rb.writer.writeAll("a\nb\nc\nd\n");
     try rb.writer.flush();

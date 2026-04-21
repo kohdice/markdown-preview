@@ -1,5 +1,15 @@
 const std = @import("std");
-const actions = @import("actions.zig");
+
+pub const KeyAction = enum {
+    quit,
+    scroll_up,
+    scroll_down,
+    page_up,
+    page_down,
+    scroll_top,
+    scroll_bottom,
+    none,
+};
 
 pub const key_read_buf_size: usize = 16;
 
@@ -9,7 +19,7 @@ pub const InputState = struct {
     phase: InputPhase = .idle,
     digit: u8 = 0,
 
-    pub fn feedByte(self: *InputState, b: u8) actions.KeyAction {
+    pub fn feedByte(self: *InputState, b: u8) KeyAction {
         switch (self.phase) {
             .idle => return self.handleKey(b),
             .esc => {
@@ -47,7 +57,7 @@ pub const InputState = struct {
         }
     }
 
-    fn handleKey(self: *InputState, b: u8) actions.KeyAction {
+    fn handleKey(self: *InputState, b: u8) KeyAction {
         if (b == 0x1b) {
             self.phase = .esc;
             return .none;
@@ -65,22 +75,22 @@ pub const InputState = struct {
 
 test "InputState single-byte keys" {
     var s: InputState = .{};
-    try std.testing.expectEqual(actions.KeyAction.quit, s.feedByte('q'));
-    try std.testing.expectEqual(actions.KeyAction.scroll_up, s.feedByte('k'));
-    try std.testing.expectEqual(actions.KeyAction.scroll_down, s.feedByte('j'));
-    try std.testing.expectEqual(actions.KeyAction.scroll_top, s.feedByte('g'));
-    try std.testing.expectEqual(actions.KeyAction.scroll_bottom, s.feedByte('G'));
-    try std.testing.expectEqual(actions.KeyAction.none, s.feedByte('x'));
+    try std.testing.expectEqual(KeyAction.quit, s.feedByte('q'));
+    try std.testing.expectEqual(KeyAction.scroll_up, s.feedByte('k'));
+    try std.testing.expectEqual(KeyAction.scroll_down, s.feedByte('j'));
+    try std.testing.expectEqual(KeyAction.scroll_top, s.feedByte('g'));
+    try std.testing.expectEqual(KeyAction.scroll_bottom, s.feedByte('G'));
+    try std.testing.expectEqual(KeyAction.none, s.feedByte('x'));
     try std.testing.expectEqual(InputPhase.idle, s.phase);
 }
 
 test "InputState complete arrow sequence in burst" {
     var s: InputState = .{};
-    try std.testing.expectEqual(actions.KeyAction.none, s.feedByte(0x1b));
+    try std.testing.expectEqual(KeyAction.none, s.feedByte(0x1b));
     try std.testing.expectEqual(InputPhase.esc, s.phase);
-    try std.testing.expectEqual(actions.KeyAction.none, s.feedByte('['));
+    try std.testing.expectEqual(KeyAction.none, s.feedByte('['));
     try std.testing.expectEqual(InputPhase.csi, s.phase);
-    try std.testing.expectEqual(actions.KeyAction.scroll_up, s.feedByte('A'));
+    try std.testing.expectEqual(KeyAction.scroll_up, s.feedByte('A'));
     try std.testing.expectEqual(InputPhase.idle, s.phase);
 }
 
@@ -88,7 +98,7 @@ test "InputState arrow down" {
     var s: InputState = .{};
     _ = s.feedByte(0x1b);
     _ = s.feedByte('[');
-    try std.testing.expectEqual(actions.KeyAction.scroll_down, s.feedByte('B'));
+    try std.testing.expectEqual(KeyAction.scroll_down, s.feedByte('B'));
     try std.testing.expectEqual(InputPhase.idle, s.phase);
 }
 
@@ -96,9 +106,9 @@ test "InputState PageUp sequence" {
     var s: InputState = .{};
     _ = s.feedByte(0x1b);
     _ = s.feedByte('[');
-    try std.testing.expectEqual(actions.KeyAction.none, s.feedByte('5'));
+    try std.testing.expectEqual(KeyAction.none, s.feedByte('5'));
     try std.testing.expectEqual(InputPhase.csi_digit, s.phase);
-    try std.testing.expectEqual(actions.KeyAction.page_up, s.feedByte('~'));
+    try std.testing.expectEqual(KeyAction.page_up, s.feedByte('~'));
     try std.testing.expectEqual(InputPhase.idle, s.phase);
 }
 
@@ -107,7 +117,7 @@ test "InputState PageDown sequence" {
     _ = s.feedByte(0x1b);
     _ = s.feedByte('[');
     _ = s.feedByte('6');
-    try std.testing.expectEqual(actions.KeyAction.page_down, s.feedByte('~'));
+    try std.testing.expectEqual(KeyAction.page_down, s.feedByte('~'));
     try std.testing.expectEqual(InputPhase.idle, s.phase);
 }
 
@@ -115,20 +125,20 @@ test "InputState ESC then regular key processes the key" {
     var s: InputState = .{};
     _ = s.feedByte(0x1b);
     try std.testing.expectEqual(InputPhase.esc, s.phase);
-    try std.testing.expectEqual(actions.KeyAction.scroll_down, s.feedByte('j'));
+    try std.testing.expectEqual(KeyAction.scroll_down, s.feedByte('j'));
     try std.testing.expectEqual(InputPhase.idle, s.phase);
 }
 
 test "InputState ESC then unknown key is ignored" {
     var s: InputState = .{};
     _ = s.feedByte(0x1b);
-    try std.testing.expectEqual(actions.KeyAction.none, s.feedByte('x'));
+    try std.testing.expectEqual(KeyAction.none, s.feedByte('x'));
     try std.testing.expectEqual(InputPhase.idle, s.phase);
 }
 
 test "InputState double ESC: first consumed, second starts new sequence" {
     var s: InputState = .{};
     _ = s.feedByte(0x1b);
-    try std.testing.expectEqual(actions.KeyAction.none, s.feedByte(0x1b));
+    try std.testing.expectEqual(KeyAction.none, s.feedByte(0x1b));
     try std.testing.expectEqual(InputPhase.esc, s.phase);
 }

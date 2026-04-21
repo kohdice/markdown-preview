@@ -2,14 +2,15 @@ const std = @import("std");
 const content_hash = @import("content_hash.zig");
 const file_watcher = @import("file_watcher.zig");
 const loop = @import("loop.zig");
-const options = @import("options.zig");
 const pager = @import("pager.zig");
 const pipeline = @import("pipeline.zig");
-const raw_term = @import("raw_term.zig");
+const raw_term = @import("../term/raw.zig");
 const render = @import("../render.zig");
 const render_buffer_mod = @import("render_buffer.zig");
 const term = @import("../term.zig");
+const ansi = term.ansi;
 const terminal = term.terminal;
+const width = term.width;
 
 const exit_success: u8 = 0;
 const exit_failure: u8 = 1;
@@ -17,7 +18,17 @@ const exit_failure: u8 = 1;
 const default_term_cols: usize = 80;
 const default_term_rows: usize = 24;
 
-pub const WatchOptions = options.WatchOptions;
+pub const WatchOptions = struct {
+    cwd: std.fs.Dir,
+    path: []const u8,
+    stdout: *std.io.Writer,
+    stderr: *std.io.Writer,
+    stdout_handle: std.posix.fd_t,
+    stdin_handle: std.posix.fd_t,
+    enable_ansi: bool,
+    ambiguous_width: width.AmbiguousWidth,
+    color_mode: ansi.ColorMode = .truecolor,
+};
 
 pub fn run(opts: WatchOptions) !u8 {
     if (!std.posix.isatty(opts.stdout_handle) or !std.posix.isatty(opts.stdin_handle)) {
@@ -42,8 +53,7 @@ pub fn run(opts: WatchOptions) !u8 {
     var state_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer state_arena.deinit();
 
-    var renderer: render.Renderer = undefined;
-    renderer.init(state_arena.allocator(), .{
+    var renderer = render.Renderer.init(state_arena.allocator(), .{
         .enable_ansi = opts.enable_ansi,
         .ambiguous_width = opts.ambiguous_width,
         .color_mode = opts.color_mode,
@@ -53,7 +63,8 @@ pub fn run(opts: WatchOptions) !u8 {
     var cycle_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer cycle_arena.deinit();
 
-    var buffer = render_buffer_mod.RenderBuffer.init(state_arena.allocator());
+    var buffer: render_buffer_mod.RenderBuffer = undefined;
+    buffer.init(state_arena.allocator());
     defer buffer.deinit();
 
     var term_size = terminal.getTerminalSize(opts.stdout_handle) orelse terminal.TerminalSize{ .cols = default_term_cols, .rows = default_term_rows };

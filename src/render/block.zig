@@ -3,6 +3,7 @@ const ansi = @import("../term/ansi.zig");
 const theme = @import("../term/theme.zig");
 const width = @import("../term/width.zig");
 const ast = @import("../ast.zig");
+const parse_mod = @import("../parse.zig");
 const render_inline = @import("inline.zig");
 const prefix_writer = @import("prefix_writer.zig");
 const render_table = @import("table.zig");
@@ -23,31 +24,6 @@ const list_bullet = struct {
     const level1 = "◦ ";
     const level2 = "▪ ";
 };
-
-fn writeRawLines(
-    writer: *std.io.Writer,
-    enable_ansi: bool,
-    color_mode: ansi.ColorMode,
-    raw_lines: []const []const u8,
-    base_style: ansi.TextStyle,
-) !void {
-    var state: ansi.StyledState = .{};
-    for (raw_lines, 0..) |line, idx| {
-        if (idx > 0) {
-            try ansi.flushStyle(writer, &state);
-            try writer.writeByte('\n');
-        }
-        const content = if (idx + 1 < raw_lines.len) trimTrailingSpaces(line) else line;
-        try ansi.writeStyledRun(writer, enable_ansi, color_mode, &state, base_style, content);
-    }
-    try ansi.flushStyle(writer, &state);
-}
-
-fn trimTrailingSpaces(line: []const u8) []const u8 {
-    var end = line.len;
-    while (end > 0 and line[end - 1] == ' ') end -= 1;
-    return line[0..end];
-}
 
 fn bulletForDepth(depth: usize) []const u8 {
     return switch (depth % 3) {
@@ -87,15 +63,36 @@ pub const RenderSession = struct {
     wrap_width: ?usize,
     highlighter: *highlight.Highlighter,
     mermaid_cache: *std.AutoHashMapUnmanaged(u64, mermaid.Diagram),
+    /// Render-only side channel: paragraph pointer → raw lines for
+    /// trigger-free paragraphs, in block-walk emission order. Lives on the
+    /// session because it is not part of the public parse/render contract
+    /// (`ParsedDocument` / `RenderContext` do not expose it).
+    trivial_runs: []const parse_mod.TrivialRun = &.{},
+    trivial_cursor: usize = 0,
+
+    /// Peek the next trivial run and consume it iff it belongs to `p`. Used
+    /// by every paragraph-visit site to decide between the raw-lines fast
+    /// path and the regular inline chain.
+    fn takeTrivialParagraph(self: *RenderSession, p: *const ast.Paragraph) ?parse_mod.TrivialRun.Lines {
+        if (self.trivial_cursor >= self.trivial_runs.len) return null;
+        const run = self.trivial_runs[self.trivial_cursor];
+        if (run.paragraph != p) return null;
+        self.trivial_cursor += 1;
+        return run.lines;
+    }
 
     fn pushSegment(self: *RenderSession, segment: prefix_writer.PrefixStack.Segment) !void {
-        try self.writer.flush();
+        // PrefixWriter applies the active stack at line-start; unflushed bytes
+        // must drain with the OLD stack before the new segment takes effect.
+        // See prefix_writer.zig "push mid-line does not retroactively prefix
+        // first line".
+        if (self.writer.end > 0) try self.writer.flush();
         try self.prefix_stack.push(segment);
     }
 
     fn popPrefix(self: *RenderSession) !void {
         errdefer self.prefix_stack.pop();
-        try self.writer.flush();
+        if (self.writer.end > 0) try self.writer.flush();
         self.prefix_stack.pop();
     }
 
@@ -120,15 +117,15 @@ pub const RenderSession = struct {
     }
 
     pub fn write(self: *RenderSession, blocks: []const ast.BlockNode) !void {
-        for (blocks, 0..) |block, i| {
+        for (blocks, 0..) |*block_ptr, i| {
             if (i > 0) try self.writer.writeByte('\n');
-            try self.writeBlock(block, 0);
+            try self.writeBlock(block_ptr, 0);
         }
     }
 
-    fn writeBlock(self: *RenderSession, block: ast.BlockNode, depth: usize) anyerror!void {
-        switch (block) {
-            .paragraph => |paragraph| try self.writeParagraph(paragraph),
+    fn writeBlock(self: *RenderSession, block_ptr: *const ast.BlockNode, depth: usize) anyerror!void {
+        switch (block_ptr.*) {
+            .paragraph => try self.writeParagraph(&block_ptr.paragraph),
             .heading => |heading| try self.writeHeading(heading),
             .blockquote => |blockquote| try self.writeBlockQuote(blockquote, depth),
             .list => |list| try self.writeList(list, depth),
@@ -140,18 +137,14 @@ pub const RenderSession = struct {
         }
     }
 
-    fn writeParagraph(self: *RenderSession, paragraph: ast.Paragraph) !void {
+    fn writeParagraph(self: *RenderSession, paragraph: *const ast.Paragraph) !void {
         const style: ansi.TextStyle = .{ .fg = self.ctx.palette.body };
-        if (paragraph.raw_lines.len > 0) {
-            try self.writeRawLinesMaybeWrap(paragraph.raw_lines, style, 0);
-            return;
-        }
-        try self.writeInlinesMaybeWrap(paragraph.children, style, 0);
+        try self.writeParagraphContent(paragraph, style, 0);
     }
 
-    fn writeRawLinesMaybeWrap(
+    fn writeParagraphContent(
         self: *RenderSession,
-        raw_lines: []const []const u8,
+        paragraph: *const ast.Paragraph,
         base_style: ansi.TextStyle,
         continuation_indent: usize,
     ) !void {
@@ -159,39 +152,35 @@ pub const RenderSession = struct {
         if (pushed) try self.pushIndent(continuation_indent);
         defer if (pushed) self.popPrefix() catch {};
 
+        const trivial_lines = self.takeTrivialParagraph(paragraph);
+
         if (self.wrap_width) |wrap_w| {
             const available = if (wrap_w > continuation_indent)
                 wrap_w - continuation_indent
             else
                 1;
             self.wrap_writer.reset(self.writer, available);
-            try writeRawLines(&self.wrap_writer.writer, self.ctx.enable_ansi, self.ctx.color_mode, raw_lines, base_style);
+            try self.writeBody(&self.wrap_writer.writer, paragraph, trivial_lines, base_style);
             try self.wrap_writer.finish();
         } else {
-            try writeRawLines(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, raw_lines, base_style);
+            try self.writeBody(self.writer, paragraph, trivial_lines, base_style);
         }
     }
 
-    fn writeInlinesMaybeWrap(
+    fn writeBody(
         self: *RenderSession,
-        first: ast.InlineRef,
+        writer: *std.io.Writer,
+        paragraph: *const ast.Paragraph,
+        trivial_lines: ?parse_mod.TrivialRun.Lines,
         base_style: ansi.TextStyle,
-        continuation_indent: usize,
     ) !void {
-        const pushed = continuation_indent > 0;
-        if (pushed) try self.pushIndent(continuation_indent);
-        defer if (pushed) self.popPrefix() catch {};
-
-        if (self.wrap_width) |wrap_w| {
-            const available = if (wrap_w > continuation_indent)
-                wrap_w - continuation_indent
-            else
-                1;
-            self.wrap_writer.reset(self.writer, available);
-            try render_inline.writeInlineChain(self.ctx, &self.wrap_writer.writer, first, base_style);
-            try self.wrap_writer.finish();
+        if (trivial_lines) |lines| {
+            switch (lines) {
+                .single => |line| try render_inline.writePlainLines(self.ctx, writer, &.{line}, base_style),
+                .multi => |multi| try render_inline.writePlainLines(self.ctx, writer, multi, base_style),
+            }
         } else {
-            try render_inline.writeInlineChain(self.ctx, self.writer, first, base_style);
+            try render_inline.writeInlineChain(self.ctx, writer, paragraph.children, base_style);
         }
     }
 
@@ -228,24 +217,20 @@ pub const RenderSession = struct {
     }
 
     fn writeBlocksInBlockQuote(self: *RenderSession, blocks: []const ast.BlockNode, depth: usize) anyerror!void {
-        for (blocks, 0..) |block, i| {
+        for (blocks, 0..) |*block_ptr, i| {
             if (i > 0) try self.writer.writeByte('\n');
-            switch (block) {
-                .paragraph => |paragraph| try self.writeBlockQuoteParagraph(paragraph),
+            switch (block_ptr.*) {
+                .paragraph => try self.writeBlockQuoteParagraph(&block_ptr.paragraph),
                 .blockquote => |blockquote| try self.writeBlockQuote(blockquote, depth),
                 .table => |table| try render_table.writeTable(self.ctx, self.writer, self.persistent_allocator, self.table_scratch, table, .blockquote),
-                else => try self.writeBlock(block, depth),
+                else => try self.writeBlock(block_ptr, depth),
             }
         }
     }
 
-    fn writeBlockQuoteParagraph(self: *RenderSession, paragraph: ast.Paragraph) !void {
+    fn writeBlockQuoteParagraph(self: *RenderSession, paragraph: *const ast.Paragraph) !void {
         const style: ansi.TextStyle = .{ .fg = self.ctx.palette.muted };
-        if (paragraph.raw_lines.len > 0) {
-            try self.writeRawLinesMaybeWrap(paragraph.raw_lines, style, 0);
-            return;
-        }
-        try self.writeInlinesMaybeWrap(paragraph.children, style, 0);
+        try self.writeParagraphContent(paragraph, style, 0);
     }
 
     fn writeList(self: *RenderSession, list: ast.List, depth: usize) anyerror!void {
@@ -283,21 +268,21 @@ pub const RenderSession = struct {
 
         try self.writeCheckbox(item.checked);
 
-        for (item.blocks, 0..) |child, child_index| {
+        for (item.blocks, 0..) |*child_ptr, child_index| {
             if (child_index > 0) try self.writer.writeByte('\n');
-            switch (child) {
-                .paragraph => |paragraph| {
+            switch (child_ptr.*) {
+                .paragraph => {
                     if (child_index > 0) try self.writer.splatByteAll(' ', content_col);
-                    try self.writeListItemParagraph(paragraph, content_col);
+                    try self.writeListItemParagraph(&child_ptr.paragraph, content_col);
                 },
                 .list => |nested| try self.writeList(nested, depth + 1),
                 .blockquote => |blockquote| try self.writeBlockQuote(blockquote, depth + 1),
-                .blank_line => try self.writeBlock(child, depth),
+                .blank_line => try self.writeBlock(child_ptr, depth),
                 else => {
                     if (child_index > 0) {
-                        try self.writeListChildIndented(child, content_col, depth);
+                        try self.writeListChildIndented(child_ptr, content_col, depth);
                     } else {
-                        try self.writeBlock(child, depth);
+                        try self.writeBlock(child_ptr, depth);
                     }
                 },
             }
@@ -306,7 +291,7 @@ pub const RenderSession = struct {
 
     fn writeListChildIndented(
         self: *RenderSession,
-        child_block: ast.BlockNode,
+        child_block: *const ast.BlockNode,
         indent: usize,
         depth: usize,
     ) anyerror!void {
@@ -327,38 +312,20 @@ pub const RenderSession = struct {
 
     fn writeListItemParagraph(
         self: *RenderSession,
-        paragraph: ast.Paragraph,
+        paragraph: *const ast.Paragraph,
         content_col: usize,
     ) !void {
         const style: ansi.TextStyle = .{ .fg = self.ctx.palette.body };
 
-        if (paragraph.raw_lines.len > 0) {
-            if (content_col == 0 or self.wrap_width != null) {
-                try self.writeRawLinesMaybeWrap(paragraph.raw_lines, style, content_col);
-                return;
-            }
-
-            try self.pushIndent(content_col);
-            errdefer self.popPrefix() catch {};
-            try writeRawLines(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, paragraph.raw_lines, style);
-            try self.popPrefix();
-            return;
-        }
-
         if (content_col == 0 or self.wrap_width != null) {
-            try self.writeInlinesMaybeWrap(paragraph.children, style, content_col);
+            try self.writeParagraphContent(paragraph, style, content_col);
             return;
         }
 
         try self.pushIndent(content_col);
         errdefer self.popPrefix() catch {};
 
-        try render_inline.writeInlineChain(
-            self.ctx,
-            self.writer,
-            paragraph.children,
-            style,
-        );
+        try self.writeBody(self.writer, paragraph, self.takeTrivialParagraph(paragraph), style);
 
         try self.popPrefix();
     }

@@ -59,8 +59,7 @@ test "table renderer reuses scratch on repeated render of the same table-only do
     defer _ = render_gpa.deinit();
 
     var counting = bench.CountingAllocator.init(render_gpa.allocator());
-    var renderer: render.Renderer = undefined;
-    renderer.init(counting.allocator(), .{});
+    var renderer = render.Renderer.init(counting.allocator(), .{});
     defer renderer.deinit();
 
     _ = try renderWithDiscarding(&renderer, &doc, &counting);
@@ -91,8 +90,7 @@ test "table renderer reuses grown scratch when rendering small-large-small table
     defer _ = render_gpa.deinit();
 
     var counting = bench.CountingAllocator.init(render_gpa.allocator());
-    var renderer: render.Renderer = undefined;
-    renderer.init(counting.allocator(), .{});
+    var renderer = render.Renderer.init(counting.allocator(), .{});
     defer renderer.deinit();
 
     _ = try renderWithDiscarding(&renderer, &small_doc, &counting);
@@ -150,13 +148,13 @@ test "wide table border near 2048-byte batch threshold produces correct output" 
 
 fn renderWithDiscarding(
     renderer: *render.Renderer,
-    doc: *const ast.Document,
+    output: *const parse.ParseOutput,
     counting: *const bench.CountingAllocator,
 ) !bench.CounterSnapshot {
     var sink: [256]u8 = undefined;
     var discarding: std.io.Writer.Discarding = .init(&sink);
     const before = counting.snapshot();
-    try renderer.render(&discarding.writer, doc, null);
+    try renderer.render(&discarding.writer, output, null);
     const after = counting.snapshot();
     return bench.CounterSnapshot.diff(after, before);
 }

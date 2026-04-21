@@ -6,8 +6,7 @@ const simple_flowchart = "flowchart LR\n  A --> B\n";
 
 test "Renderer starts with an empty mermaid cache" {
     const allocator = std.testing.allocator;
-    var renderer: render.Renderer = undefined;
-    renderer.init(allocator, .{});
+    var renderer = render.Renderer.init(allocator, .{});
     defer renderer.deinit();
     try std.testing.expectEqual(@as(usize, 0), renderer.mermaid_cache.count());
 }
@@ -20,8 +19,7 @@ test "Rendering a mermaid block populates the cache" {
     try fixture.appendBlock(try fixture.codeFence("```mermaid", "```", "mermaid", simple_flowchart));
     try fixture.finish(false);
 
-    var renderer: render.Renderer = undefined;
-    renderer.init(allocator, .{});
+    var renderer = render.Renderer.init(allocator, .{});
     defer renderer.deinit();
 
     var discarding: std.io.Writer.Discarding = .init(&.{});
@@ -38,8 +36,7 @@ test "Rendering identical mermaid twice keeps cache size at one" {
     try fixture.appendBlock(try fixture.codeFence("```mermaid", "```", "mermaid", simple_flowchart));
     try fixture.finish(false);
 
-    var renderer: render.Renderer = undefined;
-    renderer.init(allocator, .{});
+    var renderer = render.Renderer.init(allocator, .{});
     defer renderer.deinit();
 
     var discarding: std.io.Writer.Discarding = .init(&.{});
@@ -59,8 +56,7 @@ test "Distinct mermaid contents produce distinct cache entries" {
     try fixture.appendBlock(try fixture.codeFence("```mermaid", "```", "mermaid", "flowchart LR\n  X --> Y\n"));
     try fixture.finish(false);
 
-    var renderer: render.Renderer = undefined;
-    renderer.init(allocator, .{});
+    var renderer = render.Renderer.init(allocator, .{});
     defer renderer.deinit();
 
     var discarding: std.io.Writer.Discarding = .init(&.{});
@@ -77,8 +73,7 @@ test "Invalid mermaid does not populate cache" {
     try fixture.appendBlock(try fixture.codeFence("```mermaid", "```", "mermaid", "not a real diagram\n"));
     try fixture.finish(false);
 
-    var renderer: render.Renderer = undefined;
-    renderer.init(allocator, .{});
+    var renderer = render.Renderer.init(allocator, .{});
     defer renderer.deinit();
 
     var discarding: std.io.Writer.Discarding = .init(&.{});

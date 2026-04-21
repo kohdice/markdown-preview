@@ -33,9 +33,12 @@ const usage_message =
     \\
 ;
 
-const ParsedArgs = struct {
-    path: []const u8,
-    watch: bool,
+pub const Command = union(enum) {
+    render: RenderCommand,
+    watch: WatchCommand,
+
+    pub const RenderCommand = struct { path: []const u8 };
+    pub const WatchCommand = struct { path: []const u8 };
 };
 
 const ParseError = error{
@@ -44,7 +47,7 @@ const ParseError = error{
     UnknownFlag,
 };
 
-fn parseArgs(args: []const [:0]const u8) ParseError!ParsedArgs {
+pub fn parseArgs(args: []const [:0]const u8) ParseError!Command {
     var path: ?[]const u8 = null;
     var positional_only = false;
     var watch_flag = false;
@@ -69,20 +72,25 @@ fn parseArgs(args: []const [:0]const u8) ParseError!ParsedArgs {
         path = arg;
     }
 
-    if (path) |p| return .{ .path = p, .watch = watch_flag };
-    return error.MissingPath;
+    const resolved_path = path orelse return error.MissingPath;
+    if (watch_flag) return .{ .watch = .{ .path = resolved_path } };
+    return .{ .render = .{ .path = resolved_path } };
 }
 
 pub fn run(opts: RunOptions) !u8 {
-    const parsed = parseArgs(opts.args) catch {
+    const command = parseArgs(opts.args) catch {
         try opts.stderr.writeAll(usage_message);
         return exit_failure;
     };
 
-    if (parsed.watch) {
-        return watch.run(.{
+    return executeCommand(opts, command);
+}
+
+pub fn executeCommand(opts: RunOptions, command: Command) !u8 {
+    return switch (command) {
+        .watch => |cmd| watch.run(.{
             .cwd = opts.cwd,
-            .path = parsed.path,
+            .path = cmd.path,
             .stdout = opts.stdout,
             .stderr = opts.stderr,
             .stdout_handle = opts.stdout_handle,
@@ -90,55 +98,57 @@ pub fn run(opts: RunOptions) !u8 {
             .enable_ansi = opts.enable_ansi,
             .ambiguous_width = opts.ambiguous_width,
             .color_mode = opts.color_mode,
-        });
-    }
+        }),
+        .render => |cmd| renderOnce(opts, cmd.path),
+    };
+}
 
-    const source = source_loader.loadFile(opts.allocator, opts.cwd, parsed.path) catch |err| {
-        try opts.stderr.print("mp: unable to read '{s}': {s}\n", .{ parsed.path, @errorName(err) });
+fn renderOnce(opts: RunOptions, path: []const u8) !u8 {
+    const source = source_loader.loadFile(opts.allocator, opts.cwd, path) catch |err| {
+        try opts.stderr.print("mp: unable to read '{s}': {s}\n", .{ path, @errorName(err) });
         return exit_failure;
     };
 
-    var doc = try parse.parse(opts.allocator, source);
-    defer doc.deinit();
+    var output = try parse.parse(opts.allocator, source);
+    defer output.deinit();
 
-    var renderer: render.Renderer = undefined;
-    renderer.init(opts.allocator, .{
+    var renderer = render.Renderer.init(opts.allocator, .{
         .enable_ansi = opts.enable_ansi,
         .ambiguous_width = opts.ambiguous_width,
         .color_mode = opts.color_mode,
     });
     defer renderer.deinit();
 
-    try renderer.render(opts.stdout, &doc, opts.wrap_width);
+    try renderer.render(opts.stdout, &output, opts.wrap_width);
     return exit_success;
 }
 
-test "parseArgs accepts plain positional path" {
+test "parseArgs returns render command for plain positional path" {
     const args = [_][:0]const u8{ "mp", "foo.md" };
     const parsed = try parseArgs(&args);
-    try std.testing.expectEqualStrings("foo.md", parsed.path);
-    try std.testing.expect(!parsed.watch);
+    try std.testing.expect(parsed == .render);
+    try std.testing.expectEqualStrings("foo.md", parsed.render.path);
 }
 
-test "parseArgs accepts --watch before path" {
+test "parseArgs returns watch command when --watch precedes path" {
     const args = [_][:0]const u8{ "mp", "--watch", "foo.md" };
     const parsed = try parseArgs(&args);
-    try std.testing.expectEqualStrings("foo.md", parsed.path);
-    try std.testing.expect(parsed.watch);
+    try std.testing.expect(parsed == .watch);
+    try std.testing.expectEqualStrings("foo.md", parsed.watch.path);
 }
 
-test "parseArgs accepts --watch after path" {
+test "parseArgs returns watch command when --watch follows path" {
     const args = [_][:0]const u8{ "mp", "foo.md", "--watch" };
     const parsed = try parseArgs(&args);
-    try std.testing.expectEqualStrings("foo.md", parsed.path);
-    try std.testing.expect(parsed.watch);
+    try std.testing.expect(parsed == .watch);
+    try std.testing.expectEqualStrings("foo.md", parsed.watch.path);
 }
 
-test "parseArgs accepts --watch with -- sentinel" {
+test "parseArgs returns watch command when --watch precedes -- sentinel" {
     const args = [_][:0]const u8{ "mp", "--watch", "--", "--notes.md" };
     const parsed = try parseArgs(&args);
-    try std.testing.expectEqualStrings("--notes.md", parsed.path);
-    try std.testing.expect(parsed.watch);
+    try std.testing.expect(parsed == .watch);
+    try std.testing.expectEqualStrings("--notes.md", parsed.watch.path);
 }
 
 test "parseArgs rejects --watch without path" {
@@ -164,7 +174,8 @@ test "parseArgs rejects no positional args" {
 test "parseArgs with -- sentinel treats following arg as positional even if it starts with --" {
     const args = [_][:0]const u8{ "mp", "--", "--notes.md" };
     const parsed = try parseArgs(&args);
-    try std.testing.expectEqualStrings("--notes.md", parsed.path);
+    try std.testing.expect(parsed == .render);
+    try std.testing.expectEqualStrings("--notes.md", parsed.render.path);
 }
 
 test "parseArgs with -- sentinel still rejects duplicate positional" {

@@ -29,8 +29,8 @@ pub const Renderer = struct {
     scratch: std.heap.ArenaAllocator,
     mermaid_cache: std.AutoHashMapUnmanaged(u64, mermaid.Diagram) = .empty,
 
-    pub fn init(self: *Renderer, persistent_allocator: std.mem.Allocator, opts: RenderOptions) void {
-        self.* = .{
+    pub fn init(persistent_allocator: std.mem.Allocator, opts: RenderOptions) Renderer {
+        return .{
             .persistent_allocator = persistent_allocator,
             .opts = opts,
             .palette = theme.default_palette,
@@ -56,7 +56,7 @@ pub const Renderer = struct {
     pub fn render(
         self: *Renderer,
         writer: *std.io.Writer,
-        doc: *const parse.Document,
+        output: *const parse.ParseOutput,
         wrap_width: ?usize,
     ) !void {
         _ = self.scratch.reset(.retain_capacity);
@@ -70,7 +70,7 @@ pub const Renderer = struct {
         wrap_writer.init(writer, 0, self.opts.ambiguous_width, self.persistent_allocator, &self.wrap_line_buf);
 
         const ctx: render_context.RenderContext = .{
-            .doc = doc,
+            .doc = &output.parsed.document,
             .enable_ansi = self.opts.enable_ansi,
             .ambiguous_width = self.opts.ambiguous_width,
             .palette = self.palette,
@@ -88,10 +88,11 @@ pub const Renderer = struct {
             .table_scratch = &self.table_scratch,
             .wrap_writer = &wrap_writer,
             .mermaid_cache = &self.mermaid_cache,
+            .trivial_runs = output.trivial_runs,
         };
 
-        try session.write(doc.blocks);
-        if (doc.has_trailing_newline) try prefix_w.writer.writeByte('\n');
+        try session.write(output.parsed.document.blocks);
+        if (output.parsed.document.has_trailing_newline) try prefix_w.writer.writeByte('\n');
         try prefix_w.writer.flush();
     }
 };

@@ -67,11 +67,11 @@ pub const TableScratch = struct {
     }
 };
 
-pub const TablePlacement = enum {
+const TablePlacement = enum {
     top_level,
     blockquote,
 
-    pub fn cellColor(self: TablePlacement, palette: theme.Palette) theme.Rgb {
+    fn cellColor(self: TablePlacement, palette: theme.Palette) theme.Rgb {
         return switch (self) {
             .top_level => palette.body,
             .blockquote => palette.muted,
@@ -80,18 +80,21 @@ pub const TablePlacement = enum {
 };
 
 const ScratchWriter = struct {
+    pub const stack_buffer_size: usize = 1024;
+
     buf: *std.ArrayListUnmanaged(u8),
     allocator: std.mem.Allocator,
+    stack_buf: [stack_buffer_size]u8 = undefined,
     writer: std.io.Writer,
 
     const vtable: std.io.Writer.VTable = .{
         .drain = drain,
-        .flush = flushFn,
+        .flush = std.io.Writer.defaultFlush,
         .rebase = std.io.Writer.failingRebase,
     };
 
-    fn init(buf: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator) ScratchWriter {
-        return .{
+    fn init(self: *ScratchWriter, buf: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator) void {
+        self.* = .{
             .buf = buf,
             .allocator = allocator,
             .writer = .{
@@ -99,10 +102,18 @@ const ScratchWriter = struct {
                 .vtable = &vtable,
             },
         };
+        self.writer.buffer = &self.stack_buf;
     }
 
     fn drain(w: *std.io.Writer, data: []const []const u8, splat: usize) std.io.Writer.Error!usize {
         const self: *ScratchWriter = @fieldParentPtr("writer", w);
+
+        const pending = w.buffered();
+        if (pending.len > 0) {
+            self.buf.appendSlice(self.allocator, pending) catch return error.WriteFailed;
+            w.end = 0;
+        }
+
         var total: usize = 0;
         for (data, 0..) |slice, idx| {
             const repeat: usize = if (idx == data.len - 1) splat else 1;
@@ -113,8 +124,6 @@ const ScratchWriter = struct {
         }
         return total;
     }
-
-    fn flushFn(_: *std.io.Writer) std.io.Writer.Error!void {}
 };
 
 pub fn writeTable(
@@ -135,7 +144,8 @@ pub fn writeTable(
     const header_style: ansi.TextStyle = .{ .fg = cell_fg, .bold = true };
     const body_style: ansi.TextStyle = .{ .fg = cell_fg };
 
-    var scratch_writer = ScratchWriter.init(&scratch.bytes_buf, allocator);
+    var scratch_writer: ScratchWriter = undefined;
+    scratch_writer.init(&scratch.bytes_buf, allocator);
 
     for (0..col_count) |c| {
         const byte_start: u32 = @intCast(scratch.bytes_buf.items.len);
@@ -149,6 +159,7 @@ pub fn writeTable(
                 ctx.ambiguous_width,
             );
         }
+        try scratch_writer.writer.flush();
         const byte_end: u32 = @intCast(scratch.bytes_buf.items.len);
         try scratch.header_records.append(allocator, .{
             .byte_start = byte_start,
@@ -169,6 +180,7 @@ pub fn writeTable(
                 body_style,
                 ctx.ambiguous_width,
             );
+            try scratch_writer.writer.flush();
             const byte_end: u32 = @intCast(scratch.bytes_buf.items.len);
             try scratch.body_records_flat.append(allocator, .{
                 .byte_start = byte_start,

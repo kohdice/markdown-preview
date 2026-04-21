@@ -4,29 +4,44 @@ const block_cursor = @import("block_cursor.zig");
 const parse_block = @import("block.zig");
 const parse_link = @import("link.zig");
 const parse_table = @import("table.zig");
+const parse_inline = @import("inline.zig");
+const inline_trigger = @import("inline_trigger.zig");
 const inline_work_mod = @import("inline_work.zig");
 
 const BlockCursor = block_cursor.BlockCursor;
 const InlineWork = inline_work_mod.InlineWork;
+const PendingInline = inline_work_mod.PendingInline;
 
 pub const BlockDocument = struct {
     blocks: []ast.BlockNode,
+    /// Paragraph / heading inline work in depth-first block-walk order. The
+    /// inline phase consumes it in the same order, so no back-pointer is
+    /// required. Trigger-free entries are tagged `.trivial_*` so the inline
+    /// phase can skip the full parser.
+    pending_inline: []const PendingInline,
+    /// Table-cell inline work; tables carry stable `target` pointers so they
+    /// don't fit the walk-order contract of `pending_inline`.
     inline_work: []const InlineWork,
     link_defs: ast.LinkDefMap,
 };
 
-pub fn buildBlockDocument(allocator: std.mem.Allocator, source: []const u8) !BlockDocument {
+pub fn buildBlockDocument(
+    allocator: std.mem.Allocator,
+    builder: *parse_inline.InlineBuilder,
+    source: []const u8,
+) !BlockDocument {
     var walker = Walker{
         .allocator = allocator,
+        .builder = builder,
         .link_defs = .{},
     };
-    defer walker.deinitScratch();
 
     var cursor = BlockCursor.initRoot(source);
     const blocks = try walker.parseBlocks(&cursor);
 
     return .{
         .blocks = blocks,
+        .pending_inline = walker.pending_inline.items,
         .inline_work = walker.inline_work.items,
         .link_defs = walker.link_defs,
     };
@@ -34,18 +49,17 @@ pub fn buildBlockDocument(allocator: std.mem.Allocator, source: []const u8) !Blo
 
 const Walker = struct {
     allocator: std.mem.Allocator,
+    builder: *parse_inline.InlineBuilder,
     link_defs: ast.LinkDefMap,
     inline_work: std.ArrayListUnmanaged(InlineWork) = .empty,
+    pending_inline: std.ArrayListUnmanaged(PendingInline) = .empty,
     link_definition_scratch: std.ArrayListUnmanaged(u8) = .empty,
     link_label_scratch: std.ArrayListUnmanaged(u8) = .empty,
     paragraph_lines: std.ArrayListUnmanaged([]const u8) = .empty,
     code_lines: std.ArrayListUnmanaged([]const u8) = .empty,
 
-    fn deinitScratch(self: *Walker) void {
-        self.link_definition_scratch.deinit(self.allocator);
-        self.link_label_scratch.deinit(self.allocator);
-        self.paragraph_lines.deinit(self.allocator);
-        self.code_lines.deinit(self.allocator);
+    fn pushPending(self: *Walker, entry: PendingInline) !void {
+        try self.pending_inline.append(self.allocator, entry);
     }
 
     fn parseBlocks(self: *Walker, cursor: *BlockCursor) anyerror![]ast.BlockNode {
@@ -90,15 +104,16 @@ const Walker = struct {
 
             if (parse_block.heading(line)) |heading| {
                 cursor.advanceLine();
-                const lines_buf = try self.allocator.alloc([]const u8, 1);
-                lines_buf[0] = heading.content;
                 try blocks.append(self.allocator, .{
                     .heading = .{
                         .level = heading.level,
                         .children = ast.no_inline,
-                        .pending_lines = lines_buf,
                     },
                 });
+                // Headings always take the full inline parser path: the
+                // trivial-bypass side channel is reserved for paragraphs,
+                // which are what benchmarks showed benefit from it.
+                try self.pushPending(.{ .full_single = heading.content });
                 continue;
             }
 
@@ -165,12 +180,11 @@ const Walker = struct {
             if (!is_first) {
                 if (parse_block.setextHeadingUnderline(line)) |underline| {
                     block_cursor.advanceParagraphLine(cursor, paragraph_line.lazy);
-                    const lines_copy = try self.allocator.dupe([]const u8, self.paragraph_lines.items);
+                    try self.emitParagraphPending(false);
                     return .{
                         .heading = .{
                             .level = underline.level,
                             .children = ast.no_inline,
-                            .pending_lines = lines_copy,
                         },
                     };
                 }
@@ -186,13 +200,28 @@ const Walker = struct {
             is_first = false;
         }
 
-        const lines_copy = try self.allocator.dupe([]const u8, self.paragraph_lines.items);
-        return .{
-            .paragraph = .{
-                .children = ast.no_inline,
-                .pending_lines = lines_copy,
-            },
-        };
+        const is_trivial = self.paragraph_lines.items.len > 0 and
+            inline_trigger.isTrivial(self.paragraph_lines.items);
+        try self.emitParagraphPending(is_trivial);
+        return .{ .paragraph = .{ .children = ast.no_inline } };
+    }
+
+    fn emitParagraphPending(self: *Walker, is_trivial: bool) !void {
+        const lines = self.paragraph_lines.items;
+        if (lines.len == 1) {
+            const single = lines[0];
+            try self.pushPending(if (is_trivial)
+                .{ .trivial_single = single }
+            else
+                .{ .full_single = single });
+            return;
+        }
+
+        const lines_copy = try self.allocator.dupe([]const u8, lines);
+        try self.pushPending(if (is_trivial)
+            .{ .trivial_multi = lines_copy }
+        else
+            .{ .full_multi = lines_copy });
     }
 
     fn peekLinkDefinition(self: *Walker, cursor: *const BlockCursor) anyerror!?LinkDefinitionMatch {
@@ -563,70 +592,101 @@ fn joinLines(allocator: std.mem.Allocator, lines: []const []const u8) ![]const u
     return buffer;
 }
 
-test "buildBlockDocument emits paragraph with no_inline placeholder and pending_lines" {
+const TestBuild = struct {
+    block_doc: BlockDocument,
+    builder: parse_inline.InlineBuilder,
+};
+
+fn buildForTest(allocator: std.mem.Allocator, source: []const u8) !TestBuild {
+    var builder = parse_inline.InlineBuilder.init(allocator);
+    const block_doc = try buildBlockDocument(allocator, &builder, source);
+    return .{ .block_doc = block_doc, .builder = builder };
+}
+
+test "buildBlockDocument queues trigger-free paragraph as trivial_single pending" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const block_doc = try buildBlockDocument(arena.allocator(), "Hello world\n");
+    const build_result = try buildForTest(arena.allocator(), "Hello world\n");
+    const block_doc = build_result.block_doc;
     try std.testing.expectEqual(@as(usize, 1), block_doc.blocks.len);
     try std.testing.expect(block_doc.blocks[0] == .paragraph);
     try std.testing.expectEqual(ast.no_inline, block_doc.blocks[0].paragraph.children);
-    try std.testing.expectEqual(@as(usize, 1), block_doc.blocks[0].paragraph.pending_lines.len);
-    try std.testing.expectEqualStrings("Hello world", block_doc.blocks[0].paragraph.pending_lines[0]);
 
-    try std.testing.expectEqual(@as(usize, 0), block_doc.inline_work.len);
+    try std.testing.expectEqual(@as(usize, 1), block_doc.pending_inline.len);
+    try std.testing.expect(block_doc.pending_inline[0] == .trivial_single);
+    try std.testing.expectEqualStrings("Hello world", block_doc.pending_inline[0].trivial_single);
 }
 
-test "buildBlockDocument ATX heading emits heading variant with pending_lines" {
+test "buildBlockDocument ATX heading always uses full inline parse" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const block_doc = try buildBlockDocument(arena.allocator(), "## Title\n\nBody\n");
+    const build_result = try buildForTest(arena.allocator(), "## Title\n\nBody\n");
+    const block_doc = build_result.block_doc;
     try std.testing.expectEqual(@as(usize, 3), block_doc.blocks.len);
     try std.testing.expect(block_doc.blocks[0] == .heading);
     try std.testing.expectEqual(@as(u8, 2), block_doc.blocks[0].heading.level);
-    try std.testing.expectEqual(ast.no_inline, block_doc.blocks[0].heading.children);
-    try std.testing.expectEqualStrings("Title", block_doc.blocks[0].heading.pending_lines[0]);
 
     try std.testing.expect(block_doc.blocks[1] == .blank_line);
     try std.testing.expect(block_doc.blocks[2] == .paragraph);
-    try std.testing.expectEqualStrings("Body", block_doc.blocks[2].paragraph.pending_lines[0]);
 
     try std.testing.expectEqual(@as(usize, 0), block_doc.inline_work.len);
+    try std.testing.expectEqual(@as(usize, 2), block_doc.pending_inline.len);
+    try std.testing.expect(block_doc.pending_inline[0] == .full_single);
+    try std.testing.expectEqualStrings("Title", block_doc.pending_inline[0].full_single);
+    try std.testing.expect(block_doc.pending_inline[1] == .trivial_single);
+    try std.testing.expectEqualStrings("Body", block_doc.pending_inline[1].trivial_single);
 }
 
-test "buildBlockDocument setext heading pivot sets pending_lines on heading not paragraph" {
+test "buildBlockDocument setext heading records multi-line heading pending_inline entry" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const block_doc = try buildBlockDocument(arena.allocator(), "Alpha\nBeta\n====\n");
+    const build_result = try buildForTest(arena.allocator(), "Alpha\nBeta\n====\n");
+    const block_doc = build_result.block_doc;
     try std.testing.expectEqual(@as(usize, 1), block_doc.blocks.len);
     try std.testing.expect(block_doc.blocks[0] == .heading);
     try std.testing.expectEqual(@as(u8, 1), block_doc.blocks[0].heading.level);
-    try std.testing.expectEqual(ast.no_inline, block_doc.blocks[0].heading.children);
 
-    try std.testing.expectEqual(@as(usize, 2), block_doc.blocks[0].heading.pending_lines.len);
-    try std.testing.expectEqualStrings("Alpha", block_doc.blocks[0].heading.pending_lines[0]);
-    try std.testing.expectEqualStrings("Beta", block_doc.blocks[0].heading.pending_lines[1]);
-
-    try std.testing.expectEqual(@as(usize, 0), block_doc.inline_work.len);
+    try std.testing.expectEqual(@as(usize, 1), block_doc.pending_inline.len);
+    try std.testing.expect(block_doc.pending_inline[0] == .full_multi);
+    try std.testing.expectEqual(@as(usize, 2), block_doc.pending_inline[0].full_multi.len);
+    try std.testing.expectEqualStrings("Alpha", block_doc.pending_inline[0].full_multi[0]);
+    try std.testing.expectEqualStrings("Beta", block_doc.pending_inline[0].full_multi[1]);
 }
 
-test "buildBlockDocument blockquote recursion populates inner paragraph pending_lines" {
+test "buildBlockDocument paragraph with inline trigger records full_multi pending" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const block_doc = try buildBlockDocument(arena.allocator(), "> inner one\n> inner two\n");
+    const build_result = try buildForTest(arena.allocator(), "one *em*\ntwo\n");
+    const block_doc = build_result.block_doc;
+    try std.testing.expect(block_doc.blocks[0] == .paragraph);
+    try std.testing.expectEqual(ast.no_inline, block_doc.blocks[0].paragraph.children);
+    try std.testing.expectEqual(@as(usize, 1), block_doc.pending_inline.len);
+    try std.testing.expect(block_doc.pending_inline[0] == .full_multi);
+    try std.testing.expectEqual(@as(usize, 2), block_doc.pending_inline[0].full_multi.len);
+}
+
+test "buildBlockDocument blockquote trigger-free inner paragraph queues trivial_multi pending" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const build_result = try buildForTest(arena.allocator(), "> inner one\n> inner two\n");
+    const block_doc = build_result.block_doc;
     try std.testing.expect(block_doc.blocks[0] == .blockquote);
     const bq = block_doc.blocks[0].blockquote;
     try std.testing.expectEqual(@as(usize, 1), bq.blocks.len);
     try std.testing.expect(bq.blocks[0] == .paragraph);
+    try std.testing.expectEqual(ast.no_inline, bq.blocks[0].paragraph.children);
 
-    try std.testing.expectEqual(@as(usize, 2), bq.blocks[0].paragraph.pending_lines.len);
-    try std.testing.expectEqualStrings("inner one", bq.blocks[0].paragraph.pending_lines[0]);
-    try std.testing.expectEqualStrings("inner two", bq.blocks[0].paragraph.pending_lines[1]);
-
-    try std.testing.expectEqual(@as(usize, 0), block_doc.inline_work.len);
+    try std.testing.expectEqual(@as(usize, 1), block_doc.pending_inline.len);
+    try std.testing.expect(block_doc.pending_inline[0] == .trivial_multi);
+    const lines = block_doc.pending_inline[0].trivial_multi;
+    try std.testing.expectEqual(@as(usize, 2), lines.len);
+    try std.testing.expectEqualStrings("inner one", lines[0]);
+    try std.testing.expectEqualStrings("inner two", lines[1]);
 }
 
 test "buildBlockDocument table emits TableCell array with per-cell slice work" {
@@ -639,7 +699,7 @@ test "buildBlockDocument table emits TableCell array with per-cell slice work" {
         \\| 1 | 2 |
         \\
     ;
-    const block_doc = try buildBlockDocument(arena.allocator(), source);
+    const block_doc = (try buildForTest(arena.allocator(), source)).block_doc;
     try std.testing.expect(block_doc.blocks[0] == .table);
     const t = block_doc.blocks[0].table;
     try std.testing.expectEqual(@as(usize, 2), t.header.len);
@@ -670,7 +730,7 @@ test "buildBlockDocument collects link definition into link_defs and drops the b
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const block_doc = try buildBlockDocument(arena.allocator(), "[anchor]: /target \"Example\"\n\nTrailing paragraph\n");
+    const block_doc = (try buildForTest(arena.allocator(), "[anchor]: /target \"Example\"\n\nTrailing paragraph\n")).block_doc;
     try std.testing.expectEqual(@as(u32, 1), block_doc.link_defs.count());
 
     const def = block_doc.link_defs.get("anchor") orelse return error.TestUnexpected;
@@ -683,50 +743,55 @@ test "buildBlockDocument collects link definition into link_defs and drops the b
         if (b == .paragraph) saw_paragraph = true;
     }
     try std.testing.expect(saw_paragraph);
-
-    try std.testing.expectEqual(@as(usize, 0), block_doc.inline_work.len);
 }
 
 test "buildBlockDocument records forward-referencing link definition before its use" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const block_doc = try buildBlockDocument(arena.allocator(), "See [x][ref] later.\n\n[ref]: /u\n");
+    const block_doc = (try buildForTest(arena.allocator(), "See [x][ref] later.\n\n[ref]: /u\n")).block_doc;
     try std.testing.expect(block_doc.link_defs.count() == 1);
     const def = block_doc.link_defs.get("ref") orelse return error.TestUnexpected;
     try std.testing.expectEqualStrings("/u", def.url);
 
     try std.testing.expect(block_doc.blocks[0] == .paragraph);
-    try std.testing.expectEqualStrings("See [x][ref] later.", block_doc.blocks[0].paragraph.pending_lines[0]);
 }
 
 test "buildBlockDocument captures fenced code block with language and content" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const block_doc = try buildBlockDocument(arena.allocator(), "```zig\nconst x = 1;\n```\n");
+    const block_doc = (try buildForTest(arena.allocator(), "```zig\nconst x = 1;\n```\n")).block_doc;
     try std.testing.expect(block_doc.blocks[0] == .code_fence);
     try std.testing.expectEqualStrings("zig", block_doc.blocks[0].code_fence.language);
     try std.testing.expectEqualStrings("const x = 1;", block_doc.blocks[0].code_fence.content);
     try std.testing.expectEqual(@as(usize, 0), block_doc.inline_work.len);
 }
 
-test "buildBlockDocument emits list with per-item child paragraph pending_lines" {
+test "buildBlockDocument emits list with trigger-free item paragraphs as trivial_single pending" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const block_doc = try buildBlockDocument(arena.allocator(), "- alpha\n- beta\n- gamma\n");
+    const build_result = try buildForTest(arena.allocator(), "- alpha\n- beta\n- gamma\n");
+    _ = build_result.builder;
+    const block_doc = build_result.block_doc;
     try std.testing.expect(block_doc.blocks[0] == .list);
     const list = block_doc.blocks[0].list;
     try std.testing.expectEqual(ast.ListKind.unordered, list.kind);
     try std.testing.expectEqual(@as(usize, 3), list.items.len);
 
-    try std.testing.expectEqual(@as(usize, 0), block_doc.inline_work.len);
-    for (list.items, [_][]const u8{ "alpha", "beta", "gamma" }) |item, expected_text| {
+    try std.testing.expectEqual(@as(usize, 3), block_doc.pending_inline.len);
+
+    const expected = [_][]const u8{ "alpha", "beta", "gamma" };
+    for (list.items, expected, 0..) |item, want, idx| {
         try std.testing.expectEqual(@as(u8, '-'), item.marker);
         try std.testing.expectEqual(@as(usize, 1), item.blocks.len);
         try std.testing.expect(item.blocks[0] == .paragraph);
-        try std.testing.expectEqualStrings(expected_text, item.blocks[0].paragraph.pending_lines[0]);
+        try std.testing.expectEqual(ast.no_inline, item.blocks[0].paragraph.children);
+
+        const pending = block_doc.pending_inline[idx];
+        try std.testing.expect(pending == .trivial_single);
+        try std.testing.expectEqualStrings(want, pending.trivial_single);
     }
 }
 
@@ -734,7 +799,7 @@ test "buildBlockDocument preserves ordered list number and nested task-list chec
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const block_doc = try buildBlockDocument(arena.allocator(), "1. [x] done\n2. [ ] todo\n");
+    const block_doc = (try buildForTest(arena.allocator(), "1. [x] done\n2. [ ] todo\n")).block_doc;
     try std.testing.expect(block_doc.blocks[0] == .list);
     const list = block_doc.blocks[0].list;
     try std.testing.expectEqual(ast.ListKind.ordered, list.kind);
@@ -765,7 +830,7 @@ test "buildBlockDocument does NOT treat link-definition-like line inside fenced 
         \\See [x][real].
         \\
     ;
-    const block_doc = try buildBlockDocument(arena.allocator(), source);
+    const block_doc = (try buildForTest(arena.allocator(), source)).block_doc;
 
     try std.testing.expect(block_doc.blocks[0] == .code_fence);
     try std.testing.expectEqualStrings("[not-a-ref]: /fake", block_doc.blocks[0].code_fence.content);
@@ -780,7 +845,7 @@ test "buildBlockDocument emits thematic break and blank line variants" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const block_doc = try buildBlockDocument(arena.allocator(), "text\n\n---\n");
+    const block_doc = (try buildForTest(arena.allocator(), "text\n\n---\n")).block_doc;
     try std.testing.expect(block_doc.blocks[0] == .paragraph);
     try std.testing.expect(block_doc.blocks[1] == .blank_line);
     try std.testing.expect(block_doc.blocks[2] == .thematic_break);
@@ -790,7 +855,7 @@ test "buildBlockDocument empty input yields empty blocks and empty work" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const block_doc = try buildBlockDocument(arena.allocator(), "");
+    const block_doc = (try buildForTest(arena.allocator(), "")).block_doc;
     try std.testing.expectEqual(@as(usize, 0), block_doc.blocks.len);
     try std.testing.expectEqual(@as(usize, 0), block_doc.inline_work.len);
     try std.testing.expectEqual(@as(u32, 0), block_doc.link_defs.count());

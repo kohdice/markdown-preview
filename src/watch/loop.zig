@@ -3,10 +3,10 @@ const content_hash = @import("content_hash.zig");
 const debounce_mod = @import("debounce.zig");
 const file_watcher = @import("file_watcher.zig");
 const input = @import("input.zig");
-const options = @import("options.zig");
+const orchestrator = @import("orchestrator.zig");
 const pager = @import("pager.zig");
 const pipeline = @import("pipeline.zig");
-const raw_term = @import("raw_term.zig");
+const raw_term = @import("../term/raw.zig");
 const render = @import("../render.zig");
 const render_buffer_mod = @import("render_buffer.zig");
 const term = @import("../term.zig");
@@ -21,7 +21,7 @@ pub const ExitReason = enum {
 };
 
 pub fn eventLoop(
-    opts: options.WatchOptions,
+    opts: orchestrator.WatchOptions,
     rt: *raw_term.RawTerm,
     watcher: *file_watcher.FileWatcher,
     renderer: *render.Renderer,

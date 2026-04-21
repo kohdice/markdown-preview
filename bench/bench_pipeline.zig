@@ -142,8 +142,7 @@ fn runOnce(
     const parse_after = parse_counting.snapshot();
 
     var render_counting = bench.CountingAllocator.init(allocator);
-    var renderer: Renderer = undefined;
-    renderer.init(render_counting.allocator(), .{ .ambiguous_width = ambiguous });
+    var renderer = Renderer.init(render_counting.allocator(), .{ .ambiguous_width = ambiguous });
     defer renderer.deinit();
 
     var sink: [4096]u8 = undefined;
