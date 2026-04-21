@@ -12,7 +12,8 @@ test {
 }
 
 pub fn renderTo(
-    cwd: std.fs.Dir,
+    io: std.Io,
+    cwd: std.Io.Dir,
     path: []const u8,
     renderer: *render.Renderer,
     cycle_arena: *std.heap.ArenaAllocator,
@@ -23,7 +24,7 @@ pub fn renderTo(
     _ = cycle_arena.reset(.retain_capacity);
     const cycle_alloc = cycle_arena.allocator();
 
-    const source = source_loader.loadFile(cycle_alloc, cwd, path) catch |err| {
+    const source = source_loader.loadFile(cycle_alloc, io, cwd, path) catch |err| {
         buffer.reset();
         buffer.writer.print("mp: unable to read '{s}': {s}\n", .{ path, @errorName(err) }) catch {};
         buffer.finalize() catch {};

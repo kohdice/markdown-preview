@@ -21,14 +21,16 @@ const KqueueWatcher = struct {
     const Self = @This();
 
     pub fn init(dir_path: [*:0]const u8, file_name: [*:0]const u8) !Self {
-        const kq = try std.posix.kqueue();
-        errdefer std.posix.close(kq);
+        const rc = std.c.kqueue();
+        if (rc < 0) return error.Kqueue;
+        const kq: std.posix.fd_t = rc;
+        errdefer std.Io.Threaded.closeFd(kq);
 
         const dir_fd = try std.posix.openatZ(std.posix.AT.FDCWD, dir_path, .{ .ACCMODE = .RDONLY }, 0);
-        errdefer std.posix.close(dir_fd);
+        errdefer std.Io.Threaded.closeFd(dir_fd);
 
         const file_fd = try std.posix.openatZ(dir_fd, file_name, .{ .ACCMODE = .RDONLY }, 0);
-        errdefer std.posix.close(file_fd);
+        errdefer std.Io.Threaded.closeFd(file_fd);
 
         var watcher = Self{
             .kq = kq,
@@ -42,9 +44,9 @@ const KqueueWatcher = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        if (self.file_fd) |fd| std.posix.close(fd);
-        std.posix.close(self.dir_fd);
-        std.posix.close(self.kq);
+        if (self.file_fd) |fd| std.Io.Threaded.closeFd(fd);
+        std.Io.Threaded.closeFd(self.dir_fd);
+        std.Io.Threaded.closeFd(self.kq);
     }
 
     pub fn getFd(self: *const Self) std.posix.fd_t {
@@ -54,14 +56,14 @@ const KqueueWatcher = struct {
     pub fn consumeEvents(self: *Self) !WatchEvent {
         var events: [kevent_batch_size]std.posix.Kevent = undefined;
         const timeout = std.posix.timespec{ .sec = 0, .nsec = 0 };
-        const count = try std.posix.kevent(self.kq, &.{}, &events, &timeout);
+        const count = try std.Io.Kqueue.kevent(self.kq, &.{}, &events, &timeout);
 
         var result: WatchEvent = .none;
         for (events[0..count]) |ev| {
             const ident: std.posix.fd_t = @intCast(ev.ident);
             if (self.file_fd != null and ident == self.file_fd.?) {
                 if (ev.fflags & (note_delete | note_rename) != 0) {
-                    std.posix.close(self.file_fd.?);
+                    std.Io.Threaded.closeFd(self.file_fd.?);
                     self.file_fd = null;
                 } else if (ev.fflags & (note_write | note_attrib) != 0) {
                     result = .modified;
@@ -103,7 +105,7 @@ const KqueueWatcher = struct {
             n += 1;
         }
 
-        _ = try std.posix.kevent(self.kq, changelist[0..n], &.{}, null);
+        _ = try std.Io.Kqueue.kevent(self.kq, changelist[0..n], &.{}, null);
     }
 
     fn makeVnodeEvent(fd: std.posix.fd_t, fflags: u32) std.posix.Kevent {
@@ -139,15 +141,29 @@ const InotifyWatcher = struct {
     const dir_mask = std.os.linux.IN.CREATE | std.os.linux.IN.MOVED_TO;
 
     pub fn init(dir_path: [*:0]const u8, file_name: [*:0]const u8) !Self {
-        const inotify_fd = try std.posix.inotify_init1(std.os.linux.IN.NONBLOCK | std.os.linux.IN.CLOEXEC);
-        errdefer std.posix.close(inotify_fd);
+        const init_rc = std.os.linux.inotify_init1(std.os.linux.IN.NONBLOCK | std.os.linux.IN.CLOEXEC);
+        switch (std.os.linux.E.init(init_rc)) {
+            .SUCCESS => {},
+            else => return error.InotifyInit,
+        }
+        const inotify_fd: std.posix.fd_t = @intCast(init_rc);
+        errdefer std.Io.Threaded.closeFd(inotify_fd);
 
-        const dir_wd = try std.posix.inotify_add_watchZ(inotify_fd, dir_path, dir_mask);
+        const dir_wd_rc = std.os.linux.inotify_add_watch(inotify_fd, dir_path, dir_mask);
+        switch (std.os.linux.E.init(dir_wd_rc)) {
+            .SUCCESS => {},
+            else => return error.InotifyAddWatch,
+        }
+        const dir_wd: i32 = @intCast(dir_wd_rc);
 
-        var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const full_path = buildFullPath(&full_path_buf, dir_path, file_name) orelse return error.NameTooLong;
 
-        const file_wd = std.posix.inotify_add_watchZ(inotify_fd, full_path, file_mask) catch null;
+        const file_wd_rc = std.os.linux.inotify_add_watch(inotify_fd, full_path, file_mask);
+        const file_wd: ?i32 = switch (std.os.linux.E.init(file_wd_rc)) {
+            .SUCCESS => @intCast(file_wd_rc),
+            else => null,
+        };
 
         return .{
             .inotify_fd = inotify_fd,
@@ -159,7 +175,7 @@ const InotifyWatcher = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        std.posix.close(self.inotify_fd);
+        std.Io.Threaded.closeFd(self.inotify_fd);
     }
 
     pub fn getFd(self: *const Self) std.posix.fd_t {
@@ -212,12 +228,16 @@ const InotifyWatcher = struct {
     }
 
     fn tryRewatch(self: *Self) void {
-        var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const full_path = buildFullPath(&full_path_buf, self.dir_path, self.file_name) orelse return;
-        self.file_wd = std.posix.inotify_add_watchZ(self.inotify_fd, full_path, file_mask) catch null;
+        const rc = std.os.linux.inotify_add_watch(self.inotify_fd, full_path, file_mask);
+        self.file_wd = switch (std.os.linux.E.init(rc)) {
+            .SUCCESS => @intCast(rc),
+            else => null,
+        };
     }
 
-    fn buildFullPath(buf: *[std.fs.max_path_bytes]u8, dir: [*:0]const u8, name: [*:0]const u8) ?[*:0]const u8 {
+    fn buildFullPath(buf: *[std.Io.Dir.max_path_bytes]u8, dir: [*:0]const u8, name: [*:0]const u8) ?[*:0]const u8 {
         const dir_slice = std.mem.sliceTo(dir, 0);
         const name_slice = std.mem.sliceTo(name, 0);
         const needs_sep: usize = if (dir_slice.len > 0 and dir_slice[dir_slice.len - 1] != '/') 1 else 0;
@@ -232,21 +252,22 @@ const InotifyWatcher = struct {
 };
 
 test "FileWatcher detects file modification" {
+    const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const dir_path = try tmp.dir.realpath(".", &dir_path_buf);
-    dir_path_buf[dir_path.len] = 0;
-    const dir_z: [*:0]const u8 = @ptrCast(dir_path.ptr);
+    const dir_len = try tmp.dir.realPath(io, &dir_path_buf);
+    dir_path_buf[dir_len] = 0;
+    const dir_z: [*:0]const u8 = @ptrCast(dir_path_buf[0..dir_len :0].ptr);
 
-    try tmp.dir.writeFile(.{ .sub_path = "test.md", .data = "hello" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "test.md", .data = "hello" });
 
     var watcher = try FileWatcher.init(dir_z, "test.md");
     defer watcher.deinit();
 
-    try tmp.dir.writeFile(.{ .sub_path = "test.md", .data = "world" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "test.md", .data = "world" });
 
-    std.Thread.sleep(50 * std.time.ns_per_ms);
+    try std.Io.sleep(io, .fromMilliseconds(50), .awake);
 
     var poll_fds = [_]std.posix.pollfd{
         .{ .fd = watcher.getFd(), .events = std.posix.POLL.IN, .revents = 0 },
@@ -257,23 +278,24 @@ test "FileWatcher detects file modification" {
     try std.testing.expect(event == .modified or event == .recreated);
 }
 
-var dir_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+var dir_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
 
 test "FileWatcher detects file deletion and recreation" {
+    const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const dir_path = try tmp.dir.realpath(".", &dir_path_buf2);
-    dir_path_buf2[dir_path.len] = 0;
-    const dir_z: [*:0]const u8 = @ptrCast(dir_path.ptr);
+    const dir_len = try tmp.dir.realPath(io, &dir_path_buf2);
+    dir_path_buf2[dir_len] = 0;
+    const dir_z: [*:0]const u8 = @ptrCast(dir_path_buf2[0..dir_len :0].ptr);
 
-    try tmp.dir.writeFile(.{ .sub_path = "test2.md", .data = "original" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "test2.md", .data = "original" });
 
     var watcher = try FileWatcher.init(dir_z, "test2.md");
     defer watcher.deinit();
 
-    try tmp.dir.deleteFile("test2.md");
-    std.Thread.sleep(50 * std.time.ns_per_ms);
+    try tmp.dir.deleteFile(io, "test2.md");
+    try std.Io.sleep(io, .fromMilliseconds(50), .awake);
 
     var poll_fds = [_]std.posix.pollfd{
         .{ .fd = watcher.getFd(), .events = std.posix.POLL.IN, .revents = 0 },
@@ -281,25 +303,26 @@ test "FileWatcher detects file deletion and recreation" {
     _ = try std.posix.poll(&poll_fds, 500);
     _ = try watcher.consumeEvents();
 
-    try tmp.dir.writeFile(.{ .sub_path = "test2.md", .data = "recreated" });
-    std.Thread.sleep(50 * std.time.ns_per_ms);
+    try tmp.dir.writeFile(io, .{ .sub_path = "test2.md", .data = "recreated" });
+    try std.Io.sleep(io, .fromMilliseconds(50), .awake);
 
     _ = try std.posix.poll(&poll_fds, 500);
     const event = try watcher.consumeEvents();
     try std.testing.expect(event == .modified or event == .recreated);
 }
 
-var dir_path_buf2: [std.fs.max_path_bytes]u8 = undefined;
+var dir_path_buf2: [std.Io.Dir.max_path_bytes]u8 = undefined;
 
 test "FileWatcher getFd returns valid descriptor" {
+    const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const dir_path = try tmp.dir.realpath(".", &dir_path_buf3);
-    dir_path_buf3[dir_path.len] = 0;
-    const dir_z: [*:0]const u8 = @ptrCast(dir_path.ptr);
+    const dir_len = try tmp.dir.realPath(io, &dir_path_buf3);
+    dir_path_buf3[dir_len] = 0;
+    const dir_z: [*:0]const u8 = @ptrCast(dir_path_buf3[0..dir_len :0].ptr);
 
-    try tmp.dir.writeFile(.{ .sub_path = "test3.md", .data = "content" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "test3.md", .data = "content" });
 
     var watcher = try FileWatcher.init(dir_z, "test3.md");
     defer watcher.deinit();
@@ -307,4 +330,4 @@ test "FileWatcher getFd returns valid descriptor" {
     try std.testing.expect(watcher.getFd() >= 0);
 }
 
-var dir_path_buf3: [std.fs.max_path_bytes]u8 = undefined;
+var dir_path_buf3: [std.Io.Dir.max_path_bytes]u8 = undefined;
