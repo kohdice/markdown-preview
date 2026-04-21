@@ -7,6 +7,7 @@ const term_ansi = @import("term/ansi.zig");
 const term_terminal = @import("term/terminal.zig");
 const term_width = @import("term/width.zig");
 const watch_orchestrator = @import("watch/orchestrator.zig");
+const unwrapWriteError = @import("write_error.zig").unwrapWriteError;
 
 pub const RenderOptions = render_mod.RenderOptions;
 pub const AmbiguousWidth = term_width.AmbiguousWidth;
@@ -15,7 +16,7 @@ pub const ColorMode = term_ansi.ColorMode;
 pub fn renderSource(
     allocator: std.mem.Allocator,
     source: []const u8,
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     wrap_width: ?usize,
     options: RenderOptions,
 ) !void {
@@ -30,13 +31,14 @@ pub fn renderSource(
 
 pub fn renderFile(
     allocator: std.mem.Allocator,
-    cwd: std.fs.Dir,
+    io: std.Io,
+    cwd: std.Io.Dir,
     path: []const u8,
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     wrap_width: ?usize,
     options: RenderOptions,
 ) !void {
-    const src = try source_loader_mod.loadFile(allocator, cwd, path);
+    const src = try source_loader_mod.loadFile(allocator, io, cwd, path);
     var doc = try parse_mod.parse(allocator, src);
     defer doc.deinit();
 
@@ -51,59 +53,66 @@ pub fn renderFile(
 /// `render_options == null` auto-detects ANSI/color/ambiguous-width.
 pub const WatchRequest = struct {
     allocator: std.mem.Allocator,
-    cwd: std.fs.Dir,
+    cwd: std.Io.Dir,
     path: []const u8,
     render_options: ?RenderOptions = null,
 };
 
 /// Live-preview `request.path` on the process's stdout until the user quits.
-/// Requires stdin and stdout to be interactive TTYs.
-pub fn watchFile(request: WatchRequest) !u8 {
-    const stdout_file = std.fs.File.stdout();
-    const stderr_file = std.fs.File.stderr();
-    const stdin_file = std.fs.File.stdin();
+/// Requires stdin and stdout to be interactive TTYs. Takes `std.process.Init`
+/// so stdio, env, and the Io implementation stay encapsulated inside the
+/// facade; callers pass along the `init` their `main` receives.
+pub fn watchFile(init: std.process.Init, request: WatchRequest) !u8 {
+    const io = init.io;
+    const stdout_file = std.Io.File.stdout();
+    const stderr_file = std.Io.File.stderr();
+    const stdin_file = std.Io.File.stdin();
 
-    const stdout_buffer = try request.allocator.alloc(u8, stdout_buffer_mod.sizeFor(stdout_file));
+    const stdout_buffer = try request.allocator.alloc(u8, try stdout_buffer_mod.sizeFor(io, stdout_file));
     defer request.allocator.free(stdout_buffer);
     var stderr_buffer: [1024]u8 = undefined;
 
-    var stdout_stream = stdout_file.writer(stdout_buffer);
-    var stderr_stream = stderr_file.writer(&stderr_buffer);
+    var stdout_stream = stdout_file.writer(io, stdout_buffer);
+    var stderr_stream = stderr_file.writer(io, &stderr_buffer);
 
-    const options = request.render_options orelse detectedRenderOptions(stdout_file);
+    const options = request.render_options orelse try detectedRenderOptions(io, stdout_file, init.environ_map);
 
-    const exit_code = try watch_orchestrator.run(.{
+    const exit_code = watch_orchestrator.run(.{
+        .io = io,
         .cwd = request.cwd,
         .path = request.path,
         .stdout = &stdout_stream.interface,
         .stderr = &stderr_stream.interface,
-        .stdout_handle = stdout_file.handle,
-        .stdin_handle = stdin_file.handle,
+        .stdout_file = stdout_file,
+        .stdin_file = stdin_file,
         .enable_ansi = options.enable_ansi,
         .ambiguous_width = options.ambiguous_width,
         .color_mode = options.color_mode,
-    });
+    }) catch |err| return unwrapWriteError(err, &stdout_stream, &stderr_stream);
 
-    try stdout_stream.interface.flush();
-    try stderr_stream.interface.flush();
+    stdout_stream.interface.flush() catch |err| return unwrapWriteError(err, &stdout_stream, &stderr_stream);
+    stderr_stream.interface.flush() catch |err| return unwrapWriteError(err, &stdout_stream, &stderr_stream);
     return exit_code;
 }
 
-fn detectedRenderOptions(stdout_file: std.fs.File) RenderOptions {
-    const enable_ansi = switch (std.io.tty.Config.detect(stdout_file)) {
-        .escape_codes, .windows_api => true,
-        .no_color => false,
-    };
+fn detectedRenderOptions(
+    io: std.Io,
+    stdout_file: std.Io.File,
+    environ_map: *const std.process.Environ.Map,
+) !RenderOptions {
+    const no_color = if (environ_map.get("NO_COLOR")) |v| v.len != 0 else false;
+    const force_color = if (environ_map.get("CLICOLOR_FORCE")) |v| v.len != 0 else false;
+    const mode = try std.Io.Terminal.Mode.detect(io, stdout_file, no_color, force_color);
     return .{
-        .enable_ansi = enable_ansi,
-        .ambiguous_width = term_terminal.detectAmbiguousWidthFromProcess(),
-        .color_mode = term_terminal.detectColorModeFromProcess(),
+        .enable_ansi = mode != .no_color,
+        .ambiguous_width = term_terminal.detectAmbiguousWidthFromEnv(environ_map),
+        .color_mode = term_terminal.detectColorModeFromEnv(environ_map),
     };
 }
 
 test "renderSource writes rendered markdown for heading and list" {
     const allocator = std.testing.allocator;
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
 
     try renderSource(
@@ -119,7 +128,7 @@ test "renderSource writes rendered markdown for heading and list" {
 
 test "renderSource honors wrap_width for trivial paragraph" {
     const allocator = std.testing.allocator;
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
 
     try renderSource(
@@ -135,20 +144,22 @@ test "renderSource honors wrap_width for trivial paragraph" {
 
 test "renderFile reads from cwd and writes rendered output" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.writeFile(.{
+    try tmp.dir.writeFile(io, .{
         .sub_path = "doc.md",
         .data = "## Hello\n",
     });
 
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
 
     try renderFile(
         allocator,
+        io,
         tmp.dir,
         "doc.md",
         &buf.writer,

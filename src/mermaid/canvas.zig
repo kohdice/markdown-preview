@@ -328,7 +328,7 @@ pub const Canvas = struct {
 };
 
 pub fn writeCanvas(
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     canvas: *const Canvas,
     wrap_width: ?usize,
     ambiguous: width_mod.AmbiguousWidth,
@@ -366,7 +366,7 @@ pub fn writeCanvas(
 }
 
 pub fn writeCanvasAnsi(
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     canvas: *const Canvas,
     wrap_width: ?usize,
     ambiguous: width_mod.AmbiguousWidth,
@@ -409,7 +409,7 @@ pub fn writeCanvasAnsi(
 }
 
 fn writeRowAnsi(
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     canvas: *const Canvas,
     r: usize,
     cols: usize,
@@ -454,7 +454,7 @@ fn rolesEqual(a: ?u8, b: ?u8) bool {
     return a.? == b.?;
 }
 
-fn writeRow(writer: *std.io.Writer, canvas: *const Canvas, r: usize, cols: usize) !void {
+fn writeRow(writer: *std.Io.Writer, canvas: *const Canvas, r: usize, cols: usize) !void {
     var last_nonspace: usize = 0;
     var c: usize = 0;
     while (c < cols) : (c += 1) {
@@ -477,7 +477,7 @@ fn writeRow(writer: *std.io.Writer, canvas: *const Canvas, r: usize, cols: usize
 }
 
 fn expectCanvasOutput(canvas: *const Canvas, expected: []const u8) !void {
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try writeCanvas(&sink.writer, canvas, null, .narrow);
     try std.testing.expectEqualStrings(expected, sink.writer.buffered());
@@ -500,7 +500,7 @@ test "writeCanvasAnsi wraps single role cell with SGR and reset" {
     var canvas = try Canvas.init(std.testing.allocator, 1, 2);
     defer canvas.deinit();
     canvas.drawCodepointRole(0, 0, 'X', 0, .narrow);
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     const colors = [_]theme.Rgb{.{ .r = 0, .g = 255, .b = 0 }};
     try writeCanvasAnsi(&sink.writer, &canvas, null, .narrow, &colors, .truecolor);
@@ -512,7 +512,7 @@ test "writeCanvasAnsi groups consecutive same-role cells under single SGR prefix
     defer canvas.deinit();
     canvas.drawCodepointRole(0, 0, 'A', 0, .narrow);
     canvas.drawCodepointRole(0, 1, 'B', 0, .narrow);
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     const colors = [_]theme.Rgb{.{ .r = 255, .g = 0, .b = 0 }};
     try writeCanvasAnsi(&sink.writer, &canvas, null, .narrow, &colors, .truecolor);
@@ -524,7 +524,7 @@ test "writeCanvasAnsi in none mode equals plain writeCanvas" {
     defer canvas.deinit();
     canvas.drawCodepointRole(0, 0, 'A', 0, .narrow);
     canvas.drawCodepoint(0, 1, 'B', .narrow);
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     const colors = [_]theme.Rgb{.{ .r = 0, .g = 0, .b = 0 }};
     try writeCanvasAnsi(&sink.writer, &canvas, null, .narrow, &colors, .none);
@@ -537,7 +537,7 @@ test "writeCanvasAnsi clips to wrap_width with trailing ellipsis" {
     canvas.drawCodepointRole(0, 0, 'X', 0, .narrow);
     var c: usize = 1;
     while (c < 40) : (c += 1) canvas.drawCodepoint(0, c, '.', .narrow);
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     const colors = [_]theme.Rgb{.{ .r = 255, .g = 0, .b = 0 }};
     try writeCanvasAnsi(&sink.writer, &canvas, 20, .narrow, &colors, .truecolor);
@@ -556,7 +556,7 @@ test "writeCanvasAnsi with wrap_width null emits full-width output unchanged" {
     canvas.drawCodepointRole(0, 0, 'X', 0, .narrow);
     var c: usize = 1;
     while (c < 40) : (c += 1) canvas.drawCodepoint(0, c, '.', .narrow);
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     const colors = [_]theme.Rgb{.{ .r = 255, .g = 0, .b = 0 }};
     try writeCanvasAnsi(&sink.writer, &canvas, null, .narrow, &colors, .truecolor);
@@ -571,7 +571,7 @@ test "writeCanvasAnsi clip path emits reset before ellipsis for colored last cel
     defer canvas.deinit();
     var c: usize = 0;
     while (c < 40) : (c += 1) canvas.drawCodepointRole(0, c, 'R', 0, .narrow);
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     const colors = [_]theme.Rgb{.{ .r = 255, .g = 0, .b = 0 }};
     try writeCanvasAnsi(&sink.writer, &canvas, 20, .narrow, &colors, .truecolor);
@@ -587,7 +587,7 @@ test "writeCanvasAnsi with wrap_width larger than cols does not clip" {
     defer canvas.deinit();
     var c: usize = 0;
     while (c < 10) : (c += 1) canvas.drawCodepointRole(0, c, 'A', 0, .narrow);
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     const colors = [_]theme.Rgb{.{ .r = 0, .g = 128, .b = 0 }};
     try writeCanvasAnsi(&sink.writer, &canvas, 100, .narrow, &colors, .truecolor);
@@ -601,7 +601,7 @@ test "writeCanvasAnsi with wrap_width leq ellipsis width does not clip" {
     defer canvas.deinit();
     var c: usize = 0;
     while (c < 10) : (c += 1) canvas.drawCodepointRole(0, c, 'B', 0, .narrow);
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     const colors = [_]theme.Rgb{.{ .r = 0, .g = 0, .b = 128 }};
     try writeCanvasAnsi(&sink.writer, &canvas, 1, .narrow, &colors, .truecolor);
@@ -712,7 +712,7 @@ test "writeCanvas clipping never splits a wide glyph" {
     canvas.drawCodepoint(0, 3, '日', .narrow);
     canvas.drawCodepoint(0, 5, 'D', .narrow);
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try writeCanvas(&sink.writer, &canvas, 5, .narrow);
     try std.testing.expectEqualStrings("ABC …", sink.writer.buffered());
@@ -725,12 +725,12 @@ test "writeCanvas skips clipping for degenerate wrap_width" {
     canvas.drawCodepoint(0, 1, 'B', .narrow);
     canvas.drawCodepoint(0, 2, 'C', .narrow);
 
-    var sink_zero: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink_zero: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink_zero.deinit();
     try writeCanvas(&sink_zero.writer, &canvas, 0, .narrow);
     try std.testing.expectEqualStrings("ABC", sink_zero.writer.buffered());
 
-    var sink_one: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink_one: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink_one.deinit();
     try writeCanvas(&sink_one.writer, &canvas, 1, .narrow);
     try std.testing.expectEqualStrings("ABC", sink_one.writer.buffered());

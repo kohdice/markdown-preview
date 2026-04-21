@@ -72,7 +72,7 @@ const TrackingAllocator = struct {
 };
 
 test "parse with borrowed source does not free the caller-owned buffer on deinit" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
 
     var tracking = TrackingAllocator.init(gpa.allocator());
@@ -92,7 +92,7 @@ test "parse with borrowed source does not free the caller-owned buffer on deinit
 }
 
 test "parse with owned source frees the buffer on deinit" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
 
     var tracking = TrackingAllocator.init(gpa.allocator());
@@ -122,9 +122,9 @@ test "parse with mapped source unmaps the buffer on deinit" {
     @memset(data, 'a');
     data[data.len - 1] = '\n';
 
-    try tmp.dir.writeFile(.{ .sub_path = "big.md", .data = data });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "big.md", .data = data });
 
-    const source = try source_loader.loadFile(std.testing.allocator, tmp.dir, "big.md");
+    const source = try source_loader.loadFile(std.testing.allocator, std.testing.io, tmp.dir, "big.md");
     try std.testing.expect(source == .mapped);
 
     var doc = try parse.parse(std.testing.allocator, source);
@@ -137,10 +137,10 @@ test "parse with mapped source unmaps the buffer on deinit" {
 }
 
 test "parse with owned source can free buffer with a different allocator than AST storage" {
-    var ast_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var ast_gpa = std.heap.DebugAllocator(.{}){};
     defer _ = ast_gpa.deinit();
 
-    var source_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var source_gpa = std.heap.DebugAllocator(.{}){};
     defer _ = source_gpa.deinit();
 
     var source_tracking = TrackingAllocator.init(source_gpa.allocator());

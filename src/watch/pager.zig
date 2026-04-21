@@ -87,7 +87,7 @@ pub const Pager = struct {
 
     pub fn displayPage(
         self: *Pager,
-        stdout: *std.io.Writer,
+        stdout: *std.Io.Writer,
         buffer: *const render_buffer_mod.RenderBuffer,
         scroll_offset: usize,
         visible_rows: usize,
@@ -184,7 +184,7 @@ fn visibleRows(
 }
 
 fn writeStatusLine(
-    stdout: *std.io.Writer,
+    stdout: *std.Io.Writer,
     scroll_offset: usize,
     content_rows: usize,
     total_lines: usize,
@@ -277,7 +277,7 @@ test "Pager reuses capacity across repaints without unbounded growth" {
     try rb.writer.writeAll("x\ny\nz\n");
     try rb.writer.flush();
 
-    var out: std.io.Writer.Allocating = .init(allocator);
+    var out: std.Io.Writer.Allocating = .init(allocator);
     defer out.deinit();
 
     pgr.displayPage(&out.writer, &rb, 0, 3, false, .truecolor);
@@ -303,7 +303,7 @@ test "Pager diffing skips emission for unchanged rows" {
     try rb.writer.writeAll("one\ntwo\nthree\n");
     try rb.writer.flush();
 
-    var out: std.io.Writer.Allocating = .init(allocator);
+    var out: std.Io.Writer.Allocating = .init(allocator);
     defer out.deinit();
 
     pgr.displayPage(&out.writer, &rb, 0, 4, false, .truecolor);
@@ -329,7 +329,7 @@ test "Pager (END) status line under color_mode=.none emits no reverse-video SGR"
     try rb.writer.writeAll("one\ntwo\n");
     try rb.writer.flush();
 
-    var out: std.io.Writer.Allocating = .init(allocator);
+    var out: std.Io.Writer.Allocating = .init(allocator);
     defer out.deinit();
 
     pgr.displayPage(&out.writer, &rb, 0, 5, true, .none);
@@ -350,7 +350,7 @@ test "Pager (END) status line under color_mode=.ansi16 emits reverse-video SGR" 
     try rb.writer.writeAll("one\ntwo\n");
     try rb.writer.flush();
 
-    var out: std.io.Writer.Allocating = .init(allocator);
+    var out: std.Io.Writer.Allocating = .init(allocator);
     defer out.deinit();
 
     pgr.displayPage(&out.writer, &rb, 0, 5, true, .ansi16);
@@ -371,7 +371,7 @@ test "Pager diff forces full repaint when color_mode changes" {
     try rb.writer.writeAll("alpha\nbeta\n");
     try rb.writer.flush();
 
-    var out: std.io.Writer.Allocating = .init(allocator);
+    var out: std.Io.Writer.Allocating = .init(allocator);
     defer out.deinit();
 
     pgr.displayPage(&out.writer, &rb, 0, 4, true, .truecolor);
@@ -393,7 +393,7 @@ test "Pager full repaint when scroll changes" {
     try rb.writer.writeAll("a\nb\nc\nd\n");
     try rb.writer.flush();
 
-    var out: std.io.Writer.Allocating = .init(allocator);
+    var out: std.Io.Writer.Allocating = .init(allocator);
     defer out.deinit();
 
     pgr.displayPage(&out.writer, &rb, 0, 3, false, .truecolor);

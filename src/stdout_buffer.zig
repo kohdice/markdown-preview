@@ -8,29 +8,29 @@ pub const file_ceiling: usize = 256 * 1024;
 
 pub const Kind = enum { tty, pipe, file };
 
-pub fn sizeFor(file: std.fs.File) usize {
-    return switch (classifyFile(file)) {
+pub fn sizeFor(io: std.Io, file: std.Io.File) !usize {
+    const kind = try classifyFile(io, file);
+    return switch (kind) {
         .tty => tty_size,
         .pipe => pipe_size,
-        .file => fileBlockSize(file.handle),
+        .file => fileBlockSize(io, file),
     };
 }
 
-pub fn classifyFile(file: std.fs.File) Kind {
-    if (std.posix.isatty(file.handle)) return .tty;
-    const stat = file.stat() catch return .pipe;
+pub fn classifyFile(io: std.Io, file: std.Io.File) !Kind {
+    if (try file.isTty(io)) return .tty;
+    const stat = file.stat(io) catch return .pipe;
     return switch (stat.kind) {
         .file => .file,
         else => .pipe,
     };
 }
 
-fn fileBlockSize(handle: std.posix.fd_t) usize {
-    if (builtin.os.tag == .windows) return clamp(file_floor);
-    const stat = std.posix.fstat(handle) catch return clamp(file_floor);
-    const raw: isize = @intCast(stat.blksize);
-    if (raw <= 0) return clamp(file_floor);
-    return clamp(@intCast(raw));
+fn fileBlockSize(io: std.Io, file: std.Io.File) usize {
+    const stat = file.stat(io) catch return clamp(file_floor);
+    const raw: usize = stat.block_size;
+    if (raw == 0) return clamp(file_floor);
+    return clamp(raw);
 }
 
 pub fn clamp(block_size: usize) usize {
@@ -57,26 +57,29 @@ test "clamp caps at ceiling when block size is above ceiling" {
 }
 
 test "classifyFile labels a regular file as .file" {
+    const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    var f = try tmp.dir.createFile("buf_classify.txt", .{ .read = true });
-    defer f.close();
-    try std.testing.expectEqual(Kind.file, classifyFile(f));
+    var f = try tmp.dir.createFile(io, "buf_classify.txt", .{ .read = true });
+    defer f.close(io);
+    try std.testing.expectEqual(Kind.file, try classifyFile(io, f));
 }
 
 test "classifyFile labels /dev/null as .pipe, not .tty" {
     if (builtin.os.tag == .windows) return;
-    var dev_null = std.fs.openFileAbsolute("/dev/null", .{ .mode = .read_write }) catch return;
-    defer dev_null.close();
-    try std.testing.expect(classifyFile(dev_null) != .tty);
+    const io = std.testing.io;
+    var dev_null = std.Io.Dir.openFileAbsolute(io, "/dev/null", .{ .mode = .read_write }) catch return;
+    defer dev_null.close(io);
+    try std.testing.expect((try classifyFile(io, dev_null)) != .tty);
 }
 
 test "sizeFor on a regular file clamps to the 64-256 KiB range" {
+    const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    var f = try tmp.dir.createFile("buf_size.txt", .{ .read = true });
-    defer f.close();
-    const size = sizeFor(f);
+    var f = try tmp.dir.createFile(io, "buf_size.txt", .{ .read = true });
+    defer f.close(io);
+    const size = try sizeFor(io, f);
     try std.testing.expect(size >= file_floor);
     try std.testing.expect(size <= file_ceiling);
 }

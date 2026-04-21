@@ -3,7 +3,7 @@ const helpers = @import("../helpers/render_from_source.zig");
 const internals = @import("internals");
 
 fn renderFence(allocator: std.mem.Allocator, source: []const u8, enable_ansi: bool) ![]u8 {
-    var output: std.io.Writer.Allocating = .init(allocator);
+    var output: std.Io.Writer.Allocating = .init(allocator);
     defer output.deinit();
     var doc = try internals.parse.parse(allocator, .{ .borrowed = source });
     defer doc.deinit();

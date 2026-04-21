@@ -33,38 +33,37 @@ fn classifyWindowsCodePage(code_page: u32, wt_session_nonempty: bool) width.Ambi
     };
 }
 
-pub fn detectAmbiguousWidthFromProcess() width.AmbiguousWidth {
+const EnvAdapter = struct {
+    map: *const std.process.Environ.Map,
+    pub fn get(self: @This(), name: []const u8) ?[]const u8 {
+        return self.map.get(name);
+    }
+};
+
+pub fn detectAmbiguousWidthFromEnv(env: *const std.process.Environ.Map) width.AmbiguousWidth {
     if (builtin.os.tag == .windows) {
-        if (std.process.hasNonEmptyEnvVarConstant("RUNEWIDTH_EASTASIAN")) {
-            const env = std.process.getenvW(std.unicode.wtf8ToWtf16LeStringLiteral("RUNEWIDTH_EASTASIAN")) orelse unreachable;
-            return if (env.len == 1 and env[0] == @as(u16, '1')) .wide else .narrow;
+        if (env.get("RUNEWIDTH_EASTASIAN")) |v| {
+            if (v.len > 0) {
+                return if (std.mem.eql(u8, v, "1")) .wide else .narrow;
+            }
         }
+        const wt_session_nonempty = if (env.get("WT_SESSION")) |v| v.len > 0 else false;
         return classifyWindowsCodePage(
             std.os.windows.kernel32.GetConsoleOutputCP(),
-            std.process.hasNonEmptyEnvVarConstant("WT_SESSION"),
+            wt_session_nonempty,
         );
     }
 
-    const process_env = struct {
-        pub fn get(name: []const u8) ?[]const u8 {
-            return std.posix.getenv(name);
-        }
-    };
-    return width.detectAmbiguousWidth(process_env);
+    return width.detectAmbiguousWidth(EnvAdapter{ .map = env });
 }
 
-pub fn detectColorModeFromProcess() ansi.ColorMode {
+pub fn detectColorModeFromEnv(env: *const std.process.Environ.Map) ansi.ColorMode {
     if (builtin.os.tag == .windows) {
-        if (std.process.hasNonEmptyEnvVarConstant("NO_COLOR")) return .none;
+        if (env.get("NO_COLOR")) |v| if (v.len > 0) return .none;
         return .truecolor;
     }
 
-    const process_env = struct {
-        pub fn get(name: []const u8) ?[]const u8 {
-            return std.posix.getenv(name);
-        }
-    };
-    return ansi.detectColorMode(process_env);
+    return ansi.detectColorMode(EnvAdapter{ .map = env });
 }
 
 test "classifyWindowsCodePage wide for classic CJK code pages" {

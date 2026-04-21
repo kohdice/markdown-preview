@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const enter_alt_screen = "\x1b[?1049h";
 const exit_alt_screen = "\x1b[?1049l";
@@ -7,21 +8,21 @@ var signal_pipe_write: std.posix.fd_t = -1;
 
 pub const RawTerm = struct {
     stdin_fd: std.posix.fd_t,
-    stdout: *std.io.Writer,
+    stdout: *std.Io.Writer,
     original_termios: std.posix.termios,
     signal_pipe: [2]std.posix.fd_t,
     prev_sigint: std.posix.Sigaction,
     prev_sigterm: std.posix.Sigaction,
     prev_sigwinch: std.posix.Sigaction,
 
-    pub fn setup(stdin_fd: std.posix.fd_t, stdout: *std.io.Writer) !RawTerm {
+    pub fn setup(stdin_fd: std.posix.fd_t, stdout: *std.Io.Writer) !RawTerm {
         const original = try std.posix.tcgetattr(stdin_fd);
 
-        const pipe = try std.posix.pipe2(.{ .NONBLOCK = true, .CLOEXEC = true });
+        const pipe = try std.Io.Threaded.pipe2(.{ .NONBLOCK = true, .CLOEXEC = true });
         errdefer {
             signal_pipe_write = -1;
-            std.posix.close(pipe[0]);
-            std.posix.close(pipe[1]);
+            std.Io.Threaded.closeFd(pipe[0]);
+            std.Io.Threaded.closeFd(pipe[1]);
         }
         signal_pipe_write = pipe[1];
 
@@ -74,8 +75,8 @@ pub const RawTerm = struct {
         std.posix.sigaction(std.posix.SIG.WINCH, &self.prev_sigwinch, null);
 
         signal_pipe_write = -1;
-        std.posix.close(self.signal_pipe[0]);
-        std.posix.close(self.signal_pipe[1]);
+        std.Io.Threaded.closeFd(self.signal_pipe[0]);
+        std.Io.Threaded.closeFd(self.signal_pipe[1]);
     }
 
     pub fn signalFd(self: *const RawTerm) std.posix.fd_t {
@@ -90,17 +91,26 @@ pub const RawTerm = struct {
     }
 };
 
-fn signalHandler(sig: c_int) callconv(.c) void {
+fn signalHandler(sig: std.posix.SIG) callconv(.c) void {
     const fd = signal_pipe_write;
     if (fd < 0) return;
-    const byte = [_]u8{@intCast(@as(c_uint, @bitCast(sig)))};
-    _ = std.posix.write(fd, &byte) catch {};
+    const byte = [_]u8{@intCast(@intFromEnum(sig))};
+    if (comptime builtin.os.tag == .linux) {
+        _ = std.os.linux.write(fd, &byte, 1);
+    } else {
+        _ = std.c.write(fd, &byte, 1);
+    }
+}
+
+fn isStdinTty() bool {
+    _ = std.posix.tcgetattr(std.posix.STDIN_FILENO) catch return false;
+    return true;
 }
 
 test "signal pipe creation and readback" {
-    if (!std.posix.isatty(std.posix.STDIN_FILENO)) return error.SkipZigTest;
+    if (!isStdinTty()) return error.SkipZigTest;
 
-    var alloc_writer: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var alloc_writer: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer alloc_writer.deinit();
 
     var raw = try RawTerm.setup(std.posix.STDIN_FILENO, &alloc_writer.writer);

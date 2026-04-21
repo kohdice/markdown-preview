@@ -85,12 +85,12 @@ const ScratchWriter = struct {
     buf: *std.ArrayListUnmanaged(u8),
     allocator: std.mem.Allocator,
     stack_buf: [stack_buffer_size]u8 = undefined,
-    writer: std.io.Writer,
+    writer: std.Io.Writer,
 
-    const vtable: std.io.Writer.VTable = .{
+    const vtable: std.Io.Writer.VTable = .{
         .drain = drain,
-        .flush = std.io.Writer.defaultFlush,
-        .rebase = std.io.Writer.failingRebase,
+        .flush = std.Io.Writer.defaultFlush,
+        .rebase = std.Io.Writer.failingRebase,
     };
 
     fn init(self: *ScratchWriter, buf: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator) void {
@@ -105,7 +105,7 @@ const ScratchWriter = struct {
         self.writer.buffer = &self.stack_buf;
     }
 
-    fn drain(w: *std.io.Writer, data: []const []const u8, splat: usize) std.io.Writer.Error!usize {
+    fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
         const self: *ScratchWriter = @fieldParentPtr("writer", w);
 
         const pending = w.buffered();
@@ -128,7 +128,7 @@ const ScratchWriter = struct {
 
 pub fn writeTable(
     ctx: *const RenderContext,
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     allocator: std.mem.Allocator,
     scratch: *TableScratch,
     table: ast.Table,
@@ -245,7 +245,7 @@ pub fn writeTable(
 
 fn writeRowFromScratch(
     ctx: *const RenderContext,
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     bytes: []const u8,
     records: []const CellRecord,
     col_widths: []const usize,
@@ -286,7 +286,7 @@ fn writeRowFromScratch(
 }
 
 fn writeBorder(
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     col_widths: []const usize,
     kind: BorderKind,
     enable_ansi: bool,

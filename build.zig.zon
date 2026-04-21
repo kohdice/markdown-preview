@@ -2,15 +2,11 @@
     .name = .markdown_preview,
     .version = "0.0.0",
     .fingerprint = 0x5ede8ef936bc293,
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .tree_sitter = .{
-            .url = "https://github.com/tree-sitter/zig-tree-sitter/archive/5373b8395bcf6cf17e6a02be1a9996bedb34abf6.tar.gz",
-            .hash = "tree_sitter-0.25.0-8heIf7iZAQDu5oiKLKffYhdvWpEuxc5OhsySDlkFLxFT",
-        },
-        .tree_sitter_zig = .{
-            .url = "https://github.com/tree-sitter-grammars/tree-sitter-zig/archive/6479aa13f32f701c383083d8b28360ebd682fb7d.tar.gz",
-            .hash = "tree_sitter_zig-1.1.2-AAAAAJ57XACsD_XBHC4i6G6rnCsZ1dZj7CLRTC09toEB",
+            .url = "https://github.com/tree-sitter/zig-tree-sitter/archive/0cf58172e61f6fdd16f681cde42b4acb531a23db.tar.gz",
+            .hash = "tree_sitter-0.26.0-8heIf3CaAQDeVTQc0DMSBhbQAEx5aF-dTen4_LPxMgrv",
         },
         .tree_sitter_c = .{
             .url = "https://github.com/tree-sitter/tree-sitter-c/archive/refs/tags/v0.24.1.tar.gz",
@@ -55,6 +51,10 @@
         .tree_sitter_json = .{
             .url = "https://github.com/tree-sitter/tree-sitter-json/archive/refs/tags/v0.24.8.tar.gz",
             .hash = "N-V-__8AACVXAgA_t-N8nrK20OmKiOtw3RhaBCAnXwQIiQ8g",
+        },
+        .tree_sitter_zig = .{
+            .url = "https://github.com/kohdice/tree-sitter-zig/archive/6c2f4f90cab7c72ec27d9dd19361649cc59f41c2.tar.gz",
+            .hash = "tree_sitter_zig-1.1.2-sr5WUIF7XACkCsywV3Fe8eWmyLCLEOzkQoIUEa37IVE-",
         },
     },
     .paths = .{

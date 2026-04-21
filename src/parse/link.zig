@@ -120,7 +120,7 @@ pub fn findReferenceLabelEnd(text: []const u8, start: usize) ?usize {
 }
 
 pub fn lineCouldStartLinkTitle(line: []const u8) bool {
-    const trimmed = std.mem.trimLeft(u8, line, parse_block.horizontal_whitespace);
+    const trimmed = std.mem.trimStart(u8, line, parse_block.horizontal_whitespace);
     if (trimmed.len == 0) return false;
     return switch (trimmed[0]) {
         '"', '\'', '(' => true,

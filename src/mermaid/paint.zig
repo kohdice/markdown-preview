@@ -25,7 +25,7 @@ pub const PaintOptions = struct {
 };
 
 pub fn paint(
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     allocator: std.mem.Allocator,
     diagram: *const compile_mod.Diagram,
     opts: PaintOptions,
@@ -78,7 +78,7 @@ fn expectPaintProducesOutput(source: []const u8, opts: PaintOptions) !void {
     var diagram = try compile_mod.compile(alloc, source);
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paint(&sink.writer, alloc, &diagram, opts);
 
@@ -116,7 +116,7 @@ test "compile then paint accepts bare xychart source end-to-end" {
     var diagram = try compile_mod.compile(std.testing.allocator, "xychart\nbar [1, 2, 3]\n");
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paint(&sink.writer, std.testing.allocator, &diagram, .{
         .wrap_width = null,
@@ -136,7 +136,7 @@ test "compile strips multi-line init directive before flowchart and paint render
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paint(&sink.writer, std.testing.allocator, &diagram, .{
         .enable_ansi = false,
@@ -157,7 +157,7 @@ test "compile+paint keeps %%{...}%% inside sequence message label" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paint(&sink.writer, std.testing.allocator, &diagram, .{
         .enable_ansi = false,
@@ -176,7 +176,7 @@ test "compile+paint keeps %%{...}%% inside flowchart node label" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paint(&sink.writer, std.testing.allocator, &diagram, .{
         .enable_ansi = false,
@@ -196,7 +196,7 @@ test "compile silently strips init config scoped to a different diagram" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paint(&sink.writer, std.testing.allocator, &diagram, .{
         .enable_ansi = false,
@@ -231,7 +231,7 @@ test "compile+paint accepts init theme-only directive before xychart" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paint(&sink.writer, std.testing.allocator, &diagram, .{
         .enable_ansi = false,
@@ -248,7 +248,7 @@ test "compile+paint treats lowercase xychart key as ordinary config (no Unsuppor
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paint(&sink.writer, std.testing.allocator, &diagram, .{
         .enable_ansi = false,
@@ -275,9 +275,9 @@ test "graph BT output is canvas vertical flip of graph TD" {
         .ambiguous_width = .narrow,
     };
 
-    var sink_td: std.io.Writer.Allocating = .init(alloc);
+    var sink_td: std.Io.Writer.Allocating = .init(alloc);
     defer sink_td.deinit();
-    var sink_bt: std.io.Writer.Allocating = .init(alloc);
+    var sink_bt: std.Io.Writer.Allocating = .init(alloc);
     defer sink_bt.deinit();
 
     try paint(&sink_td.writer, alloc, &td_diagram, opts);
@@ -354,9 +354,9 @@ test "graph RL and graph LR produce identical output" {
         .ambiguous_width = .narrow,
     };
 
-    var sink_lr: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink_lr: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink_lr.deinit();
-    var sink_rl: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink_rl: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink_rl.deinit();
 
     try paint(&sink_lr.writer, std.testing.allocator, &lr_diagram, opts);
@@ -374,7 +374,7 @@ test "paint draws frame and title around flowchart subgraph" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paint(&sink.writer, std.testing.allocator, &diagram, .{
         .enable_ansi = false,
@@ -398,7 +398,7 @@ test "paint drops edges to empty composite state" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paint(&sink.writer, std.testing.allocator, &diagram, .{
         .enable_ansi = false,
@@ -422,7 +422,7 @@ test "paint draws composite state frame without routing to invisible node" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paint(&sink.writer, std.testing.allocator, &diagram, .{
         .enable_ansi = false,
@@ -442,7 +442,7 @@ test "paint renders erDiagram" {
     var diagram = try compile_mod.compile(std.testing.allocator, "erDiagram\n    CUSTOMER ||--o{ ORDER : places\n");
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paint(&sink.writer, std.testing.allocator, &diagram, .{
         .enable_ansi = false,
@@ -459,7 +459,7 @@ test "paint renders gitGraph with LR colon header" {
     var diagram = try compile_mod.compile(std.testing.allocator, "gitGraph LR:\n    commit\n    commit\n");
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paint(&sink.writer, std.testing.allocator, &diagram, .{
         .enable_ansi = false,
@@ -489,7 +489,7 @@ test "paint renders stateDiagram-v2" {
     var diagram = try compile_mod.compile(std.testing.allocator, "stateDiagram-v2\n    [*] --> Idle\n    Idle --> Running\n    Running --> [*]\n");
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paint(&sink.writer, std.testing.allocator, &diagram, .{
         .enable_ansi = false,
@@ -505,7 +505,7 @@ test "paint renders sequence diagram" {
     var diagram = try compile_mod.compile(std.testing.allocator, "sequenceDiagram\n    Alice->>Bob: hi\n");
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paint(&sink.writer, std.testing.allocator, &diagram, .{
         .enable_ansi = false,
@@ -526,7 +526,7 @@ test "paint renders single-edge flowchart" {
     var diagram = try compile_mod.compile(std.testing.allocator, "graph TD\n    A --> B\n");
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paint(&sink.writer, std.testing.allocator, &diagram, .{
         .enable_ansi = false,
@@ -545,7 +545,7 @@ test "paint renders labeled edge with label text in output" {
     var diagram = try compile_mod.compile(std.testing.allocator, "graph TD\n    A --> B\n    B -->|yes| C\n");
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paint(&sink.writer, std.testing.allocator, &diagram, .{
         .enable_ansi = false,
@@ -561,7 +561,7 @@ test "paint keeps Unicode glyphs in wide ambiguous mode" {
     var diagram = try compile_mod.compile(std.testing.allocator, "graph TD\n    A --> B\n");
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paint(&sink.writer, std.testing.allocator, &diagram, .{
         .enable_ansi = false,
@@ -579,7 +579,7 @@ test "paint LR direction renders horizontally" {
     var diagram = try compile_mod.compile(std.testing.allocator, "graph LR\n    A --> B\n");
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paint(&sink.writer, std.testing.allocator, &diagram, .{
         .enable_ansi = false,
@@ -597,7 +597,7 @@ test "paint empty flowchart emits nothing" {
     var diagram = try compile_mod.compile(std.testing.allocator, "graph TD\n");
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paint(&sink.writer, std.testing.allocator, &diagram, .{
         .enable_ansi = false,
@@ -611,7 +611,7 @@ test "paint flowchart --- edge does not emit an arrow head" {
     var diagram = try compile_mod.compile(std.testing.allocator, "graph TD\n    A --- B\n");
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paint(&sink.writer, std.testing.allocator, &diagram, .{
         .enable_ansi = false,
@@ -631,7 +631,7 @@ test "paint stateDiagram renders rounded corners for [*] and stadium states" {
     var diagram = try compile_mod.compile(std.testing.allocator, "stateDiagram-v2\n    [*] --> Idle\n    Idle --> [*]\n");
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paint(&sink.writer, std.testing.allocator, &diagram, .{
         .enable_ansi = false,
@@ -653,7 +653,7 @@ test "paint diamond node renders with diamond corners" {
     var diagram = try compile_mod.compile(std.testing.allocator, "graph TD\n    A{Decide} --> B\n");
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paint(&sink.writer, std.testing.allocator, &diagram, .{
         .enable_ansi = false,
@@ -671,7 +671,7 @@ test "paint dispatches xychart to paintXyChart" {
     var diagram = try compile_mod.compile(std.testing.allocator, "xychart\ntitle \"Demo\"\n");
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paint(&sink.writer, std.testing.allocator, &diagram, .{
         .enable_ansi = false,
@@ -685,7 +685,7 @@ test "paint no longer returns UnsupportedDiagram for xychart" {
     var diagram = try compile_mod.compile(std.testing.allocator, "xychart\n");
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paint(&sink.writer, std.testing.allocator, &diagram, .{
         .enable_ansi = false,

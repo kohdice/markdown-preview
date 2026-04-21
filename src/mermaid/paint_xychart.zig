@@ -79,7 +79,7 @@ pub const ASCII_GLYPHS: XyGlyphs = .{
 };
 
 pub fn paintXyChart(
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     allocator: std.mem.Allocator,
     chart_ptr: *const types.XyChart,
     opts: Options,
@@ -97,7 +97,7 @@ pub fn paintXyChart(
 }
 
 fn writeVertical(
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     allocator: std.mem.Allocator,
     chart: *const types.XyChart,
     opts: Options,
@@ -252,7 +252,7 @@ fn writeVertical(
 }
 
 fn writeHorizontal(
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     allocator: std.mem.Allocator,
     chart: *const types.XyChart,
     opts: Options,
@@ -778,7 +778,7 @@ fn lineColVertical(
 }
 
 fn renderToString(allocator: std.mem.Allocator, chart: *const types.XyChart) ![]u8 {
-    var sink: std.io.Writer.Allocating = .init(allocator);
+    var sink: std.Io.Writer.Allocating = .init(allocator);
     errdefer sink.deinit();
     try paintXyChart(&sink.writer, allocator, chart, .{
         .wrap_width = null,
@@ -1056,7 +1056,7 @@ test "paintXyChart horizontal renders y-axis title on last row" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    const trimmed = std.mem.trimRight(u8, out, "\n");
+    const trimmed = std.mem.trimEnd(u8, out, "\n");
     const nl = std.mem.lastIndexOfScalar(u8, trimmed, '\n');
     const last_line = if (nl) |i| trimmed[i + 1 ..] else trimmed;
     try std.testing.expect(std.mem.indexOf(u8, last_line, "Revenue") != null);
@@ -1116,7 +1116,7 @@ test "paintXyChart horizontal renders tick labels on the bottom" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    const trimmed = std.mem.trimRight(u8, out, "\n");
+    const trimmed = std.mem.trimEnd(u8, out, "\n");
     const nl = std.mem.lastIndexOfScalar(u8, trimmed, '\n');
     const last_line = if (nl) |i| trimmed[i + 1 ..] else trimmed;
     try std.testing.expect(std.mem.indexOf(u8, last_line, "0") != null);
@@ -1617,7 +1617,7 @@ test "paintXyChart use_ascii=true substitutes +|-#. for unicode drawing glyphs" 
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paintXyChart(&sink.writer, std.testing.allocator, &diagram.xychart, .{
         .wrap_width = null,
@@ -1650,7 +1650,7 @@ test "paintXyChart returns UnsupportedFeature for series exceeding 1024 points" 
     var diagram = try compile_mod.compile(std.testing.allocator, source.items);
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try std.testing.expectError(error.UnsupportedFeature, paintXyChart(&sink.writer, std.testing.allocator, &diagram.xychart, .{
         .wrap_width = null,
@@ -1675,7 +1675,7 @@ test "paintXyChart wraps series colors modulo 8 (series 0 and series 8 share rol
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paintXyChart(&sink.writer, std.testing.allocator, &diagram.xychart, .{
         .wrap_width = null,
@@ -1722,7 +1722,7 @@ test "paintXyChart with enable_ansi=true emits truecolor escape for bars" {
     var diagram = try compile_mod.compile(std.testing.allocator, "xychart\nbar [1, 2, 3]\n");
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paintXyChart(&sink.writer, std.testing.allocator, &diagram.xychart, .{
         .wrap_width = null,
@@ -1736,7 +1736,7 @@ test "paintXyChart with 2 bar series produces two distinct SGR foreground sequen
     var diagram = try compile_mod.compile(std.testing.allocator, "xychart\nbar [1, 2, 3]\nbar [4, 5, 6]\n");
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paintXyChart(&sink.writer, std.testing.allocator, &diagram.xychart, .{
         .wrap_width = null,
@@ -1767,7 +1767,7 @@ test "paintXyChart with enable_ansi=false (default) emits no SGR escape" {
     var diagram = try compile_mod.compile(std.testing.allocator, "xychart\nbar [1, 2, 3]\n");
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paintXyChart(&sink.writer, std.testing.allocator, &diagram.xychart, .{
         .wrap_width = null,
@@ -1782,7 +1782,7 @@ test "vertical xychart clips each line when wrap_width=30 with enable_ansi=true"
     var diagram = try compile_mod.compile(std.testing.allocator, src);
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paintXyChart(&sink.writer, std.testing.allocator, &diagram.xychart, .{
         .wrap_width = 30,
@@ -1799,7 +1799,7 @@ test "horizontal xychart clips each line when wrap_width=30 with enable_ansi=tru
     var diagram = try compile_mod.compile(std.testing.allocator, src);
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paintXyChart(&sink.writer, std.testing.allocator, &diagram.xychart, .{
         .wrap_width = 30,
@@ -1815,7 +1815,7 @@ test "vertical xychart with wrap_width=null and enable_ansi=true emits no ellips
     var diagram = try compile_mod.compile(std.testing.allocator, "xychart\nbar [1, 2, 3]\n");
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(std.testing.allocator);
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try paintXyChart(&sink.writer, std.testing.allocator, &diagram.xychart, .{
         .wrap_width = null,

@@ -27,16 +27,17 @@ test "markdown_preview.renderSource produces heading and list output for represe
 
 test "markdown_preview.renderFile reads fixture from disk and renders via the facade" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.writeFile(.{
+    try tmp.dir.writeFile(io, .{
         .sub_path = "doc.md",
         .data = "## Hello\n\nplain body\n",
     });
 
-    const rendered = try facade.renderFileToOwnedSlice(allocator, tmp.dir, "doc.md", .{});
+    const rendered = try facade.renderFileToOwnedSlice(allocator, io, tmp.dir, "doc.md", .{});
     defer allocator.free(rendered);
 
     try std.testing.expectEqualStrings("Hello\n\nplain body\n", rendered);

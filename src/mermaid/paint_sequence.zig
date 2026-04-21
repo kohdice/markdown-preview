@@ -24,7 +24,7 @@ const note_height: usize = 3;
 const block_border_h: usize = 1;
 
 pub fn paintSequence(
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     allocator: std.mem.Allocator,
     diagram_ptr: *const types.SequenceDiagram,
     opts: Options,
@@ -628,7 +628,7 @@ test "paintSequence renders participant boxes and arrow" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -646,7 +646,7 @@ test "paintSequence handles single participant with no messages" {
     var diagram = try compile_mod.compile(alloc, "sequenceDiagram\n    participant Alice\n");
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
     const out = sink.writer.buffered();
@@ -662,7 +662,7 @@ test "renderer draws filled and open arrow heads" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -682,7 +682,7 @@ test "note with after_index=-1 is NOT rendered" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -700,7 +700,7 @@ test "note with after_index>=0 IS rendered" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -717,7 +717,7 @@ test "activate/deactivate flags are parsed but ASCII does not draw activation (u
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -737,7 +737,7 @@ test "block header uses kind [label] format" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -755,7 +755,7 @@ test "label-less block renders kind only without brackets" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -776,7 +776,7 @@ test "nested blocks render outer before inner" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -803,7 +803,7 @@ test "empty block still renders frame" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -821,7 +821,7 @@ test "activate/deactivate with multiple messages renders normally without activa
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -843,7 +843,7 @@ test "Note over two participants spans both lifelines" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -865,7 +865,7 @@ test "long Note over is not silently dropped" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -884,7 +884,7 @@ test "Note left of with long text is not silently dropped" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -904,7 +904,7 @@ test "long else label is fully rendered" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -924,7 +924,7 @@ test "nested block with long inner header is fully rendered" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -946,7 +946,7 @@ test "nested else divider label is fully rendered" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -966,7 +966,7 @@ test "nested block outer frame has no gaps on inner block rows" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -987,7 +987,7 @@ test "final flush of nested empty blocks has outer frame borders" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -1009,7 +1009,7 @@ test "sequential blocks at same index are not nested" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 

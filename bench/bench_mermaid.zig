@@ -33,7 +33,7 @@ pub fn main() !void {
 }
 
 fn runCompile(name: []const u8, source: []const u8) !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
 
     var counting = bench.CountingAllocator.init(gpa.allocator());
@@ -76,7 +76,7 @@ fn compileOnce(
 }
 
 fn runPaint(name: []const u8, source: []const u8) !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
 
     var counting = bench.CountingAllocator.init(gpa.allocator());
@@ -118,7 +118,7 @@ fn paintOnce(
     counting: *const bench.CountingAllocator,
 ) !PaintResult {
     var sink: [4096]u8 = undefined;
-    var discarding: std.io.Writer.Discarding = .init(&sink);
+    var discarding: std.Io.Writer.Discarding = .init(&sink);
 
     const before = counting.snapshot();
     var timer = try std.time.Timer.start();

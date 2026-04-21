@@ -30,7 +30,7 @@ fn laneRole(lane: u16) u8 {
 }
 
 pub fn paintGit(
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     allocator: std.mem.Allocator,
     graph_ptr: *const types.GitGraph,
     opts: Options,
@@ -244,7 +244,7 @@ test "paintGit renders ● for NORMAL commits" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = false });
 
@@ -261,7 +261,7 @@ test "paintGit renders ⊗ for REVERSE and ■ for HIGHLIGHT" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = false });
 
@@ -282,7 +282,7 @@ test "paintGit renders ◎ for merge commits" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = false });
 
@@ -300,7 +300,7 @@ test "paintGit renders branch lane labels and branch fork glyphs" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = false });
 
@@ -317,7 +317,7 @@ test "paintGit renders tag text" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = false });
 
@@ -335,7 +335,7 @@ test "paintGit places each tag on the row just above its own lane" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = false });
 
@@ -366,7 +366,7 @@ test "paintGit renders merge tag above the merge commit glyph" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = false });
 
@@ -386,7 +386,7 @@ test "paintGit renders merge from an empty branch via fork point" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = false });
 
@@ -409,7 +409,7 @@ test "paintGit without ANSI contains no escape sequences" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = false });
 
@@ -425,7 +425,7 @@ test "paintGit with enable_ansi=true emits truecolor SGR" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = true });
 
@@ -443,11 +443,11 @@ test "paintGit enable_ansi=false matches bare-default call byte-for-byte" {
     );
     defer diagram.deinit();
 
-    var with_flag: std.io.Writer.Allocating = .init(alloc);
+    var with_flag: std.Io.Writer.Allocating = .init(alloc);
     defer with_flag.deinit();
     try paintGit(&with_flag.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = false });
 
-    var defaults: std.io.Writer.Allocating = .init(alloc);
+    var defaults: std.Io.Writer.Allocating = .init(alloc);
     defer defaults.deinit();
     try paintGit(&defaults.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
@@ -479,7 +479,7 @@ test "paintGit with enable_ansi=true uses different SGR for lane 0 and lane 1" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = true });
 
@@ -517,7 +517,7 @@ test "paintGit wraps lane colors modulo 8 (lane 0 and lane 8 share role)" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = true });
 
@@ -552,7 +552,7 @@ test "paintGit lane 7 and lane 8 use distinct roles" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = true });
 
@@ -573,7 +573,7 @@ test "paintGit HIGHLIGHT commit glyph uses lane role color" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = true });
 
@@ -596,7 +596,7 @@ test "paintGit merge commit ◎ is preceded by destination lane SGR" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = true });
 
@@ -628,7 +628,7 @@ test "paintGit merge connector uses destination lane role" {
     );
     defer diagram.deinit();
 
-    var sink: std.io.Writer.Allocating = .init(alloc);
+    var sink: std.Io.Writer.Allocating = .init(alloc);
     defer sink.deinit();
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = true });
 

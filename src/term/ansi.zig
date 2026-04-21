@@ -90,7 +90,7 @@ pub fn detectColorMode(env: anytype) ColorMode {
     return .none;
 }
 
-pub fn writeSgrFg(writer: *std.io.Writer, rgb: theme.Rgb, mode: ColorMode) !void {
+pub fn writeSgrFg(writer: *std.Io.Writer, rgb: theme.Rgb, mode: ColorMode) !void {
     switch (mode) {
         .none => return,
         .truecolor => {
@@ -188,7 +188,7 @@ pub const TextStyle = struct {
     }
 };
 
-pub fn applyStyle(writer: *std.io.Writer, mode: ColorMode, style: TextStyle) !void {
+pub fn applyStyle(writer: *std.Io.Writer, mode: ColorMode, style: TextStyle) !void {
     var buf: [48]u8 = undefined;
     const len = buildStylePrefix(&buf, mode, style);
     if (len > 0) try writer.writeAll(buf[0..len]);
@@ -266,7 +266,7 @@ pub const StyledState = struct {
 };
 
 pub fn writeStyledRun(
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     enabled: bool,
     mode: ColorMode,
     state: *StyledState,
@@ -290,7 +290,7 @@ pub fn writeStyledRun(
     state.current = style;
 }
 
-pub fn flushStyle(writer: *std.io.Writer, state: *StyledState) !void {
+pub fn flushStyle(writer: *std.Io.Writer, state: *StyledState) !void {
     if (state.current == null) return;
     try writer.writeAll(reset_sequence);
     state.current = null;
@@ -307,7 +307,7 @@ fn stylesEqual(a: TextStyle, b: TextStyle) bool {
 }
 
 pub fn writeStyled(
-    writer: *std.io.Writer,
+    writer: *std.Io.Writer,
     enabled: bool,
     mode: ColorMode,
     style: TextStyle,
@@ -346,7 +346,7 @@ fn containsControlChar(text: []const u8) bool {
 /// Write text with C0 control characters and DEL stripped to prevent
 /// terminal escape-sequence injection from untrusted Markdown input.
 /// Tab and newline are preserved because they are meaningful whitespace.
-fn writeSanitized(writer: *std.io.Writer, text: []const u8) !void {
+fn writeSanitized(writer: *std.Io.Writer, text: []const u8) !void {
     if (!containsControlChar(text)) return writer.writeAll(text);
 
     var start: usize = 0;
@@ -362,42 +362,42 @@ fn writeSanitized(writer: *std.io.Writer, text: []const u8) !void {
 const testing = std.testing;
 
 test "writeSgrFg emits ESC[38;2;R;G;Bm in truecolor mode" {
-    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf.deinit();
     try writeSgrFg(&buf.writer, .{ .r = 59, .g = 130, .b = 246 }, .truecolor);
     try testing.expectEqualStrings("\x1b[38;2;59;130;246m", buf.writer.buffered());
 }
 
 test "writeSgrFg writes nothing in none mode" {
-    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf.deinit();
     try writeSgrFg(&buf.writer, .{ .r = 59, .g = 130, .b = 246 }, .none);
     try testing.expectEqualStrings("", buf.writer.buffered());
 }
 
 test "writeSgrFg in ansi256 mode maps pure red to color cube 196" {
-    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf.deinit();
     try writeSgrFg(&buf.writer, .{ .r = 255, .g = 0, .b = 0 }, .ansi256);
     try testing.expectEqualStrings("\x1b[38;5;196m", buf.writer.buffered());
 }
 
 test "writeSgrFg in ansi256 mode maps mid-gray to grayscale index 244" {
-    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf.deinit();
     try writeSgrFg(&buf.writer, .{ .r = 128, .g = 128, .b = 128 }, .ansi256);
     try testing.expectEqualStrings("\x1b[38;5;244m", buf.writer.buffered());
 }
 
 test "writeSgrFg in ansi16 mode maps bright red to code 91" {
-    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf.deinit();
     try writeSgrFg(&buf.writer, .{ .r = 255, .g = 64, .b = 64 }, .ansi16);
     try testing.expectEqualStrings("\x1b[91m", buf.writer.buffered());
 }
 
 test "writeSgrFg in ansi16 mode maps dark blue to code 34" {
-    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf.deinit();
     try writeSgrFg(&buf.writer, .{ .r = 0, .g = 0, .b = 64 }, .ansi16);
     try testing.expectEqualStrings("\x1b[34m", buf.writer.buffered());
@@ -447,7 +447,7 @@ test "detectColorMode returns none when NO_COLOR is set" {
 }
 
 test "writeStyledRun first call emits prefix and text, no reset" {
-    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf.deinit();
     var state: StyledState = .{};
     const style: TextStyle = .{ .fg = .{ .r = 255, .g = 0, .b = 0 } };
@@ -457,7 +457,7 @@ test "writeStyledRun first call emits prefix and text, no reset" {
 }
 
 test "writeStyledRun second call with same style skips prefix and reset" {
-    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf.deinit();
     var state: StyledState = .{};
     const style: TextStyle = .{ .fg = .{ .r = 255, .g = 0, .b = 0 } };
@@ -467,7 +467,7 @@ test "writeStyledRun second call with same style skips prefix and reset" {
 }
 
 test "writeStyledRun different style emits reset and new prefix" {
-    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf.deinit();
     var state: StyledState = .{};
     const red: TextStyle = .{ .fg = .{ .r = 255, .g = 0, .b = 0 } };
@@ -481,7 +481,7 @@ test "writeStyledRun different style emits reset and new prefix" {
 }
 
 test "flushStyle emits reset when state is set and nothing when cleared" {
-    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf.deinit();
     var state: StyledState = .{};
     const red: TextStyle = .{ .fg = .{ .r = 255, .g = 0, .b = 0 } };
@@ -493,7 +493,7 @@ test "flushStyle emits reset when state is set and nothing when cleared" {
 }
 
 test "writeStyledRun with ansi disabled emits plain text only" {
-    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf.deinit();
     var state: StyledState = .{};
     const style: TextStyle = .{ .fg = .{ .r = 255, .g = 0, .b = 0 } };
@@ -503,7 +503,7 @@ test "writeStyledRun with ansi disabled emits plain text only" {
 }
 
 test "writeStyledRun with color_mode=.none emits plain text even when enabled" {
-    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf.deinit();
     var state: StyledState = .{};
     const style: TextStyle = .{ .fg = .{ .r = 255, .g = 0, .b = 0 }, .bold = true };
@@ -513,7 +513,7 @@ test "writeStyledRun with color_mode=.none emits plain text even when enabled" {
 }
 
 test "writeStyledRun with color_mode=.ansi16 emits ansi16 fg code not truecolor" {
-    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf.deinit();
     var state: StyledState = .{};
     const style: TextStyle = .{ .fg = .{ .r = 255, .g = 64, .b = 64 } };
@@ -526,7 +526,7 @@ test "writeStyledRun with color_mode=.ansi16 emits ansi16 fg code not truecolor"
 }
 
 test "writeStyledRun with color_mode=.ansi256 emits 38;5; not 38;2;" {
-    var buf: std.io.Writer.Allocating = .init(testing.allocator);
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf.deinit();
     var state: StyledState = .{};
     const style: TextStyle = .{ .fg = .{ .r = 255, .g = 0, .b = 0 } };
@@ -540,13 +540,13 @@ test "writeStyledRun with color_mode=.ansi256 emits 38;5; not 38;2;" {
 test "writeStyled fast path boundary at 256 bytes" {
     const style: TextStyle = .{ .fg = .{ .r = 0, .g = 0, .b = 0 } };
 
-    var buf256: std.io.Writer.Allocating = .init(testing.allocator);
+    var buf256: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf256.deinit();
     const text256 = "a" ** 256;
     try writeStyled(&buf256.writer, true, .truecolor, style, text256);
     const out256 = buf256.writer.buffered();
 
-    var buf257: std.io.Writer.Allocating = .init(testing.allocator);
+    var buf257: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf257.deinit();
     const text257 = "a" ** 257;
     try writeStyled(&buf257.writer, true, .truecolor, style, text257);

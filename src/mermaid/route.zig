@@ -320,8 +320,8 @@ pub fn aStarPath(
     if (start_row >= canvas_rows_ or start_col >= canvas_cols_) return null;
     if (goal_row >= canvas_rows_ or goal_col >= canvas_cols_) return null;
 
-    var open = std.PriorityQueue(AStarEntry, void, lessEntry).init(allocator, {});
-    defer open.deinit();
+    var open = std.PriorityQueue(AStarEntry, void, lessEntry).empty;
+    defer open.deinit(allocator);
 
     var came_from = std.AutoHashMap(SearchKey, SearchKey).init(allocator);
     defer came_from.deinit();
@@ -335,7 +335,7 @@ pub fn aStarPath(
         .dir = start_dir,
     };
     try g_score.put(start_key, 0);
-    try open.add(.{
+    try open.push(allocator, .{
         .key = start_key,
         .g = 0,
         .f = manhattan(start_row, start_col, goal_row, goal_col),
@@ -348,7 +348,7 @@ pub fn aStarPath(
         .{ .dr = 0, .dc = 1, .dir = .right },
     };
 
-    while (open.removeOrNull()) |current| {
+    while (open.pop()) |current| {
         const recorded = g_score.get(current.key) orelse std.math.maxInt(u32);
         if (recorded < current.g) continue;
 
@@ -379,7 +379,7 @@ pub fn aStarPath(
             try g_score.put(neighbor_key, tentative_g);
             try came_from.put(neighbor_key, current.key);
             const h = manhattan(new_row, new_col, goal_row, goal_col);
-            try open.add(.{ .key = neighbor_key, .g = tentative_g, .f = tentative_g + h });
+            try open.push(allocator, .{ .key = neighbor_key, .g = tentative_g, .f = tentative_g + h });
         }
     }
 

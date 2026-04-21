@@ -19,19 +19,22 @@ const default_term_cols: usize = 80;
 const default_term_rows: usize = 24;
 
 pub const WatchOptions = struct {
-    cwd: std.fs.Dir,
+    io: std.Io,
+    cwd: std.Io.Dir,
     path: []const u8,
-    stdout: *std.io.Writer,
-    stderr: *std.io.Writer,
-    stdout_handle: std.posix.fd_t,
-    stdin_handle: std.posix.fd_t,
+    stdout: *std.Io.Writer,
+    stderr: *std.Io.Writer,
+    stdout_file: std.Io.File,
+    stdin_file: std.Io.File,
     enable_ansi: bool,
     ambiguous_width: width.AmbiguousWidth,
     color_mode: ansi.ColorMode = .truecolor,
 };
 
 pub fn run(opts: WatchOptions) !u8 {
-    if (!std.posix.isatty(opts.stdout_handle) or !std.posix.isatty(opts.stdin_handle)) {
+    const stdout_tty = opts.stdout_file.isTty(opts.io) catch false;
+    const stdin_tty = opts.stdin_file.isTty(opts.io) catch false;
+    if (!stdout_tty or !stdin_tty) {
         try opts.stderr.writeAll("mp: --watch requires an interactive terminal (stdin and stdout must be a TTY)\n");
         return exit_failure;
     }
@@ -39,12 +42,12 @@ pub fn run(opts: WatchOptions) !u8 {
     const dir_path = std.fs.path.dirnamePosix(opts.path) orelse ".";
     const file_name = std.fs.path.basenamePosix(opts.path);
 
-    var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var dir_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const dir_z = toCString(&dir_buf, dir_path) orelse {
         try opts.stderr.print("mp: path too long: '{s}'\n", .{opts.path});
         return exit_failure;
     };
-    var name_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var name_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const name_z = toCString(&name_buf, file_name) orelse {
         try opts.stderr.print("mp: path too long: '{s}'\n", .{opts.path});
         return exit_failure;
@@ -67,10 +70,10 @@ pub fn run(opts: WatchOptions) !u8 {
     buffer.init(state_arena.allocator());
     defer buffer.deinit();
 
-    var term_size = terminal.getTerminalSize(opts.stdout_handle) orelse terminal.TerminalSize{ .cols = default_term_cols, .rows = default_term_rows };
+    var term_size = terminal.getTerminalSize(opts.stdout_file.handle) orelse terminal.TerminalSize{ .cols = default_term_cols, .rows = default_term_rows };
     var wrap_width: ?usize = if (opts.enable_ansi) term_size.cols else null;
 
-    var rt = raw_term.RawTerm.setup(opts.stdin_handle, opts.stdout) catch {
+    var rt = raw_term.RawTerm.setup(opts.stdin_file.handle, opts.stdout) catch {
         try opts.stderr.writeAll("mp: failed to configure terminal\n");
         return exit_failure;
     };
@@ -82,7 +85,7 @@ pub fn run(opts: WatchOptions) !u8 {
     var pgr = pager.Pager.init(std.heap.page_allocator);
     defer pgr.deinit();
 
-    _ = pipeline.renderTo(opts.cwd, opts.path, &renderer, &cycle_arena, &buffer, wrap_width, &hash);
+    _ = pipeline.renderTo(opts.io, opts.cwd, opts.path, &renderer, &cycle_arena, &buffer, wrap_width, &hash);
     pgr.displayPage(opts.stdout, &buffer, scroll_offset, term_size.rows, opts.enable_ansi, opts.color_mode);
 
     var watcher = file_watcher.FileWatcher.init(dir_z, name_z) catch |err| {
@@ -100,7 +103,7 @@ pub fn run(opts: WatchOptions) !u8 {
     };
 }
 
-fn toCString(buf: *[std.fs.max_path_bytes]u8, slice: []const u8) ?[*:0]const u8 {
+fn toCString(buf: *[std.Io.Dir.max_path_bytes]u8, slice: []const u8) ?[*:0]const u8 {
     if (slice.len >= buf.len) return null;
     @memcpy(buf[0..slice.len], slice);
     buf[slice.len] = 0;

@@ -14,7 +14,7 @@ pub fn renderSourceToOwnedSlice(
     input: []const u8,
     opts: FacadeRenderOptions,
 ) ![]u8 {
-    var output: std.io.Writer.Allocating = .init(allocator);
+    var output: std.Io.Writer.Allocating = .init(allocator);
     defer output.deinit();
 
     try markdown_preview.renderSource(allocator, input, &output.writer, opts.wrap_width, .{
@@ -29,14 +29,15 @@ pub fn renderSourceToOwnedSlice(
 
 pub fn renderFileToOwnedSlice(
     allocator: std.mem.Allocator,
-    cwd: std.fs.Dir,
+    io: std.Io,
+    cwd: std.Io.Dir,
     path: []const u8,
     opts: FacadeRenderOptions,
 ) ![]u8 {
-    var output: std.io.Writer.Allocating = .init(allocator);
+    var output: std.Io.Writer.Allocating = .init(allocator);
     defer output.deinit();
 
-    try markdown_preview.renderFile(allocator, cwd, path, &output.writer, opts.wrap_width, .{
+    try markdown_preview.renderFile(allocator, io, cwd, path, &output.writer, opts.wrap_width, .{
         .enable_ansi = opts.enable_ansi,
         .ambiguous_width = opts.ambiguous_width,
         .color_mode = opts.color_mode,

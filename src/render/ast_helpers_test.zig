@@ -365,7 +365,7 @@ pub fn renderDocumentToOwnedSlice(
     parse_output: *const parse.ParseOutput,
     opts: TestRenderOptions,
 ) ![]u8 {
-    var output: std.io.Writer.Allocating = .init(allocator);
+    var output: std.Io.Writer.Allocating = .init(allocator);
     defer output.deinit();
 
     var renderer = render.Renderer.init(allocator, .{

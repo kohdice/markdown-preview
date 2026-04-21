@@ -22,7 +22,7 @@ fn naiveLineOffsets(
 test "render cycle produces line offsets matching naive newline scan" {
     const allocator = std.testing.allocator;
 
-    var doc = try parse.parse(allocator, .{ .borrowed = 
+    var doc = try parse.parse(allocator, .{ .borrowed =
         \\# Title
         \\
         \\Paragraph one with **bold** and _italic_ text.
@@ -81,10 +81,11 @@ test "render cycle of empty document produces no line offsets" {
 
 test "pipeline.renderTo returns .rendered on first call" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.writeFile(.{ .sub_path = "doc.md", .data = "# Hello\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "doc.md", .data = "# Hello\n" });
 
     var renderer = render.Renderer.init(allocator, .{ .enable_ansi = false, .ambiguous_width = .narrow });
     defer renderer.deinit();
@@ -98,17 +99,18 @@ test "pipeline.renderTo returns .rendered on first call" {
 
     var hash: content_hash.ContentHash = .{};
 
-    const outcome = pipeline.renderTo(tmp.dir, "doc.md", &renderer, &cycle_arena, &buffer, null, &hash);
+    const outcome = pipeline.renderTo(io, tmp.dir, "doc.md", &renderer, &cycle_arena, &buffer, null, &hash);
     try std.testing.expectEqual(pipeline.RenderOutcome.rendered, outcome);
     try std.testing.expect(buffer.buffered().len > 0);
 }
 
 test "pipeline.renderTo returns .skipped_unchanged when hash matches" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.writeFile(.{ .sub_path = "doc.md", .data = "# Hello\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "doc.md", .data = "# Hello\n" });
 
     var renderer = render.Renderer.init(allocator, .{ .enable_ansi = false, .ambiguous_width = .narrow });
     defer renderer.deinit();
@@ -122,21 +124,22 @@ test "pipeline.renderTo returns .skipped_unchanged when hash matches" {
 
     var hash: content_hash.ContentHash = .{};
 
-    _ = pipeline.renderTo(tmp.dir, "doc.md", &renderer, &cycle_arena, &buffer, null, &hash);
+    _ = pipeline.renderTo(io, tmp.dir, "doc.md", &renderer, &cycle_arena, &buffer, null, &hash);
     const first_bytes = try allocator.dupe(u8, buffer.buffered());
     defer allocator.free(first_bytes);
 
-    const outcome = pipeline.renderTo(tmp.dir, "doc.md", &renderer, &cycle_arena, &buffer, null, &hash);
+    const outcome = pipeline.renderTo(io, tmp.dir, "doc.md", &renderer, &cycle_arena, &buffer, null, &hash);
     try std.testing.expectEqual(pipeline.RenderOutcome.skipped_unchanged, outcome);
     try std.testing.expectEqualSlices(u8, first_bytes, buffer.buffered());
 }
 
 test "pipeline.renderTo returns .rendered after hash.reset()" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.writeFile(.{ .sub_path = "doc.md", .data = "# Hello\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "doc.md", .data = "# Hello\n" });
 
     var renderer = render.Renderer.init(allocator, .{ .enable_ansi = false, .ambiguous_width = .narrow });
     defer renderer.deinit();
@@ -150,15 +153,16 @@ test "pipeline.renderTo returns .rendered after hash.reset()" {
 
     var hash: content_hash.ContentHash = .{};
 
-    _ = pipeline.renderTo(tmp.dir, "doc.md", &renderer, &cycle_arena, &buffer, null, &hash);
+    _ = pipeline.renderTo(io, tmp.dir, "doc.md", &renderer, &cycle_arena, &buffer, null, &hash);
     hash.reset();
 
-    const outcome = pipeline.renderTo(tmp.dir, "doc.md", &renderer, &cycle_arena, &buffer, null, &hash);
+    const outcome = pipeline.renderTo(io, tmp.dir, "doc.md", &renderer, &cycle_arena, &buffer, null, &hash);
     try std.testing.expectEqual(pipeline.RenderOutcome.rendered, outcome);
 }
 
 test "pipeline.renderTo recovers after read error without stale skip" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -175,11 +179,11 @@ test "pipeline.renderTo recovers after read error without stale skip" {
 
     var hash: content_hash.ContentHash = .{};
 
-    const first = pipeline.renderTo(tmp.dir, "missing.md", &renderer, &cycle_arena, &buffer, null, &hash);
+    const first = pipeline.renderTo(io, tmp.dir, "missing.md", &renderer, &cycle_arena, &buffer, null, &hash);
     try std.testing.expectEqual(pipeline.RenderOutcome.error_inline, first);
 
-    try tmp.dir.writeFile(.{ .sub_path = "missing.md", .data = "# Now present\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "missing.md", .data = "# Now present\n" });
 
-    const second = pipeline.renderTo(tmp.dir, "missing.md", &renderer, &cycle_arena, &buffer, null, &hash);
+    const second = pipeline.renderTo(io, tmp.dir, "missing.md", &renderer, &cycle_arena, &buffer, null, &hash);
     try std.testing.expectEqual(pipeline.RenderOutcome.rendered, second);
 }

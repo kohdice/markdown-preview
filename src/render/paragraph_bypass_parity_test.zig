@@ -17,7 +17,7 @@ fn renderOnce(
     var doc = try parse.parse(allocator, .{ .borrowed = input });
     defer doc.deinit();
 
-    var output: std.io.Writer.Allocating = .init(allocator);
+    var output: std.Io.Writer.Allocating = .init(allocator);
     defer output.deinit();
 
     var renderer = render.Renderer.init(allocator, .{ .enable_ansi = false });
@@ -49,7 +49,7 @@ fn expectBypassParityWithAnsi(input: []const u8) !void {
     inline_trigger.disable_bypass = false;
     var doc_a = try parse.parse(allocator, .{ .borrowed = input });
     defer doc_a.deinit();
-    var out_a: std.io.Writer.Allocating = .init(allocator);
+    var out_a: std.Io.Writer.Allocating = .init(allocator);
     defer out_a.deinit();
     var renderer_a = render.Renderer.init(allocator, .{ .enable_ansi = true });
     defer renderer_a.deinit();
@@ -62,7 +62,7 @@ fn expectBypassParityWithAnsi(input: []const u8) !void {
     defer inline_trigger.disable_bypass = false;
     var doc_b = try parse.parse(allocator, .{ .borrowed = input });
     defer doc_b.deinit();
-    var out_b: std.io.Writer.Allocating = .init(allocator);
+    var out_b: std.Io.Writer.Allocating = .init(allocator);
     defer out_b.deinit();
     var renderer_b = render.Renderer.init(allocator, .{ .enable_ansi = true });
     defer renderer_b.deinit();

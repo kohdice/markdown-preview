@@ -14,7 +14,7 @@ pub fn renderToOwnedSlice(
     input: []const u8,
     opts: TestRenderOptions,
 ) ![]u8 {
-    var output: std.io.Writer.Allocating = .init(allocator);
+    var output: std.Io.Writer.Allocating = .init(allocator);
     defer output.deinit();
 
     var doc = try parse(allocator, .{ .borrowed = input });

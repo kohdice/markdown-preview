@@ -90,7 +90,7 @@ fn parseFromOwned(allocator: std.mem.Allocator, owned_source: []u8) ParseError!t
 
     var it = std.mem.splitScalar(u8, owned_source, '\n');
     while (it.next()) |raw| {
-        const stripped_cr = std.mem.trimRight(u8, raw, "\r");
+        const stripped_cr = std.mem.trimEnd(u8, raw, "\r");
         const trimmed = std.mem.trim(u8, stripped_cr, " \t");
         if (trimmed.len == 0) continue;
 
@@ -132,7 +132,7 @@ fn validateHeader(line: []const u8) ParseError!void {
     if (head.len == 0) return;
     if (head.len == 1 and head[0] == ':') return;
 
-    if (head[head.len - 1] == ':') head = std.mem.trimRight(u8, head[0 .. head.len - 1], " \t");
+    if (head[head.len - 1] == ':') head = std.mem.trimEnd(u8, head[0 .. head.len - 1], " \t");
 
     if (std.ascii.eqlIgnoreCase(head, "LR")) return;
     if (std.ascii.eqlIgnoreCase(head, "TB") or std.ascii.eqlIgnoreCase(head, "BT")) return error.UnsupportedFeature;

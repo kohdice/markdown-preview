@@ -6,12 +6,12 @@ pub const RenderBuffer = struct {
     line_offsets: std.ArrayListUnmanaged(usize) = .empty,
     row_hashes: std.ArrayListUnmanaged(u64) = .empty,
     pending_newline: bool = false,
-    writer: std.io.Writer,
+    writer: std.Io.Writer,
 
-    const vtable: std.io.Writer.VTable = .{
+    const vtable: std.Io.Writer.VTable = .{
         .drain = drain,
-        .flush = std.io.Writer.defaultFlush,
-        .rebase = std.io.Writer.failingRebase,
+        .flush = std.Io.Writer.defaultFlush,
+        .rebase = std.Io.Writer.failingRebase,
     };
 
     pub fn init(self: *RenderBuffer, allocator: std.mem.Allocator) void {
@@ -76,7 +76,7 @@ pub const RenderBuffer = struct {
         }
     }
 
-    fn drain(w: *std.io.Writer, data: []const []const u8, splat: usize) std.io.Writer.Error!usize {
+    fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
         const self: *RenderBuffer = @fieldParentPtr("writer", w);
 
         var total: usize = 0;

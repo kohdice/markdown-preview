@@ -39,30 +39,30 @@ pub fn eventLoop(
 
     var poll_fds = [_]std.posix.pollfd{
         .{ .fd = watcher.getFd(), .events = std.posix.POLL.IN, .revents = 0 },
-        .{ .fd = opts.stdin_handle, .events = std.posix.POLL.IN, .revents = 0 },
+        .{ .fd = opts.stdin_file.handle, .events = std.posix.POLL.IN, .revents = 0 },
         .{ .fd = rt.signalFd(), .events = std.posix.POLL.IN, .revents = 0 },
     };
 
     var input_state: input.InputState = .{};
     var debounce: debounce_mod.DebounceState = .{};
-    var timer = std.time.Timer.start() catch return .poll_error;
+    const timer_start = std.Io.Timestamp.now(opts.io, .awake);
 
     while (true) {
-        const timeout = debounce.pollTimeoutMs(timer.read());
+        const timeout = debounce.pollTimeoutMs(elapsedNs(opts.io, timer_start));
         _ = std.posix.poll(&poll_fds, timeout) catch return .poll_error;
 
         var needs_redisplay = false;
 
         if (poll_fds[signal_idx].revents & std.posix.POLL.IN != 0) {
             if (rt.readSignal()) |sig| {
-                if (sig == std.posix.SIG.WINCH) {
-                    term_size.* = terminal.getTerminalSize(opts.stdout_handle) orelse term_size.*;
+                if (sig == @as(u8, @intFromEnum(std.posix.SIG.WINCH))) {
+                    term_size.* = terminal.getTerminalSize(opts.stdout_file.handle) orelse term_size.*;
                     wrap_width.* = if (opts.enable_ansi) term_size.cols else null;
                     scroll_offset.* = 0;
                     debounce.clear();
                     hash.reset();
                     pgr.invalidate();
-                    _ = pipeline.renderTo(opts.cwd, opts.path, renderer, cycle_arena, buffer, wrap_width.*, hash);
+                    _ = pipeline.renderTo(opts.io, opts.cwd, opts.path, renderer, cycle_arena, buffer, wrap_width.*, hash);
                     needs_redisplay = true;
                 } else {
                     return .signal_exit;
@@ -73,13 +73,13 @@ pub fn eventLoop(
         if (poll_fds[watcher_idx].revents & std.posix.POLL.IN != 0) {
             const event = watcher.consumeEvents() catch return .poll_error;
             if (event != .none) {
-                debounce.schedule(timer.read(), debounce_window_ns);
+                debounce.schedule(elapsedNs(opts.io, timer_start), debounce_window_ns);
             }
         }
 
         if (poll_fds[stdin_idx].revents & std.posix.POLL.IN != 0) {
             var key_buf: [input.key_read_buf_size]u8 = undefined;
-            const n = std.posix.read(opts.stdin_handle, &key_buf) catch return .poll_error;
+            const n = std.posix.read(opts.stdin_file.handle, &key_buf) catch return .poll_error;
             for (key_buf[0..n]) |byte| {
                 const action = input_state.feedByte(byte);
                 if (action == .quit) return .user_quit;
@@ -89,10 +89,10 @@ pub fn eventLoop(
             }
         }
 
-        if (debounce.expired(timer.read())) {
+        if (debounce.expired(elapsedNs(opts.io, timer_start))) {
             debounce.clear();
             scroll_offset.* = 0;
-            const outcome = pipeline.renderTo(opts.cwd, opts.path, renderer, cycle_arena, buffer, wrap_width.*, hash);
+            const outcome = pipeline.renderTo(opts.io, opts.cwd, opts.path, renderer, cycle_arena, buffer, wrap_width.*, hash);
             if (outcome != .skipped_unchanged) needs_redisplay = true;
         }
 
@@ -100,4 +100,8 @@ pub fn eventLoop(
             pgr.displayPage(opts.stdout, buffer, scroll_offset.*, term_size.rows, opts.enable_ansi, opts.color_mode);
         }
     }
+}
+
+fn elapsedNs(io: std.Io, start: std.Io.Timestamp) u64 {
+    return @intCast(start.untilNow(io, .awake).nanoseconds);
 }

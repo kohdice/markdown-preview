@@ -283,6 +283,7 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/source_loader.zig", .needs_tree_sitter = false },
         .{ .path = "src/backing_allocator.zig", .needs_tree_sitter = false },
         .{ .path = "src/stdout_buffer.zig", .needs_tree_sitter = false },
+        .{ .path = "src/write_error.zig", .needs_tree_sitter = false },
     };
 
     for (test_roots) |test_root| {
@@ -505,29 +506,30 @@ fn compileGrammarLibrary(
     src: GrammarSource,
     lib_name: []const u8,
 ) *std.Build.Step.Compile {
+    const root_module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
     const lib = b.addLibrary(.{
         .name = lib_name,
         .linkage = .static,
-        .root_module = b.createModule(.{
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-        }),
+        .root_module = root_module,
     });
     const subdir = src.src_subdir orelse "src";
     const parser_path = b.fmt("{s}/parser.c", .{subdir});
-    lib.addCSourceFile(.{
+    root_module.addCSourceFile(.{
         .file = src.dep.path(parser_path),
         .flags = &.{"-std=c11"},
     });
     if (src.has_scanner) {
         const scanner_path = b.fmt("{s}/scanner.c", .{subdir});
-        lib.addCSourceFile(.{
+        root_module.addCSourceFile(.{
             .file = src.dep.path(scanner_path),
             .flags = &.{"-std=c11"},
         });
     }
-    lib.addIncludePath(src.dep.path(subdir));
+    root_module.addIncludePath(src.dep.path(subdir));
     return lib;
 }
 

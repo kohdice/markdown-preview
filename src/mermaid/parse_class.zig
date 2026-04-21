@@ -121,7 +121,7 @@ fn parseFromOwned(allocator: std.mem.Allocator, owned_source: []u8) ParseError!t
     var header_seen = false;
     var it = std.mem.splitScalar(u8, owned_source, '\n');
     while (it.next()) |raw| {
-        const stripped_cr = std.mem.trimRight(u8, raw, "\r");
+        const stripped_cr = std.mem.trimEnd(u8, raw, "\r");
         const trimmed = std.mem.trim(u8, stripped_cr, " \t");
         if (trimmed.len == 0) continue;
         if (std.mem.startsWith(u8, trimmed, "%%")) continue;
@@ -204,7 +204,7 @@ fn parseLine(parser: *Parser, line: []const u8) ParseError!void {
     if (isUnsupportedStatement(line)) return error.UnsupportedFeature;
 
     if (std.mem.startsWith(u8, line, "class ")) {
-        try parseClassDeclaration(parser, std.mem.trimLeft(u8, line[6..], " \t"));
+        try parseClassDeclaration(parser, std.mem.trimStart(u8, line[6..], " \t"));
         return;
     }
     if (parseMemberLine(parser, line)) |_| return else |err| switch (err) {
@@ -260,9 +260,9 @@ fn isSilentlySkipped(line: []const u8) bool {
 
 fn parseClassDeclaration(parser: *Parser, rest: []const u8) ParseError!void {
     var body = rest;
-    const trimmed = std.mem.trimRight(u8, body, " \t");
+    const trimmed = std.mem.trimEnd(u8, body, " \t");
     const opens_block = trimmed.len > 0 and trimmed[trimmed.len - 1] == '{';
-    if (opens_block) body = std.mem.trimRight(u8, trimmed[0 .. trimmed.len - 1], " \t");
+    if (opens_block) body = std.mem.trimEnd(u8, trimmed[0 .. trimmed.len - 1], " \t");
 
     const match = matchClassNameAndGeneric(body) orelse return;
     const name = body[0..match.name_end];
@@ -456,7 +456,7 @@ fn parseMemberExpr(line: []const u8) ParseError!ParsedMember {
             '~' => .package,
             else => .unknown,
         };
-        if (visibility != .unknown) rest = std.mem.trimLeft(u8, rest[1..], " \t");
+        if (visibility != .unknown) rest = std.mem.trimStart(u8, rest[1..], " \t");
     }
     if (rest.len == 0) return error.InvalidMermaid;
 
@@ -464,7 +464,7 @@ fn parseMemberExpr(line: []const u8) ParseError!ParsedMember {
         if (std.mem.indexOfScalarPos(u8, rest, open_idx + 1, ')')) |close_idx| {
             const name_raw = rest[0..open_idx];
             const params = rest[open_idx + 1 .. close_idx];
-            const type_raw = std.mem.trimLeft(u8, rest[close_idx + 1 ..], " \t");
+            const type_raw = std.mem.trimStart(u8, rest[close_idx + 1 ..], " \t");
 
             var name = name_raw;
             var is_static = false;
@@ -532,8 +532,8 @@ const MemberError = ParseError || error{NotMember};
 
 fn parseMemberLine(parser: *Parser, line: []const u8) MemberError!void {
     const colon_idx = std.mem.indexOfScalar(u8, line, ':') orelse return error.NotMember;
-    const name_part = std.mem.trimRight(u8, line[0..colon_idx], " \t");
-    const raw_member_text = std.mem.trimLeft(u8, line[colon_idx + 1 ..], " \t");
+    const name_part = std.mem.trimEnd(u8, line[0..colon_idx], " \t");
+    const raw_member_text = std.mem.trimStart(u8, line[colon_idx + 1 ..], " \t");
 
     if (name_part.len == 0 or raw_member_text.len == 0) return error.NotMember;
     validateIdent(name_part) catch return error.NotMember;
@@ -601,7 +601,7 @@ fn findRelation(text: []const u8) ?RelationMatch {
 fn parseRelation(parser: *Parser, line: []const u8) ParseError!void {
     const match = findRelation(line) orelse return error.InvalidMermaid;
 
-    const lhs_text = std.mem.trimRight(u8, line[0..match.start], " \t");
+    const lhs_text = std.mem.trimEnd(u8, line[0..match.start], " \t");
     const after = line[match.start + match.len ..];
 
     var rhs_end: usize = after.len;
@@ -641,24 +641,24 @@ fn parseRelation(parser: *Parser, line: []const u8) ParseError!void {
 }
 
 fn takeTrailingQuoted(text: *[]const u8) ?[]const u8 {
-    const s = std.mem.trimRight(u8, text.*, " \t");
+    const s = std.mem.trimEnd(u8, text.*, " \t");
     if (s.len < 2 or s[s.len - 1] != '"') return null;
     var i: usize = s.len - 2;
     while (i > 0 and s[i] != '"') : (i -= 1) {}
     if (s[i] != '"') return null;
     const card = s[i + 1 .. s.len - 1];
-    text.* = std.mem.trimRight(u8, s[0..i], " \t");
+    text.* = std.mem.trimEnd(u8, s[0..i], " \t");
     return card;
 }
 
 fn takeLeadingQuoted(text: *[]const u8) ?[]const u8 {
-    const s = std.mem.trimLeft(u8, text.*, " \t");
+    const s = std.mem.trimStart(u8, text.*, " \t");
     if (s.len == 0 or s[0] != '"') return null;
     var i: usize = 1;
     while (i < s.len and s[i] != '"') : (i += 1) {}
     if (i >= s.len) return null;
     const card = s[1..i];
-    text.* = std.mem.trimLeft(u8, s[i + 1 ..], " \t");
+    text.* = std.mem.trimStart(u8, s[i + 1 ..], " \t");
     return card;
 }
 

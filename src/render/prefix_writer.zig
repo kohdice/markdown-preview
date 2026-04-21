@@ -29,7 +29,7 @@ pub const PrefixStack = struct {
         return self.segments.items.len == 0;
     }
 
-    pub fn emit(self: *const PrefixStack, writer: *std.io.Writer) !void {
+    pub fn emit(self: *const PrefixStack, writer: *std.Io.Writer) !void {
         for (self.segments.items) |seg| {
             if (seg.indent > 0) try writer.splatByteAll(' ', seg.indent);
             if (seg.marker.len > 0) try writer.writeAll(seg.marker);
@@ -38,17 +38,17 @@ pub const PrefixStack = struct {
 };
 
 pub const PrefixWriter = struct {
-    parent: *std.io.Writer,
+    parent: *std.Io.Writer,
     stack: *const PrefixStack,
     at_line_start: bool,
     buf: [recommended_buffer_size]u8,
-    writer: std.io.Writer,
+    writer: std.Io.Writer,
 
     pub const recommended_buffer_size = 512;
 
     pub fn init(
         self: *PrefixWriter,
-        parent: *std.io.Writer,
+        parent: *std.Io.Writer,
         stack: *const PrefixStack,
     ) void {
         self.* = .{
@@ -63,17 +63,17 @@ pub const PrefixWriter = struct {
         };
     }
 
-    pub fn finish(self: *PrefixWriter) std.io.Writer.Error!void {
+    pub fn finish(self: *PrefixWriter) std.Io.Writer.Error!void {
         try self.writer.flush();
     }
 
-    const vtable: std.io.Writer.VTable = .{
+    const vtable: std.Io.Writer.VTable = .{
         .drain = drain,
-        .flush = std.io.Writer.defaultFlush,
-        .rebase = std.io.Writer.failingRebase,
+        .flush = std.Io.Writer.defaultFlush,
+        .rebase = std.Io.Writer.failingRebase,
     };
 
-    fn drain(w: *std.io.Writer, data: []const []const u8, splat: usize) std.io.Writer.Error!usize {
+    fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
         const self: *PrefixWriter = @fieldParentPtr("writer", w);
 
         const buffered = w.buffered();
@@ -93,7 +93,7 @@ pub const PrefixWriter = struct {
         return total;
     }
 
-    fn processSlice(self: *PrefixWriter, bytes: []const u8) std.io.Writer.Error!usize {
+    fn processSlice(self: *PrefixWriter, bytes: []const u8) std.Io.Writer.Error!usize {
         var pos: usize = 0;
 
         while (pos < bytes.len) {
@@ -123,7 +123,7 @@ test "prefix stack push/pop changes emitted prefix" {
     var stack: PrefixStack = .init(allocator);
     defer stack.deinit();
 
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
     var pw: PrefixWriter = undefined;
     pw.init(&buf.writer, &stack);
@@ -143,7 +143,7 @@ test "empty stack produces no prefix" {
     var stack: PrefixStack = .init(allocator);
     defer stack.deinit();
 
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
     var pw: PrefixWriter = undefined;
     pw.init(&buf.writer, &stack);
@@ -159,7 +159,7 @@ test "nested prefixes compose via stack" {
     var stack: PrefixStack = .init(allocator);
     defer stack.deinit();
 
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
     var pw: PrefixWriter = undefined;
     pw.init(&buf.writer, &stack);
@@ -181,7 +181,7 @@ test "push mid-line does not retroactively prefix first line" {
     var stack: PrefixStack = .init(allocator);
     defer stack.deinit();
 
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
     var pw: PrefixWriter = undefined;
     pw.init(&buf.writer, &stack);
@@ -201,7 +201,7 @@ test "styled prefix bytes pass through verbatim" {
     var stack: PrefixStack = .init(allocator);
     defer stack.deinit();
 
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
     var pw: PrefixWriter = undefined;
     pw.init(&buf.writer, &stack);
@@ -220,7 +220,7 @@ test "writeByte triggers prefix" {
     var stack: PrefixStack = .init(allocator);
     defer stack.deinit();
 
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
     var pw: PrefixWriter = undefined;
     pw.init(&buf.writer, &stack);
@@ -240,7 +240,7 @@ test "splatByteAll after newline receives prefix" {
     var stack: PrefixStack = .init(allocator);
     defer stack.deinit();
 
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
     var pw: PrefixWriter = undefined;
     pw.init(&buf.writer, &stack);
@@ -258,7 +258,7 @@ test "empty writes do not emit prefix" {
     var stack: PrefixStack = .init(allocator);
     defer stack.deinit();
 
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
     var pw: PrefixWriter = undefined;
     pw.init(&buf.writer, &stack);

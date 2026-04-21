@@ -36,7 +36,7 @@ pub fn main() !void {
 }
 
 fn runScenario(scenario: Scenario) !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
 
     var counting = bench.CountingAllocator.init(gpa.allocator());
@@ -54,7 +54,7 @@ fn runScenario(scenario: Scenario) !void {
     defer renderer.deinit();
 
     var sink: [512]u8 = undefined;
-    var discarding: std.io.Writer.Discarding = .init(&sink);
+    var discarding: std.Io.Writer.Discarding = .init(&sink);
     timer.reset();
     try renderer.render(&discarding.writer, &doc, wrap_width);
     const render_elapsed_ns = timer.read();

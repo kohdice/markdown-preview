@@ -62,7 +62,7 @@ pub fn diagramConfigKey(kind: DiagramKind) ?[]const u8 {
 pub fn classifyHeader(source: []const u8) DiagramKind {
     const line = firstMeaningfulLine(source) orelse return .unknown;
     const raw_token = leadingToken(line);
-    const token = std.mem.trimRight(u8, raw_token, ":");
+    const token = std.mem.trimEnd(u8, raw_token, ":");
 
     if (std.ascii.eqlIgnoreCase(token, "graph")) return .flowchart;
     if (std.ascii.eqlIgnoreCase(token, "flowchart")) return .flowchart;
