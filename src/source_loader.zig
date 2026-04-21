@@ -58,6 +58,8 @@ fn readFile(
     var buffer = try allocator.alloc(u8, len);
     errdefer allocator.free(buffer);
 
+    adviseSequential(file.handle, len);
+
     var filled: usize = 0;
     while (filled < len) {
         const n = try file.read(buffer[filled..]);
@@ -70,6 +72,12 @@ fn readFile(
     }
 
     return .{ .owned = .{ .allocator = allocator, .buffer = buffer } };
+}
+
+fn adviseSequential(fd: std.posix.fd_t, len: usize) void {
+    if (builtin.os.tag != .linux) return;
+    const linux = std.os.linux;
+    _ = linux.fadvise(fd, 0, @intCast(len), linux.POSIX_FADV.SEQUENTIAL);
 }
 
 test "loadFile returns owned source for small files" {
