@@ -238,7 +238,7 @@ pub const Highlighter = struct {
     pub fn writeHighlightedBlock(
         self: *Highlighter,
         allocator: std.mem.Allocator,
-        writer: *std.io.Writer,
+        writer: *std.Io.Writer,
         source: []const u8,
         lang: Language,
         syn_palette: theme.SyntaxPalette,
@@ -971,7 +971,7 @@ test "Highlighter: writes styled zig source" {
     defer hl.deinit();
 
     const allocator = std.testing.allocator;
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
 
     const source = "const x: u32 = 42;";
@@ -1008,7 +1008,7 @@ test "Highlighter: highlights every supported language end-to-end" {
     };
 
     for (cases) |case| {
-        var buf: std.io.Writer.Allocating = .init(allocator);
+        var buf: std.Io.Writer.Allocating = .init(allocator);
         defer buf.deinit();
 
         try hl.writeHighlightedBlock(allocator, &buf.writer, case.source, case.lang, theme.default_syntax_palette, .truecolor);
@@ -1032,7 +1032,7 @@ test "Highlighter: later @function pattern overrides generic @variable on fn dec
     defer hl.deinit();
 
     const allocator = std.testing.allocator;
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
 
     const source = "fn greet() void {}";
@@ -1052,7 +1052,7 @@ test "Highlighter: uncaptured whitespace renders with plain color" {
     defer hl.deinit();
 
     const allocator = std.testing.allocator;
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
 
     const source = "const x = 1;";
@@ -1072,7 +1072,7 @@ test "Highlighter: @string captures survive a #set! directive on the pattern" {
     defer hl.deinit();
 
     const allocator = std.testing.allocator;
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
 
     const source = "const msg = \"hi\";";
@@ -1093,7 +1093,7 @@ test "Highlighter: lua-match highlights Zig type identifiers" {
     defer hl.deinit();
 
     const allocator = std.testing.allocator;
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
 
     const source = "const value: MyType = undefined;";
@@ -1113,7 +1113,7 @@ test "Highlighter: javascript require is builtin when not shadowed" {
     defer hl.deinit();
 
     const allocator = std.testing.allocator;
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
 
     const source = "require('fs');";
@@ -1132,7 +1132,7 @@ test "Highlighter: javascript local require does not use builtin styling" {
     defer hl.deinit();
 
     const allocator = std.testing.allocator;
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
 
     const source = "function demo(require) { return require; }";
@@ -1151,7 +1151,7 @@ test "Highlighter: @spell meta capture does not override @comment italic" {
     defer hl.deinit();
 
     const allocator = std.testing.allocator;
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
 
     const source = "// hello world";
@@ -1174,7 +1174,7 @@ test "Highlighter: forced .failed returns QueryUnavailable" {
     hl.forceLanguageFailedForTesting(.zig);
 
     const allocator = std.testing.allocator;
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
 
     try std.testing.expectError(
@@ -1189,7 +1189,7 @@ test "Highlighter: .failed is sticky across repeated calls" {
     hl.forceLanguageFailedForTesting(.zig);
 
     const allocator = std.testing.allocator;
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
 
     for (0..3) |_| {
@@ -1231,7 +1231,7 @@ fn renderHighlightedForTest(
     source: []const u8,
     lang: Language,
 ) ![]u8 {
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
     try hl.writeHighlightedBlock(allocator, &buf.writer, source, lang, theme.default_syntax_palette, .truecolor);
     var list = buf.toArrayList();

@@ -301,7 +301,7 @@ fn wrapText(
 ) ![]u8 {
     if (max_width == 0) return try allocator.dupe(u8, text);
 
-    var result: std.ArrayListUnmanaged(u8) = .{};
+    var result: std.ArrayListUnmanaged(u8) = .empty;
     errdefer result.deinit(allocator);
 
     var col: usize = 0;
@@ -395,7 +395,7 @@ fn wrapText(
 }
 
 pub const WrapWriter = struct {
-    parent: *std.io.Writer,
+    parent: *std.Io.Writer,
     line_buf: *std.ArrayListUnmanaged(u8),
     col: usize,
     last_space_buf: ?usize,
@@ -407,13 +407,13 @@ pub const WrapWriter = struct {
     pending: [24]u8,
     pending_len: u5,
     writer_buf: [writer_buffer_size]u8,
-    writer: std.io.Writer,
+    writer: std.Io.Writer,
 
     const writer_buffer_size = 512;
 
     pub fn init(
         self: *WrapWriter,
-        parent: *std.io.Writer,
+        parent: *std.Io.Writer,
         max_width: usize,
         ambiguous: AmbiguousWidth,
         allocator: std.mem.Allocator,
@@ -442,7 +442,7 @@ pub const WrapWriter = struct {
 
     pub fn reset(
         self: *WrapWriter,
-        parent: *std.io.Writer,
+        parent: *std.Io.Writer,
         max_width: usize,
     ) void {
         self.parent = parent;
@@ -460,7 +460,7 @@ pub const WrapWriter = struct {
         _ = self;
     }
 
-    pub fn finish(self: *WrapWriter) std.io.Writer.Error!void {
+    pub fn finish(self: *WrapWriter) std.Io.Writer.Error!void {
         try self.writer.flush();
         if (self.pending_len > 0) {
             if (self.pending[0] == ESC) {
@@ -475,13 +475,13 @@ pub const WrapWriter = struct {
         }
     }
 
-    const wrap_vtable: std.io.Writer.VTable = .{
+    const wrap_vtable: std.Io.Writer.VTable = .{
         .drain = wrapDrain,
         .flush = wrapFlush,
-        .rebase = std.io.Writer.failingRebase,
+        .rebase = std.Io.Writer.failingRebase,
     };
 
-    fn wrapFlush(w: *std.io.Writer) std.io.Writer.Error!void {
+    fn wrapFlush(w: *std.Io.Writer) std.Io.Writer.Error!void {
         const self: *WrapWriter = @fieldParentPtr("writer", w);
         const buffered = w.buffered();
         if (buffered.len > 0) {
@@ -495,7 +495,7 @@ pub const WrapWriter = struct {
         self.last_space_buf = null;
     }
 
-    fn wrapDrain(w: *std.io.Writer, data: []const []const u8, splat: usize) std.io.Writer.Error!usize {
+    fn wrapDrain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
         const self: *WrapWriter = @fieldParentPtr("writer", w);
 
         const buffered = w.buffered();
@@ -1573,7 +1573,7 @@ test "detectAmbiguousWidth LC_ALL beats LC_CTYPE and LANG" {
 
 fn wrapWriterCollect(input: []const u8, max_w: usize, ambiguous: AmbiguousWidth) ![]u8 {
     const allocator = std.testing.allocator;
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     errdefer buf.deinit();
 
     var line_buf: std.ArrayListUnmanaged(u8) = .empty;
@@ -1640,7 +1640,7 @@ test "WrapWriter styled fragment boundaries" {
     const expected = try wrapText(allocator, input, 10, .narrow);
     defer allocator.free(expected);
 
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     errdefer buf.deinit();
 
     var line_buf: std.ArrayListUnmanaged(u8) = .empty;
@@ -1698,7 +1698,7 @@ test "WrapWriter split ANSI CSI across writes" {
     const expected = try wrapText(allocator, input, 10, .narrow);
     defer allocator.free(expected);
 
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     errdefer buf.deinit();
 
     var line_buf: std.ArrayListUnmanaged(u8) = .empty;
@@ -1724,7 +1724,7 @@ test "WrapWriter split ANSI CSI across writes" {
 test "WrapWriter split ANSI ESC+[ across writes" {
     const allocator = std.testing.allocator;
 
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     errdefer buf.deinit();
 
     var line_buf: std.ArrayListUnmanaged(u8) = .empty;
@@ -1753,7 +1753,7 @@ test "WrapWriter split UTF-8 across writes" {
     const expected = try wrapText(allocator, full, 10, .narrow);
     defer allocator.free(expected);
 
-    var buf: std.io.Writer.Allocating = .init(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
     errdefer buf.deinit();
 
     var line_buf: std.ArrayListUnmanaged(u8) = .empty;
