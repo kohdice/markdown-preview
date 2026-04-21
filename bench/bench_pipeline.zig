@@ -33,20 +33,16 @@ pub fn main() !void {
     const table = [_]Fixture{
         .{ .name = "small-8KiB-ascii", .spec = fixtures.small_ascii, .ambiguous = .narrow },
         .{ .name = "mid-128KiB-cjk", .spec = fixtures.mid_cjk, .ambiguous = .wide },
-        .{ .name = "large-external", .spec = fixtures.large_external, .ambiguous = .narrow },
     };
 
     var explicit_ambiguous: ?AmbiguousWidth = null;
     var custom_path: ?[]const u8 = null;
-    var skip_large = false;
 
     for (args[1..]) |arg| {
         if (std.mem.eql(u8, arg, "--wide")) {
             explicit_ambiguous = .wide;
         } else if (std.mem.eql(u8, arg, "--narrow")) {
             explicit_ambiguous = .narrow;
-        } else if (std.mem.eql(u8, arg, "--skip-large")) {
-            skip_large = true;
         } else {
             custom_path = arg;
         }
@@ -68,16 +64,7 @@ pub fn main() !void {
 
     std.debug.print("pipeline benchmark (file -> parse -> render -> Discarding)\n", .{});
     for (table) |f| {
-        fixtures.ensure(allocator, f.spec) catch |err| switch (err) {
-            error.MissingFixture => {
-                if (skip_large) {
-                    std.debug.print("{s}: skipped (--skip-large, missing {s})\n", .{ f.name, f.spec.path });
-                    continue;
-                }
-                return err;
-            },
-            else => return err,
-        };
+        try fixtures.ensure(allocator, f.spec);
         const cold = try runOnce(allocator, f.spec.path, f.ambiguous);
         const warm = try runOnce(allocator, f.spec.path, f.ambiguous);
         printFixtureRuns(f.name, cold, warm);

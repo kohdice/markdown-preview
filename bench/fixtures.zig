@@ -1,12 +1,11 @@
 const std = @import("std");
 
 pub const cache_dir = ".bench-cache";
-pub const large_fixture_path = ".bench-cache/large.md";
 
 pub const Spec = struct {
     path: []const u8,
     target_bytes: usize,
-    generator: ?*const fn (std.mem.Allocator, usize) anyerror![]u8,
+    generator: *const fn (std.mem.Allocator, usize) anyerror![]u8,
 };
 
 pub const small_ascii: Spec = .{
@@ -21,30 +20,12 @@ pub const mid_cjk: Spec = .{
     .generator = makeCjkProse,
 };
 
-pub const large_external: Spec = .{
-    .path = large_fixture_path,
-    .target_bytes = 0,
-    .generator = null,
-};
-
-pub const all = [_]Spec{ small_ascii, mid_cjk, large_external };
+pub const all = [_]Spec{ small_ascii, mid_cjk };
 
 pub fn ensure(allocator: std.mem.Allocator, spec: Spec) !void {
-    const generator = spec.generator orelse {
-        std.fs.cwd().access(spec.path, .{}) catch {
-            std.debug.print(
-                "error: missing external fixture {s}. " ++
-                    "Place a ~8.9 MiB markdown file there (see .plans/refactor_master.md Phase 0).\n",
-                .{spec.path},
-            );
-            return error.MissingFixture;
-        };
-        return;
-    };
-
     try std.fs.cwd().makePath(cache_dir);
 
-    const expected = try generator(allocator, spec.target_bytes);
+    const expected = try spec.generator(allocator, spec.target_bytes);
     defer allocator.free(expected);
 
     if (std.fs.cwd().readFileAlloc(allocator, spec.path, 1 << 28)) |actual| {

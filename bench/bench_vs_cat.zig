@@ -10,15 +10,12 @@ pub fn main() !void {
     defer std.process.argsFree(allocator, args);
 
     var mp_path: ?[]const u8 = null;
-    var skip_large = false;
     var positional = std.ArrayListUnmanaged([]const u8).empty;
     defer positional.deinit(allocator);
 
     for (args[1..]) |arg| {
         if (std.mem.startsWith(u8, arg, mp_flag)) {
             mp_path = arg[mp_flag.len..];
-        } else if (std.mem.eql(u8, arg, "--skip-large")) {
-            skip_large = true;
         } else {
             try positional.append(allocator, arg);
         }
@@ -40,16 +37,7 @@ pub fn main() !void {
 
     if (positional.items.len == 0) {
         for (fixtures_mod.all) |spec| {
-            fixtures_mod.ensure(allocator, spec) catch |err| switch (err) {
-                error.MissingFixture => {
-                    if (skip_large) {
-                        std.debug.print("skipping {s}: --skip-large\n", .{spec.path});
-                        continue;
-                    }
-                    return err;
-                },
-                else => return err,
-            };
+            try fixtures_mod.ensure(allocator, spec);
             try default_fixtures.append(allocator, spec.path);
         }
     }
