@@ -284,6 +284,7 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/backing_allocator.zig", .needs_tree_sitter = false },
         .{ .path = "src/stdout_buffer.zig", .needs_tree_sitter = false },
         .{ .path = "src/write_error.zig", .needs_tree_sitter = false },
+        .{ .path = "bench/bench_support.zig", .needs_tree_sitter = false },
     };
 
     for (test_roots) |test_root| {

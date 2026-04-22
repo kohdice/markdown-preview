@@ -1,5 +1,43 @@
 const std = @import("std");
 
+/// Monotonic stopwatch helper for benchmark harnesses.
+///
+/// Replaces the removed `std.time.Timer` API on Zig 0.16.0. Backed by
+/// `std.Io.Clock` so platform-specific clock source selection (e.g.
+/// `CLOCK_MONOTONIC` on Linux, `CLOCK_UPTIME_RAW` on macOS) lives inside
+/// the `Io` implementation rather than the bench code.
+pub const BenchTimer = struct {
+    io: std.Io,
+    start_ts: std.Io.Clock.Timestamp,
+
+    /// Captures a starting timestamp on the `awake` (monotonic) clock.
+    pub fn start(io: std.Io) BenchTimer {
+        return .{
+            .io = io,
+            .start_ts = std.Io.Clock.Timestamp.now(io, .awake),
+        };
+    }
+
+    /// Returns nanoseconds elapsed since `start`.
+    pub fn read(self: BenchTimer) u64 {
+        const now_ts = std.Io.Clock.Timestamp.now(self.io, .awake);
+        const ns = self.start_ts.durationTo(now_ts).raw.nanoseconds;
+        if (ns <= 0) return 0;
+        return @intCast(ns);
+    }
+};
+
+test "BenchTimer.read returns non-decreasing nanoseconds" {
+    var timer = BenchTimer.start(std.testing.io);
+    const first = timer.read();
+    var spin: usize = 0;
+    while (spin < 64) : (spin += 1) {
+        std.mem.doNotOptimizeAway(spin);
+    }
+    const second = timer.read();
+    try std.testing.expect(second >= first);
+}
+
 pub const CounterSnapshot = struct {
     alloc_count: usize,
     resize_count: usize,
