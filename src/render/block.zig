@@ -115,7 +115,7 @@ pub const RenderSession = struct {
             .code_block => |code_block| try self.writeCodeBlock(code_block),
             .code_fence => |code_fence| try self.writeCodeFence(code_fence),
             .thematic_break => try self.writeThematicBreak(),
-            .table => |table| try render_table.writeTable(self.ctx, self.writer, self.persistent_allocator, self.table_scratch, table, .top_level),
+            .table => |table| try render_table.writeTable(self.ctx, self.writer, self.persistent_allocator, self.table_scratch, table, .top_level, self.wrap_width),
             .blank_line => {},
         }
     }
@@ -186,7 +186,7 @@ pub const RenderSession = struct {
             switch (block_ptr.*) {
                 .paragraph => try self.writeBlockQuoteParagraph(&block_ptr.paragraph),
                 .blockquote => |blockquote| try self.writeBlockQuote(blockquote, depth),
-                .table => |table| try render_table.writeTable(self.ctx, self.writer, self.persistent_allocator, self.table_scratch, table, .blockquote),
+                .table => |table| try render_table.writeTable(self.ctx, self.writer, self.persistent_allocator, self.table_scratch, table, .blockquote, self.wrap_width),
                 else => try self.writeBlock(block_ptr, depth),
             }
         }

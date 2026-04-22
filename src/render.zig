@@ -104,6 +104,7 @@ test {
     _ = @import("render/inline.zig");
     _ = @import("render/prefix_writer.zig");
     _ = @import("render/table.zig");
+    _ = @import("render/cell_segment.zig");
     _ = @import("render/ast_helpers_test.zig");
     _ = @import("render/document_test.zig");
     _ = @import("render/inline_test.zig");

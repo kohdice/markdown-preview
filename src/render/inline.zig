@@ -5,6 +5,7 @@ const text = @import("../text.zig");
 const width_mod = @import("../term/width.zig");
 const theme = @import("../term/theme.zig");
 const render_context = @import("context.zig");
+const cell_segment = @import("cell_segment.zig");
 const RenderContext = render_context.RenderContext;
 
 const link_url_open = "(";
@@ -242,6 +243,133 @@ pub fn writeAndMeasureInlineChain(
     try traverseInlineChain(MeasureWriteVisitor, &visitor, ctx.doc, first);
     try ansi.flushStyle(writer, &sgr_state);
     return visitor.width_total;
+}
+
+const SegmentVisitor = struct {
+    pub const Error = error{ WriteFailed, OutOfMemory };
+    const Self = @This();
+
+    ctx: *const RenderContext,
+    builder: *cell_segment.CellSegmentBuilder,
+    current_style: ansi.TextStyle,
+
+    pub fn onText(self: *Self, content: []const u8) Error!void {
+        try writeTextWithEntitiesSegmented(self, content, self.current_style);
+    }
+
+    pub fn onCodeSpan(self: *Self, content: []const u8) Error!void {
+        try self.builder.writeStyled(.{ .fg = self.ctx.palette.inline_code }, content);
+    }
+
+    pub fn onAutolink(self: *Self, url: []const u8) Error!void {
+        const merged = self.current_style.merge(.{ .fg = self.ctx.palette.link, .underline = true });
+        try self.builder.writeStyled(merged, url);
+    }
+
+    pub fn onSoftBreak(self: *Self) Error!void {
+        try self.builder.breakSegment();
+    }
+
+    pub fn onHardBreak(self: *Self) Error!void {
+        try self.builder.breakSegment();
+    }
+
+    pub fn onContainer(self: *Self, kind: ContainerKind, doc: *const ast.Document, children: ast.InlineRef) Error!void {
+        const saved = self.current_style;
+        self.current_style = self.current_style.merge(switch (kind) {
+            .emphasis => ansi.TextStyle{ .italic = true },
+            .strong => ansi.TextStyle{ .bold = true },
+            .bold_italic => ansi.TextStyle{ .bold = true, .italic = true },
+            .strikethrough => ansi.TextStyle{ .strikethrough = true },
+        });
+        try traverseInlineChain(Self, self, doc, children);
+        self.current_style = saved;
+    }
+
+    pub fn onLink(self: *Self, doc: *const ast.Document, link: ast.LinkInline) Error!void {
+        const saved = self.current_style;
+        self.current_style = self.current_style.merge(.{ .fg = self.ctx.palette.link, .underline = true });
+        try traverseInlineChain(Self, self, doc, link.children);
+        self.current_style = saved;
+
+        const muted_dim: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .dim = true };
+        try self.builder.writeStyled(muted_dim, link_url_open);
+        try self.builder.writeStyled(muted_dim, link.url);
+        try self.builder.writeStyled(muted_dim, link_url_close);
+        if (link.title) |t| {
+            const title_style: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .dim = true, .italic = true };
+            try self.builder.writeStyled(title_style, link_title_separator);
+            try self.builder.writeStyled(title_style, t);
+        }
+    }
+
+    pub fn onImage(self: *Self, doc: *const ast.Document, img: ast.ImageInline) Error!void {
+        const img_style: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .italic = true };
+        try self.builder.writeStyled(img_style, image_alt_prefix);
+
+        const saved = self.current_style;
+        self.current_style = img_style;
+        try traverseInlineChain(Self, self, doc, img.children);
+        self.current_style = saved;
+
+        try self.builder.writeStyled(img_style, image_alt_suffix);
+        const muted_dim: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .dim = true };
+        try self.builder.writeStyled(muted_dim, link_url_open);
+        try self.builder.writeStyled(muted_dim, img.url);
+        try self.builder.writeStyled(muted_dim, link_url_close);
+        if (img.title) |t| {
+            const title_style: ansi.TextStyle = .{ .fg = self.ctx.palette.muted, .dim = true, .italic = true };
+            try self.builder.writeStyled(title_style, link_title_separator);
+            try self.builder.writeStyled(title_style, t);
+        }
+    }
+};
+
+fn writeTextWithEntitiesSegmented(
+    visitor: *SegmentVisitor,
+    content: []const u8,
+    style: ansi.TextStyle,
+) SegmentVisitor.Error!void {
+    if (std.mem.indexOfScalar(u8, content, '&') == null) {
+        try visitor.builder.writeStyled(style, content);
+        return;
+    }
+
+    var pos: usize = 0;
+    var plain_start: usize = 0;
+
+    while (pos < content.len) {
+        if (content[pos] == '&') {
+            if (text.decode(content, pos)) |result| {
+                if (plain_start < pos) {
+                    try visitor.builder.writeStyled(style, content[plain_start..pos]);
+                }
+                try visitor.builder.writeStyled(style, result.bytes[0..result.len]);
+                pos = result.end;
+                plain_start = pos;
+                continue;
+            }
+        }
+        pos += 1;
+    }
+
+    if (plain_start < content.len) {
+        try visitor.builder.writeStyled(style, content[plain_start..]);
+    }
+}
+
+pub fn writeSegmentedInlineChain(
+    ctx: *const RenderContext,
+    builder: *cell_segment.CellSegmentBuilder,
+    first: ast.InlineRef,
+    base_style: ansi.TextStyle,
+) !void {
+    var visitor: SegmentVisitor = .{
+        .ctx = ctx,
+        .builder = builder,
+        .current_style = base_style,
+    };
+    try traverseInlineChain(SegmentVisitor, &visitor, ctx.doc, first);
 }
 
 const testing = std.testing;
