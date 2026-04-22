@@ -115,14 +115,14 @@ fn runOnce(
     path: []const u8,
     ambiguous: AmbiguousWidth,
 ) !Run {
-    var read_timer = try std.time.Timer.start();
+    const read_timer = bench.BenchTimer.start(io);
     const source = try source_loader.loadFile(allocator, io, std.Io.Dir.cwd(), path);
     const read_ns = read_timer.read();
     const input_bytes = source.bytes().len;
 
     var parse_counting = bench.CountingAllocator.init(allocator);
     const parse_before = parse_counting.snapshot();
-    var parse_timer = try std.time.Timer.start();
+    const parse_timer = bench.BenchTimer.start(io);
     var doc = try parse(parse_counting.allocator(), source);
     const parse_ns = parse_timer.read();
     defer doc.deinit();
@@ -136,8 +136,8 @@ fn runOnce(
     var discarding: std.Io.Writer.Discarding = .init(&sink);
 
     const render_before = render_counting.snapshot();
-    var render_timer = try std.time.Timer.start();
-    try renderer.render(&discarding.writer, &doc, null);
+    const render_timer = bench.BenchTimer.start(io);
+    try renderer.render(&discarding.writer, &doc, null, render_counting.allocator());
     try discarding.writer.flush();
     const render_ns = render_timer.read();
     const render_after = render_counting.snapshot();

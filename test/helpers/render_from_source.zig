@@ -25,7 +25,7 @@ pub fn renderToOwnedSlice(
         .ambiguous_width = opts.ambiguous_width,
     });
     defer renderer.deinit();
-    try renderer.render(&output.writer, &doc, opts.wrap_width);
+    try renderer.render(&output.writer, &doc, opts.wrap_width, allocator);
     var list = output.toArrayList();
     return list.toOwnedSlice(allocator);
 }

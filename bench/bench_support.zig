@@ -1,5 +1,35 @@
 const std = @import("std");
 
+pub const BenchTimer = struct {
+    io: std.Io,
+    start_ts: std.Io.Clock.Timestamp,
+
+    pub fn start(io: std.Io) BenchTimer {
+        return .{
+            .io = io,
+            .start_ts = std.Io.Clock.Timestamp.now(io, .awake),
+        };
+    }
+
+    pub fn read(self: BenchTimer) u64 {
+        const now_ts = std.Io.Clock.Timestamp.now(self.io, .awake);
+        const ns = self.start_ts.durationTo(now_ts).raw.nanoseconds;
+        if (ns <= 0) return 0;
+        return @intCast(ns);
+    }
+};
+
+test "BenchTimer.read returns non-decreasing nanoseconds" {
+    var timer = BenchTimer.start(std.testing.io);
+    const first = timer.read();
+    var spin: usize = 0;
+    while (spin < 64) : (spin += 1) {
+        std.mem.doNotOptimizeAway(spin);
+    }
+    const second = timer.read();
+    try std.testing.expect(second >= first);
+}
+
 pub const CounterSnapshot = struct {
     alloc_count: usize,
     resize_count: usize,

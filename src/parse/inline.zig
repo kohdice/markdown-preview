@@ -33,9 +33,6 @@ pub const InlineBuilder = struct {
         };
     }
 
-    /// Pre-size `nodes` / `next` for workloads dominated by non-trivial
-    /// paragraphs (emphasis / links / code spans). Trivial-paragraph heavy
-    /// inputs skip the reserve via `estimateInlineNodeCapacity`'s threshold.
     pub fn reserve(self: *InlineBuilder, capacity: usize) !void {
         if (capacity == 0) return;
         try self.nodes.ensureTotalCapacityPrecise(self.allocator, capacity);

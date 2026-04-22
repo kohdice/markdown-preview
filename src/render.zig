@@ -1,6 +1,5 @@
 const std = @import("std");
 const ast = @import("ast.zig");
-const parse = @import("parse.zig");
 const term = @import("term.zig");
 const ansi = term.ansi;
 const highlight = term.highlight;
@@ -27,7 +26,6 @@ pub const Renderer = struct {
     table_scratch: render_table.TableScratch = .{},
     wrap_line_buf: std.ArrayListUnmanaged(u8) = .empty,
     scratch: std.heap.ArenaAllocator,
-    mermaid_cache: std.AutoHashMapUnmanaged(u64, mermaid.Diagram) = .empty,
 
     pub fn init(persistent_allocator: std.mem.Allocator, opts: RenderOptions) Renderer {
         return .{
@@ -39,14 +37,10 @@ pub const Renderer = struct {
             .table_scratch = .{},
             .wrap_line_buf = .empty,
             .scratch = std.heap.ArenaAllocator.init(persistent_allocator),
-            .mermaid_cache = .empty,
         };
     }
 
     pub fn deinit(self: *Renderer) void {
-        var it = self.mermaid_cache.valueIterator();
-        while (it.next()) |diagram| diagram.deinit();
-        self.mermaid_cache.deinit(self.persistent_allocator);
         self.highlighter.deinit();
         self.table_scratch.deinit(self.persistent_allocator);
         self.wrap_line_buf.deinit(self.persistent_allocator);
@@ -56,11 +50,19 @@ pub const Renderer = struct {
     pub fn render(
         self: *Renderer,
         writer: *std.Io.Writer,
-        output: *const parse.ParseOutput,
+        doc: *const ast.Document,
         wrap_width: ?usize,
+        cycle_allocator: std.mem.Allocator,
     ) !void {
         _ = self.scratch.reset(.retain_capacity);
         self.table_scratch.reset();
+
+        var mermaid_cache: std.StringHashMapUnmanaged(mermaid.Diagram) = .empty;
+        defer {
+            var it = mermaid_cache.valueIterator();
+            while (it.next()) |diagram| diagram.deinit();
+            mermaid_cache.deinit(cycle_allocator);
+        }
 
         var prefix_stack: prefix_writer_mod.PrefixStack = .init(self.scratch.allocator());
         var prefix_w: prefix_writer_mod.PrefixWriter = undefined;
@@ -70,7 +72,7 @@ pub const Renderer = struct {
         wrap_writer.init(writer, 0, self.opts.ambiguous_width, self.persistent_allocator, &self.wrap_line_buf);
 
         const ctx: render_context.RenderContext = .{
-            .doc = &output.parsed.document,
+            .doc = doc,
             .enable_ansi = self.opts.enable_ansi,
             .ambiguous_width = self.opts.ambiguous_width,
             .palette = self.palette,
@@ -83,16 +85,16 @@ pub const Renderer = struct {
             .prefix_stack = &prefix_stack,
             .scratch = self.scratch.allocator(),
             .persistent_allocator = self.persistent_allocator,
+            .cycle_allocator = cycle_allocator,
             .wrap_width = wrap_width,
             .highlighter = &self.highlighter,
             .table_scratch = &self.table_scratch,
             .wrap_writer = &wrap_writer,
-            .mermaid_cache = &self.mermaid_cache,
-            .trivial_runs = output.trivial_runs,
+            .mermaid_cache = &mermaid_cache,
         };
 
-        try session.write(output.parsed.document.blocks);
-        if (output.parsed.document.has_trailing_newline) try prefix_w.writer.writeByte('\n');
+        try session.write(doc.blocks);
+        if (doc.has_trailing_newline) try prefix_w.writer.writeByte('\n');
         try prefix_w.writer.flush();
     }
 };
@@ -109,7 +111,6 @@ test {
     _ = @import("render/table_test.zig");
     _ = @import("render/code_test.zig");
     _ = @import("render/mermaid_cache_test.zig");
-    _ = @import("render/paragraph_bypass_parity_test.zig");
     _ = @import("render/highlight_color_bypass_parity_test.zig");
     _ = @import("render/color_mode_propagation_test.zig");
 }

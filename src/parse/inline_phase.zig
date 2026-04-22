@@ -1,6 +1,5 @@
 const std = @import("std");
 const ast = @import("../ast.zig");
-const parse_mod = @import("../parse.zig");
 const block_phase = @import("block_phase.zig");
 const parse_inline = @import("inline.zig");
 const inline_work_mod = @import("inline_work.zig");
@@ -12,18 +11,15 @@ pub const ParseResult = struct {
     inline_nodes: []ast.InlineNode,
     inline_next: []ast.InlineRef,
     link_defs: ast.LinkDefMap,
-    trivial_runs: []const parse_mod.TrivialRun,
 };
 
 pub fn resolveInlines(
-    allocator: std.mem.Allocator,
     builder: *parse_inline.InlineBuilder,
     block_doc: block_phase.BlockDocument,
 ) !ParseResult {
     var link_defs = block_doc.link_defs;
 
     var walk: Walk = .{
-        .allocator = allocator,
         .builder = builder,
         .link_defs = &link_defs,
         .pending = block_doc.pending_inline,
@@ -43,17 +39,14 @@ pub fn resolveInlines(
         .inline_nodes = storage.nodes,
         .inline_next = storage.next,
         .link_defs = link_defs,
-        .trivial_runs = try walk.trivial.toOwnedSlice(allocator),
     };
 }
 
 const Walk = struct {
-    allocator: std.mem.Allocator,
     builder: *parse_inline.InlineBuilder,
     link_defs: *const ast.LinkDefMap,
     pending: []const PendingInline,
     cursor: usize = 0,
-    trivial: std.ArrayListUnmanaged(parse_mod.TrivialRun) = .empty,
 
     fn takePending(self: *Walk) PendingInline {
         const entry = self.pending[self.cursor];
@@ -61,43 +54,16 @@ const Walk = struct {
         return entry;
     }
 
-    fn resolveParagraph(self: *Walk, p: *ast.Paragraph, entry: PendingInline) !void {
-        switch (entry) {
-            .full_single => |line| p.children = if (line.len == 0)
+    fn resolveInline(self: *Walk, entry: PendingInline) !ast.InlineRef {
+        return switch (entry) {
+            .single => |line| if (line.len == 0)
                 ast.no_inline
             else
                 try self.builder.parseSlice(line, self.link_defs),
-            .full_multi => |lines| p.children = if (lines.len == 0)
+            .multi => |lines| if (lines.len == 0)
                 ast.no_inline
             else
                 try self.builder.parseLines(lines, self.link_defs),
-            // Trivial paragraphs skip materialization; the renderer
-            // consults the private render seam via pointer match in
-            // block-walk order.
-            .trivial_single => |line| try self.trivial.append(self.allocator, .{
-                .paragraph = p,
-                .lines = .{ .single = line },
-            }),
-            .trivial_multi => |lines| try self.trivial.append(self.allocator, .{
-                .paragraph = p,
-                .lines = .{ .multi = lines },
-            }),
-        }
-    }
-
-    fn resolveHeading(self: *Walk, h: *ast.Heading, entry: PendingInline) !void {
-        h.children = switch (entry) {
-            .full_single => |line| if (line.len == 0)
-                ast.no_inline
-            else
-                try self.builder.parseSlice(line, self.link_defs),
-            .full_multi => |lines| if (lines.len == 0)
-                ast.no_inline
-            else
-                try self.builder.parseLines(lines, self.link_defs),
-            // Headings route through the full inline parser: trivial bypass
-            // applies only to paragraphs (see block_phase heading emission).
-            .trivial_single, .trivial_multi => unreachable,
         };
     }
 
@@ -106,12 +72,12 @@ const Walk = struct {
             .paragraph => |*p| {
                 if (!ast.hasInline(p.children)) {
                     const entry = self.takePending();
-                    try self.resolveParagraph(p, entry);
+                    p.children = try self.resolveInline(entry);
                 }
             },
             .heading => |*h| {
                 const entry = self.takePending();
-                try self.resolveHeading(h, entry);
+                h.children = try self.resolveInline(entry);
             },
             .blockquote => |*bq| {
                 for (bq.blocks) |*child| try self.resolveBlock(child);
@@ -129,10 +95,10 @@ const Walk = struct {
 fn buildAll(allocator: std.mem.Allocator, source: []const u8) !ParseResult {
     var builder = parse_inline.InlineBuilder.init(allocator);
     const block_doc = try block_phase.buildBlockDocument(allocator, &builder, source);
-    return resolveInlines(allocator, &builder, block_doc);
+    return resolveInlines(&builder, block_doc);
 }
 
-test "resolveInlines records trigger-free single-line paragraph in trivial_runs" {
+test "resolveInlines materialises trigger-free single-line paragraph as text node" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
@@ -140,12 +106,11 @@ test "resolveInlines records trigger-free single-line paragraph in trivial_runs"
 
     try std.testing.expectEqual(@as(usize, 1), result.blocks.len);
     try std.testing.expect(result.blocks[0] == .paragraph);
-    try std.testing.expectEqual(ast.no_inline, result.blocks[0].paragraph.children);
-
-    try std.testing.expectEqual(@as(usize, 1), result.trivial_runs.len);
-    try std.testing.expectEqual(&result.blocks[0].paragraph, result.trivial_runs[0].paragraph);
-    try std.testing.expect(result.trivial_runs[0].lines == .single);
-    try std.testing.expectEqualStrings("Plain text", result.trivial_runs[0].lines.single);
+    const head = result.blocks[0].paragraph.children;
+    try std.testing.expect(ast.hasInline(head));
+    try std.testing.expect(result.inline_nodes[head] == .text);
+    try std.testing.expectEqualStrings("Plain text", result.inline_nodes[head].text);
+    try std.testing.expectEqual(ast.no_inline, result.inline_next[head]);
 }
 
 test "resolveInlines builds inline chain when paragraph contains a trigger" {
@@ -155,7 +120,6 @@ test "resolveInlines builds inline chain when paragraph contains a trigger" {
     const result = try buildAll(arena.allocator(), "One *em* tag\n");
 
     try std.testing.expect(ast.hasInline(result.blocks[0].paragraph.children));
-    try std.testing.expectEqual(@as(usize, 0), result.trivial_runs.len);
 }
 
 test "resolveInlines produces heading with ATX children" {
@@ -177,7 +141,6 @@ test "resolveInlines produces setext heading with level 1 children" {
     try std.testing.expect(result.blocks[0] == .heading);
     try std.testing.expectEqual(@as(u8, 1), result.blocks[0].heading.level);
     try std.testing.expect(ast.hasInline(result.blocks[0].heading.children));
-    try std.testing.expectEqual(@as(usize, 0), result.trivial_runs.len);
 }
 
 test "resolveInlines produces heading nested inside blockquote" {
@@ -190,7 +153,6 @@ test "resolveInlines produces heading nested inside blockquote" {
     const inner = result.blocks[0].blockquote.blocks[0];
     try std.testing.expect(inner == .heading);
     try std.testing.expect(ast.hasInline(inner.heading.children));
-    try std.testing.expectEqual(@as(usize, 0), result.trivial_runs.len);
 }
 
 test "resolveInlines resolves forward-referencing reference link using link_defs" {
@@ -217,23 +179,25 @@ test "resolveInlines resolves forward-referencing reference link using link_defs
     try std.testing.expect(found_link);
 }
 
-test "resolveInlines stores multi-line trigger-free paragraph in trivial_runs without materializing" {
+test "resolveInlines materialises multi-line trigger-free paragraph as text + soft_break chain" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
     const result = try buildAll(arena.allocator(), "one\ntwo\n");
 
     try std.testing.expect(result.blocks[0] == .paragraph);
-    try std.testing.expectEqual(ast.no_inline, result.blocks[0].paragraph.children);
+    const head = result.blocks[0].paragraph.children;
+    try std.testing.expect(ast.hasInline(head));
 
-    try std.testing.expectEqual(@as(usize, 1), result.trivial_runs.len);
-    const run = result.trivial_runs[0];
-    try std.testing.expectEqual(&result.blocks[0].paragraph, run.paragraph);
-    try std.testing.expect(run.lines == .multi);
-    try std.testing.expectEqual(@as(usize, 2), run.lines.multi.len);
-    try std.testing.expectEqualStrings("one", run.lines.multi[0]);
-    try std.testing.expectEqualStrings("two", run.lines.multi[1]);
-    try std.testing.expectEqual(@as(usize, 0), result.inline_nodes.len);
+    const expected = [_]std.meta.Tag(ast.InlineNode){ .text, .soft_break, .text };
+    var idx: usize = 0;
+    var current = head;
+    while (ast.hasInline(current)) : (idx += 1) {
+        try std.testing.expect(idx < expected.len);
+        try std.testing.expect(std.meta.activeTag(result.inline_nodes[current]) == expected[idx]);
+        current = result.inline_next[current];
+    }
+    try std.testing.expectEqual(@as(usize, expected.len), idx);
 }
 
 test "resolveInlines builds soft_break chain when multi-line paragraph has trigger" {
@@ -291,7 +255,7 @@ test "resolveInlines walks table cells and resolves inline emphasis" {
     try std.testing.expect(saw_emphasis);
 }
 
-test "resolveInlines descends into blockquote children and records trivial paragraphs" {
+test "resolveInlines descends into blockquote children and materialises inner paragraph" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
@@ -300,12 +264,10 @@ test "resolveInlines descends into blockquote children and records trivial parag
     try std.testing.expect(result.blocks[0] == .blockquote);
     const inner = &result.blocks[0].blockquote.blocks[0];
     try std.testing.expect(inner.* == .paragraph);
-    try std.testing.expectEqual(ast.no_inline, inner.paragraph.children);
-
-    try std.testing.expectEqual(@as(usize, 1), result.trivial_runs.len);
-    try std.testing.expectEqual(&inner.paragraph, result.trivial_runs[0].paragraph);
-    try std.testing.expect(result.trivial_runs[0].lines == .single);
-    try std.testing.expectEqualStrings("inner text", result.trivial_runs[0].lines.single);
+    const head = inner.paragraph.children;
+    try std.testing.expect(ast.hasInline(head));
+    try std.testing.expect(result.inline_nodes[head] == .text);
+    try std.testing.expectEqualStrings("inner text", result.inline_nodes[head].text);
 }
 
 test "resolveInlines preserves block count across resolution" {
@@ -315,7 +277,6 @@ test "resolveInlines preserves block count across resolution" {
     const result = try buildAll(arena.allocator(), "a\n\nb\n");
 
     try std.testing.expectEqual(@as(usize, 3), result.blocks.len);
-    try std.testing.expectEqual(@as(usize, 2), result.trivial_runs.len);
 }
 
 test "resolveInlines on empty input returns empty storage" {
@@ -326,5 +287,4 @@ test "resolveInlines on empty input returns empty storage" {
 
     try std.testing.expectEqual(@as(usize, 0), result.blocks.len);
     try std.testing.expectEqual(@as(usize, 0), result.inline_nodes.len);
-    try std.testing.expectEqual(@as(usize, 0), result.trivial_runs.len);
 }

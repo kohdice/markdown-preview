@@ -13,34 +13,36 @@ const PaintResult = struct {
     output_bytes: usize,
 };
 
-pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
+
+    var arena = std.heap.ArenaAllocator.init(init.gpa);
     defer arena.deinit();
     const allocator = arena.allocator();
 
     std.debug.print("mermaid benchmark\n", .{});
 
     const flowchart_src = try makeFlowchartSource(allocator, 16);
-    try runCompile("flowchart-compile-16", flowchart_src);
-    try runPaint("flowchart-paint-16", flowchart_src);
+    try runCompile(io, "flowchart-compile-16", flowchart_src);
+    try runPaint(io, "flowchart-paint-16", flowchart_src);
 
-    try runCompile("sequence-compile-small", sequence_sample);
-    try runCompile("class-compile-small", class_sample);
-    try runCompile("er-compile-small", er_sample);
+    try runCompile(io, "sequence-compile-small", sequence_sample);
+    try runCompile(io, "class-compile-small", class_sample);
+    try runCompile(io, "er-compile-small", er_sample);
 
-    try runPaint("gitgraph-paint-small", gitgraph_sample);
-    try runPaint("xychart-paint-small", xychart_sample);
+    try runPaint(io, "gitgraph-paint-small", gitgraph_sample);
+    try runPaint(io, "xychart-paint-small", xychart_sample);
 }
 
-fn runCompile(name: []const u8, source: []const u8) !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
+fn runCompile(io: std.Io, name: []const u8, source: []const u8) !void {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
 
     var counting = bench.CountingAllocator.init(gpa.allocator());
     const allocator = counting.allocator();
 
-    const cold = try compileOnce(allocator, source, &counting);
-    const warm = try compileOnce(allocator, source, &counting);
+    const cold = try compileOnce(io, allocator, source, &counting);
+    const warm = try compileOnce(io, allocator, source, &counting);
 
     std.debug.print(
         "{s}: cold_compile={d:.3}ms cold_allocs={d} cold_bytes={d} warm_compile={d:.3}ms warm_allocs={d} warm_bytes={d}\n",
@@ -57,12 +59,13 @@ fn runCompile(name: []const u8, source: []const u8) !void {
 }
 
 fn compileOnce(
+    io: std.Io,
     allocator: std.mem.Allocator,
     source: []const u8,
     counting: *const bench.CountingAllocator,
 ) !CompileResult {
     const before = counting.snapshot();
-    var timer = try std.time.Timer.start();
+    const timer = bench.BenchTimer.start(io);
     var diagram = try mermaid.compile(allocator, source);
     const elapsed_ns = timer.read();
     const after = counting.snapshot();
@@ -75,8 +78,8 @@ fn compileOnce(
     };
 }
 
-fn runPaint(name: []const u8, source: []const u8) !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
+fn runPaint(io: std.Io, name: []const u8, source: []const u8) !void {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
 
     var counting = bench.CountingAllocator.init(gpa.allocator());
@@ -91,8 +94,8 @@ fn runPaint(name: []const u8, source: []const u8) !void {
         .ambiguous_width = .narrow,
     };
 
-    const cold = try paintOnce(allocator, &diagram, opts, &counting);
-    const warm = try paintOnce(allocator, &diagram, opts, &counting);
+    const cold = try paintOnce(io, allocator, &diagram, opts, &counting);
+    const warm = try paintOnce(io, allocator, &diagram, opts, &counting);
 
     std.debug.assert(cold.output_bytes > 0);
 
@@ -112,6 +115,7 @@ fn runPaint(name: []const u8, source: []const u8) !void {
 }
 
 fn paintOnce(
+    io: std.Io,
     allocator: std.mem.Allocator,
     diagram: *const mermaid.Diagram,
     opts: mermaid.PaintOptions,
@@ -121,7 +125,7 @@ fn paintOnce(
     var discarding: std.Io.Writer.Discarding = .init(&sink);
 
     const before = counting.snapshot();
-    var timer = try std.time.Timer.start();
+    const timer = bench.BenchTimer.start(io);
     try mermaid.paint(&discarding.writer, allocator, diagram, opts);
     const elapsed_ns = timer.read();
     const after = counting.snapshot();
@@ -140,10 +144,10 @@ fn nsToMs(ns: u64) f64 {
 fn makeFlowchartSource(allocator: std.mem.Allocator, node_count: usize) ![]u8 {
     std.debug.assert(node_count >= 2);
 
-    var out: std.ArrayListUnmanaged(u8) = .empty;
-    defer out.deinit(allocator);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    errdefer aw.deinit();
+    const writer = &aw.writer;
 
-    var writer = out.writer(allocator);
     try writer.writeAll("graph TD\n");
     for (0..node_count) |i| {
         try writer.print("    N{d}[Node {d}]\n", .{ i, i });
@@ -152,7 +156,7 @@ fn makeFlowchartSource(allocator: std.mem.Allocator, node_count: usize) ![]u8 {
         try writer.print("    N{d} --> N{d}\n", .{ i, i + 1 });
     }
 
-    return out.toOwnedSlice(allocator);
+    return aw.toOwnedSlice();
 }
 
 const sequence_sample =

@@ -2,11 +2,8 @@ const std = @import("std");
 const content_hash = @import("content_hash.zig");
 const file_watcher = @import("file_watcher.zig");
 const loop = @import("loop.zig");
-const pager = @import("pager.zig");
-const pipeline = @import("pipeline.zig");
 const raw_term = @import("../term/raw.zig");
-const render = @import("../render.zig");
-const render_buffer_mod = @import("render_buffer.zig");
+const session_mod = @import("session.zig");
 const term = @import("../term.zig");
 const ansi = term.ansi;
 const terminal = term.terminal;
@@ -19,6 +16,7 @@ const default_term_cols: usize = 80;
 const default_term_rows: usize = 24;
 
 pub const WatchOptions = struct {
+    allocator: std.mem.Allocator,
     io: std.Io,
     cwd: std.Io.Dir,
     path: []const u8,
@@ -53,22 +51,13 @@ pub fn run(opts: WatchOptions) !u8 {
         return exit_failure;
     };
 
-    var state_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer state_arena.deinit();
-
-    var renderer = render.Renderer.init(state_arena.allocator(), .{
+    var session: session_mod.WatchSession = undefined;
+    session.init(opts.allocator, .{
         .enable_ansi = opts.enable_ansi,
         .ambiguous_width = opts.ambiguous_width,
         .color_mode = opts.color_mode,
     });
-    defer renderer.deinit();
-
-    var cycle_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer cycle_arena.deinit();
-
-    var buffer: render_buffer_mod.RenderBuffer = undefined;
-    buffer.init(state_arena.allocator());
-    defer buffer.deinit();
+    defer session.deinit();
 
     var term_size = terminal.getTerminalSize(opts.stdout_file.handle) orelse terminal.TerminalSize{ .cols = default_term_cols, .rows = default_term_rows };
     var wrap_width: ?usize = if (opts.enable_ansi) term_size.cols else null;
@@ -82,11 +71,8 @@ pub fn run(opts: WatchOptions) !u8 {
     var scroll_offset: usize = 0;
     var hash: content_hash.ContentHash = .{};
 
-    var pgr = pager.Pager.init(std.heap.page_allocator);
-    defer pgr.deinit();
-
-    _ = pipeline.renderTo(opts.io, opts.cwd, opts.path, &renderer, &cycle_arena, &buffer, wrap_width, &hash);
-    pgr.displayPage(opts.stdout, &buffer, scroll_offset, term_size.rows, opts.enable_ansi, opts.color_mode);
+    _ = session.refreshFrom(opts.io, opts.cwd, opts.path, wrap_width, &hash);
+    session.pgr.displayPage(opts.stdout, &session.buffer, scroll_offset, term_size.rows, opts.enable_ansi, opts.color_mode);
 
     var watcher = file_watcher.FileWatcher.init(dir_z, name_z) catch |err| {
         try opts.stderr.print("mp: unable to watch '{s}': {s}\n", .{ opts.path, @errorName(err) });
@@ -94,7 +80,7 @@ pub fn run(opts: WatchOptions) !u8 {
     };
     defer watcher.deinit();
 
-    const exit_reason = loop.eventLoop(opts, &rt, &watcher, &renderer, &cycle_arena, &buffer, &term_size, &wrap_width, &scroll_offset, &hash, &pgr);
+    const exit_reason = loop.eventLoop(opts, &rt, &watcher, &session, &term_size, &wrap_width, &scroll_offset, &hash);
 
     return switch (exit_reason) {
         .user_quit => exit_success,

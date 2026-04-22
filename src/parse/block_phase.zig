@@ -5,7 +5,6 @@ const parse_block = @import("block.zig");
 const parse_link = @import("link.zig");
 const parse_table = @import("table.zig");
 const parse_inline = @import("inline.zig");
-const inline_trigger = @import("inline_trigger.zig");
 const inline_work_mod = @import("inline_work.zig");
 
 const BlockCursor = block_cursor.BlockCursor;
@@ -16,8 +15,7 @@ pub const BlockDocument = struct {
     blocks: []ast.BlockNode,
     /// Paragraph / heading inline work in depth-first block-walk order. The
     /// inline phase consumes it in the same order, so no back-pointer is
-    /// required. Trigger-free entries are tagged `.trivial_*` so the inline
-    /// phase can skip the full parser.
+    /// required.
     pending_inline: []const PendingInline,
     /// Table-cell inline work; tables carry stable `target` pointers so they
     /// don't fit the walk-order contract of `pending_inline`.
@@ -110,10 +108,7 @@ const Walker = struct {
                         .children = ast.no_inline,
                     },
                 });
-                // Headings always take the full inline parser path: the
-                // trivial-bypass side channel is reserved for paragraphs,
-                // which are what benchmarks showed benefit from it.
-                try self.pushPending(.{ .full_single = heading.content });
+                try self.pushPending(.{ .single = heading.content });
                 continue;
             }
 
@@ -180,7 +175,7 @@ const Walker = struct {
             if (!is_first) {
                 if (parse_block.setextHeadingUnderline(line)) |underline| {
                     block_cursor.advanceParagraphLine(cursor, paragraph_line.lazy);
-                    try self.emitParagraphPending(false);
+                    try self.emitParagraphPending();
                     return .{
                         .heading = .{
                             .level = underline.level,
@@ -200,28 +195,19 @@ const Walker = struct {
             is_first = false;
         }
 
-        const is_trivial = self.paragraph_lines.items.len > 0 and
-            inline_trigger.isTrivial(self.paragraph_lines.items);
-        try self.emitParagraphPending(is_trivial);
+        try self.emitParagraphPending();
         return .{ .paragraph = .{ .children = ast.no_inline } };
     }
 
-    fn emitParagraphPending(self: *Walker, is_trivial: bool) !void {
+    fn emitParagraphPending(self: *Walker) !void {
         const lines = self.paragraph_lines.items;
         if (lines.len == 1) {
-            const single = lines[0];
-            try self.pushPending(if (is_trivial)
-                .{ .trivial_single = single }
-            else
-                .{ .full_single = single });
+            try self.pushPending(.{ .single = lines[0] });
             return;
         }
 
         const lines_copy = try self.allocator.dupe([]const u8, lines);
-        try self.pushPending(if (is_trivial)
-            .{ .trivial_multi = lines_copy }
-        else
-            .{ .full_multi = lines_copy });
+        try self.pushPending(.{ .multi = lines_copy });
     }
 
     fn peekLinkDefinition(self: *Walker, cursor: *const BlockCursor) anyerror!?LinkDefinitionMatch {
@@ -603,7 +589,7 @@ fn buildForTest(allocator: std.mem.Allocator, source: []const u8) !TestBuild {
     return .{ .block_doc = block_doc, .builder = builder };
 }
 
-test "buildBlockDocument queues trigger-free paragraph as trivial_single pending" {
+test "buildBlockDocument queues single-line paragraph as single pending" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
@@ -614,11 +600,11 @@ test "buildBlockDocument queues trigger-free paragraph as trivial_single pending
     try std.testing.expectEqual(ast.no_inline, block_doc.blocks[0].paragraph.children);
 
     try std.testing.expectEqual(@as(usize, 1), block_doc.pending_inline.len);
-    try std.testing.expect(block_doc.pending_inline[0] == .trivial_single);
-    try std.testing.expectEqualStrings("Hello world", block_doc.pending_inline[0].trivial_single);
+    try std.testing.expect(block_doc.pending_inline[0] == .single);
+    try std.testing.expectEqualStrings("Hello world", block_doc.pending_inline[0].single);
 }
 
-test "buildBlockDocument ATX heading always uses full inline parse" {
+test "buildBlockDocument ATX heading queues single pending entry for the heading text" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
@@ -633,10 +619,10 @@ test "buildBlockDocument ATX heading always uses full inline parse" {
 
     try std.testing.expectEqual(@as(usize, 0), block_doc.inline_work.len);
     try std.testing.expectEqual(@as(usize, 2), block_doc.pending_inline.len);
-    try std.testing.expect(block_doc.pending_inline[0] == .full_single);
-    try std.testing.expectEqualStrings("Title", block_doc.pending_inline[0].full_single);
-    try std.testing.expect(block_doc.pending_inline[1] == .trivial_single);
-    try std.testing.expectEqualStrings("Body", block_doc.pending_inline[1].trivial_single);
+    try std.testing.expect(block_doc.pending_inline[0] == .single);
+    try std.testing.expectEqualStrings("Title", block_doc.pending_inline[0].single);
+    try std.testing.expect(block_doc.pending_inline[1] == .single);
+    try std.testing.expectEqualStrings("Body", block_doc.pending_inline[1].single);
 }
 
 test "buildBlockDocument setext heading records multi-line heading pending_inline entry" {
@@ -650,13 +636,13 @@ test "buildBlockDocument setext heading records multi-line heading pending_inlin
     try std.testing.expectEqual(@as(u8, 1), block_doc.blocks[0].heading.level);
 
     try std.testing.expectEqual(@as(usize, 1), block_doc.pending_inline.len);
-    try std.testing.expect(block_doc.pending_inline[0] == .full_multi);
-    try std.testing.expectEqual(@as(usize, 2), block_doc.pending_inline[0].full_multi.len);
-    try std.testing.expectEqualStrings("Alpha", block_doc.pending_inline[0].full_multi[0]);
-    try std.testing.expectEqualStrings("Beta", block_doc.pending_inline[0].full_multi[1]);
+    try std.testing.expect(block_doc.pending_inline[0] == .multi);
+    try std.testing.expectEqual(@as(usize, 2), block_doc.pending_inline[0].multi.len);
+    try std.testing.expectEqualStrings("Alpha", block_doc.pending_inline[0].multi[0]);
+    try std.testing.expectEqualStrings("Beta", block_doc.pending_inline[0].multi[1]);
 }
 
-test "buildBlockDocument paragraph with inline trigger records full_multi pending" {
+test "buildBlockDocument paragraph with inline trigger records multi pending" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
@@ -665,11 +651,11 @@ test "buildBlockDocument paragraph with inline trigger records full_multi pendin
     try std.testing.expect(block_doc.blocks[0] == .paragraph);
     try std.testing.expectEqual(ast.no_inline, block_doc.blocks[0].paragraph.children);
     try std.testing.expectEqual(@as(usize, 1), block_doc.pending_inline.len);
-    try std.testing.expect(block_doc.pending_inline[0] == .full_multi);
-    try std.testing.expectEqual(@as(usize, 2), block_doc.pending_inline[0].full_multi.len);
+    try std.testing.expect(block_doc.pending_inline[0] == .multi);
+    try std.testing.expectEqual(@as(usize, 2), block_doc.pending_inline[0].multi.len);
 }
 
-test "buildBlockDocument blockquote trigger-free inner paragraph queues trivial_multi pending" {
+test "buildBlockDocument blockquote inner paragraph queues multi pending" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
@@ -682,8 +668,8 @@ test "buildBlockDocument blockquote trigger-free inner paragraph queues trivial_
     try std.testing.expectEqual(ast.no_inline, bq.blocks[0].paragraph.children);
 
     try std.testing.expectEqual(@as(usize, 1), block_doc.pending_inline.len);
-    try std.testing.expect(block_doc.pending_inline[0] == .trivial_multi);
-    const lines = block_doc.pending_inline[0].trivial_multi;
+    try std.testing.expect(block_doc.pending_inline[0] == .multi);
+    const lines = block_doc.pending_inline[0].multi;
     try std.testing.expectEqual(@as(usize, 2), lines.len);
     try std.testing.expectEqualStrings("inner one", lines[0]);
     try std.testing.expectEqualStrings("inner two", lines[1]);
@@ -768,7 +754,7 @@ test "buildBlockDocument captures fenced code block with language and content" {
     try std.testing.expectEqual(@as(usize, 0), block_doc.inline_work.len);
 }
 
-test "buildBlockDocument emits list with trigger-free item paragraphs as trivial_single pending" {
+test "buildBlockDocument emits list with item paragraphs as single pending" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
@@ -790,8 +776,8 @@ test "buildBlockDocument emits list with trigger-free item paragraphs as trivial
         try std.testing.expectEqual(ast.no_inline, item.blocks[0].paragraph.children);
 
         const pending = block_doc.pending_inline[idx];
-        try std.testing.expect(pending == .trivial_single);
-        try std.testing.expectEqualStrings(want, pending.trivial_single);
+        try std.testing.expect(pending == .single);
+        try std.testing.expectEqualStrings(want, pending.single);
     }
 }
 

@@ -19,8 +19,10 @@ const RenderResult = struct {
     output_bytes: usize,
 };
 
-pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
+
+    var arena = std.heap.ArenaAllocator.init(init.gpa);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -36,18 +38,18 @@ pub fn main() !void {
 
     std.debug.print("render benchmark\n", .{});
     for (scenarios) |scenario| {
-        try runScenario(scenario);
+        try runScenario(io, scenario);
     }
 }
 
-fn runScenario(scenario: Scenario) !void {
-    var parse_gpa = std.heap.DebugAllocator(.{}){};
+fn runScenario(io: std.Io, scenario: Scenario) !void {
+    var parse_gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = parse_gpa.deinit();
 
     var doc = try parse(parse_gpa.allocator(), .{ .borrowed = scenario.input });
     defer doc.deinit();
 
-    var render_gpa = std.heap.DebugAllocator(.{}){};
+    var render_gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = render_gpa.deinit();
 
     var counting = bench.CountingAllocator.init(render_gpa.allocator());
@@ -57,8 +59,8 @@ fn runScenario(scenario: Scenario) !void {
     });
     defer renderer.deinit();
 
-    const cold = try renderOnce(&renderer, &doc, &counting);
-    const warm = try renderOnce(&renderer, &doc, &counting);
+    const cold = try renderOnce(io, &renderer, &doc, &counting);
+    const warm = try renderOnce(io, &renderer, &doc, &counting);
 
     std.debug.print(
         "{s}: cold_render={d:.3}ms cold_allocs={d} cold_resizes={d} cold_bytes={d} warm_render={d:.3}ms warm_allocs={d} warm_resizes={d} warm_bytes={d} output_bytes={d}\n",
@@ -78,15 +80,16 @@ fn runScenario(scenario: Scenario) !void {
 }
 
 fn renderOnce(
+    io: std.Io,
     renderer: *Renderer,
     doc: anytype,
-    counting: *const bench.CountingAllocator,
+    counting: *bench.CountingAllocator,
 ) !RenderResult {
     var sink: [512]u8 = undefined;
     var discarding: std.Io.Writer.Discarding = .init(&sink);
     const before = counting.snapshot();
-    var timer = try std.time.Timer.start();
-    try renderer.render(&discarding.writer, doc, null);
+    const timer = bench.BenchTimer.start(io);
+    try renderer.render(&discarding.writer, doc, null, counting.allocator());
     const after = counting.snapshot();
     return .{
         .elapsed_ns = timer.read(),
@@ -115,22 +118,22 @@ fn makeAsciiTableDocumentWithPrefix(
     col_count: usize,
     prefix: []const u8,
 ) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
-    defer out.deinit(allocator);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    errdefer aw.deinit();
+    const writer = &aw.writer;
 
-    var writer = out.writer(allocator);
     for (0..table_count) |table_index| {
-        try appendAsciiTable(&writer, prefix, table_index, row_count, col_count);
+        try appendAsciiTable(writer, prefix, table_index, row_count, col_count);
         if (table_index + 1 < table_count) {
             try writer.writeByte('\n');
         }
     }
 
-    return out.toOwnedSlice(allocator);
+    return aw.toOwnedSlice();
 }
 
 fn appendAsciiTable(
-    writer: *std.ArrayListUnmanaged(u8).Writer,
+    writer: *std.Io.Writer,
     prefix: []const u8,
     table_index: usize,
     row_count: usize,
@@ -155,13 +158,13 @@ fn makeCjkTableDocument(
     row_count: usize,
     col_count: usize,
 ) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
-    defer out.deinit(allocator);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    errdefer aw.deinit();
+    const writer = &aw.writer;
 
-    var writer = out.writer(allocator);
     for (0..table_count) |table_index| {
-        try writeHeader(&writer, "", table_index, col_count, true);
-        try writeDelimiter(&writer, "", col_count);
+        try writeHeader(writer, "", table_index, col_count, true);
+        try writeDelimiter(writer, "", col_count);
         for (0..row_count) |row_index| {
             try writer.writeAll("|");
             for (0..col_count) |col_index| {
@@ -174,11 +177,11 @@ fn makeCjkTableDocument(
         }
     }
 
-    return out.toOwnedSlice(allocator);
+    return aw.toOwnedSlice();
 }
 
 fn writeHeader(
-    writer: *std.ArrayListUnmanaged(u8).Writer,
+    writer: *std.Io.Writer,
     prefix: []const u8,
     table_index: usize,
     col_count: usize,
@@ -197,7 +200,7 @@ fn writeHeader(
 }
 
 fn writeDelimiter(
-    writer: *std.ArrayListUnmanaged(u8).Writer,
+    writer: *std.Io.Writer,
     prefix: []const u8,
     col_count: usize,
 ) !void {

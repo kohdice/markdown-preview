@@ -2,7 +2,7 @@ const std = @import("std");
 const parse = @import("parse.zig");
 const render = @import("render.zig");
 const term = @import("term.zig");
-const watch = @import("watch.zig");
+const watch = @import("watch/orchestrator.zig");
 const source_loader = @import("source_loader.zig");
 const ansi = term.ansi;
 const width = term.width;
@@ -90,6 +90,7 @@ pub fn run(opts: RunOptions) !u8 {
 pub fn executeCommand(opts: RunOptions, command: Command) !u8 {
     return switch (command) {
         .watch => |cmd| watch.run(.{
+            .allocator = opts.allocator,
             .io = opts.io,
             .cwd = opts.cwd,
             .path = cmd.path,
@@ -111,8 +112,8 @@ fn renderOnce(opts: RunOptions, path: []const u8) !u8 {
         return exit_failure;
     };
 
-    var output = try parse.parse(opts.allocator, source);
-    defer output.deinit();
+    var doc = try parse.parse(opts.allocator, source);
+    defer doc.deinit();
 
     var renderer = render.Renderer.init(opts.allocator, .{
         .enable_ansi = opts.enable_ansi,
@@ -121,7 +122,7 @@ fn renderOnce(opts: RunOptions, path: []const u8) !u8 {
     });
     defer renderer.deinit();
 
-    try renderer.render(opts.stdout, &output, opts.wrap_width);
+    try renderer.render(opts.stdout, &doc, opts.wrap_width, opts.allocator);
     return exit_success;
 }
 

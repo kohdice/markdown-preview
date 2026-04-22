@@ -128,12 +128,12 @@ test "parse with mapped source unmaps the buffer on deinit" {
     try std.testing.expect(source == .mapped);
 
     var doc = try parse.parse(std.testing.allocator, source);
-    try std.testing.expect(doc.parsed.document.source_storage == .mapped);
-    try std.testing.expectEqual(@as(usize, threshold), doc.parsed.document.source.len);
+    try std.testing.expect(doc.source_storage == .mapped);
+    try std.testing.expectEqual(@as(usize, threshold), doc.source.len);
 
     doc.deinit();
-    try std.testing.expect(doc.parsed.document.source_storage == .borrowed);
-    try std.testing.expectEqual(@as(usize, 0), doc.parsed.document.source.len);
+    try std.testing.expect(doc.source_storage == .borrowed);
+    try std.testing.expectEqual(@as(usize, 0), doc.source.len);
 }
 
 test "parse with owned source can free buffer with a different allocator than AST storage" {

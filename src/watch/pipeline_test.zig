@@ -45,7 +45,7 @@ test "render cycle produces line offsets matching naive newline scan" {
     buffer.init(allocator);
     defer buffer.deinit();
 
-    try renderer.render(&buffer.writer, &doc, null);
+    try renderer.render(&buffer.writer, &doc, null, allocator);
     try buffer.writer.flush();
 
     const expected = try naiveLineOffsets(allocator, buffer.buffered());
@@ -70,7 +70,7 @@ test "render cycle of empty document produces no line offsets" {
     buffer.init(allocator);
     defer buffer.deinit();
 
-    try renderer.render(&buffer.writer, &doc, null);
+    try renderer.render(&buffer.writer, &doc, null, allocator);
     try buffer.writer.flush();
 
     const expected = try naiveLineOffsets(allocator, buffer.buffered());

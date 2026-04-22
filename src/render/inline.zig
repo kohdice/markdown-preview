@@ -223,42 +223,6 @@ pub fn writeInlineChain(
     try ansi.flushStyle(writer, &sgr_state);
 }
 
-/// Emit a trigger-free paragraph's raw lines as `text + soft_break + ... +
-/// text` without materialising an inline chain. Used by the render session's
-/// trivial-paragraph fast path; `isTrivial` in the parser already rejects
-/// non-final lines with 2+ trailing spaces (hard-break) so any lone trailing
-/// space here is insignificant whitespace per CommonMark 0.31.2 §2.1 and is
-/// trimmed.
-pub fn writePlainLines(
-    ctx: *const RenderContext,
-    writer: *std.Io.Writer,
-    lines: []const []const u8,
-    base_style: ansi.TextStyle,
-) !void {
-    var sgr_state: ansi.StyledState = .{};
-    var visitor: WriteVisitor = .{
-        .ctx = ctx,
-        .writer = writer,
-        .sgr_state = &sgr_state,
-        .current_style = base_style,
-        .width_total = {},
-        .ambiguous = {},
-    };
-    for (lines, 0..) |line, idx| {
-        const is_final = idx + 1 == lines.len;
-        const content = if (is_final) line else trimTrivialTrailingSpaces(line);
-        if (content.len > 0) try visitor.onText(content);
-        if (!is_final) try visitor.onSoftBreak();
-    }
-    try ansi.flushStyle(writer, &sgr_state);
-}
-
-fn trimTrivialTrailingSpaces(line: []const u8) []const u8 {
-    var end = line.len;
-    while (end > 0 and line[end - 1] == ' ') end -= 1;
-    return line[0..end];
-}
-
 pub fn writeAndMeasureInlineChain(
     ctx: *const RenderContext,
     writer: *std.Io.Writer,

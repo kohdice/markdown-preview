@@ -284,6 +284,7 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/backing_allocator.zig", .needs_tree_sitter = false },
         .{ .path = "src/stdout_buffer.zig", .needs_tree_sitter = false },
         .{ .path = "src/write_error.zig", .needs_tree_sitter = false },
+        .{ .path = "bench/bench_support.zig", .needs_tree_sitter = false },
     };
 
     for (test_roots) |test_root| {
@@ -306,6 +307,18 @@ pub fn build(b: *std.Build) void {
         });
         const run_unit_tests = b.addRunArtifact(unit_tests);
         test_step.dependOn(&run_unit_tests.step);
+    }
+
+    const bench_compile_targets = [_]*std.Build.Step.Compile{
+        bench_exe,
+        bench_render_exe,
+        bench_mermaid_exe,
+        bench_watch_buffer_exe,
+        bench_pipeline_exe,
+        bench_vs_cat_exe,
+    };
+    for (bench_compile_targets) |bench_compile_target| {
+        test_step.dependOn(&bench_compile_target.step);
     }
 }
 

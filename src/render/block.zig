@@ -3,7 +3,6 @@ const ansi = @import("../term/ansi.zig");
 const theme = @import("../term/theme.zig");
 const width = @import("../term/width.zig");
 const ast = @import("../ast.zig");
-const parse_mod = @import("../parse.zig");
 const render_inline = @import("inline.zig");
 const prefix_writer = @import("prefix_writer.zig");
 const render_table = @import("table.zig");
@@ -58,28 +57,12 @@ pub const RenderSession = struct {
     prefix_stack: *prefix_writer.PrefixStack,
     scratch: std.mem.Allocator,
     persistent_allocator: std.mem.Allocator,
+    cycle_allocator: std.mem.Allocator,
     table_scratch: *render_table.TableScratch,
     wrap_writer: *width.WrapWriter,
     wrap_width: ?usize,
     highlighter: *highlight.Highlighter,
-    mermaid_cache: *std.AutoHashMapUnmanaged(u64, mermaid.Diagram),
-    /// Render-only side channel: paragraph pointer → raw lines for
-    /// trigger-free paragraphs, in block-walk emission order. Lives on the
-    /// session because it is not part of the public parse/render contract
-    /// (`ParsedDocument` / `RenderContext` do not expose it).
-    trivial_runs: []const parse_mod.TrivialRun = &.{},
-    trivial_cursor: usize = 0,
-
-    /// Peek the next trivial run and consume it iff it belongs to `p`. Used
-    /// by every paragraph-visit site to decide between the raw-lines fast
-    /// path and the regular inline chain.
-    fn takeTrivialParagraph(self: *RenderSession, p: *const ast.Paragraph) ?parse_mod.TrivialRun.Lines {
-        if (self.trivial_cursor >= self.trivial_runs.len) return null;
-        const run = self.trivial_runs[self.trivial_cursor];
-        if (run.paragraph != p) return null;
-        self.trivial_cursor += 1;
-        return run.lines;
-    }
+    mermaid_cache: *std.StringHashMapUnmanaged(mermaid.Diagram),
 
     fn pushSegment(self: *RenderSession, segment: prefix_writer.PrefixStack.Segment) !void {
         // PrefixWriter applies the active stack at line-start; unflushed bytes
@@ -152,35 +135,16 @@ pub const RenderSession = struct {
         if (pushed) try self.pushIndent(continuation_indent);
         defer if (pushed) self.popPrefix() catch {};
 
-        const trivial_lines = self.takeTrivialParagraph(paragraph);
-
         if (self.wrap_width) |wrap_w| {
             const available = if (wrap_w > continuation_indent)
                 wrap_w - continuation_indent
             else
                 1;
             self.wrap_writer.reset(self.writer, available);
-            try self.writeBody(&self.wrap_writer.writer, paragraph, trivial_lines, base_style);
+            try render_inline.writeInlineChain(self.ctx, &self.wrap_writer.writer, paragraph.children, base_style);
             try self.wrap_writer.finish();
         } else {
-            try self.writeBody(self.writer, paragraph, trivial_lines, base_style);
-        }
-    }
-
-    fn writeBody(
-        self: *RenderSession,
-        writer: *std.Io.Writer,
-        paragraph: *const ast.Paragraph,
-        trivial_lines: ?parse_mod.TrivialRun.Lines,
-        base_style: ansi.TextStyle,
-    ) !void {
-        if (trivial_lines) |lines| {
-            switch (lines) {
-                .single => |line| try render_inline.writePlainLines(self.ctx, writer, &.{line}, base_style),
-                .multi => |multi| try render_inline.writePlainLines(self.ctx, writer, multi, base_style),
-            }
-        } else {
-            try render_inline.writeInlineChain(self.ctx, writer, paragraph.children, base_style);
+            try render_inline.writeInlineChain(self.ctx, self.writer, paragraph.children, base_style);
         }
     }
 
@@ -325,7 +289,7 @@ pub const RenderSession = struct {
         try self.pushIndent(content_col);
         errdefer self.popPrefix() catch {};
 
-        try self.writeBody(self.writer, paragraph, self.takeTrivialParagraph(paragraph), style);
+        try render_inline.writeInlineChain(self.ctx, self.writer, paragraph.children, style);
 
         try self.popPrefix();
     }
@@ -368,16 +332,12 @@ pub const RenderSession = struct {
             .ambiguous_width = self.ctx.ambiguous_width,
             .color_mode = self.ctx.color_mode,
         };
-        const key = std.hash.XxHash3.hash(0, content);
-        const diagram_ptr = if (self.mermaid_cache.getPtr(key)) |cached|
-            cached
-        else blk: {
-            var compiled = try mermaid.compile(self.persistent_allocator, content);
-            errdefer compiled.deinit();
-            try self.mermaid_cache.put(self.persistent_allocator, key, compiled);
-            break :blk self.mermaid_cache.getPtr(key).?;
-        };
-        try mermaid.paint(self.writer, self.scratch, diagram_ptr, opts);
+        const gop = try self.mermaid_cache.getOrPut(self.cycle_allocator, content);
+        if (!gop.found_existing) {
+            errdefer _ = self.mermaid_cache.remove(content);
+            gop.value_ptr.* = try mermaid.compile(self.cycle_allocator, content);
+        }
+        try mermaid.paint(self.writer, self.scratch, gop.value_ptr, opts);
     }
 
     fn writeMermaidFallback(self: *RenderSession, content: []const u8, err: mermaid.PaintError) !void {
@@ -491,7 +451,7 @@ test "RenderSession.write renders heading content without document trailing newl
         .palette = theme.default_palette,
         .syn_palette = theme.default_syntax_palette,
     };
-    var cache: std.AutoHashMapUnmanaged(u64, mermaid.Diagram) = .empty;
+    var cache: std.StringHashMapUnmanaged(mermaid.Diagram) = .empty;
     defer cache.deinit(allocator);
 
     var session: RenderSession = .{
@@ -500,6 +460,7 @@ test "RenderSession.write renders heading content without document trailing newl
         .prefix_stack = &prefix_stack,
         .scratch = allocator,
         .persistent_allocator = allocator,
+        .cycle_allocator = allocator,
         .table_scratch = &table_scratch,
         .wrap_writer = &wrap,
         .wrap_width = null,

@@ -149,13 +149,13 @@ test "wide table border near 2048-byte batch threshold produces correct output" 
 
 fn renderWithDiscarding(
     renderer: *render.Renderer,
-    output: *const parse.ParseOutput,
-    counting: *const bench.CountingAllocator,
+    output: *const ast.Document,
+    counting: *bench.CountingAllocator,
 ) !bench.CounterSnapshot {
     var sink: [256]u8 = undefined;
     var discarding: std.Io.Writer.Discarding = .init(&sink);
     const before = counting.snapshot();
-    try renderer.render(&discarding.writer, output, null);
+    try renderer.render(&discarding.writer, output, null, counting.allocator());
     const after = counting.snapshot();
     return bench.CounterSnapshot.diff(after, before);
 }

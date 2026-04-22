@@ -4,7 +4,6 @@ pub const RenderBuffer = struct {
     allocator: std.mem.Allocator,
     bytes: std.ArrayListUnmanaged(u8) = .empty,
     line_offsets: std.ArrayListUnmanaged(usize) = .empty,
-    row_hashes: std.ArrayListUnmanaged(u64) = .empty,
     pending_newline: bool = false,
     writer: std.Io.Writer,
 
@@ -27,13 +26,11 @@ pub const RenderBuffer = struct {
     pub fn deinit(self: *RenderBuffer) void {
         self.bytes.deinit(self.allocator);
         self.line_offsets.deinit(self.allocator);
-        self.row_hashes.deinit(self.allocator);
     }
 
     pub fn reset(self: *RenderBuffer) void {
         self.bytes.clearRetainingCapacity();
         self.line_offsets.clearRetainingCapacity();
-        self.row_hashes.clearRetainingCapacity();
         self.pending_newline = false;
     }
 
@@ -58,22 +55,6 @@ pub const RenderBuffer = struct {
         var line = data[start..end];
         if (line.len > 0 and line[line.len - 1] == '\n') line = line[0 .. line.len - 1];
         return line;
-    }
-
-    pub fn rowHash(self: *const RenderBuffer, idx: usize) u64 {
-        if (idx < self.row_hashes.items.len) return self.row_hashes.items[idx];
-        return std.hash.XxHash3.hash(0, self.row(idx));
-    }
-
-    pub fn finalize(self: *RenderBuffer) !void {
-        try self.writer.flush();
-        const total = self.totalLines();
-        self.row_hashes.clearRetainingCapacity();
-        try self.row_hashes.ensureTotalCapacity(self.allocator, total);
-        var i: usize = 0;
-        while (i < total) : (i += 1) {
-            self.row_hashes.appendAssumeCapacity(std.hash.XxHash3.hash(0, self.row(i)));
-        }
     }
 
     fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
@@ -190,63 +171,6 @@ test "RenderBuffer treats three lines with trailing newline as three lines" {
     try std.testing.expectEqual(@as(usize, 0), rb.lineOffsets()[0]);
     try std.testing.expectEqual(@as(usize, 2), rb.lineOffsets()[1]);
     try std.testing.expectEqual(@as(usize, 4), rb.lineOffsets()[2]);
-}
-
-test "RenderBuffer.rowHash changes with content and matches for identical content" {
-    var rb_a: RenderBuffer = undefined;
-    rb_a.init(std.testing.allocator);
-    defer rb_a.deinit();
-    var rb_b: RenderBuffer = undefined;
-    rb_b.init(std.testing.allocator);
-    defer rb_b.deinit();
-
-    try rb_a.writer.writeAll("hello\nworld\n");
-    try rb_a.writer.flush();
-    try rb_b.writer.writeAll("hello\nworld\n");
-    try rb_b.writer.flush();
-
-    try std.testing.expectEqual(rb_a.rowHash(0), rb_b.rowHash(0));
-    try std.testing.expectEqual(rb_a.rowHash(1), rb_b.rowHash(1));
-    try std.testing.expect(rb_a.rowHash(0) != rb_a.rowHash(1));
-}
-
-test "RenderBuffer.finalize populates rowHash cache so subsequent reads are O(1)" {
-    var rb: RenderBuffer = undefined;
-    rb.init(std.testing.allocator);
-    defer rb.deinit();
-
-    try rb.writer.writeAll("alpha\nbeta\ngamma\n");
-    try rb.finalize();
-
-    try std.testing.expectEqual(@as(usize, 3), rb.row_hashes.items.len);
-    try std.testing.expectEqual(rb.row_hashes.items[0], rb.rowHash(0));
-    try std.testing.expectEqual(rb.row_hashes.items[1], rb.rowHash(1));
-    try std.testing.expectEqual(rb.row_hashes.items[2], rb.rowHash(2));
-}
-
-test "RenderBuffer.flush does not populate rowHash cache" {
-    var rb: RenderBuffer = undefined;
-    rb.init(std.testing.allocator);
-    defer rb.deinit();
-
-    try rb.writer.writeAll("alpha\nbeta\n");
-    try rb.writer.flush();
-
-    try std.testing.expectEqual(@as(usize, 0), rb.row_hashes.items.len);
-    try std.testing.expectEqual(@as(usize, 2), rb.totalLines());
-}
-
-test "RenderBuffer.reset clears the rowHash cache" {
-    var rb: RenderBuffer = undefined;
-    rb.init(std.testing.allocator);
-    defer rb.deinit();
-
-    try rb.writer.writeAll("alpha\nbeta\n");
-    try rb.finalize();
-    try std.testing.expectEqual(@as(usize, 2), rb.row_hashes.items.len);
-
-    rb.reset();
-    try std.testing.expectEqual(@as(usize, 0), rb.row_hashes.items.len);
 }
 
 test "RenderBuffer.row returns bytes of the requested line without its trailing newline" {
