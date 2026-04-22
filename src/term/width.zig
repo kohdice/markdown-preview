@@ -6,16 +6,10 @@ const ESC = 0x1b;
 const SOFT_HYPHEN = 0x00AD;
 const ZWSP = 0x200B;
 const ZWNJ = 0x200C;
-const ZWJ = 0x200D;
+pub const ZWJ = 0x200D;
 const WORD_JOINER = 0x2060;
 const BOM = 0xFEFF;
 
-/// Interpretation of Unicode East Asian Width "Ambiguous" (UAX #11 category A).
-/// Most modern terminals (Ghostty default, Alacritty, WezTerm, iTerm2) treat
-/// Ambiguous characters as 1 column wide. CJK-legacy terminal configurations
-/// (Vim `set ambiwidth=double`, Apple Terminal east-asian-wide setting, classic
-/// xterm-cjk) treat them as 2 columns. Callers pick the interpretation that
-/// matches their target terminal.
 pub const AmbiguousWidth = enum { narrow, wide };
 
 const multibyte_charsets = [_][]const u8{
@@ -89,9 +83,6 @@ fn parseLocale(locale: []const u8) ?LocaleInfo {
     };
 }
 
-/// Heuristic East Asian width detection modeled after `mattn/go-runewidth`.
-/// The parser is intentionally conservative: malformed locale strings fall back
-/// to narrow instead of assuming CJK behavior.
 pub fn classifyLocale(locale: []const u8) AmbiguousWidth {
     if (std.mem.eql(u8, locale, "C")) return .narrow;
     if (std.mem.eql(u8, locale, "POSIX")) return .narrow;
@@ -163,13 +154,6 @@ fn isAsciiPrintable(text: []const u8) bool {
     return true;
 }
 
-/// ASCII printable characters are width 1, CJK characters are width 2,
-/// ANSI escape sequences are width 0, control characters are width 0.
-/// Combining characters and variation selectors are width 0.
-/// ZWJ emoji sequences (e.g., family emoji) are counted as a single
-/// width-2 unit instead of summing each component.
-/// The `ambiguous` argument controls how East Asian Width Ambiguous
-/// characters are sized — see `AmbiguousWidth`.
 pub fn displayWidth(text: []const u8, ambiguous: AmbiguousWidth) usize {
     if (isAsciiPrintable(text)) return text.len;
 
@@ -802,12 +786,57 @@ pub const WrapWriter = struct {
     }
 };
 
-fn isEmoji(cp: u21) bool {
+pub fn isEmoji(cp: u21) bool {
     if (cp >= 0x1F300 and cp <= 0x1F9FF) return true;
     if (cp >= 0x1FA00 and cp <= 0x1FAFF) return true;
     if (cp >= 0x2600 and cp <= 0x26FF) return true;
     if (cp >= 0x2700 and cp <= 0x27BF) return true;
     return false;
+}
+
+fn isEmojiPresentation(cp: u21) bool {
+    return switch (cp) {
+        0x231A,
+        0x231B,
+        0x23E9...0x23EC,
+        0x23F0,
+        0x23F3,
+        0x25FD...0x25FE,
+        0x2614...0x2615,
+        0x2648...0x2653,
+        0x267F,
+        0x2693,
+        0x26A1,
+        0x26AA...0x26AB,
+        0x26BD...0x26BE,
+        0x26C4...0x26C5,
+        0x26CE,
+        0x26D4,
+        0x26EA,
+        0x26F2...0x26F3,
+        0x26F5,
+        0x26FA,
+        0x26FD,
+        0x2705,
+        0x270A...0x270B,
+        0x2728,
+        0x274C,
+        0x274E,
+        0x2753...0x2755,
+        0x2757,
+        0x2795...0x2797,
+        0x27B0,
+        0x27BF,
+        0x2B1B...0x2B1C,
+        0x2B50,
+        0x2B55,
+        0x1F004,
+        0x1F0CF,
+        0x1F18E,
+        0x1F191...0x1F19A,
+        => true,
+        else => false,
+    };
 }
 
 const eaw_ambiguous_ranges = [_][2]u21{
@@ -1069,7 +1098,7 @@ fn inSortedRanges(cp: u21, ranges: []const CodepointRange) bool {
     return std.sort.binarySearch(CodepointRange, ranges, cp, rangeCompare) != null;
 }
 
-fn codepointWidth(cp: u21, ambiguous: AmbiguousWidth) usize {
+pub fn codepointWidth(cp: u21, ambiguous: AmbiguousWidth) usize {
     if (cp < 0x100) {
         if (cp < 0x20) return 0;
         if (cp == 0x7F) return 0;
@@ -1084,6 +1113,7 @@ fn codepointWidth(cp: u21, ambiguous: AmbiguousWidth) usize {
     }
 
     if (inSortedRanges(cp, &zero_width_ranges)) return 0;
+    if (isEmojiPresentation(cp)) return 2;
     if (inSortedRanges(cp, &wide_ranges)) return 2;
 
     if (isEastAsianAmbiguous(cp)) {
@@ -1142,6 +1172,10 @@ test "control characters are width 0" {
 
 test "emoji is width 2" {
     try std.testing.expectEqual(@as(usize, 2), displayWidth("🚀", .narrow));
+}
+
+test "BMP emoji presentation symbol is width 2" {
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("✅", .narrow));
 }
 
 test "sliceToWidth basic" {
