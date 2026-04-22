@@ -308,6 +308,22 @@ pub fn build(b: *std.Build) void {
         const run_unit_tests = b.addRunArtifact(unit_tests);
         test_step.dependOn(&run_unit_tests.step);
     }
+
+    // Compile-only check for bench executables so Zig API regressions
+    // (removed std.time.Timer, ArrayList writer, std.process.Init shape,
+    // Child.Term tag casing) surface in `zig build test` rather than only
+    // when someone manually invokes the bench-* steps.
+    const bench_compile_targets = [_]*std.Build.Step.Compile{
+        bench_exe,
+        bench_render_exe,
+        bench_mermaid_exe,
+        bench_watch_buffer_exe,
+        bench_pipeline_exe,
+        bench_vs_cat_exe,
+    };
+    for (bench_compile_targets) |bench_compile_target| {
+        test_step.dependOn(&bench_compile_target.step);
+    }
 }
 
 const TreeSitterAttach = struct {
