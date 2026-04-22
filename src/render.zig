@@ -1,6 +1,5 @@
 const std = @import("std");
 const ast = @import("ast.zig");
-const parse = @import("parse.zig");
 const term = @import("term.zig");
 const ansi = term.ansi;
 const highlight = term.highlight;
@@ -51,7 +50,7 @@ pub const Renderer = struct {
     pub fn render(
         self: *Renderer,
         writer: *std.Io.Writer,
-        output: *const parse.ParseOutput,
+        doc: *const ast.Document,
         wrap_width: ?usize,
         cycle_allocator: std.mem.Allocator,
     ) !void {
@@ -73,7 +72,7 @@ pub const Renderer = struct {
         wrap_writer.init(writer, 0, self.opts.ambiguous_width, self.persistent_allocator, &self.wrap_line_buf);
 
         const ctx: render_context.RenderContext = .{
-            .doc = &output.parsed.document,
+            .doc = doc,
             .enable_ansi = self.opts.enable_ansi,
             .ambiguous_width = self.opts.ambiguous_width,
             .palette = self.palette,
@@ -92,11 +91,10 @@ pub const Renderer = struct {
             .table_scratch = &self.table_scratch,
             .wrap_writer = &wrap_writer,
             .mermaid_cache = &mermaid_cache,
-            .trivial_runs = output.trivial_runs,
         };
 
-        try session.write(output.parsed.document.blocks);
-        if (output.parsed.document.has_trailing_newline) try prefix_w.writer.writeByte('\n');
+        try session.write(doc.blocks);
+        if (doc.has_trailing_newline) try prefix_w.writer.writeByte('\n');
         try prefix_w.writer.flush();
     }
 };
@@ -113,7 +111,6 @@ test {
     _ = @import("render/table_test.zig");
     _ = @import("render/code_test.zig");
     _ = @import("render/mermaid_cache_test.zig");
-    _ = @import("render/paragraph_bypass_parity_test.zig");
     _ = @import("render/highlight_color_bypass_parity_test.zig");
     _ = @import("render/color_mode_propagation_test.zig");
 }

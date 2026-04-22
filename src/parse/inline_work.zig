@@ -13,30 +13,25 @@ pub const InlineWork = struct {
 };
 
 /// Queued paragraph / heading inline work. The block walk records one entry
-/// per non-trivial block and the inline phase consumes them in the same
-/// depth-first order, so no back-pointer is needed. The `.trivial_*` variants
-/// are a hint from the block walker: the input contains no inline triggers,
-/// so the inline phase can synthesize the text + soft_break chain directly
-/// without running the full inline parser.
+/// per paragraph / heading and the inline phase consumes them in the same
+/// depth-first order, so no back-pointer is needed.
 pub const PendingInline = union(enum) {
-    full_single: []const u8,
-    full_multi: []const []const u8,
-    trivial_single: []const u8,
-    trivial_multi: []const []const u8,
+    single: []const u8,
+    multi: []const []const u8,
 };
 
-test "PendingInline.full_single carries the line verbatim" {
-    const entry: PendingInline = .{ .full_single = "hello" };
-    try std.testing.expect(entry == .full_single);
-    try std.testing.expectEqualStrings("hello", entry.full_single);
+test "PendingInline.single carries the line verbatim" {
+    const entry: PendingInline = .{ .single = "hello" };
+    try std.testing.expect(entry == .single);
+    try std.testing.expectEqualStrings("hello", entry.single);
 }
 
-test "PendingInline.trivial_multi carries the lines slice verbatim" {
+test "PendingInline.multi carries the lines slice verbatim" {
     const lines = [_][]const u8{ "alpha", "beta" };
-    const entry: PendingInline = .{ .trivial_multi = &lines };
-    try std.testing.expect(entry == .trivial_multi);
-    try std.testing.expectEqual(@as(usize, 2), entry.trivial_multi.len);
-    try std.testing.expectEqualStrings("alpha", entry.trivial_multi[0]);
+    const entry: PendingInline = .{ .multi = &lines };
+    try std.testing.expect(entry == .multi);
+    try std.testing.expectEqual(@as(usize, 2), entry.multi.len);
+    try std.testing.expectEqualStrings("alpha", entry.multi[0]);
 }
 
 test "InlineWork.Input carries table cell slice verbatim" {

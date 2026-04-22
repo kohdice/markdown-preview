@@ -112,8 +112,8 @@ fn renderOnce(opts: RunOptions, path: []const u8) !u8 {
         return exit_failure;
     };
 
-    var output = try parse.parse(opts.allocator, source);
-    defer output.deinit();
+    var doc = try parse.parse(opts.allocator, source);
+    defer doc.deinit();
 
     var renderer = render.Renderer.init(opts.allocator, .{
         .enable_ansi = opts.enable_ansi,
@@ -122,7 +122,7 @@ fn renderOnce(opts: RunOptions, path: []const u8) !u8 {
     });
     defer renderer.deinit();
 
-    try renderer.render(opts.stdout, &output, opts.wrap_width, opts.allocator);
+    try renderer.render(opts.stdout, &doc, opts.wrap_width, opts.allocator);
     return exit_success;
 }
 

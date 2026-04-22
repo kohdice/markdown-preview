@@ -17,14 +17,10 @@ pub const RenderFixture = struct {
     inline_nodes: std.ArrayListUnmanaged(ast.InlineNode) = .empty,
     inline_next: std.ArrayListUnmanaged(ast.InlineRef) = .empty,
     blocks: std.ArrayListUnmanaged(ast.BlockNode) = .empty,
-    output: parse.ParseOutput = .{
-        .parsed = .{
-            .document = .{
-                .blocks = &.{},
-                .link_defs = .{},
-                .has_trailing_newline = false,
-            },
-        },
+    output: ast.Document = .{
+        .blocks = &.{},
+        .link_defs = .{},
+        .has_trailing_newline = false,
     },
 
     const State = enum {
@@ -323,24 +319,19 @@ pub const RenderFixture = struct {
         self.arena = null;
 
         self.output = .{
-            .parsed = .{
-                .document = .{
-                    .source = "",
-                    .source_storage = .borrowed,
-                    .inline_nodes = inline_nodes,
-                    .inline_next = inline_next,
-                    .blocks = blocks,
-                    .link_defs = .{},
-                    .has_trailing_newline = has_trailing_newline,
-                    .storage = .{ .arena = arena },
-                },
-            },
-            .trivial_runs = &.{},
+            .source = "",
+            .source_storage = .borrowed,
+            .inline_nodes = inline_nodes,
+            .inline_next = inline_next,
+            .blocks = blocks,
+            .link_defs = .{},
+            .has_trailing_newline = has_trailing_newline,
+            .storage = .{ .arena = arena },
         };
         self.state = .finished;
     }
 
-    pub fn document(self: *const RenderFixture) FixtureError!*const parse.ParseOutput {
+    pub fn document(self: *const RenderFixture) FixtureError!*const ast.Document {
         if (self.state != .finished) return error.FixtureNotFinished;
         return &self.output;
     }
@@ -362,7 +353,7 @@ pub const TestRenderOptions = struct {
 
 pub fn renderDocumentToOwnedSlice(
     allocator: std.mem.Allocator,
-    parse_output: *const parse.ParseOutput,
+    parse_output: *const ast.Document,
     opts: TestRenderOptions,
 ) ![]u8 {
     var output: std.Io.Writer.Allocating = .init(allocator);
@@ -405,6 +396,6 @@ test "RenderFixture supports empty inline chains via ast.no_inline" {
     try fixture.finish(false);
 
     const rendered = try fixture.document();
-    try std.testing.expectEqual(@as(usize, 0), rendered.parsed.document.inline_nodes.len);
-    try std.testing.expectEqual(ast.no_inline, rendered.parsed.document.blocks[0].paragraph.children);
+    try std.testing.expectEqual(@as(usize, 0), rendered.inline_nodes.len);
+    try std.testing.expectEqual(ast.no_inline, rendered.blocks[0].paragraph.children);
 }

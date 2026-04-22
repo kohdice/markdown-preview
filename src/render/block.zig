@@ -3,7 +3,6 @@ const ansi = @import("../term/ansi.zig");
 const theme = @import("../term/theme.zig");
 const width = @import("../term/width.zig");
 const ast = @import("../ast.zig");
-const parse_mod = @import("../parse.zig");
 const render_inline = @import("inline.zig");
 const prefix_writer = @import("prefix_writer.zig");
 const render_table = @import("table.zig");
@@ -64,20 +63,6 @@ pub const RenderSession = struct {
     wrap_width: ?usize,
     highlighter: *highlight.Highlighter,
     mermaid_cache: *std.StringHashMapUnmanaged(mermaid.Diagram),
-    /// Render-only side channel: paragraph pointer → raw lines for
-    /// trigger-free paragraphs, in block-walk emission order. Lives on the
-    /// session because it is not part of the public parse/render contract
-    /// (`ParsedDocument` / `RenderContext` do not expose it).
-    trivial_runs: []const parse_mod.TrivialRun = &.{},
-    trivial_cursor: usize = 0,
-
-    fn takeTrivialParagraph(self: *RenderSession, p: *const ast.Paragraph) ?parse_mod.TrivialRun.Lines {
-        if (self.trivial_cursor >= self.trivial_runs.len) return null;
-        const run = self.trivial_runs[self.trivial_cursor];
-        if (run.paragraph != p) return null;
-        self.trivial_cursor += 1;
-        return run.lines;
-    }
 
     fn pushSegment(self: *RenderSession, segment: prefix_writer.PrefixStack.Segment) !void {
         // PrefixWriter applies the active stack at line-start; unflushed bytes
@@ -150,35 +135,16 @@ pub const RenderSession = struct {
         if (pushed) try self.pushIndent(continuation_indent);
         defer if (pushed) self.popPrefix() catch {};
 
-        const trivial_lines = self.takeTrivialParagraph(paragraph);
-
         if (self.wrap_width) |wrap_w| {
             const available = if (wrap_w > continuation_indent)
                 wrap_w - continuation_indent
             else
                 1;
             self.wrap_writer.reset(self.writer, available);
-            try self.writeBody(&self.wrap_writer.writer, paragraph, trivial_lines, base_style);
+            try render_inline.writeInlineChain(self.ctx, &self.wrap_writer.writer, paragraph.children, base_style);
             try self.wrap_writer.finish();
         } else {
-            try self.writeBody(self.writer, paragraph, trivial_lines, base_style);
-        }
-    }
-
-    fn writeBody(
-        self: *RenderSession,
-        writer: *std.Io.Writer,
-        paragraph: *const ast.Paragraph,
-        trivial_lines: ?parse_mod.TrivialRun.Lines,
-        base_style: ansi.TextStyle,
-    ) !void {
-        if (trivial_lines) |lines| {
-            switch (lines) {
-                .single => |line| try render_inline.writePlainLines(self.ctx, writer, &.{line}, base_style),
-                .multi => |multi| try render_inline.writePlainLines(self.ctx, writer, multi, base_style),
-            }
-        } else {
-            try render_inline.writeInlineChain(self.ctx, writer, paragraph.children, base_style);
+            try render_inline.writeInlineChain(self.ctx, self.writer, paragraph.children, base_style);
         }
     }
 
@@ -323,7 +289,7 @@ pub const RenderSession = struct {
         try self.pushIndent(content_col);
         errdefer self.popPrefix() catch {};
 
-        try self.writeBody(self.writer, paragraph, self.takeTrivialParagraph(paragraph), style);
+        try render_inline.writeInlineChain(self.ctx, self.writer, paragraph.children, style);
 
         try self.popPrefix();
     }
