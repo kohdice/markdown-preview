@@ -224,11 +224,10 @@ pub fn writeInlineChain(
 }
 
 /// Emit a trigger-free paragraph's raw lines as `text + soft_break + ... +
-/// text` without materialising an inline chain. Used by the render session's
-/// trivial-paragraph fast path; `isTrivial` in the parser already rejects
-/// non-final lines with 2+ trailing spaces (hard-break) so any lone trailing
-/// space here is insignificant whitespace per CommonMark 0.31.2 §2.1 and is
-/// trimmed.
+/// text` without materialising an inline chain. `isTrivial` in the parser
+/// already rejects non-final lines with 2+ trailing spaces (hard-break) so
+/// any lone trailing space here is insignificant whitespace per CommonMark
+/// 0.31.2 §2.1 and is trimmed.
 pub fn writePlainLines(
     ctx: *const RenderContext,
     writer: *std.Io.Writer,

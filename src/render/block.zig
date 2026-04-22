@@ -71,9 +71,6 @@ pub const RenderSession = struct {
     trivial_runs: []const parse_mod.TrivialRun = &.{},
     trivial_cursor: usize = 0,
 
-    /// Peek the next trivial run and consume it iff it belongs to `p`. Used
-    /// by every paragraph-visit site to decide between the raw-lines fast
-    /// path and the regular inline chain.
     fn takeTrivialParagraph(self: *RenderSession, p: *const ast.Paragraph) ?parse_mod.TrivialRun.Lines {
         if (self.trivial_cursor >= self.trivial_runs.len) return null;
         const run = self.trivial_runs[self.trivial_cursor];
