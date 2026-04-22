@@ -43,7 +43,7 @@ test "markdown_preview.renderFile reads fixture from disk and renders via the fa
     try std.testing.expectEqualStrings("Hello\n\nplain body\n", rendered);
 }
 
-test "markdown_preview.renderSource applies wrap_width to trivial paragraphs" {
+test "markdown_preview.renderSource applies wrap_width to plain paragraphs" {
     const allocator = std.testing.allocator;
     const source = "alpha beta gamma delta epsilon\n";
 

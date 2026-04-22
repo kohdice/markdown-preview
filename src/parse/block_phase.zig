@@ -589,7 +589,7 @@ fn buildForTest(allocator: std.mem.Allocator, source: []const u8) !TestBuild {
     return .{ .block_doc = block_doc, .builder = builder };
 }
 
-test "buildBlockDocument queues trigger-free paragraph as trivial_single pending" {
+test "buildBlockDocument queues single-line paragraph as single pending" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 

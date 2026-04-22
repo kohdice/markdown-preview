@@ -131,7 +131,7 @@ test "renderSource writes rendered markdown for heading and list" {
     try std.testing.expectEqualStrings("Title\n\n• item\n", buf.writer.buffered());
 }
 
-test "renderSource honors wrap_width for trivial paragraph" {
+test "renderSource honors wrap_width for plain paragraph" {
     const allocator = std.testing.allocator;
     var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();

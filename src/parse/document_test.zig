@@ -1118,7 +1118,7 @@ test "parseDocument paragraph with hard break produces hard_break node" {
     try std.testing.expectEqualStrings("bar", inlineNodeAt(&doc, children, 2).text);
 }
 
-test "parseDocument trivial multi-line paragraph builds soft_break chain via fast path" {
+test "parseDocument multi-line paragraph builds text + soft_break chain" {
     const allocator = std.testing.allocator;
     const input = "foo\nbar\n";
 
