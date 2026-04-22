@@ -1,83 +1,53 @@
 const std = @import("std");
+const bench = @import("bench_support");
 const render = @import("../render.zig");
 const helpers = @import("ast_helpers_test.zig");
 
-const simple_flowchart = "flowchart LR\n  A --> B\n";
-
-test "Renderer starts with an empty mermaid cache" {
-    const allocator = std.testing.allocator;
-    var renderer = render.Renderer.init(allocator, .{});
-    defer renderer.deinit();
-    try std.testing.expectEqual(@as(usize, 0), renderer.mermaid_cache.count());
-}
-
-test "Rendering a mermaid block populates the cache" {
-    const allocator = std.testing.allocator;
-    var fixture = helpers.RenderFixture.init(allocator);
+fn renderMermaidFromFixture(
+    fixture_allocator: std.mem.Allocator,
+    renderer: *render.Renderer,
+    cycle_allocator: std.mem.Allocator,
+    mermaid_source: []const u8,
+) !void {
+    var fixture = helpers.RenderFixture.init(fixture_allocator);
     defer fixture.deinit();
-
-    try fixture.appendBlock(try fixture.codeFence("```mermaid", "```", "mermaid", simple_flowchart));
+    try fixture.appendBlock(try fixture.codeFence("```mermaid", "```", "mermaid", mermaid_source));
     try fixture.finish(false);
 
-    var renderer = render.Renderer.init(allocator, .{});
-    defer renderer.deinit();
-
-    var discarding: std.Io.Writer.Discarding = .init(&.{});
-    try renderer.render(&discarding.writer, try fixture.document(), null);
-
-    try std.testing.expectEqual(@as(usize, 1), renderer.mermaid_cache.count());
+    var sink: [256]u8 = undefined;
+    var discarding: std.Io.Writer.Discarding = .init(&sink);
+    try renderer.render(&discarding.writer, try fixture.document(), null, cycle_allocator);
 }
 
-test "Rendering identical mermaid twice keeps cache size at one" {
-    const allocator = std.testing.allocator;
-    var fixture = helpers.RenderFixture.init(allocator);
-    defer fixture.deinit();
+test "renderer memory is bounded across many mermaid render cycles" {
+    var gpa = std.heap.DebugAllocator(.{}){};
+    defer _ = gpa.deinit();
+    var counting = bench.CountingAllocator.init(gpa.allocator());
 
-    try fixture.appendBlock(try fixture.codeFence("```mermaid", "```", "mermaid", simple_flowchart));
-    try fixture.finish(false);
+    var state_arena = std.heap.ArenaAllocator.init(counting.allocator());
+    defer state_arena.deinit();
+    var cycle_arena = std.heap.ArenaAllocator.init(counting.allocator());
+    defer cycle_arena.deinit();
 
-    var renderer = render.Renderer.init(allocator, .{});
+    var renderer = render.Renderer.init(state_arena.allocator(), .{});
     defer renderer.deinit();
 
-    var discarding: std.Io.Writer.Discarding = .init(&.{});
-    const doc = try fixture.document();
-    try renderer.render(&discarding.writer, doc, null);
-    try renderer.render(&discarding.writer, doc, null);
+    const cycle_count: usize = 20;
+    var src_buf: [128]u8 = undefined;
+    var baseline: usize = 0;
 
-    try std.testing.expectEqual(@as(usize, 1), renderer.mermaid_cache.count());
-}
+    var i: usize = 0;
+    while (i < cycle_count) : (i += 1) {
+        const src = try std.fmt.bufPrint(&src_buf, "flowchart LR\n  A{d} --> B{d}\n", .{ i, i });
+        try renderMermaidFromFixture(std.testing.allocator, &renderer, cycle_arena.allocator(), src);
+        _ = cycle_arena.reset(.retain_capacity);
 
-test "Distinct mermaid contents produce distinct cache entries" {
-    const allocator = std.testing.allocator;
-    var fixture = helpers.RenderFixture.init(allocator);
-    defer fixture.deinit();
-
-    try fixture.appendBlock(try fixture.codeFence("```mermaid", "```", "mermaid", simple_flowchart));
-    try fixture.appendBlock(try fixture.codeFence("```mermaid", "```", "mermaid", "flowchart LR\n  X --> Y\n"));
-    try fixture.finish(false);
-
-    var renderer = render.Renderer.init(allocator, .{});
-    defer renderer.deinit();
-
-    var discarding: std.Io.Writer.Discarding = .init(&.{});
-    try renderer.render(&discarding.writer, try fixture.document(), null);
-
-    try std.testing.expectEqual(@as(usize, 2), renderer.mermaid_cache.count());
-}
-
-test "Invalid mermaid does not populate cache" {
-    const allocator = std.testing.allocator;
-    var fixture = helpers.RenderFixture.init(allocator);
-    defer fixture.deinit();
-
-    try fixture.appendBlock(try fixture.codeFence("```mermaid", "```", "mermaid", "not a real diagram\n"));
-    try fixture.finish(false);
-
-    var renderer = render.Renderer.init(allocator, .{});
-    defer renderer.deinit();
-
-    var discarding: std.Io.Writer.Discarding = .init(&.{});
-    try renderer.render(&discarding.writer, try fixture.document(), null);
-
-    try std.testing.expectEqual(@as(usize, 0), renderer.mermaid_cache.count());
+        // Scratch and arena first-node sizes stabilise after the first two
+        // cycles; pin the budget then. 1 KiB of slack tolerates arena churn
+        // while still catching a per-cycle Diagram-sized leak.
+        if (i == 1) baseline = counting.live_bytes;
+        if (i > 1) {
+            try std.testing.expect(counting.live_bytes <= baseline + 1024);
+        }
+    }
 }
