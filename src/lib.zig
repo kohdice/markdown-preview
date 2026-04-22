@@ -78,6 +78,7 @@ pub fn watchFile(init: std.process.Init, request: WatchRequest) !u8 {
     const options = request.render_options orelse try detectedRenderOptions(io, stdout_file, init.environ_map);
 
     const exit_code = watch_orchestrator.run(.{
+        .allocator = request.allocator,
         .io = io,
         .cwd = request.cwd,
         .path = request.path,
@@ -108,6 +109,10 @@ fn detectedRenderOptions(
         .ambiguous_width = term_terminal.detectAmbiguousWidthFromEnv(environ_map),
         .color_mode = term_terminal.detectColorModeFromEnv(environ_map),
     };
+}
+
+test {
+    _ = @import("watch/session.zig");
 }
 
 test "renderSource writes rendered markdown for heading and list" {

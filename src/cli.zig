@@ -90,6 +90,7 @@ pub fn run(opts: RunOptions) !u8 {
 pub fn executeCommand(opts: RunOptions, command: Command) !u8 {
     return switch (command) {
         .watch => |cmd| watch.run(.{
+            .allocator = opts.allocator,
             .io = opts.io,
             .cwd = opts.cwd,
             .path = cmd.path,

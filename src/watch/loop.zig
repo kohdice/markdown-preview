@@ -5,10 +5,8 @@ const file_watcher = @import("file_watcher.zig");
 const input = @import("input.zig");
 const orchestrator = @import("orchestrator.zig");
 const pager = @import("pager.zig");
-const pipeline = @import("pipeline.zig");
 const raw_term = @import("../term/raw.zig");
-const render = @import("../render.zig");
-const render_buffer_mod = @import("render_buffer.zig");
+const session_mod = @import("session.zig");
 const term = @import("../term.zig");
 const terminal = term.terminal;
 
@@ -24,14 +22,11 @@ pub fn eventLoop(
     opts: orchestrator.WatchOptions,
     rt: *raw_term.RawTerm,
     watcher: *file_watcher.FileWatcher,
-    renderer: *render.Renderer,
-    cycle_arena: *std.heap.ArenaAllocator,
-    buffer: *render_buffer_mod.RenderBuffer,
+    session: *session_mod.WatchSession,
     term_size: *terminal.TerminalSize,
     wrap_width: *?usize,
     scroll_offset: *usize,
     hash: *content_hash.ContentHash,
-    pgr: *pager.Pager,
 ) ExitReason {
     const watcher_idx: usize = 0;
     const stdin_idx: usize = 1;
@@ -61,8 +56,8 @@ pub fn eventLoop(
                     scroll_offset.* = 0;
                     debounce.clear();
                     hash.reset();
-                    pgr.invalidate();
-                    _ = pipeline.renderTo(opts.io, opts.cwd, opts.path, renderer, cycle_arena, buffer, wrap_width.*, hash);
+                    session.pgr.invalidate();
+                    _ = session.refreshFrom(opts.io, opts.cwd, opts.path, wrap_width.*, hash);
                     needs_redisplay = true;
                 } else {
                     return .signal_exit;
@@ -83,7 +78,7 @@ pub fn eventLoop(
             for (key_buf[0..n]) |byte| {
                 const action = input_state.feedByte(byte);
                 if (action == .quit) return .user_quit;
-                if (pager.applyAction(action, scroll_offset, buffer.totalLines(), term_size.rows)) {
+                if (pager.applyAction(action, scroll_offset, session.buffer.totalLines(), term_size.rows)) {
                     needs_redisplay = true;
                 }
             }
@@ -92,12 +87,12 @@ pub fn eventLoop(
         if (debounce.expired(elapsedNs(opts.io, timer_start))) {
             debounce.clear();
             scroll_offset.* = 0;
-            const outcome = pipeline.renderTo(opts.io, opts.cwd, opts.path, renderer, cycle_arena, buffer, wrap_width.*, hash);
+            const outcome = session.refreshFrom(opts.io, opts.cwd, opts.path, wrap_width.*, hash);
             if (outcome != .skipped_unchanged) needs_redisplay = true;
         }
 
         if (needs_redisplay) {
-            pgr.displayPage(opts.stdout, buffer, scroll_offset.*, term_size.rows, opts.enable_ansi, opts.color_mode);
+            session.pgr.displayPage(opts.stdout, &session.buffer, scroll_offset.*, term_size.rows, opts.enable_ansi, opts.color_mode);
         }
     }
 }
