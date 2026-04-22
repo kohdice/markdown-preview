@@ -73,7 +73,7 @@ fn ensureHyperfine(io: std.Io) !void {
         return error.HyperfineMissing;
     };
     switch (term) {
-        .Exited => |code| if (code != 0) return error.HyperfineMissing,
+        .exited => |code| if (code != 0) return error.HyperfineMissing,
         else => return error.HyperfineMissing,
     }
 }
@@ -114,7 +114,7 @@ fn runHyperfine(
     });
     const term = try child.wait(io);
     switch (term) {
-        .Exited => |code| if (code != 0) {
+        .exited => |code| if (code != 0) {
             std.debug.print("hyperfine exited with status {d} for {s}\n", .{ code, path });
             return error.HyperfineFailed;
         },
