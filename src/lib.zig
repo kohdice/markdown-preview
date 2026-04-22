@@ -26,7 +26,7 @@ pub fn renderSource(
     var renderer = render_mod.Renderer.init(allocator, options);
     defer renderer.deinit();
 
-    try renderer.render(writer, &doc, wrap_width);
+    try renderer.render(writer, &doc, wrap_width, allocator);
 }
 
 pub fn renderFile(
@@ -45,7 +45,7 @@ pub fn renderFile(
     var renderer = render_mod.Renderer.init(allocator, options);
     defer renderer.deinit();
 
-    try renderer.render(writer, &doc, wrap_width);
+    try renderer.render(writer, &doc, wrap_width, allocator);
 }
 
 /// Semantic watch-mode request. The facade opens stdio and detects the

@@ -83,13 +83,13 @@ fn renderOnce(
     io: std.Io,
     renderer: *Renderer,
     doc: anytype,
-    counting: *const bench.CountingAllocator,
+    counting: *bench.CountingAllocator,
 ) !RenderResult {
     var sink: [512]u8 = undefined;
     var discarding: std.Io.Writer.Discarding = .init(&sink);
     const before = counting.snapshot();
     const timer = bench.BenchTimer.start(io);
-    try renderer.render(&discarding.writer, doc, null);
+    try renderer.render(&discarding.writer, doc, null, counting.allocator());
     const after = counting.snapshot();
     return .{
         .elapsed_ns = timer.read(),

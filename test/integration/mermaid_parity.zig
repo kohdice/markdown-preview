@@ -12,7 +12,7 @@ fn renderFence(allocator: std.mem.Allocator, source: []const u8, enable_ansi: bo
         .ambiguous_width = .narrow,
     });
     defer renderer.deinit();
-    try renderer.render(&output.writer, &doc, null);
+    try renderer.render(&output.writer, &doc, null, allocator);
     var list = output.toArrayList();
     return list.toOwnedSlice(allocator);
 }

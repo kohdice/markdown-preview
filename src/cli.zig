@@ -122,7 +122,7 @@ fn renderOnce(opts: RunOptions, path: []const u8) !u8 {
     });
     defer renderer.deinit();
 
-    try renderer.render(opts.stdout, &output, opts.wrap_width);
+    try renderer.render(opts.stdout, &output, opts.wrap_width, opts.allocator);
     return exit_success;
 }
 

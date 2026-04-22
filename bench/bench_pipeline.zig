@@ -137,7 +137,7 @@ fn runOnce(
 
     const render_before = render_counting.snapshot();
     const render_timer = bench.BenchTimer.start(io);
-    try renderer.render(&discarding.writer, &doc, null);
+    try renderer.render(&discarding.writer, &doc, null, render_counting.allocator());
     try discarding.writer.flush();
     const render_ns = render_timer.read();
     const render_after = render_counting.snapshot();

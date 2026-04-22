@@ -58,11 +58,12 @@ pub const RenderSession = struct {
     prefix_stack: *prefix_writer.PrefixStack,
     scratch: std.mem.Allocator,
     persistent_allocator: std.mem.Allocator,
+    cycle_allocator: std.mem.Allocator,
     table_scratch: *render_table.TableScratch,
     wrap_writer: *width.WrapWriter,
     wrap_width: ?usize,
     highlighter: *highlight.Highlighter,
-    mermaid_cache: *std.AutoHashMapUnmanaged(u64, mermaid.Diagram),
+    mermaid_cache: *std.StringHashMapUnmanaged(mermaid.Diagram),
     /// Render-only side channel: paragraph pointer → raw lines for
     /// trigger-free paragraphs, in block-walk emission order. Lives on the
     /// session because it is not part of the public parse/render contract
@@ -368,16 +369,12 @@ pub const RenderSession = struct {
             .ambiguous_width = self.ctx.ambiguous_width,
             .color_mode = self.ctx.color_mode,
         };
-        const key = std.hash.XxHash3.hash(0, content);
-        const diagram_ptr = if (self.mermaid_cache.getPtr(key)) |cached|
-            cached
-        else blk: {
-            var compiled = try mermaid.compile(self.persistent_allocator, content);
-            errdefer compiled.deinit();
-            try self.mermaid_cache.put(self.persistent_allocator, key, compiled);
-            break :blk self.mermaid_cache.getPtr(key).?;
-        };
-        try mermaid.paint(self.writer, self.scratch, diagram_ptr, opts);
+        const gop = try self.mermaid_cache.getOrPut(self.cycle_allocator, content);
+        if (!gop.found_existing) {
+            errdefer _ = self.mermaid_cache.remove(content);
+            gop.value_ptr.* = try mermaid.compile(self.cycle_allocator, content);
+        }
+        try mermaid.paint(self.writer, self.scratch, gop.value_ptr, opts);
     }
 
     fn writeMermaidFallback(self: *RenderSession, content: []const u8, err: mermaid.PaintError) !void {
@@ -491,7 +488,7 @@ test "RenderSession.write renders heading content without document trailing newl
         .palette = theme.default_palette,
         .syn_palette = theme.default_syntax_palette,
     };
-    var cache: std.AutoHashMapUnmanaged(u64, mermaid.Diagram) = .empty;
+    var cache: std.StringHashMapUnmanaged(mermaid.Diagram) = .empty;
     defer cache.deinit(allocator);
 
     var session: RenderSession = .{
@@ -500,6 +497,7 @@ test "RenderSession.write renders heading content without document trailing newl
         .prefix_stack = &prefix_stack,
         .scratch = allocator,
         .persistent_allocator = allocator,
+        .cycle_allocator = allocator,
         .table_scratch = &table_scratch,
         .wrap_writer = &wrap,
         .wrap_width = null,

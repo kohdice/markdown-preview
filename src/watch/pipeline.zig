@@ -47,7 +47,7 @@ pub fn renderTo(
     };
     defer doc.deinit();
 
-    renderer.render(&buffer.writer, &doc, wrap_width) catch {
+    renderer.render(&buffer.writer, &doc, wrap_width, cycle_alloc) catch {
         buffer.writer.flush() catch {};
         hash.reset();
         return .error_inline;

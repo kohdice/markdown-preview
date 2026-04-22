@@ -23,7 +23,7 @@ fn renderOnce(
     var renderer = render.Renderer.init(allocator, .{ .enable_ansi = false });
     defer renderer.deinit();
 
-    try renderer.render(&output.writer, &doc, wrap_width);
+    try renderer.render(&output.writer, &doc, wrap_width, allocator);
     var list = output.toArrayList();
     return list.toOwnedSlice(allocator);
 }
@@ -53,7 +53,7 @@ fn expectBypassParityWithAnsi(input: []const u8) !void {
     defer out_a.deinit();
     var renderer_a = render.Renderer.init(allocator, .{ .enable_ansi = true });
     defer renderer_a.deinit();
-    try renderer_a.render(&out_a.writer, &doc_a, null);
+    try renderer_a.render(&out_a.writer, &doc_a, null, allocator);
     var list_a = out_a.toArrayList();
     const bytes_with = try list_a.toOwnedSlice(allocator);
     defer allocator.free(bytes_with);
@@ -66,7 +66,7 @@ fn expectBypassParityWithAnsi(input: []const u8) !void {
     defer out_b.deinit();
     var renderer_b = render.Renderer.init(allocator, .{ .enable_ansi = true });
     defer renderer_b.deinit();
-    try renderer_b.render(&out_b.writer, &doc_b, null);
+    try renderer_b.render(&out_b.writer, &doc_b, null, allocator);
     var list_b = out_b.toArrayList();
     const bytes_without = try list_b.toOwnedSlice(allocator);
     defer allocator.free(bytes_without);

@@ -58,7 +58,7 @@ fn runScenario(io: std.Io, scenario: Scenario) !void {
     var sink: [512]u8 = undefined;
     var discarding: std.Io.Writer.Discarding = .init(&sink);
     timer = bench.BenchTimer.start(io);
-    try renderer.render(&discarding.writer, &doc, wrap_width);
+    try renderer.render(&discarding.writer, &doc, wrap_width, allocator);
     const render_elapsed_ns = timer.read();
     const after_render = counting.snapshot();
 
