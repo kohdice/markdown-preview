@@ -18,8 +18,10 @@ const Run = struct {
     total_lines: usize,
 };
 
-pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
+
+    var arena = std.heap.ArenaAllocator.init(init.gpa);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -35,8 +37,8 @@ pub fn main() !void {
         const payload = try makePayload(allocator, scenario.total_bytes, scenario.line_length);
         defer allocator.free(payload);
 
-        const cold = try runOnce(scenario, payload);
-        const warm = try runOnce(scenario, payload);
+        const cold = try runOnce(io, scenario, payload);
+        const warm = try runOnce(io, scenario, payload);
 
         const mib = @as(f64, @floatFromInt(scenario.total_bytes)) / (1024.0 * 1024.0);
         std.debug.print(
@@ -57,14 +59,14 @@ pub fn main() !void {
     }
 }
 
-fn runOnce(scenario: Scenario, payload: []const u8) !Run {
+fn runOnce(io: std.Io, scenario: Scenario, payload: []const u8) !Run {
     var counting = bench.CountingAllocator.init(std.heap.smp_allocator);
     var rb: RenderBuffer = undefined;
     rb.init(counting.allocator());
     defer rb.deinit();
 
     const before = counting.snapshot();
-    var timer = try std.time.Timer.start();
+    const timer = bench.BenchTimer.start(io);
 
     var pos: usize = 0;
     while (pos < payload.len) {

@@ -11,8 +11,10 @@ const Scenario = struct {
     wrap_width: ?usize = null,
 };
 
-pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
+
+    var arena = std.heap.ArenaAllocator.init(init.gpa);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -31,19 +33,19 @@ pub fn main() !void {
 
     std.debug.print("inline benchmark\n", .{});
     for (scenarios) |scenario| {
-        try runScenario(scenario);
+        try runScenario(io, scenario);
     }
 }
 
-fn runScenario(scenario: Scenario) !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
+fn runScenario(io: std.Io, scenario: Scenario) !void {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
 
     var counting = bench.CountingAllocator.init(gpa.allocator());
     const allocator = counting.allocator();
 
     const before_parse = counting.snapshot();
-    var timer = try std.time.Timer.start();
+    var timer = bench.BenchTimer.start(io);
     var doc = try parse(allocator, .{ .borrowed = scenario.input });
     defer doc.deinit();
     const parse_elapsed_ns = timer.read();
@@ -55,7 +57,7 @@ fn runScenario(scenario: Scenario) !void {
 
     var sink: [512]u8 = undefined;
     var discarding: std.Io.Writer.Discarding = .init(&sink);
-    timer.reset();
+    timer = bench.BenchTimer.start(io);
     try renderer.render(&discarding.writer, &doc, wrap_width);
     const render_elapsed_ns = timer.read();
     const after_render = counting.snapshot();
@@ -136,10 +138,9 @@ fn makeNestedInlineInput(allocator: std.mem.Allocator, depth: usize) ![]u8 {
 fn makeManyParagraphsInput(allocator: std.mem.Allocator, count: usize) ![]u8 {
     var out: std.ArrayListUnmanaged(u8) = .empty;
     defer out.deinit(allocator);
-    var writer = out.writer(allocator);
 
     for (0..count) |i| {
-        try writer.print("Paragraph {d} with **bold** and *italic* text.\n\n", .{i});
+        try out.print(allocator, "Paragraph {d} with **bold** and *italic* text.\n\n", .{i});
     }
 
     return out.toOwnedSlice(allocator);
@@ -148,12 +149,11 @@ fn makeManyParagraphsInput(allocator: std.mem.Allocator, count: usize) ![]u8 {
 fn makeManyHeadingsInput(allocator: std.mem.Allocator, count: usize) ![]u8 {
     var out: std.ArrayListUnmanaged(u8) = .empty;
     defer out.deinit(allocator);
-    var writer = out.writer(allocator);
 
     for (0..count) |i| {
         const level = (i % 6) + 1;
         for (0..level) |_| try out.append(allocator, '#');
-        try writer.print(" Heading {d}\n\n", .{i});
+        try out.print(allocator, " Heading {d}\n\n", .{i});
     }
 
     return out.toOwnedSlice(allocator);
@@ -162,11 +162,10 @@ fn makeManyHeadingsInput(allocator: std.mem.Allocator, count: usize) ![]u8 {
 fn makeTableInput(allocator: std.mem.Allocator, rows: usize, cols: usize) ![]u8 {
     var out: std.ArrayListUnmanaged(u8) = .empty;
     defer out.deinit(allocator);
-    var writer = out.writer(allocator);
 
     for (0..cols) |c| {
         if (c > 0) try out.append(allocator, '|');
-        try writer.print(" H{d} ", .{c});
+        try out.print(allocator, " H{d} ", .{c});
     }
     try out.append(allocator, '\n');
 
@@ -179,7 +178,7 @@ fn makeTableInput(allocator: std.mem.Allocator, rows: usize, cols: usize) ![]u8 
     for (0..rows) |r| {
         for (0..cols) |c| {
             if (c > 0) try out.append(allocator, '|');
-            try writer.print(" R{d}C{d} ", .{ r, c });
+            try out.print(allocator, " R{d}C{d} ", .{ r, c });
         }
         try out.append(allocator, '\n');
     }
@@ -191,9 +190,8 @@ fn makeReferenceLinkInput(allocator: std.mem.Allocator, count: usize) ![]u8 {
     var out: std.ArrayListUnmanaged(u8) = .empty;
     defer out.deinit(allocator);
 
-    var writer = out.writer(allocator);
     for (0..count) |index| {
-        try writer.print("[label-{d}]: https://example.com/{d} \"title-{d}\"\n", .{
+        try out.print(allocator, "[label-{d}]: https://example.com/{d} \"title-{d}\"\n", .{
             index,
             index,
             index,
@@ -202,7 +200,7 @@ fn makeReferenceLinkInput(allocator: std.mem.Allocator, count: usize) ![]u8 {
     try out.append(allocator, '\n');
 
     for (0..count) |index| {
-        try writer.print("[label-{d}][label-{d}] ", .{ index, index });
+        try out.print(allocator, "[label-{d}][label-{d}] ", .{ index, index });
     }
     try out.append(allocator, '\n');
 
