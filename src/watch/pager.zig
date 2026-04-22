@@ -56,6 +56,7 @@ pub fn applyAction(action: input.KeyAction, scroll_offset: *usize, total_lines: 
 pub const Pager = struct {
     allocator: std.mem.Allocator,
     prev_row_hashes: std.ArrayListUnmanaged(u64) = .empty,
+    curr_row_hashes: std.ArrayListUnmanaged(u64) = .empty,
     prev_scroll: ?usize = null,
     prev_enable_ansi: ?bool = null,
     prev_color_mode: ?ansi.ColorMode = null,
@@ -67,10 +68,12 @@ pub const Pager = struct {
 
     pub fn deinit(self: *Pager) void {
         self.prev_row_hashes.deinit(self.allocator);
+        self.curr_row_hashes.deinit(self.allocator);
     }
 
     pub fn invalidate(self: *Pager) void {
         self.prev_row_hashes.clearRetainingCapacity();
+        self.curr_row_hashes.clearRetainingCapacity();
         self.prev_scroll = null;
         self.prev_enable_ansi = null;
         self.prev_color_mode = null;
@@ -107,6 +110,11 @@ pub const Pager = struct {
         const visible = visibleRows(buffer, scroll_offset, content_rows);
         const row_count = visible.count();
 
+        self.hashVisibleRows(visible) catch {
+            self.invalidate();
+            return;
+        };
+
         if (!can_diff) {
             stdout.writeAll("\x1b[H\x1b[J") catch return;
             var k: usize = 0;
@@ -118,8 +126,7 @@ pub const Pager = struct {
             const prev_count = self.prevRowCount();
             var k: usize = 0;
             while (k < row_count) : (k += 1) {
-                const buffer_idx = visible.first + k;
-                const unchanged = k < prev_count and buffer.rowHash(buffer_idx) == self.prevRowHash(k);
+                const unchanged = k < prev_count and self.curr_row_hashes.items[k] == self.prevRowHash(k);
                 if (unchanged) continue;
                 stdout.print("\x1b[{d};1H\x1b[2K", .{k + 1}) catch return;
                 stdout.writeAll(visible.row(k)) catch return;
@@ -135,25 +142,28 @@ pub const Pager = struct {
         writeStatusLine(stdout, scroll_offset, content_rows, buffer.totalLines(), enable_ansi, color_mode);
         stdout.flush() catch {};
 
-        self.captureRows(visible) catch {
-            self.invalidate();
-            return;
-        };
+        self.rollForwardHashes();
         self.prev_scroll = scroll_offset;
         self.prev_enable_ansi = enable_ansi;
         self.prev_color_mode = color_mode;
         self.prev_content_rows = content_rows;
     }
 
-    fn captureRows(self: *Pager, visible: VisibleRows) !void {
-        self.prev_row_hashes.clearRetainingCapacity();
+    fn hashVisibleRows(self: *Pager, visible: VisibleRows) !void {
+        self.curr_row_hashes.clearRetainingCapacity();
         const row_count = visible.count();
-        try self.prev_row_hashes.ensureTotalCapacity(self.allocator, row_count);
+        try self.curr_row_hashes.ensureTotalCapacity(self.allocator, row_count);
         var k: usize = 0;
         while (k < row_count) : (k += 1) {
-            const buffer_idx = visible.first + k;
-            self.prev_row_hashes.appendAssumeCapacity(visible.buffer.rowHash(buffer_idx));
+            self.curr_row_hashes.appendAssumeCapacity(std.hash.XxHash3.hash(0, visible.row(k)));
         }
+    }
+
+    fn rollForwardHashes(self: *Pager) void {
+        const tmp = self.prev_row_hashes;
+        self.prev_row_hashes = self.curr_row_hashes;
+        self.curr_row_hashes = tmp;
+        self.curr_row_hashes.clearRetainingCapacity();
     }
 };
 
@@ -380,6 +390,32 @@ test "Pager diff forces full repaint when color_mode changes" {
     pgr.displayPage(&out.writer, &rb, 0, 4, true, .ansi16);
     const bytes = out.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, bytes, "\x1b[H\x1b[J") != null);
+}
+
+test "Pager diff does not require buffer.finalize to populate a row-hash cache" {
+    const allocator = std.testing.allocator;
+    var pgr = Pager.init(allocator);
+    defer pgr.deinit();
+
+    var rb: render_buffer_mod.RenderBuffer = undefined;
+    rb.init(allocator);
+    defer rb.deinit();
+    try rb.writer.writeAll("alpha\nbeta\ngamma\n");
+    try rb.writer.flush();
+
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    defer out.deinit();
+
+    pgr.displayPage(&out.writer, &rb, 0, 4, false, .truecolor);
+    const first_bytes = try allocator.dupe(u8, out.writer.buffered());
+    defer allocator.free(first_bytes);
+
+    out.clearRetainingCapacity();
+    pgr.displayPage(&out.writer, &rb, 0, 4, false, .truecolor);
+    const second_bytes = out.writer.buffered();
+
+    try std.testing.expect(first_bytes.len > second_bytes.len);
+    try std.testing.expect(std.mem.indexOf(u8, second_bytes, "\x1b[H\x1b[J") == null);
 }
 
 test "Pager full repaint when scroll changes" {
