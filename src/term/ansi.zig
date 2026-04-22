@@ -8,6 +8,47 @@ pub const italic_off = "\x1b[23m";
 pub const underline_on = "\x1b[4m";
 pub const underline_off = "\x1b[24m";
 
+const rgb_channel_max: f32 = 255.0;
+const hsl_sector_angle: f32 = 60.0;
+const hsl_full_turn: f32 = 360.0;
+const style_prefix_buf_size: usize = 48;
+const truecolor_seq_buf_size: usize = 24;
+const ansi256_seq_buf_size: usize = 12;
+const ansi16_seq_buf_size: usize = 8;
+const write_styled_fast_path_limit: usize = 256;
+const write_styled_fast_path_buf_size: usize = style_prefix_buf_size + write_styled_fast_path_limit + reset_sequence.len;
+
+const rec601 = struct {
+    const r_weight: u32 = 299;
+    const g_weight: u32 = 587;
+    const b_weight: u32 = 114;
+    const scale: u32 = 1000;
+};
+
+const ansi16 = struct {
+    const base_code: u8 = 30;
+    const bright_offset: u8 = 60;
+    const bright_luma_threshold: u32 = 100;
+    const dominant_threshold: u32 = 3;
+    const dominant_scale: u32 = 5;
+    const red_mask: u8 = 1;
+    const green_mask: u8 = 2;
+    const blue_mask: u8 = 4;
+};
+
+const ansi256 = struct {
+    const cube_base: u8 = 16;
+    const cube_axis_size: u32 = 6;
+    const cube_green_stride: u32 = cube_axis_size;
+    const cube_red_stride: u32 = cube_axis_size * cube_axis_size;
+    const channel_quantization_divisor: u32 = 256;
+    const grayscale_base: u8 = 232;
+    const grayscale_steps: u32 = 23;
+    const grayscale_step_size: u32 = 10;
+    const grayscale_delta_threshold: u8 = 10;
+    const grayscale_black_luma_threshold: u32 = 8;
+};
+
 const sgr = struct {
     const bold = "\x1b[1m";
     const dim = "\x1b[2m";
@@ -23,7 +64,7 @@ pub const Hsl = struct { h: f32, s: f32, l: f32 };
 
 pub fn hslToRgb(hsl: Hsl) theme.Rgb {
     const c = (1 - @abs(2 * hsl.l - 1)) * hsl.s;
-    const h_prime = hsl.h / 60.0;
+    const h_prime = hsl.h / hsl_sector_angle;
     const x = c * (1 - @abs(@mod(h_prime, 2.0) - 1));
     var r1: f32 = 0;
     var g1: f32 = 0;
@@ -49,16 +90,16 @@ pub fn hslToRgb(hsl: Hsl) theme.Rgb {
     }
     const m = hsl.l - c / 2;
     return .{
-        .r = @intFromFloat(@round((r1 + m) * 255)),
-        .g = @intFromFloat(@round((g1 + m) * 255)),
-        .b = @intFromFloat(@round((b1 + m) * 255)),
+        .r = @intFromFloat(@round((r1 + m) * rgb_channel_max)),
+        .g = @intFromFloat(@round((g1 + m) * rgb_channel_max)),
+        .b = @intFromFloat(@round((b1 + m) * rgb_channel_max)),
     };
 }
 
 pub fn rgbToHsl(rgb: theme.Rgb) Hsl {
-    const r: f32 = @as(f32, @floatFromInt(rgb.r)) / 255.0;
-    const g: f32 = @as(f32, @floatFromInt(rgb.g)) / 255.0;
-    const b: f32 = @as(f32, @floatFromInt(rgb.b)) / 255.0;
+    const r: f32 = @as(f32, @floatFromInt(rgb.r)) / rgb_channel_max;
+    const g: f32 = @as(f32, @floatFromInt(rgb.g)) / rgb_channel_max;
+    const b: f32 = @as(f32, @floatFromInt(rgb.b)) / rgb_channel_max;
     const max_c = @max(@max(r, g), b);
     const min_c = @min(@min(r, g), b);
     const l = (max_c + min_c) / 2;
@@ -73,8 +114,8 @@ pub fn rgbToHsl(rgb: theme.Rgb) Hsl {
     } else {
         h = (r - g) / chroma + 4;
     }
-    h *= 60;
-    if (h < 0) h += 360;
+    h *= hsl_sector_angle;
+    if (h < 0) h += hsl_full_turn;
     return .{ .h = h, .s = s, .l = l };
 }
 
@@ -94,17 +135,17 @@ pub fn writeSgrFg(writer: *std.Io.Writer, rgb: theme.Rgb, mode: ColorMode) !void
     switch (mode) {
         .none => return,
         .truecolor => {
-            var buf: [24]u8 = undefined;
+            var buf: [truecolor_seq_buf_size]u8 = undefined;
             const len = formatTruecolor(&buf, rgb.r, rgb.g, rgb.b);
             try writer.writeAll(buf[0..len]);
         },
         .ansi256 => {
-            var buf: [12]u8 = undefined;
+            var buf: [ansi256_seq_buf_size]u8 = undefined;
             const len = formatAnsi256(&buf, ansi256Index(rgb.r, rgb.g, rgb.b));
             try writer.writeAll(buf[0..len]);
         },
         .ansi16 => {
-            var buf: [8]u8 = undefined;
+            var buf: [ansi16_seq_buf_size]u8 = undefined;
             const len = formatAnsi16(&buf, ansi16Code(rgb.r, rgb.g, rgb.b));
             try writer.writeAll(buf[0..len]);
         },
@@ -112,19 +153,19 @@ pub fn writeSgrFg(writer: *std.Io.Writer, rgb: theme.Rgb, mode: ColorMode) !void
 }
 
 fn rec601Luma(r: u8, g: u8, b: u8) u32 {
-    return (@as(u32, r) * 299 + @as(u32, g) * 587 + @as(u32, b) * 114) / 1000;
+    return (@as(u32, r) * rec601.r_weight + @as(u32, g) * rec601.g_weight + @as(u32, b) * rec601.b_weight) / rec601.scale;
 }
 
 fn ansi16Code(r: u8, g: u8, b: u8) u8 {
     const luma = rec601Luma(r, g, b);
     const max_c: u32 = @max(@max(r, g), b);
-    if (max_c == 0) return 30;
-    const thr = max_c * 3;
-    var code: u8 = 30;
-    if (@as(u32, r) * 5 >= thr) code += 1;
-    if (@as(u32, g) * 5 >= thr) code += 2;
-    if (@as(u32, b) * 5 >= thr) code += 4;
-    if (luma > 100) code += 60;
+    if (max_c == 0) return ansi16.base_code;
+    const thr = max_c * ansi16.dominant_threshold;
+    var code: u8 = ansi16.base_code;
+    if (@as(u32, r) * ansi16.dominant_scale >= thr) code += ansi16.red_mask;
+    if (@as(u32, g) * ansi16.dominant_scale >= thr) code += ansi16.green_mask;
+    if (@as(u32, b) * ansi16.dominant_scale >= thr) code += ansi16.blue_mask;
+    if (luma > ansi16.bright_luma_threshold) code += ansi16.bright_offset;
     return code;
 }
 
@@ -141,16 +182,16 @@ fn formatAnsi16(buf: []u8, code: u8) usize {
 fn ansi256Index(r: u8, g: u8, b: u8) u8 {
     const max_c = @max(@max(r, g), b);
     const min_c = @min(@min(r, g), b);
-    if (max_c - min_c < 10) {
+    if (max_c - min_c < ansi256.grayscale_delta_threshold) {
         const luma = rec601Luma(r, g, b);
-        if (luma < 8) return 16;
-        const step = @min(@as(u32, 23), (luma - 8) / 10);
-        return 232 + @as(u8, @intCast(step));
+        if (luma < ansi256.grayscale_black_luma_threshold) return ansi256.cube_base;
+        const step = @min(@as(u32, ansi256.grayscale_steps), (luma - ansi256.grayscale_black_luma_threshold) / ansi256.grayscale_step_size);
+        return ansi256.grayscale_base + @as(u8, @intCast(step));
     }
-    const qr = (@as(u32, r) * 6) / 256;
-    const qg = (@as(u32, g) * 6) / 256;
-    const qb = (@as(u32, b) * 6) / 256;
-    return 16 + @as(u8, @intCast(36 * qr + 6 * qg + qb));
+    const qr = (@as(u32, r) * ansi256.cube_axis_size) / ansi256.channel_quantization_divisor;
+    const qg = (@as(u32, g) * ansi256.cube_axis_size) / ansi256.channel_quantization_divisor;
+    const qb = (@as(u32, b) * ansi256.cube_axis_size) / ansi256.channel_quantization_divisor;
+    return ansi256.cube_base + @as(u8, @intCast(ansi256.cube_red_stride * qr + ansi256.cube_green_stride * qg + qb));
 }
 
 fn formatAnsi256(buf: []u8, idx: u8) usize {
@@ -189,12 +230,12 @@ pub const TextStyle = struct {
 };
 
 pub fn applyStyle(writer: *std.Io.Writer, mode: ColorMode, style: TextStyle) !void {
-    var buf: [48]u8 = undefined;
+    var buf: [style_prefix_buf_size]u8 = undefined;
     const len = buildStylePrefix(&buf, mode, style);
     if (len > 0) try writer.writeAll(buf[0..len]);
 }
 
-fn buildStylePrefix(buf: *[48]u8, mode: ColorMode, style: TextStyle) usize {
+fn buildStylePrefix(buf: *[style_prefix_buf_size]u8, mode: ColorMode, style: TextStyle) usize {
     if (mode == .none) return 0;
 
     var pos: usize = 0;
@@ -319,10 +360,10 @@ pub fn writeStyled(
         return;
     }
 
-    if (text.len <= 256 and !containsControlChar(text)) {
-        var buf: [512]u8 = undefined;
+    if (text.len <= write_styled_fast_path_limit and !containsControlChar(text)) {
+        var buf: [write_styled_fast_path_buf_size]u8 = undefined;
         var pos: usize = 0;
-        pos += buildStylePrefix(buf[0..48], mode, style);
+        pos += buildStylePrefix(buf[0..style_prefix_buf_size], mode, style);
         @memcpy(buf[pos..][0..text.len], text);
         pos += text.len;
         @memcpy(buf[pos..][0..reset_sequence.len], reset_sequence);
