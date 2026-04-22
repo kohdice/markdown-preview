@@ -8,6 +8,11 @@ pub const LayoutError = error{
 
 const label_cap: usize = 40;
 const ellipsis = "\u{2026}";
+const cell_horizontal_padding: usize = 4;
+const min_cell_width: usize = 6;
+const regular_cell_height: usize = 3;
+const diamond_cell_height: usize = 5;
+const framed_subgraph_outer_padding: usize = 1;
 
 /// Subgraph-aware layout: each subgraph group's internal edges determine
 /// its members' local levels independently, so cross-boundary edges do not
@@ -193,8 +198,8 @@ pub fn computeLayout(
     for (truncated_labels) |label| {
         label_w = @max(label_w, width_mod.displayWidth(label, ambiguous));
     }
-    var cell_w: usize = label_w + 4;
-    if (cell_w < 6) cell_w = 6;
+    var cell_w: usize = label_w + cell_horizontal_padding;
+    if (cell_w < min_cell_width) cell_w = min_cell_width;
 
     var any_diamond = false;
     for (graph.nodes) |node| {
@@ -203,14 +208,14 @@ pub fn computeLayout(
             break;
         }
     }
-    const cell_h: usize = if (any_diamond) 5 else 3;
+    const cell_h: usize = if (any_diamond) diamond_cell_height else regular_cell_height;
 
     const subgraph_frames = try computeSubgraphFrames(allocator, graph, positions, paths);
     errdefer allocator.free(subgraph_frames);
 
     var max_depth: usize = 0;
     for (subgraph_frames) |f| max_depth = @max(max_depth, f.depth);
-    const outer_pad: usize = if (subgraph_frames.len > 0) max_depth + 1 else 0;
+    const outer_pad: usize = if (subgraph_frames.len > 0) max_depth + framed_subgraph_outer_padding else 0;
 
     return .{
         .allocator = allocator,
