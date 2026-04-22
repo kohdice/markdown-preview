@@ -27,7 +27,7 @@ pub fn renderTo(
     const source = source_loader.loadFile(cycle_alloc, io, cwd, path) catch |err| {
         buffer.reset();
         buffer.writer.print("mp: unable to read '{s}': {s}\n", .{ path, @errorName(err) }) catch {};
-        buffer.finalize() catch {};
+        buffer.writer.flush() catch {};
         hash.reset();
         return .error_inline;
     };
@@ -41,18 +41,18 @@ pub fn renderTo(
 
     var doc = parse.parse(cycle_alloc, source) catch {
         buffer.writer.writeAll("mp: parse error\n") catch {};
-        buffer.finalize() catch {};
+        buffer.writer.flush() catch {};
         hash.reset();
         return .error_inline;
     };
     defer doc.deinit();
 
     renderer.render(&buffer.writer, &doc, wrap_width) catch {
-        buffer.finalize() catch {};
+        buffer.writer.flush() catch {};
         hash.reset();
         return .error_inline;
     };
-    buffer.finalize() catch {
+    buffer.writer.flush() catch {
         hash.reset();
         return .error_inline;
     };
