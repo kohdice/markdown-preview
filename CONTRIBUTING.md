@@ -15,6 +15,7 @@ Together, we can make **markdown-preview** even better!
 1. [Developer Guide](#developer-guide)
    - [Setup](#setup)
    - [Build and Test](#build-and-test)
+   - [Benchmarking](#benchmarking)
 2. [How to Contribute](#how-to-contribute)
    - [Issues](#issues)
    - [Pull Requests](#pull-requests)
@@ -38,6 +39,30 @@ nix develop
 
 ```bash
 zig build test
+```
+
+### Benchmarking
+
+Generate the cached Markdown fixtures used for larger benchmark inputs:
+
+```bash
+zig build bench-fixtures
+```
+
+Build the release binary used for benchmarking:
+
+```bash
+zig build -Doptimize=ReleaseFast
+```
+
+Compare `mp` against `cat` with `hyperfine` directly:
+
+```bash
+hyperfine \
+  --warmup 3 \
+  --min-runs 10 \
+  --command-name cat "cat '.bench-cache/stress-cjk.md' > /dev/null" \
+  --command-name mp "./zig-out/bin/mp '.bench-cache/stress-cjk.md' > /dev/null"
 ```
 
 ## How to Contribute

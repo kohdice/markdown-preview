@@ -2,15 +2,32 @@ const std = @import("std");
 const bench = @import("bench_support.zig");
 const mermaid = @import("mermaid");
 
-const CompileResult = struct {
-    elapsed_ns: u64,
-    counts: bench.CounterSnapshot,
+const timing_allocator = std.heap.smp_allocator;
+
+const CompileTimingRunner = struct {
+    allocator: std.mem.Allocator,
+    source: []const u8,
+
+    pub fn run(self: *@This()) !void {
+        var diagram = try mermaid.compile(self.allocator, self.source);
+        defer diagram.deinit();
+        std.mem.doNotOptimizeAway(&diagram);
+    }
 };
 
-const PaintResult = struct {
-    elapsed_ns: u64,
-    counts: bench.CounterSnapshot,
-    output_bytes: usize,
+const PaintTimingRunner = struct {
+    allocator: std.mem.Allocator,
+    diagram: *const mermaid.Diagram,
+    opts: mermaid.PaintOptions,
+    last_output_bytes: usize = 0,
+
+    pub fn run(self: *@This()) !void {
+        self.last_output_bytes = try paintWithDiscarding(
+            self.allocator,
+            self.diagram,
+            self.opts,
+        );
+    }
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -23,62 +40,100 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("mermaid benchmark\n", .{});
 
     const flowchart_src = try makeFlowchartSource(allocator, 16);
-    try runCompile(io, "flowchart-compile-16", flowchart_src);
-    try runPaint(io, "flowchart-paint-16", flowchart_src);
+    try runCompile(allocator, io, "flowchart-compile-16", flowchart_src);
+    try runPaint(allocator, io, "flowchart-paint-16", flowchart_src);
 
-    try runCompile(io, "sequence-compile-small", sequence_sample);
-    try runCompile(io, "class-compile-small", class_sample);
-    try runCompile(io, "er-compile-small", er_sample);
+    try runCompile(allocator, io, "sequence-compile-small", sequence_sample);
+    try runCompile(allocator, io, "class-compile-small", class_sample);
+    try runCompile(allocator, io, "er-compile-small", er_sample);
 
-    try runPaint(io, "gitgraph-paint-small", gitgraph_sample);
-    try runPaint(io, "xychart-paint-small", xychart_sample);
+    try runPaint(allocator, io, "gitgraph-paint-small", gitgraph_sample);
+    try runPaint(allocator, io, "xychart-paint-small", xychart_sample);
 }
 
-fn runCompile(io: std.Io, name: []const u8, source: []const u8) !void {
-    var gpa: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-
-    var counting = bench.CountingAllocator.init(gpa.allocator());
-    const allocator = counting.allocator();
-
-    const cold = try compileOnce(io, allocator, source, &counting);
-    const warm = try compileOnce(io, allocator, source, &counting);
+fn runCompile(
+    sample_allocator: std.mem.Allocator,
+    io: std.Io,
+    name: []const u8,
+    source: []const u8,
+) !void {
+    var runner = CompileTimingRunner{
+        .allocator = timing_allocator,
+        .source = source,
+    };
+    const timing = try bench.measure(io, sample_allocator, bench.default_measure_options, &runner);
+    const counts = try profileCompile(source);
 
     std.debug.print(
-        "{s}: cold_compile={d:.3}ms cold_allocs={d} cold_bytes={d} warm_compile={d:.3}ms warm_allocs={d} warm_bytes={d}\n",
+        "{s}: n={d} compile_median={d:.3}ms [{d:.3}..{d:.3}] allocs={d} bytes={d}\n",
         .{
             name,
-            nsToMs(cold.elapsed_ns),
-            cold.counts.alloc_count,
-            cold.counts.bytes_allocated,
-            nsToMs(warm.elapsed_ns),
-            warm.counts.alloc_count,
-            warm.counts.bytes_allocated,
+            timing.sample_count,
+            bench.nsToMs(timing.median_ns),
+            bench.nsToMs(timing.min_ns),
+            bench.nsToMs(timing.max_ns),
+            counts.alloc_count,
+            counts.bytes_allocated,
         },
     );
 }
 
-fn compileOnce(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    source: []const u8,
-    counting: *const bench.CountingAllocator,
-) !CompileResult {
+fn profileCompile(source: []const u8) !bench.CounterSnapshot {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+
+    var counting = bench.CountingAllocator.init(gpa.allocator());
     const before = counting.snapshot();
-    const timer = bench.BenchTimer.start(io);
-    var diagram = try mermaid.compile(allocator, source);
-    const elapsed_ns = timer.read();
+    var diagram = try mermaid.compile(counting.allocator(), source);
+    defer diagram.deinit();
     const after = counting.snapshot();
-
-    diagram.deinit();
-
-    return .{
-        .elapsed_ns = elapsed_ns,
-        .counts = bench.CounterSnapshot.diff(after, before),
-    };
+    return bench.CounterSnapshot.diff(after, before);
 }
 
-fn runPaint(io: std.Io, name: []const u8, source: []const u8) !void {
+fn runPaint(
+    sample_allocator: std.mem.Allocator,
+    io: std.Io,
+    name: []const u8,
+    source: []const u8,
+) !void {
+    var diagram = try mermaid.compile(timing_allocator, source);
+    defer diagram.deinit();
+
+    const opts: mermaid.PaintOptions = .{
+        .enable_ansi = false,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    };
+
+    var runner = PaintTimingRunner{
+        .allocator = timing_allocator,
+        .diagram = &diagram,
+        .opts = opts,
+    };
+    const timing = try bench.measure(io, sample_allocator, bench.default_measure_options, &runner);
+    const profile = try profilePaint(source, opts);
+
+    std.debug.print(
+        "{s}: n={d} paint_median={d:.3}ms [{d:.3}..{d:.3}] allocs={d} bytes={d} out={d}\n",
+        .{
+            name,
+            timing.sample_count,
+            bench.nsToMs(timing.median_ns),
+            bench.nsToMs(timing.min_ns),
+            bench.nsToMs(timing.max_ns),
+            profile.counts.alloc_count,
+            profile.counts.bytes_allocated,
+            runner.last_output_bytes,
+        },
+    );
+}
+
+const PaintProfile = struct {
+    counts: bench.CounterSnapshot,
+    output_bytes: usize,
+};
+
+fn profilePaint(source: []const u8, opts: mermaid.PaintOptions) !PaintProfile {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
 
@@ -88,57 +143,28 @@ fn runPaint(io: std.Io, name: []const u8, source: []const u8) !void {
     var diagram = try mermaid.compile(allocator, source);
     defer diagram.deinit();
 
-    const opts: mermaid.PaintOptions = .{
-        .enable_ansi = false,
-        .wrap_width = null,
-        .ambiguous_width = .narrow,
-    };
-
-    const cold = try paintOnce(io, allocator, &diagram, opts, &counting);
-    const warm = try paintOnce(io, allocator, &diagram, opts, &counting);
-
-    std.debug.assert(cold.output_bytes > 0);
-
-    std.debug.print(
-        "{s}: cold_paint={d:.3}ms cold_allocs={d} cold_bytes={d} warm_paint={d:.3}ms warm_allocs={d} warm_bytes={d} output_bytes={d}\n",
-        .{
-            name,
-            nsToMs(cold.elapsed_ns),
-            cold.counts.alloc_count,
-            cold.counts.bytes_allocated,
-            nsToMs(warm.elapsed_ns),
-            warm.counts.alloc_count,
-            warm.counts.bytes_allocated,
-            cold.output_bytes,
-        },
-    );
-}
-
-fn paintOnce(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    diagram: *const mermaid.Diagram,
-    opts: mermaid.PaintOptions,
-    counting: *const bench.CountingAllocator,
-) !PaintResult {
-    var sink: [4096]u8 = undefined;
-    var discarding: std.Io.Writer.Discarding = .init(&sink);
-
     const before = counting.snapshot();
-    const timer = bench.BenchTimer.start(io);
-    try mermaid.paint(&discarding.writer, allocator, diagram, opts);
-    const elapsed_ns = timer.read();
+    const output_bytes = try paintWithDiscarding(allocator, &diagram, opts);
     const after = counting.snapshot();
 
     return .{
-        .elapsed_ns = elapsed_ns,
         .counts = bench.CounterSnapshot.diff(after, before),
-        .output_bytes = discarding.fullCount(),
+        .output_bytes = output_bytes,
     };
 }
 
-fn nsToMs(ns: u64) f64 {
-    return @as(f64, @floatFromInt(ns)) / std.time.ns_per_ms;
+fn paintWithDiscarding(
+    allocator: std.mem.Allocator,
+    diagram: *const mermaid.Diagram,
+    opts: mermaid.PaintOptions,
+) !usize {
+    var sink: [4096]u8 = undefined;
+    var discarding: std.Io.Writer.Discarding = .init(&sink);
+    try mermaid.paint(&discarding.writer, allocator, diagram, opts);
+    try discarding.writer.flush();
+    const output_bytes = discarding.fullCount();
+    std.mem.doNotOptimizeAway(output_bytes);
+    return output_bytes;
 }
 
 fn makeFlowchartSource(allocator: std.mem.Allocator, node_count: usize) ![]u8 {

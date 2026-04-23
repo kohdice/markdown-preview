@@ -1,304 +1,277 @@
 const std = @import("std");
 
+const TestRoot = struct {
+    path: []const u8,
+    needs_tree_sitter: bool,
+    needs_internals: bool = false,
+};
+
+const test_roots = [_]TestRoot{
+    .{ .path = "src/parse.zig", .needs_tree_sitter = false },
+    .{ .path = "src/render.zig", .needs_tree_sitter = true },
+    .{ .path = "src/lib.zig", .needs_tree_sitter = true },
+    .{ .path = "test/test.zig", .needs_tree_sitter = true, .needs_internals = true },
+    .{ .path = "src/cli.zig", .needs_tree_sitter = true },
+    .{ .path = "src/term/terminal.zig", .needs_tree_sitter = false },
+    .{ .path = "src/term/highlight.zig", .needs_tree_sitter = true },
+    .{ .path = "src/text.zig", .needs_tree_sitter = false },
+    .{ .path = "src/term/width.zig", .needs_tree_sitter = false },
+    .{ .path = "src/term/ansi.zig", .needs_tree_sitter = false },
+    .{ .path = "src/watch/file_watcher.zig", .needs_tree_sitter = false },
+    .{ .path = "src/term/raw.zig", .needs_tree_sitter = false },
+    .{ .path = "src/watch/render_buffer.zig", .needs_tree_sitter = false },
+    .{ .path = "src/watch/content_hash.zig", .needs_tree_sitter = false },
+    .{ .path = "src/watch/debounce.zig", .needs_tree_sitter = false },
+    .{ .path = "src/mermaid.zig", .needs_tree_sitter = false },
+    .{ .path = "src/source_loader.zig", .needs_tree_sitter = false },
+    .{ .path = "src/backing_allocator.zig", .needs_tree_sitter = false },
+    .{ .path = "src/stdout_buffer.zig", .needs_tree_sitter = false },
+    .{ .path = "src/write_error.zig", .needs_tree_sitter = false },
+    .{ .path = "bench/bench_support.zig", .needs_tree_sitter = false },
+};
+
+const queries_wrapper_source =
+    \\pub const zig_highlights: []const u8 = @embedFile("zig_highlights.scm");
+    \\pub const c_highlights: []const u8 = @embedFile("c_highlights.scm");
+    \\pub const rust_highlights: []const u8 = @embedFile("rust_highlights.scm");
+    \\pub const go_highlights: []const u8 = @embedFile("go_highlights.scm");
+    \\pub const python_highlights: []const u8 = @embedFile("python_highlights.scm");
+    \\pub const bash_highlights: []const u8 = @embedFile("bash_highlights.scm");
+    \\pub const html_highlights: []const u8 = @embedFile("html_highlights.scm");
+    \\pub const css_highlights: []const u8 = @embedFile("css_highlights.scm");
+    \\pub const json_highlights: []const u8 = @embedFile("json_highlights.scm");
+    \\// Layered highlights for the javascript family. We concatenate
+    \\// from most generic to most specific so the more specific child
+    \\// patterns win under the highlighter's "later pattern wins" rule
+    \\// (e.g. `(jsx_attribute (property_identifier) @attribute)` needs
+    \\// to come after the generic `(property_identifier) @property`
+    \\// in the javascript base highlights, otherwise jsx attributes
+    \\// render as CSS-style properties).
+    \\const javascript_base_highlights: []const u8 = @embedFile("javascript_base_highlights.scm");
+    \\const javascript_jsx_highlights: []const u8 = @embedFile("javascript_jsx_highlights.scm");
+    \\const typescript_extra_highlights: []const u8 = @embedFile("typescript_extra_highlights.scm");
+    \\pub const javascript_highlights: []const u8 = javascript_base_highlights ++ "\n" ++ javascript_jsx_highlights;
+    \\pub const typescript_highlights: []const u8 = javascript_base_highlights ++ "\n" ++ typescript_extra_highlights;
+    \\pub const tsx_highlights: []const u8 = javascript_base_highlights ++ "\n" ++ javascript_jsx_highlights ++ "\n" ++ typescript_extra_highlights;
+    \\// cpp highlights.scm is similarly a semantic shim over c.
+    \\pub const cpp_highlights: []const u8 = c_highlights ++ "\n" ++ @embedFile("cpp_extra_highlights.scm");
+    \\// Locals queries. Upstream assigns typescript a [ts_extra, js]
+    \\// stack and tsx js-only; we mirror that here.
+    \\pub const javascript_locals: []const u8 = @embedFile("javascript_locals.scm");
+    \\pub const typescript_locals: []const u8 = @embedFile("typescript_extra_locals.scm") ++ "\n" ++ javascript_locals;
+    \\pub const tsx_locals: []const u8 = javascript_locals;
+    \\
+;
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const ts_dep = b.dependency("tree_sitter", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    // build-shared=false forces tree-sitter-zig to compile as a static library
-    // so the installed `mp` binary does not keep a dlopen-style dependency on
-    // `libtree-sitter-zig.dylib` sitting inside .zig-cache.
-    const ts_zig_dep = b.dependency("tree_sitter_zig", .{
-        .target = target,
-        .optimize = optimize,
-        .@"build-shared" = false,
-    });
-    const ts_c_dep = b.dependency("tree_sitter_c", .{});
-    const ts_rust_dep = b.dependency("tree_sitter_rust", .{});
-    const ts_go_dep = b.dependency("tree_sitter_go", .{});
-    const ts_python_dep = b.dependency("tree_sitter_python", .{});
-    const ts_javascript_dep = b.dependency("tree_sitter_javascript", .{});
-    const ts_bash_dep = b.dependency("tree_sitter_bash", .{});
-    const ts_cpp_dep = b.dependency("tree_sitter_cpp", .{});
-    const ts_typescript_dep = b.dependency("tree_sitter_typescript", .{});
-    const ts_html_dep = b.dependency("tree_sitter_html", .{});
-    const ts_css_dep = b.dependency("tree_sitter_css", .{});
-    const ts_json_dep = b.dependency("tree_sitter_json", .{});
+    const ts_deps = loadTreeSitterDependencies(b, target, optimize);
+    const ts_support = prepareTreeSitterSupport(b, target, optimize, ts_deps);
 
-    const ts_support = prepareTreeSitterSupport(b, .{
-        .target = target,
-        .optimize = optimize,
-        .ts_dep = ts_dep,
-        .ts_zig_dep = ts_zig_dep,
-        .ts_c_dep = ts_c_dep,
-        .ts_rust_dep = ts_rust_dep,
-        .ts_go_dep = ts_go_dep,
-        .ts_python_dep = ts_python_dep,
-        .ts_javascript_dep = ts_javascript_dep,
-        .ts_bash_dep = ts_bash_dep,
-        .ts_cpp_dep = ts_cpp_dep,
-        .ts_typescript_dep = ts_typescript_dep,
-        .ts_html_dep = ts_html_dep,
-        .ts_css_dep = ts_css_dep,
-        .ts_json_dep = ts_json_dep,
-    });
+    const source_mod = createModule(b, "src/source.zig", target, optimize);
+    const bench_support_mod = createModule(b, "bench/bench_support.zig", target, optimize);
+    const bench_fixtures_mod = createModule(b, "bench/fixtures.zig", target, optimize);
+    const render_buffer_mod = createModule(b, "src/watch/render_buffer.zig", target, optimize);
 
-    const source_mod = b.createModule(.{
-        .root_source_file = b.path("src/source.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const exe_mod = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    attachTreeSitter(exe_mod, ts_support);
-    exe_mod.addImport("source", source_mod);
-
-    const exe = b.addExecutable(.{
-        .name = "mp",
-        .root_module = exe_mod,
-    });
-
-    b.installArtifact(exe);
-
-    const release_ts_dep = b.dependency("tree_sitter", .{
-        .target = target,
-        .optimize = .ReleaseFast,
-    });
-    const release_ts_zig_dep = b.dependency("tree_sitter_zig", .{
-        .target = target,
-        .optimize = .ReleaseFast,
-        .@"build-shared" = false,
-    });
-
-    const release_ts_support = prepareTreeSitterSupport(b, .{
-        .target = target,
-        .optimize = .ReleaseFast,
-        .ts_dep = release_ts_dep,
-        .ts_zig_dep = release_ts_zig_dep,
-        .ts_c_dep = ts_c_dep,
-        .ts_rust_dep = ts_rust_dep,
-        .ts_go_dep = ts_go_dep,
-        .ts_python_dep = ts_python_dep,
-        .ts_javascript_dep = ts_javascript_dep,
-        .ts_bash_dep = ts_bash_dep,
-        .ts_cpp_dep = ts_cpp_dep,
-        .ts_typescript_dep = ts_typescript_dep,
-        .ts_html_dep = ts_html_dep,
-        .ts_css_dep = ts_css_dep,
-        .ts_json_dep = ts_json_dep,
-    });
-
-    const release_exe_mod = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = .ReleaseFast,
-    });
-    attachTreeSitter(release_exe_mod, release_ts_support);
-    release_exe_mod.addImport("source", source_mod);
-
-    const release_exe = b.addExecutable(.{
-        .name = "mp-release",
-        .root_module = release_exe_mod,
-    });
-
-    const bench_mod = b.createModule(.{
-        .root_source_file = b.path("bench/bench_inline.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    attachTreeSitter(bench_mod, ts_support);
-
-    const bench_exe = b.addExecutable(.{
-        .name = "inline-bench",
-        .root_module = bench_mod,
-    });
-
-    const bench_render_mod = b.createModule(.{
-        .root_source_file = b.path("bench/bench_render.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    attachTreeSitter(bench_render_mod, ts_support);
-
-    const bench_render_exe = b.addExecutable(.{
-        .name = "render-bench",
-        .root_module = bench_render_mod,
-    });
-
-    const mermaid_mod = b.createModule(.{
-        .root_source_file = b.path("src/mermaid.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
+    const mermaid_mod = createModule(b, "src/mermaid.zig", target, optimize);
     mermaid_mod.addImport("source", source_mod);
-
-    const bench_mermaid_mod = b.createModule(.{
-        .root_source_file = b.path("bench/bench_mermaid.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    bench_mermaid_mod.addImport("mermaid", mermaid_mod);
-
-    const bench_mermaid_exe = b.addExecutable(.{
-        .name = "mermaid-bench",
-        .root_module = bench_mermaid_mod,
-    });
-
-    const render_buffer_mod = b.createModule(.{
-        .root_source_file = b.path("src/watch/render_buffer.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const bench_watch_buffer_mod = b.createModule(.{
-        .root_source_file = b.path("bench/bench_watch_buffer.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    bench_watch_buffer_mod.addImport("render_buffer", render_buffer_mod);
-
-    const bench_watch_buffer_exe = b.addExecutable(.{
-        .name = "watch-buffer-bench",
-        .root_module = bench_watch_buffer_mod,
-    });
-
-    const bench_fixtures_mod = b.createModule(.{
-        .root_source_file = b.path("bench/fixtures.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const bench_pipeline_mod = b.createModule(.{
-        .root_source_file = b.path("bench/bench_pipeline.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    attachTreeSitter(bench_pipeline_mod, ts_support);
-    bench_pipeline_mod.addImport("fixtures", bench_fixtures_mod);
-
-    const bench_pipeline_exe = b.addExecutable(.{
-        .name = "pipeline-bench",
-        .root_module = bench_pipeline_mod,
-    });
-
-    const bench_vs_cat_mod = b.createModule(.{
-        .root_source_file = b.path("bench/bench_vs_cat.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    bench_vs_cat_mod.addImport("fixtures", bench_fixtures_mod);
-
-    const bench_vs_cat_exe = b.addExecutable(.{
-        .name = "vs-cat-bench",
-        .root_module = bench_vs_cat_mod,
-    });
-
-    const bench_support_mod = b.createModule(.{
-        .root_source_file = b.path("bench/bench_support.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
 
     // Internal aggregation module exposing parse/render/source_loader/term
     // plus the public `facade` (src/lib.zig) for bench harnesses and
     // integration tests. External callers still use the facade directly
     // via src/lib.zig; the re-export here only lets tests exercise both
     // the facade contract and lower-level helpers from a single module.
-    const internals_mod = b.createModule(.{
-        .root_source_file = b.path("src/internals.zig"),
+    const internals_mod = createTreeSitterModule(b, "src/internals.zig", target, optimize, ts_support);
+    internals_mod.addImport("source", source_mod);
+
+    const exe = addMpExecutable(b, "mp", target, optimize, source_mod, ts_support);
+    b.installArtifact(exe);
+
+    const benches = addBenchExecutables(b, target, optimize, .{
+        .fixtures = bench_fixtures_mod,
+        .mermaid = mermaid_mod,
+        .render_buffer = render_buffer_mod,
+        .internals = internals_mod,
+    });
+
+    addArtifactRunStep(b, "run", "Run the app", exe, .{
+        .depend_on_install = true,
+        .forward_build_args = true,
+    });
+    addBenchSteps(b, benches);
+    addTestStep(b, target, optimize, source_mod, bench_support_mod, internals_mod, ts_support, benches);
+}
+
+const BenchModules = struct {
+    fixtures: *std.Build.Module,
+    mermaid: *std.Build.Module,
+    render_buffer: *std.Build.Module,
+    internals: *std.Build.Module,
+};
+
+const BenchArtifacts = struct {
+    fixtures_bench: *std.Build.Step.Compile,
+    inline_bench: *std.Build.Step.Compile,
+    render_bench: *std.Build.Step.Compile,
+    mermaid_bench: *std.Build.Step.Compile,
+    watch_buffer_bench: *std.Build.Step.Compile,
+    pipeline_bench: *std.Build.Step.Compile,
+
+    fn compileTargets(self: @This()) [6]*std.Build.Step.Compile {
+        return .{
+            self.fixtures_bench,
+            self.inline_bench,
+            self.render_bench,
+            self.mermaid_bench,
+            self.watch_buffer_bench,
+            self.pipeline_bench,
+        };
+    }
+};
+
+const RunStepOptions = struct {
+    depend_on_install: bool = false,
+    forward_build_args: bool = false,
+};
+
+fn createModule(
+    b: *std.Build,
+    root_source_path: []const u8,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *std.Build.Module {
+    return b.createModule(.{
+        .root_source_file = b.path(root_source_path),
         .target = target,
         .optimize = optimize,
     });
-    attachTreeSitter(internals_mod, ts_support);
-    internals_mod.addImport("source", source_mod);
+}
 
-    bench_mod.addImport("internals", internals_mod);
-    bench_render_mod.addImport("internals", internals_mod);
-    bench_pipeline_mod.addImport("internals", internals_mod);
+fn createTreeSitterModule(
+    b: *std.Build,
+    root_source_path: []const u8,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    ts_support: TreeSitterSupport,
+) *std.Build.Module {
+    const module = createModule(b, root_source_path, target, optimize);
+    attachTreeSitter(module, ts_support);
+    return module;
+}
 
-    const run_step = b.step("run", "Run the app");
-    const run_cmd = b.addRunArtifact(exe);
-    run_step.dependOn(&run_cmd.step);
-    run_cmd.step.dependOn(b.getInstallStep());
+fn addExecutableArtifact(
+    b: *std.Build,
+    name: []const u8,
+    module: *std.Build.Module,
+) *std.Build.Step.Compile {
+    return b.addExecutable(.{
+        .name = name,
+        .root_module = module,
+    });
+}
 
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
+fn addMpExecutable(
+    b: *std.Build,
+    name: []const u8,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    source_mod: *std.Build.Module,
+    ts_support: TreeSitterSupport,
+) *std.Build.Step.Compile {
+    const exe_mod = createTreeSitterModule(b, "src/main.zig", target, optimize, ts_support);
+    exe_mod.addImport("source", source_mod);
+    return addExecutableArtifact(b, name, exe_mod);
+}
 
-    const bench_step = b.step("bench-inline", "Run inline parser/render benchmarks");
-    const run_bench = b.addRunArtifact(bench_exe);
-    bench_step.dependOn(&run_bench.step);
+fn addBenchExecutables(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    bench_modules: BenchModules,
+) BenchArtifacts {
+    const fixtures_mod = createModule(b, "bench/bench_fixtures.zig", target, optimize);
+    fixtures_mod.addImport("fixtures", bench_modules.fixtures);
 
-    const bench_render_step = b.step("bench-render", "Run table render benchmarks");
-    const run_bench_render = b.addRunArtifact(bench_render_exe);
-    bench_render_step.dependOn(&run_bench_render.step);
+    const inline_mod = createModule(b, "bench/bench_inline.zig", target, optimize);
+    inline_mod.addImport("internals", bench_modules.internals);
 
-    const bench_mermaid_step = b.step("bench-mermaid", "Run Mermaid compile/paint benchmarks");
-    const run_bench_mermaid = b.addRunArtifact(bench_mermaid_exe);
-    bench_mermaid_step.dependOn(&run_bench_mermaid.step);
+    const render_mod = createModule(b, "bench/bench_render.zig", target, optimize);
+    render_mod.addImport("internals", bench_modules.internals);
 
-    const bench_watch_buffer_step = b.step("bench-watch-buffer", "Run RenderBuffer microbenchmark");
-    const run_bench_watch_buffer = b.addRunArtifact(bench_watch_buffer_exe);
-    bench_watch_buffer_step.dependOn(&run_bench_watch_buffer.step);
+    const mermaid_mod = createModule(b, "bench/bench_mermaid.zig", target, optimize);
+    mermaid_mod.addImport("mermaid", bench_modules.mermaid);
 
-    const bench_pipeline_step = b.step("bench-pipeline", "Run parse + render pipeline benchmark");
-    const run_bench_pipeline = b.addRunArtifact(bench_pipeline_exe);
-    bench_pipeline_step.dependOn(&run_bench_pipeline.step);
-    if (b.args) |args| run_bench_pipeline.addArgs(args);
+    const watch_buffer_mod = createModule(b, "bench/bench_watch_buffer.zig", target, optimize);
+    watch_buffer_mod.addImport("render_buffer", bench_modules.render_buffer);
 
-    const bench_vs_cat_step = b.step("bench-vs-cat", "Compare mp throughput against cat");
-    const run_bench_vs_cat = b.addRunArtifact(bench_vs_cat_exe);
-    bench_vs_cat_step.dependOn(&run_bench_vs_cat.step);
-    run_bench_vs_cat.addPrefixedFileArg("--mp=", release_exe.getEmittedBin());
-    if (b.args) |args| run_bench_vs_cat.addArgs(args);
+    const pipeline_mod = createModule(b, "bench/bench_pipeline.zig", target, optimize);
+    pipeline_mod.addImport("internals", bench_modules.internals);
+    pipeline_mod.addImport("fixtures", bench_modules.fixtures);
 
-    const test_step = b.step("test", "Run tests");
-    const test_roots = [_]struct {
-        path: []const u8,
-        needs_tree_sitter: bool,
-    }{
-        .{ .path = "src/parse.zig", .needs_tree_sitter = false },
-        .{ .path = "src/render.zig", .needs_tree_sitter = true },
-        .{ .path = "src/lib.zig", .needs_tree_sitter = true },
-        .{ .path = "test/test.zig", .needs_tree_sitter = true },
-        .{ .path = "src/cli.zig", .needs_tree_sitter = true },
-        .{ .path = "src/term/terminal.zig", .needs_tree_sitter = false },
-        .{ .path = "src/term/highlight.zig", .needs_tree_sitter = true },
-        .{ .path = "src/text.zig", .needs_tree_sitter = false },
-        .{ .path = "src/term/width.zig", .needs_tree_sitter = false },
-        .{ .path = "src/term/ansi.zig", .needs_tree_sitter = false },
-        .{ .path = "src/watch/file_watcher.zig", .needs_tree_sitter = false },
-        .{ .path = "src/term/raw.zig", .needs_tree_sitter = false },
-        .{ .path = "src/watch/render_buffer.zig", .needs_tree_sitter = false },
-        .{ .path = "src/watch/content_hash.zig", .needs_tree_sitter = false },
-        .{ .path = "src/watch/debounce.zig", .needs_tree_sitter = false },
-        .{ .path = "src/mermaid.zig", .needs_tree_sitter = false },
-        .{ .path = "src/source_loader.zig", .needs_tree_sitter = false },
-        .{ .path = "src/backing_allocator.zig", .needs_tree_sitter = false },
-        .{ .path = "src/stdout_buffer.zig", .needs_tree_sitter = false },
-        .{ .path = "src/write_error.zig", .needs_tree_sitter = false },
-        .{ .path = "bench/bench_support.zig", .needs_tree_sitter = false },
+    return .{
+        .fixtures_bench = addExecutableArtifact(b, "bench-fixtures", fixtures_mod),
+        .inline_bench = addExecutableArtifact(b, "inline-bench", inline_mod),
+        .render_bench = addExecutableArtifact(b, "render-bench", render_mod),
+        .mermaid_bench = addExecutableArtifact(b, "mermaid-bench", mermaid_mod),
+        .watch_buffer_bench = addExecutableArtifact(b, "watch-buffer-bench", watch_buffer_mod),
+        .pipeline_bench = addExecutableArtifact(b, "pipeline-bench", pipeline_mod),
     };
+}
+
+fn addArtifactRunStep(
+    b: *std.Build,
+    step_name: []const u8,
+    description: []const u8,
+    artifact: *std.Build.Step.Compile,
+    options: RunStepOptions,
+) void {
+    const step = b.step(step_name, description);
+    const run_cmd = b.addRunArtifact(artifact);
+    step.dependOn(&run_cmd.step);
+
+    if (options.depend_on_install) {
+        run_cmd.step.dependOn(b.getInstallStep());
+    }
+    if (options.forward_build_args) {
+        if (b.args) |args| {
+            run_cmd.addArgs(args);
+        }
+    }
+}
+
+fn addBenchSteps(b: *std.Build, benches: BenchArtifacts) void {
+    addArtifactRunStep(b, "bench-fixtures", "Generate cached benchmark fixtures", benches.fixtures_bench, .{});
+    addArtifactRunStep(b, "bench-inline", "Run inline parser/render benchmarks", benches.inline_bench, .{});
+    addArtifactRunStep(b, "bench-render", "Run table render benchmarks", benches.render_bench, .{});
+    addArtifactRunStep(b, "bench-mermaid", "Run Mermaid compile/paint benchmarks", benches.mermaid_bench, .{});
+    addArtifactRunStep(b, "bench-watch-buffer", "Run RenderBuffer microbenchmark", benches.watch_buffer_bench, .{});
+    addArtifactRunStep(b, "bench-pipeline", "Run parse + render pipeline benchmark", benches.pipeline_bench, .{
+        .forward_build_args = true,
+    });
+}
+
+fn addTestStep(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    source_mod: *std.Build.Module,
+    bench_support_mod: *std.Build.Module,
+    internals_mod: *std.Build.Module,
+    ts_support: TreeSitterSupport,
+    benches: BenchArtifacts,
+) void {
+    const test_step = b.step("test", "Run tests");
 
     for (test_roots) |test_root| {
-        const test_mod = b.createModule(.{
-            .root_source_file = b.path(test_root.path),
-            .target = target,
-            .optimize = optimize,
-        });
+        const test_mod = createModule(b, test_root.path, target, optimize);
         if (test_root.needs_tree_sitter) {
             attachTreeSitter(test_mod, ts_support);
         }
         test_mod.addImport("bench_support", bench_support_mod);
         test_mod.addImport("source", source_mod);
-        if (std.mem.eql(u8, test_root.path, "test/test.zig")) {
+        if (test_root.needs_internals) {
             test_mod.addImport("internals", internals_mod);
         }
 
@@ -309,36 +282,64 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&run_unit_tests.step);
     }
 
-    const bench_compile_targets = [_]*std.Build.Step.Compile{
-        bench_exe,
-        bench_render_exe,
-        bench_mermaid_exe,
-        bench_watch_buffer_exe,
-        bench_pipeline_exe,
-        bench_vs_cat_exe,
-    };
-    for (bench_compile_targets) |bench_compile_target| {
-        test_step.dependOn(&bench_compile_target.step);
+    for (benches.compileTargets()) |bench_target| {
+        test_step.dependOn(&bench_target.step);
     }
 }
 
-const TreeSitterAttach = struct {
+const GrammarDependencies = struct {
+    c: *std.Build.Dependency,
+    rust: *std.Build.Dependency,
+    go: *std.Build.Dependency,
+    python: *std.Build.Dependency,
+    javascript: *std.Build.Dependency,
+    bash: *std.Build.Dependency,
+    cpp: *std.Build.Dependency,
+    typescript: *std.Build.Dependency,
+    html: *std.Build.Dependency,
+    css: *std.Build.Dependency,
+    json: *std.Build.Dependency,
+};
+
+const TreeSitterDependencies = struct {
+    runtime: *std.Build.Dependency,
+    zig: *std.Build.Dependency,
+    grammars: GrammarDependencies,
+};
+
+fn loadTreeSitterDependencies(
+    b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    ts_dep: *std.Build.Dependency,
-    ts_zig_dep: *std.Build.Dependency,
-    ts_c_dep: *std.Build.Dependency,
-    ts_rust_dep: *std.Build.Dependency,
-    ts_go_dep: *std.Build.Dependency,
-    ts_python_dep: *std.Build.Dependency,
-    ts_javascript_dep: *std.Build.Dependency,
-    ts_bash_dep: *std.Build.Dependency,
-    ts_cpp_dep: *std.Build.Dependency,
-    ts_typescript_dep: *std.Build.Dependency,
-    ts_html_dep: *std.Build.Dependency,
-    ts_css_dep: *std.Build.Dependency,
-    ts_json_dep: *std.Build.Dependency,
-};
+) TreeSitterDependencies {
+    return .{
+        .runtime = b.dependency("tree_sitter", .{
+            .target = target,
+            .optimize = optimize,
+        }),
+        // build-shared=false forces tree-sitter-zig to compile as a static library
+        // so the installed `mp` binary does not keep a dlopen-style dependency on
+        // `libtree-sitter-zig.dylib` sitting inside .zig-cache.
+        .zig = b.dependency("tree_sitter_zig", .{
+            .target = target,
+            .optimize = optimize,
+            .@"build-shared" = false,
+        }),
+        .grammars = .{
+            .c = b.dependency("tree_sitter_c", .{}),
+            .rust = b.dependency("tree_sitter_rust", .{}),
+            .go = b.dependency("tree_sitter_go", .{}),
+            .python = b.dependency("tree_sitter_python", .{}),
+            .javascript = b.dependency("tree_sitter_javascript", .{}),
+            .bash = b.dependency("tree_sitter_bash", .{}),
+            .cpp = b.dependency("tree_sitter_cpp", .{}),
+            .typescript = b.dependency("tree_sitter_typescript", .{}),
+            .html = b.dependency("tree_sitter_html", .{}),
+            .css = b.dependency("tree_sitter_css", .{}),
+            .json = b.dependency("tree_sitter_json", .{}),
+        },
+    };
+}
 
 /// Grammar C sources and query assets shipped inside each tree-sitter
 /// grammar tarball. Most grammars drop their Zig bindings upstream, so
@@ -354,162 +355,146 @@ const GrammarSource = struct {
     src_subdir: ?[]const u8 = null,
 };
 
+const GrammarLibraries = struct {
+    c: *std.Build.Step.Compile,
+    rust: *std.Build.Step.Compile,
+    go: *std.Build.Step.Compile,
+    python: *std.Build.Step.Compile,
+    javascript: *std.Build.Step.Compile,
+    bash: *std.Build.Step.Compile,
+    cpp: *std.Build.Step.Compile,
+    typescript: *std.Build.Step.Compile,
+    tsx: *std.Build.Step.Compile,
+    html: *std.Build.Step.Compile,
+    css: *std.Build.Step.Compile,
+    json: *std.Build.Step.Compile,
+};
+
 const TreeSitterSupport = struct {
     runtime_module: *std.Build.Module,
     zig_module: *std.Build.Module,
     queries_module: *std.Build.Module,
-    c_lib: *std.Build.Step.Compile,
-    rust_lib: *std.Build.Step.Compile,
-    go_lib: *std.Build.Step.Compile,
-    python_lib: *std.Build.Step.Compile,
-    javascript_lib: *std.Build.Step.Compile,
-    bash_lib: *std.Build.Step.Compile,
-    cpp_lib: *std.Build.Step.Compile,
-    typescript_lib: *std.Build.Step.Compile,
-    tsx_lib: *std.Build.Step.Compile,
-    html_lib: *std.Build.Step.Compile,
-    css_lib: *std.Build.Step.Compile,
-    json_lib: *std.Build.Step.Compile,
+    libs: GrammarLibraries,
 };
 
-fn prepareTreeSitterSupport(b: *std.Build, a: TreeSitterAttach) TreeSitterSupport {
-    const runtime_module = a.ts_dep.module("tree_sitter");
-    const zig_module = a.ts_zig_dep.module("tree-sitter-zig");
-
-    const c_lib = compileGrammarLibrary(b, a.target, a.optimize, .{
-        .dep = a.ts_c_dep,
-        .has_scanner = false,
-        .embed_name = "c_highlights.scm",
-    }, "tree-sitter-c");
-    const rust_lib = compileGrammarLibrary(b, a.target, a.optimize, .{
-        .dep = a.ts_rust_dep,
-        .has_scanner = true,
-        .embed_name = "rust_highlights.scm",
-    }, "tree-sitter-rust");
-    const go_lib = compileGrammarLibrary(b, a.target, a.optimize, .{
-        .dep = a.ts_go_dep,
-        .has_scanner = false,
-        .embed_name = "go_highlights.scm",
-    }, "tree-sitter-go");
-    const python_lib = compileGrammarLibrary(b, a.target, a.optimize, .{
-        .dep = a.ts_python_dep,
-        .has_scanner = true,
-        .embed_name = "python_highlights.scm",
-    }, "tree-sitter-python");
-    const javascript_lib = compileGrammarLibrary(b, a.target, a.optimize, .{
-        .dep = a.ts_javascript_dep,
-        .has_scanner = true,
-        .embed_name = "javascript_highlights.scm",
-    }, "tree-sitter-javascript");
-    const bash_lib = compileGrammarLibrary(b, a.target, a.optimize, .{
-        .dep = a.ts_bash_dep,
-        .has_scanner = true,
-        .embed_name = "bash_highlights.scm",
-    }, "tree-sitter-bash");
-    const cpp_lib = compileGrammarLibrary(b, a.target, a.optimize, .{
-        .dep = a.ts_cpp_dep,
-        .has_scanner = true,
-        .embed_name = "cpp_extra_highlights.scm",
-    }, "tree-sitter-cpp");
-    const typescript_lib = compileGrammarLibrary(b, a.target, a.optimize, .{
-        .dep = a.ts_typescript_dep,
-        .has_scanner = true,
-        .embed_name = "typescript_highlights.scm",
-        .src_subdir = "typescript/src",
-    }, "tree-sitter-typescript");
-    const tsx_lib = compileGrammarLibrary(b, a.target, a.optimize, .{
-        .dep = a.ts_typescript_dep,
-        .has_scanner = true,
-        .embed_name = "tsx_highlights.scm",
-        .src_subdir = "tsx/src",
-    }, "tree-sitter-tsx");
-    const html_lib = compileGrammarLibrary(b, a.target, a.optimize, .{
-        .dep = a.ts_html_dep,
-        .has_scanner = true,
-        .embed_name = "html_highlights.scm",
-    }, "tree-sitter-html");
-    const css_lib = compileGrammarLibrary(b, a.target, a.optimize, .{
-        .dep = a.ts_css_dep,
-        .has_scanner = true,
-        .embed_name = "css_highlights.scm",
-    }, "tree-sitter-css");
-    const json_lib = compileGrammarLibrary(b, a.target, a.optimize, .{
-        .dep = a.ts_json_dep,
-        .has_scanner = false,
-        .embed_name = "json_highlights.scm",
-    }, "tree-sitter-json");
-
-    const queries = b.addWriteFiles();
-    _ = queries.addCopyFile(a.ts_zig_dep.path("queries/highlights.scm"), "zig_highlights.scm");
-    _ = queries.addCopyFile(a.ts_c_dep.path("queries/highlights.scm"), "c_highlights.scm");
-    _ = queries.addCopyFile(a.ts_rust_dep.path("queries/highlights.scm"), "rust_highlights.scm");
-    _ = queries.addCopyFile(a.ts_go_dep.path("queries/highlights.scm"), "go_highlights.scm");
-    _ = queries.addCopyFile(a.ts_python_dep.path("queries/highlights.scm"), "python_highlights.scm");
-    _ = queries.addCopyFile(a.ts_javascript_dep.path("queries/highlights.scm"), "javascript_base_highlights.scm");
-    _ = queries.addCopyFile(a.ts_javascript_dep.path("queries/highlights-jsx.scm"), "javascript_jsx_highlights.scm");
-    _ = queries.addCopyFile(a.ts_javascript_dep.path("queries/locals.scm"), "javascript_locals.scm");
-    _ = queries.addCopyFile(a.ts_bash_dep.path("queries/highlights.scm"), "bash_highlights.scm");
-    _ = queries.addCopyFile(a.ts_cpp_dep.path("queries/highlights.scm"), "cpp_extra_highlights.scm");
-    _ = queries.addCopyFile(a.ts_typescript_dep.path("queries/highlights.scm"), "typescript_extra_highlights.scm");
-    _ = queries.addCopyFile(a.ts_typescript_dep.path("queries/locals.scm"), "typescript_extra_locals.scm");
-    _ = queries.addCopyFile(a.ts_html_dep.path("queries/highlights.scm"), "html_highlights.scm");
-    _ = queries.addCopyFile(a.ts_css_dep.path("queries/highlights.scm"), "css_highlights.scm");
-    _ = queries.addCopyFile(a.ts_json_dep.path("queries/highlights.scm"), "json_highlights.scm");
-
-    const wrapper = queries.add("mod.zig",
-        \\pub const zig_highlights: []const u8 = @embedFile("zig_highlights.scm");
-        \\pub const c_highlights: []const u8 = @embedFile("c_highlights.scm");
-        \\pub const rust_highlights: []const u8 = @embedFile("rust_highlights.scm");
-        \\pub const go_highlights: []const u8 = @embedFile("go_highlights.scm");
-        \\pub const python_highlights: []const u8 = @embedFile("python_highlights.scm");
-        \\pub const bash_highlights: []const u8 = @embedFile("bash_highlights.scm");
-        \\pub const html_highlights: []const u8 = @embedFile("html_highlights.scm");
-        \\pub const css_highlights: []const u8 = @embedFile("css_highlights.scm");
-        \\pub const json_highlights: []const u8 = @embedFile("json_highlights.scm");
-        \\// Layered highlights for the javascript family. We concatenate
-        \\// from most generic to most specific so the more specific child
-        \\// patterns win under the highlighter's "later pattern wins" rule
-        \\// (e.g. `(jsx_attribute (property_identifier) @attribute)` needs
-        \\// to come after the generic `(property_identifier) @property`
-        \\// in the javascript base highlights, otherwise jsx attributes
-        \\// render as CSS-style properties).
-        \\const javascript_base_highlights: []const u8 = @embedFile("javascript_base_highlights.scm");
-        \\const javascript_jsx_highlights: []const u8 = @embedFile("javascript_jsx_highlights.scm");
-        \\const typescript_extra_highlights: []const u8 = @embedFile("typescript_extra_highlights.scm");
-        \\pub const javascript_highlights: []const u8 = javascript_base_highlights ++ "\n" ++ javascript_jsx_highlights;
-        \\pub const typescript_highlights: []const u8 = javascript_base_highlights ++ "\n" ++ typescript_extra_highlights;
-        \\pub const tsx_highlights: []const u8 = javascript_base_highlights ++ "\n" ++ javascript_jsx_highlights ++ "\n" ++ typescript_extra_highlights;
-        \\// cpp highlights.scm is similarly a semantic shim over c.
-        \\pub const cpp_highlights: []const u8 = c_highlights ++ "\n" ++ @embedFile("cpp_extra_highlights.scm");
-        \\// Locals queries. Upstream assigns typescript a [ts_extra, js]
-        \\// stack and tsx js-only; we mirror that here.
-        \\pub const javascript_locals: []const u8 = @embedFile("javascript_locals.scm");
-        \\pub const typescript_locals: []const u8 = @embedFile("typescript_extra_locals.scm") ++ "\n" ++ javascript_locals;
-        \\pub const tsx_locals: []const u8 = javascript_locals;
-        \\
-    );
-
+fn prepareTreeSitterSupport(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    deps: TreeSitterDependencies,
+) TreeSitterSupport {
     return .{
-        .runtime_module = runtime_module,
-        .zig_module = zig_module,
-        .queries_module = b.createModule(.{
-            .root_source_file = wrapper,
-            .target = a.target,
-            .optimize = a.optimize,
-        }),
-        .c_lib = c_lib,
-        .rust_lib = rust_lib,
-        .go_lib = go_lib,
-        .python_lib = python_lib,
-        .javascript_lib = javascript_lib,
-        .bash_lib = bash_lib,
-        .cpp_lib = cpp_lib,
-        .typescript_lib = typescript_lib,
-        .tsx_lib = tsx_lib,
-        .html_lib = html_lib,
-        .css_lib = css_lib,
-        .json_lib = json_lib,
+        .runtime_module = deps.runtime.module("tree_sitter"),
+        .zig_module = deps.zig.module("tree-sitter-zig"),
+        .queries_module = createQueriesModule(b, target, optimize, deps),
+        .libs = compileGrammarLibraries(b, target, optimize, deps.grammars),
     };
+}
+
+fn compileGrammarLibraries(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    deps: GrammarDependencies,
+) GrammarLibraries {
+    return .{
+        .c = compileGrammarLibrary(b, target, optimize, .{
+            .dep = deps.c,
+            .has_scanner = false,
+            .embed_name = "c_highlights.scm",
+        }, "tree-sitter-c"),
+        .rust = compileGrammarLibrary(b, target, optimize, .{
+            .dep = deps.rust,
+            .has_scanner = true,
+            .embed_name = "rust_highlights.scm",
+        }, "tree-sitter-rust"),
+        .go = compileGrammarLibrary(b, target, optimize, .{
+            .dep = deps.go,
+            .has_scanner = false,
+            .embed_name = "go_highlights.scm",
+        }, "tree-sitter-go"),
+        .python = compileGrammarLibrary(b, target, optimize, .{
+            .dep = deps.python,
+            .has_scanner = true,
+            .embed_name = "python_highlights.scm",
+        }, "tree-sitter-python"),
+        .javascript = compileGrammarLibrary(b, target, optimize, .{
+            .dep = deps.javascript,
+            .has_scanner = true,
+            .embed_name = "javascript_highlights.scm",
+        }, "tree-sitter-javascript"),
+        .bash = compileGrammarLibrary(b, target, optimize, .{
+            .dep = deps.bash,
+            .has_scanner = true,
+            .embed_name = "bash_highlights.scm",
+        }, "tree-sitter-bash"),
+        .cpp = compileGrammarLibrary(b, target, optimize, .{
+            .dep = deps.cpp,
+            .has_scanner = true,
+            .embed_name = "cpp_extra_highlights.scm",
+        }, "tree-sitter-cpp"),
+        .typescript = compileGrammarLibrary(b, target, optimize, .{
+            .dep = deps.typescript,
+            .has_scanner = true,
+            .embed_name = "typescript_highlights.scm",
+            .src_subdir = "typescript/src",
+        }, "tree-sitter-typescript"),
+        .tsx = compileGrammarLibrary(b, target, optimize, .{
+            .dep = deps.typescript,
+            .has_scanner = true,
+            .embed_name = "tsx_highlights.scm",
+            .src_subdir = "tsx/src",
+        }, "tree-sitter-tsx"),
+        .html = compileGrammarLibrary(b, target, optimize, .{
+            .dep = deps.html,
+            .has_scanner = true,
+            .embed_name = "html_highlights.scm",
+        }, "tree-sitter-html"),
+        .css = compileGrammarLibrary(b, target, optimize, .{
+            .dep = deps.css,
+            .has_scanner = true,
+            .embed_name = "css_highlights.scm",
+        }, "tree-sitter-css"),
+        .json = compileGrammarLibrary(b, target, optimize, .{
+            .dep = deps.json,
+            .has_scanner = false,
+            .embed_name = "json_highlights.scm",
+        }, "tree-sitter-json"),
+    };
+}
+
+fn createQueriesModule(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    deps: TreeSitterDependencies,
+) *std.Build.Module {
+    const queries = b.addWriteFiles();
+    addGrammarQueries(queries, deps);
+    const wrapper = queries.add("mod.zig", queries_wrapper_source);
+    return b.createModule(.{
+        .root_source_file = wrapper,
+        .target = target,
+        .optimize = optimize,
+    });
+}
+
+fn addGrammarQueries(queries: anytype, deps: TreeSitterDependencies) void {
+    _ = queries.addCopyFile(deps.zig.path("queries/highlights.scm"), "zig_highlights.scm");
+    _ = queries.addCopyFile(deps.grammars.c.path("queries/highlights.scm"), "c_highlights.scm");
+    _ = queries.addCopyFile(deps.grammars.rust.path("queries/highlights.scm"), "rust_highlights.scm");
+    _ = queries.addCopyFile(deps.grammars.go.path("queries/highlights.scm"), "go_highlights.scm");
+    _ = queries.addCopyFile(deps.grammars.python.path("queries/highlights.scm"), "python_highlights.scm");
+    _ = queries.addCopyFile(deps.grammars.javascript.path("queries/highlights.scm"), "javascript_base_highlights.scm");
+    _ = queries.addCopyFile(deps.grammars.javascript.path("queries/highlights-jsx.scm"), "javascript_jsx_highlights.scm");
+    _ = queries.addCopyFile(deps.grammars.javascript.path("queries/locals.scm"), "javascript_locals.scm");
+    _ = queries.addCopyFile(deps.grammars.bash.path("queries/highlights.scm"), "bash_highlights.scm");
+    _ = queries.addCopyFile(deps.grammars.cpp.path("queries/highlights.scm"), "cpp_extra_highlights.scm");
+    _ = queries.addCopyFile(deps.grammars.typescript.path("queries/highlights.scm"), "typescript_extra_highlights.scm");
+    _ = queries.addCopyFile(deps.grammars.typescript.path("queries/locals.scm"), "typescript_extra_locals.scm");
+    _ = queries.addCopyFile(deps.grammars.html.path("queries/highlights.scm"), "html_highlights.scm");
+    _ = queries.addCopyFile(deps.grammars.css.path("queries/highlights.scm"), "css_highlights.scm");
+    _ = queries.addCopyFile(deps.grammars.json.path("queries/highlights.scm"), "json_highlights.scm");
 }
 
 fn compileGrammarLibrary(
@@ -552,16 +537,7 @@ fn attachTreeSitter(module: *std.Build.Module, support: TreeSitterSupport) void 
     // reuse its module directly.
     module.addImport("tree-sitter-zig", support.zig_module);
     module.addImport("ts_queries", support.queries_module);
-    module.linkLibrary(support.c_lib);
-    module.linkLibrary(support.rust_lib);
-    module.linkLibrary(support.go_lib);
-    module.linkLibrary(support.python_lib);
-    module.linkLibrary(support.javascript_lib);
-    module.linkLibrary(support.bash_lib);
-    module.linkLibrary(support.cpp_lib);
-    module.linkLibrary(support.typescript_lib);
-    module.linkLibrary(support.tsx_lib);
-    module.linkLibrary(support.html_lib);
-    module.linkLibrary(support.css_lib);
-    module.linkLibrary(support.json_lib);
+    inline for (std.meta.fields(GrammarLibraries)) |field| {
+        module.linkLibrary(@field(support.libs, field.name));
+    }
 }

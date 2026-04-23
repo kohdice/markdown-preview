@@ -2,31 +2,45 @@ const std = @import("std");
 
 pub const cache_dir = ".bench-cache";
 
+const ascii_example_path = "examples/EXAMPLE.md";
+const cjk_example_path = "examples/EXAMPLE_ja.md";
+const repeated_doc_separator = "\n\n---\n\n";
+
 pub const Spec = struct {
     path: []const u8,
     target_bytes: usize,
-    generator: *const fn (std.mem.Allocator, usize) anyerror![]u8,
+    seed_path: []const u8,
 };
 
-pub const small_ascii: Spec = .{
-    .path = cache_dir ++ "/small.md",
+pub const sample_ascii: Spec = .{
+    .path = cache_dir ++ "/sample-ascii.md",
     .target_bytes = 8 * 1024,
-    .generator = makeAsciiProse,
+    .seed_path = ascii_example_path,
 };
 
-pub const mid_cjk: Spec = .{
-    .path = cache_dir ++ "/mid.md",
-    .target_bytes = 128 * 1024,
-    .generator = makeCjkProse,
+pub const sample_cjk: Spec = .{
+    .path = cache_dir ++ "/sample-cjk.md",
+    .target_bytes = 8 * 1024,
+    .seed_path = cjk_example_path,
 };
 
-pub const all = [_]Spec{ small_ascii, mid_cjk };
+pub const stress_ascii: Spec = .{
+    .path = cache_dir ++ "/stress-ascii.md",
+    .target_bytes = 1024 * 1024,
+    .seed_path = ascii_example_path,
+};
+
+pub const stress_cjk: Spec = .{
+    .path = cache_dir ++ "/stress-cjk.md",
+    .target_bytes = 1024 * 1024,
+    .seed_path = cjk_example_path,
+};
 
 pub fn ensure(allocator: std.mem.Allocator, io: std.Io, spec: Spec) !void {
     const cwd = std.Io.Dir.cwd();
     try cwd.createDirPath(io, cache_dir);
 
-    const expected = try spec.generator(allocator, spec.target_bytes);
+    const expected = try makeExampleFixture(allocator, io, spec.target_bytes, spec.seed_path);
     defer allocator.free(expected);
 
     if (cwd.readFileAlloc(io, spec.path, allocator, .limited(1 << 28))) |actual| {
@@ -39,67 +53,84 @@ pub fn ensure(allocator: std.mem.Allocator, io: std.Io, spec: Spec) !void {
     try file.writeStreamingAll(io, expected);
 }
 
-pub fn ensureAll(allocator: std.mem.Allocator, io: std.Io) !void {
-    for (all) |spec| try ensure(allocator, io, spec);
-}
+fn makeExampleFixture(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    approx_size: usize,
+    seed_path: []const u8,
+) anyerror![]u8 {
+    const cwd = std.Io.Dir.cwd();
+    const seed = try cwd.readFileAlloc(io, seed_path, allocator, .limited(1 << 20));
+    defer allocator.free(seed);
 
-pub fn makeAsciiProse(allocator: std.mem.Allocator, approx_size: usize) anyerror![]u8 {
     var out: std.ArrayListUnmanaged(u8) = .empty;
     defer out.deinit(allocator);
 
-    const paragraph =
-        "Lorem ipsum dolor sit amet, consectetur adipiscing elit. " ++
-        "Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. " ++
-        "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris " ++
-        "nisi ut aliquip ex ea commodo consequat.\n\n";
+    try out.appendSlice(allocator, seed);
+    if (approx_size <= seed.len) return out.toOwnedSlice(allocator);
 
-    const heading = "## Section heading with some text\n\n";
-    const code_fence = "```zig\nconst x: u32 = 42;\nstd.debug.print(\"{}\\n\", .{x});\n```\n\n";
-    const list_block = "- item one\n- item two\n- item three\n\n";
-
-    try out.appendSlice(allocator, "# Document title\n\n");
-    var written: usize = out.items.len;
-    var cycle: u8 = 0;
-    while (written < approx_size) : (cycle +%= 1) {
-        const block: []const u8 = switch (cycle % 4) {
-            0 => paragraph,
-            1 => list_block,
-            2 => heading,
-            else => code_fence,
-        };
-        try out.appendSlice(allocator, block);
-        written = out.items.len;
+    while (out.items.len + repeated_doc_separator.len + seed.len <= approx_size) {
+        try out.appendSlice(allocator, repeated_doc_separator);
+        try out.appendSlice(allocator, seed);
     }
 
     return out.toOwnedSlice(allocator);
 }
 
-pub fn makeCjkProse(allocator: std.mem.Allocator, approx_size: usize) anyerror![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
-    defer out.deinit(allocator);
+test "makeExampleFixture uses the English example document as the sample fixture seed" {
+    const expected = try std.Io.Dir.cwd().readFileAlloc(
+        std.testing.io,
+        ascii_example_path,
+        std.testing.allocator,
+        .limited(1 << 20),
+    );
+    defer std.testing.allocator.free(expected);
 
-    const paragraph_ja =
-        "これはマークダウンレンダラのベンチマーク用に用意した日本語段落です。" ++
-        "Markdown の解析とレンダリングを同時に計測することで、" ++
-        "East Asian Width の判定や ambiguous 幅の扱いが全体性能に与える影響を見ます。\n\n";
+    const fixture = try makeExampleFixture(
+        std.testing.allocator,
+        std.testing.io,
+        sample_ascii.target_bytes,
+        sample_ascii.seed_path,
+    );
+    defer std.testing.allocator.free(fixture);
 
-    const heading_ja = "## 見出しに混ざる English mix セクション\n\n";
-    const list_ja = "- リスト項目その一\n- リスト項目その二 with ASCII tail\n- 項目3 — 長めの続き\n\n";
-    const quote_ja = "> 引用ブロックの内側にも日本語が入ります。Pipeline 計測対象。\n\n";
+    try std.testing.expectEqualStrings(expected, fixture);
+}
 
-    try out.appendSlice(allocator, "# 日本語ドキュメント\n\n");
-    var written: usize = out.items.len;
-    var cycle: u8 = 0;
-    while (written < approx_size) : (cycle +%= 1) {
-        const block: []const u8 = switch (cycle % 4) {
-            0 => paragraph_ja,
-            1 => list_ja,
-            2 => heading_ja,
-            else => quote_ja,
-        };
-        try out.appendSlice(allocator, block);
-        written = out.items.len;
-    }
+test "makeExampleFixture uses the Japanese example document as the sample fixture seed" {
+    const expected = try std.Io.Dir.cwd().readFileAlloc(
+        std.testing.io,
+        cjk_example_path,
+        std.testing.allocator,
+        .limited(1 << 20),
+    );
+    defer std.testing.allocator.free(expected);
 
-    return out.toOwnedSlice(allocator);
+    const fixture = try makeExampleFixture(
+        std.testing.allocator,
+        std.testing.io,
+        sample_cjk.target_bytes,
+        sample_cjk.seed_path,
+    );
+    defer std.testing.allocator.free(fixture);
+
+    try std.testing.expectEqualStrings(expected, fixture);
+}
+
+test "makeExampleFixture repeats the Japanese example document without truncating sections" {
+    const expected = try std.Io.Dir.cwd().readFileAlloc(
+        std.testing.io,
+        cjk_example_path,
+        std.testing.allocator,
+        .limited(1 << 20),
+    );
+    defer std.testing.allocator.free(expected);
+
+    const target = expected.len * 3;
+    const fixture = try makeExampleFixture(std.testing.allocator, std.testing.io, target, cjk_example_path);
+    defer std.testing.allocator.free(fixture);
+
+    try std.testing.expect(std.mem.startsWith(u8, fixture, expected));
+    try std.testing.expect(std.mem.count(u8, fixture, "## 終了行") >= 2);
+    try std.testing.expect(std.mem.count(u8, fixture, "```mermaid") >= 2);
 }
