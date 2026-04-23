@@ -29,6 +29,7 @@
           name = "markdown-preview";
 
           nativeBuildInputs = with pkgs; [
+            hyperfine
             zig
           ];
         };
