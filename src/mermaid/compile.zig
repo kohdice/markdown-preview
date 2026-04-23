@@ -38,54 +38,6 @@ pub const DiagramKind = enum {
     unknown,
 };
 
-pub fn diagramConfigKey(kind: DiagramKind) ?[]const u8 {
-    return switch (kind) {
-        .flowchart => "\"flowchart\"",
-        .sequence => "\"sequence\"",
-        .class_ => "\"class\"",
-        .state => "\"state\"",
-        .er => "\"er\"",
-        .git_graph => "\"gitGraph\"",
-        .journey => "\"journey\"",
-        .gantt => "\"gantt\"",
-        .pie => "\"pie\"",
-        .mindmap => "\"mindmap\"",
-        .timeline => "\"timeline\"",
-        .quadrant => "\"quadrantChart\"",
-        .xychart => "\"xyChart\"",
-        .sankey => "\"sankey\"",
-        .block => "\"block\"",
-        .unknown => null,
-    };
-}
-
-pub fn classifyHeader(source: []const u8) DiagramKind {
-    const line = firstMeaningfulLine(source) orelse return .unknown;
-    const raw_token = leadingToken(line);
-    const token = std.mem.trimEnd(u8, raw_token, ":");
-
-    if (std.ascii.eqlIgnoreCase(token, "graph")) return .flowchart;
-    if (std.ascii.eqlIgnoreCase(token, "flowchart")) return .flowchart;
-    if (std.ascii.eqlIgnoreCase(token, "sequenceDiagram")) return .sequence;
-    if (std.ascii.eqlIgnoreCase(token, "classDiagram")) return .class_;
-    if (std.ascii.eqlIgnoreCase(token, "classDiagram-v2")) return .class_;
-    if (std.ascii.eqlIgnoreCase(token, "stateDiagram")) return .state;
-    if (std.ascii.eqlIgnoreCase(token, "stateDiagram-v2")) return .state;
-    if (std.ascii.eqlIgnoreCase(token, "erDiagram")) return .er;
-    if (std.ascii.eqlIgnoreCase(token, "journey")) return .journey;
-    if (std.ascii.eqlIgnoreCase(token, "gantt")) return .gantt;
-    if (std.ascii.eqlIgnoreCase(token, "pie")) return .pie;
-    if (std.ascii.eqlIgnoreCase(token, "mindmap")) return .mindmap;
-    if (std.ascii.eqlIgnoreCase(token, "timeline")) return .timeline;
-    if (std.ascii.eqlIgnoreCase(token, "gitGraph")) return .git_graph;
-    if (std.ascii.eqlIgnoreCase(token, "quadrantChart")) return .quadrant;
-    if (std.ascii.eqlIgnoreCase(token, "xychart")) return .xychart;
-    if (std.ascii.eqlIgnoreCase(token, "sankey-beta")) return .sankey;
-    if (std.ascii.eqlIgnoreCase(token, "block-beta")) return .block;
-
-    return .unknown;
-}
-
 fn firstMeaningfulLine(source: []const u8) ?[]const u8 {
     var cursor: usize = 0;
     while (cursor < source.len) {
@@ -130,6 +82,301 @@ pub const Diagram = union(enum) {
     }
 };
 
+const DiagramTag = std.meta.Tag(Diagram);
+
+pub const PaintTarget = enum {
+    graph,
+    sequence,
+    class_,
+    er,
+    git_graph,
+    xychart,
+};
+
+const DiagramSpec = struct {
+    kind: DiagramKind,
+    headers: []const []const u8,
+    config_key: ?[]const u8,
+    compile_tag: ?DiagramTag,
+    paint_target: ?PaintTarget,
+    parser: type,
+};
+
+pub const diagram_specs = [_]DiagramSpec{
+    .{
+        .kind = .flowchart,
+        .headers = &.{ "graph", "flowchart" },
+        .config_key = "\"flowchart\"",
+        .compile_tag = .flowchart,
+        .paint_target = .graph,
+        .parser = parse_flowchart,
+    },
+    .{
+        .kind = .sequence,
+        .headers = &.{"sequenceDiagram"},
+        .config_key = "\"sequence\"",
+        .compile_tag = .sequence,
+        .paint_target = .sequence,
+        .parser = parse_sequence,
+    },
+    .{
+        .kind = .class_,
+        .headers = &.{ "classDiagram", "classDiagram-v2" },
+        .config_key = "\"class\"",
+        .compile_tag = .class_,
+        .paint_target = .class_,
+        .parser = parse_class,
+    },
+    .{
+        .kind = .state,
+        .headers = &.{ "stateDiagram", "stateDiagram-v2" },
+        .config_key = "\"state\"",
+        .compile_tag = .state,
+        .paint_target = .graph,
+        .parser = parse_state,
+    },
+    .{
+        .kind = .er,
+        .headers = &.{"erDiagram"},
+        .config_key = "\"er\"",
+        .compile_tag = .er,
+        .paint_target = .er,
+        .parser = parse_er,
+    },
+    .{
+        .kind = .journey,
+        .headers = &.{"journey"},
+        .config_key = "\"journey\"",
+        .compile_tag = null,
+        .paint_target = null,
+        .parser = void,
+    },
+    .{
+        .kind = .gantt,
+        .headers = &.{"gantt"},
+        .config_key = "\"gantt\"",
+        .compile_tag = null,
+        .paint_target = null,
+        .parser = void,
+    },
+    .{
+        .kind = .pie,
+        .headers = &.{"pie"},
+        .config_key = "\"pie\"",
+        .compile_tag = null,
+        .paint_target = null,
+        .parser = void,
+    },
+    .{
+        .kind = .mindmap,
+        .headers = &.{"mindmap"},
+        .config_key = "\"mindmap\"",
+        .compile_tag = null,
+        .paint_target = null,
+        .parser = void,
+    },
+    .{
+        .kind = .timeline,
+        .headers = &.{"timeline"},
+        .config_key = "\"timeline\"",
+        .compile_tag = null,
+        .paint_target = null,
+        .parser = void,
+    },
+    .{
+        .kind = .git_graph,
+        .headers = &.{"gitGraph"},
+        .config_key = "\"gitGraph\"",
+        .compile_tag = .git_graph,
+        .paint_target = .git_graph,
+        .parser = parse_git,
+    },
+    .{
+        .kind = .quadrant,
+        .headers = &.{"quadrantChart"},
+        .config_key = "\"quadrantChart\"",
+        .compile_tag = null,
+        .paint_target = null,
+        .parser = void,
+    },
+    .{
+        .kind = .xychart,
+        .headers = &.{"xychart"},
+        .config_key = "\"xyChart\"",
+        .compile_tag = .xychart,
+        .paint_target = .xychart,
+        .parser = parse_xychart,
+    },
+    .{
+        .kind = .sankey,
+        .headers = &.{"sankey-beta"},
+        .config_key = "\"sankey\"",
+        .compile_tag = null,
+        .paint_target = null,
+        .parser = void,
+    },
+    .{
+        .kind = .block,
+        .headers = &.{"block-beta"},
+        .config_key = "\"block\"",
+        .compile_tag = null,
+        .paint_target = null,
+        .parser = void,
+    },
+};
+
+fn validateDiagramSpecs() void {
+    comptime var kind_counts = [_]u8{0} ** std.meta.tags(DiagramKind).len;
+    comptime var tag_counts = [_]u8{0} ** std.meta.tags(DiagramTag).len;
+
+    inline for (diagram_specs, 0..) |spec, spec_index| {
+        if (spec.kind == .unknown) {
+            @compileError("diagram_specs must not contain the sentinel kind 'unknown'");
+        }
+        if (spec.headers.len == 0) {
+            @compileError("diagram_specs entry '" ++ @tagName(spec.kind) ++ "' must declare at least one header alias");
+        }
+        if (spec.config_key == null) {
+            @compileError("diagram_specs entry '" ++ @tagName(spec.kind) ++ "' must declare a directive config key");
+        }
+
+        kind_counts[@intFromEnum(spec.kind)] += 1;
+
+        if (spec.compile_tag) |compile_tag| {
+            tag_counts[@intFromEnum(compile_tag)] += 1;
+            if (spec.parser == void) {
+                @compileError("diagram_specs entry '" ++ @tagName(spec.kind) ++ "' must provide a parser when compile_tag is set");
+            }
+            if (spec.paint_target == null) {
+                @compileError("diagram_specs entry '" ++ @tagName(spec.kind) ++ "' must provide a paint target when compile_tag is set");
+            }
+        } else {
+            if (spec.parser != void) {
+                @compileError("diagram_specs entry '" ++ @tagName(spec.kind) ++ "' must not provide a parser when compile_tag is null");
+            }
+            if (spec.paint_target != null) {
+                @compileError("diagram_specs entry '" ++ @tagName(spec.kind) ++ "' must not provide a paint target when compile_tag is null");
+            }
+        }
+
+        inline for (spec.headers) |header| {
+            if (header.len == 0) {
+                @compileError("diagram_specs entry '" ++ @tagName(spec.kind) ++ "' must not contain empty header aliases");
+            }
+
+            inline for (diagram_specs, 0..) |other_spec, other_index| {
+                if (other_index <= spec_index) continue;
+                inline for (other_spec.headers) |other_header| {
+                    if (std.ascii.eqlIgnoreCase(header, other_header)) {
+                        @compileError(std.fmt.comptimePrint(
+                            "diagram_specs header alias '{s}' is duplicated between '{s}' and '{s}'",
+                            .{ header, @tagName(spec.kind), @tagName(other_spec.kind) },
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    inline for (std.meta.tags(DiagramKind)) |kind| {
+        if (kind == .unknown) continue;
+        const count = kind_counts[@intFromEnum(kind)];
+        if (count != 1) {
+            @compileError(std.fmt.comptimePrint(
+                "diagram_specs must include exactly one entry for kind '{s}' (found {})",
+                .{ @tagName(kind), count },
+            ));
+        }
+    }
+
+    inline for (std.meta.tags(DiagramTag)) |tag| {
+        const count = tag_counts[@intFromEnum(tag)];
+        if (count != 1) {
+            @compileError(std.fmt.comptimePrint(
+                "diagram_specs must include exactly one compile_tag for diagram tag '{s}' (found {})",
+                .{ @tagName(tag), count },
+            ));
+        }
+    }
+}
+
+comptime {
+    validateDiagramSpecs();
+}
+
+pub fn diagramConfigKey(kind: DiagramKind) ?[]const u8 {
+    inline for (diagram_specs) |spec| {
+        if (kind == spec.kind) return spec.config_key;
+    }
+    return null;
+}
+
+pub fn classifyHeader(source: []const u8) DiagramKind {
+    const line = firstMeaningfulLine(source) orelse return .unknown;
+    const raw_token = leadingToken(line);
+    const token = std.mem.trimEnd(u8, raw_token, ":");
+
+    inline for (diagram_specs) |spec| {
+        inline for (spec.headers) |header| {
+            if (std.ascii.eqlIgnoreCase(token, header)) return spec.kind;
+        }
+    }
+
+    return .unknown;
+}
+
+fn normalizeParseError(comptime Parser: type, err: Parser.ParseError) CompileError {
+    if (Parser == parse_flowchart or Parser == parse_state) {
+        return switch (err) {
+            error.InvalidMermaid, error.TooManyNodes => error.InvalidMermaid,
+            error.UnsupportedFeature => error.UnsupportedFeature,
+            error.OutOfMemory => error.OutOfMemory,
+        };
+    }
+
+    if (Parser == parse_sequence) {
+        return switch (err) {
+            error.InvalidMermaid, error.TooManyParticipants => error.InvalidMermaid,
+            error.UnsupportedFeature => error.UnsupportedFeature,
+            error.OutOfMemory => error.OutOfMemory,
+        };
+    }
+
+    if (Parser == parse_class) {
+        return switch (err) {
+            error.InvalidMermaid, error.TooManyClasses => error.InvalidMermaid,
+            error.UnsupportedFeature => error.UnsupportedFeature,
+            error.OutOfMemory => error.OutOfMemory,
+        };
+    }
+
+    if (Parser == parse_er) {
+        return switch (err) {
+            error.InvalidMermaid, error.TooManyEntities => error.InvalidMermaid,
+            error.UnsupportedFeature => error.UnsupportedFeature,
+            error.OutOfMemory => error.OutOfMemory,
+        };
+    }
+
+    if (Parser == parse_git) {
+        return switch (err) {
+            error.InvalidMermaid, error.TooManyBranches => error.InvalidMermaid,
+            error.UnsupportedFeature => error.UnsupportedFeature,
+            error.OutOfMemory => error.OutOfMemory,
+        };
+    }
+
+    if (Parser == parse_xychart) {
+        return switch (err) {
+            error.InvalidMermaid => error.InvalidMermaid,
+            error.UnsupportedFeature => error.UnsupportedFeature,
+            error.OutOfMemory => error.OutOfMemory,
+        };
+    }
+
+    @compileError("missing parse error normalization for parser '" ++ @typeName(Parser) ++ "'");
+}
+
 pub fn compile(allocator: std.mem.Allocator, source: []const u8) CompileError!Diagram {
     const kind = classifyHeader(source);
     var key_buf: [1][]const u8 = undefined;
@@ -149,73 +396,21 @@ pub fn compile(allocator: std.mem.Allocator, source: []const u8) CompileError!Di
     };
     defer if (pending_free) |b| allocator.free(b);
 
-    switch (kind) {
-        .flowchart => {
-            pending_free = null;
-            const data = parse_flowchart.parseSource(allocator, stripped) catch |err| switch (err) {
-                error.InvalidMermaid, error.TooManyNodes => return error.InvalidMermaid,
-                error.UnsupportedFeature => return error.UnsupportedFeature,
-                error.OutOfMemory => return error.OutOfMemory,
-            };
-            return .{ .flowchart = data };
-        },
-        .sequence => {
-            pending_free = null;
-            const data = parse_sequence.parseSource(allocator, stripped) catch |err| switch (err) {
-                error.InvalidMermaid, error.TooManyParticipants => return error.InvalidMermaid,
-                error.UnsupportedFeature => return error.UnsupportedFeature,
-                error.OutOfMemory => return error.OutOfMemory,
-            };
-            return .{ .sequence = data };
-        },
-        .class_ => {
-            pending_free = null;
-            const data = parse_class.parseSource(allocator, stripped) catch |err| switch (err) {
-                error.InvalidMermaid, error.TooManyClasses => return error.InvalidMermaid,
-                error.UnsupportedFeature => return error.UnsupportedFeature,
-                error.OutOfMemory => return error.OutOfMemory,
-            };
-            return .{ .class_ = data };
-        },
-        .state => {
-            pending_free = null;
-            const data = parse_state.parseSource(allocator, stripped) catch |err| switch (err) {
-                error.InvalidMermaid, error.TooManyNodes => return error.InvalidMermaid,
-                error.UnsupportedFeature => return error.UnsupportedFeature,
-                error.OutOfMemory => return error.OutOfMemory,
-            };
-            return .{ .state = data };
-        },
-        .er => {
-            pending_free = null;
-            const data = parse_er.parseSource(allocator, stripped) catch |err| switch (err) {
-                error.InvalidMermaid, error.TooManyEntities => return error.InvalidMermaid,
-                error.UnsupportedFeature => return error.UnsupportedFeature,
-                error.OutOfMemory => return error.OutOfMemory,
-            };
-            return .{ .er = data };
-        },
-        .git_graph => {
-            pending_free = null;
-            const data = parse_git.parseSource(allocator, stripped) catch |err| switch (err) {
-                error.InvalidMermaid, error.TooManyBranches => return error.InvalidMermaid,
-                error.UnsupportedFeature => return error.UnsupportedFeature,
-                error.OutOfMemory => return error.OutOfMemory,
-            };
-            return .{ .git_graph = data };
-        },
-        .xychart => {
-            pending_free = null;
-            const data = parse_xychart.parseSource(allocator, stripped) catch |err| switch (err) {
-                error.InvalidMermaid => return error.InvalidMermaid,
-                error.UnsupportedFeature => return error.UnsupportedFeature,
-                error.OutOfMemory => return error.OutOfMemory,
-            };
-            return .{ .xychart = data };
-        },
-        .journey, .gantt, .pie, .mindmap, .timeline, .quadrant, .sankey, .block => return error.UnsupportedDiagram,
-        .unknown => return error.InvalidMermaid,
+    inline for (diagram_specs) |spec| {
+        if (kind == spec.kind) {
+            if (spec.compile_tag) |compile_tag| {
+                pending_free = null;
+                const data = spec.parser.parseSource(allocator, stripped) catch |err| {
+                    return normalizeParseError(spec.parser, err);
+                };
+                return @unionInit(Diagram, @tagName(compile_tag), data);
+            }
+
+            return error.UnsupportedDiagram;
+        }
     }
+
+    return error.InvalidMermaid;
 }
 
 test "compile returns flowchart variant for graph TD" {
@@ -231,6 +426,27 @@ test "compile returns sequence variant for sequenceDiagram" {
     defer diagram.deinit();
     try std.testing.expect(diagram == .sequence);
     try std.testing.expectEqual(@as(usize, 1), diagram.sequence.messages.len);
+}
+
+test "compile returns expected variants for every implemented diagram kind" {
+    const cases = [_]struct {
+        source: []const u8,
+        expected_tag: std.meta.Tag(Diagram),
+    }{
+        .{ .source = "graph TD\n    A --> B\n", .expected_tag = .flowchart },
+        .{ .source = "sequenceDiagram\n    Alice->>Bob: hi\n", .expected_tag = .sequence },
+        .{ .source = "classDiagram-v2\n    class Animal\n", .expected_tag = .class_ },
+        .{ .source = "stateDiagram-v2\n    [*] --> Idle\n", .expected_tag = .state },
+        .{ .source = "erDiagram\n    CUSTOMER\n", .expected_tag = .er },
+        .{ .source = "gitGraph:\n    commit\n", .expected_tag = .git_graph },
+        .{ .source = "xychart\n    bar [1, 2, 3]\n", .expected_tag = .xychart },
+    };
+
+    for (cases) |case| {
+        var diagram = try compile(std.testing.allocator, case.source);
+        defer diagram.deinit();
+        try std.testing.expectEqual(case.expected_tag, std.meta.activeTag(diagram));
+    }
 }
 
 test "compile returns InvalidMermaid for bogus header" {
@@ -287,6 +503,47 @@ test "classifyHeader recognises sequenceDiagram as sequence" {
 
 test "classifyHeader recognises classDiagram as class_" {
     try std.testing.expectEqual(DiagramKind.class_, classifyHeader("classDiagram\n"));
+}
+
+test "classifyHeader recognises every implemented diagram alias" {
+    const cases = [_]struct {
+        source: []const u8,
+        expected: DiagramKind,
+    }{
+        .{ .source = "graph TD\n", .expected = .flowchart },
+        .{ .source = "flowchart LR\n", .expected = .flowchart },
+        .{ .source = "sequenceDiagram\n", .expected = .sequence },
+        .{ .source = "classDiagram-v2\n", .expected = .class_ },
+        .{ .source = "stateDiagram-v2\n", .expected = .state },
+        .{ .source = "erDiagram\n", .expected = .er },
+        .{ .source = "gitGraph:\n", .expected = .git_graph },
+        .{ .source = "xychart\n", .expected = .xychart },
+    };
+
+    for (cases) |case| {
+        try std.testing.expectEqual(case.expected, classifyHeader(case.source));
+    }
+}
+
+test "diagramConfigKey returns expected keys for implemented kinds and null for unknown" {
+    const cases = [_]struct {
+        kind: DiagramKind,
+        expected: ?[]const u8,
+    }{
+        .{ .kind = .flowchart, .expected = "\"flowchart\"" },
+        .{ .kind = .sequence, .expected = "\"sequence\"" },
+        .{ .kind = .class_, .expected = "\"class\"" },
+        .{ .kind = .state, .expected = "\"state\"" },
+        .{ .kind = .er, .expected = "\"er\"" },
+        .{ .kind = .git_graph, .expected = "\"gitGraph\"" },
+        .{ .kind = .xychart, .expected = "\"xyChart\"" },
+        .{ .kind = .unknown, .expected = null },
+    };
+
+    for (cases) |case| {
+        try std.testing.expectEqualStrings(case.expected orelse "", diagramConfigKey(case.kind) orelse "");
+        try std.testing.expectEqual(case.expected == null, diagramConfigKey(case.kind) == null);
+    }
 }
 
 test "classifyHeader treats unknown types as unknown" {

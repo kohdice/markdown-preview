@@ -24,6 +24,29 @@ pub const PaintOptions = struct {
     color_mode: ansi_mod.ColorMode = .truecolor,
 };
 
+const DiagramTag = std.meta.Tag(compile_mod.Diagram);
+const PaintTarget = compile_mod.PaintTarget;
+
+fn paintTargetForTag(comptime tag: DiagramTag) PaintTarget {
+    inline for (compile_mod.diagram_specs) |spec| {
+        if (spec.compile_tag) |compile_tag| {
+            if (compile_tag == tag) {
+                return spec.paint_target orelse @compileError(
+                    "missing paint_target in diagram_specs for tag '" ++ @tagName(tag) ++ "'",
+                );
+            }
+        }
+    }
+
+    @compileError("missing diagram_specs entry for paint tag '" ++ @tagName(tag) ++ "'");
+}
+
+comptime {
+    for (std.meta.tags(DiagramTag)) |tag| {
+        _ = paintTargetForTag(tag);
+    }
+}
+
 pub fn paint(
     writer: *std.Io.Writer,
     allocator: std.mem.Allocator,
@@ -31,29 +54,50 @@ pub fn paint(
     opts: PaintOptions,
 ) PaintError!void {
     return switch (diagram.*) {
-        .flowchart => |*d| paint_flowchart.paintMermaidGraph(writer, allocator, d, opts),
-        .state => |*d| paint_flowchart.paintMermaidGraph(writer, allocator, d, opts),
-        .sequence => |*d| paint_sequence.paintSequence(writer, allocator, d, .{
+        inline else => |*d, tag| paintWithTag(tag, writer, allocator, d, opts),
+    };
+}
+
+fn paintWithTag(
+    comptime tag: DiagramTag,
+    writer: *std.Io.Writer,
+    allocator: std.mem.Allocator,
+    diagram_data: anytype,
+    opts: PaintOptions,
+) PaintError!void {
+    return paintWithTarget(paintTargetForTag(tag), writer, allocator, diagram_data, opts);
+}
+
+fn paintWithTarget(
+    comptime target: PaintTarget,
+    writer: *std.Io.Writer,
+    allocator: std.mem.Allocator,
+    diagram_data: anytype,
+    opts: PaintOptions,
+) PaintError!void {
+    return switch (target) {
+        .graph => paint_flowchart.paintMermaidGraph(writer, allocator, diagram_data, opts),
+        .sequence => paint_sequence.paintSequence(writer, allocator, diagram_data, .{
             .wrap_width = opts.wrap_width,
             .ambiguous_width = opts.ambiguous_width,
         }) catch |err| mapRenderError(err),
-        .class_ => |*d| paint_class.paintClass(writer, allocator, d, .{
+        .class_ => paint_class.paintClass(writer, allocator, diagram_data, .{
             .wrap_width = opts.wrap_width,
             .ambiguous_width = opts.ambiguous_width,
             .enable_ansi = opts.enable_ansi,
             .color_mode = opts.color_mode,
         }) catch |err| mapRenderError(err),
-        .er => |*d| paint_er.paintEr(writer, allocator, d, .{
+        .er => paint_er.paintEr(writer, allocator, diagram_data, .{
             .wrap_width = opts.wrap_width,
             .ambiguous_width = opts.ambiguous_width,
         }) catch |err| mapRenderError(err),
-        .git_graph => |*d| paint_git.paintGit(writer, allocator, d, .{
+        .git_graph => paint_git.paintGit(writer, allocator, diagram_data, .{
             .wrap_width = opts.wrap_width,
             .ambiguous_width = opts.ambiguous_width,
             .enable_ansi = opts.enable_ansi,
             .color_mode = opts.color_mode,
         }) catch |err| mapRenderError(err),
-        .xychart => |*d| paint_xychart.paintXyChart(writer, allocator, d, .{
+        .xychart => paint_xychart.paintXyChart(writer, allocator, diagram_data, .{
             .wrap_width = opts.wrap_width,
             .ambiguous_width = opts.ambiguous_width,
             .enable_ansi = opts.enable_ansi,
@@ -85,6 +129,19 @@ fn expectPaintProducesOutput(source: []const u8, opts: PaintOptions) !void {
     try std.testing.expect(sink.writer.buffered().len > 0);
 }
 
+fn expectPaintContains(source: []const u8, needle: []const u8, opts: PaintOptions) !void {
+    const alloc = std.testing.allocator;
+
+    var diagram = try compile_mod.compile(alloc, source);
+    defer diagram.deinit();
+
+    var sink: std.Io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+    try paint(&sink.writer, alloc, &diagram, opts);
+
+    try std.testing.expect(std.mem.indexOf(u8, sink.writer.buffered(), needle) != null);
+}
+
 test "paint flowchart produces non-empty output" {
     const opts: PaintOptions = .{
         .enable_ansi = false,
@@ -110,6 +167,37 @@ test "paint xychart produces non-empty output" {
         .ambiguous_width = .narrow,
     };
     try expectPaintProducesOutput("xychart\nbar [1, 2, 3]\n", opts);
+}
+
+test "paint dispatches every implemented diagram kind to a renderer" {
+    const opts: PaintOptions = .{
+        .enable_ansi = false,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    };
+    const cases = [_]struct {
+        source: []const u8,
+        expected: []const u8,
+    }{
+        .{ .source = "graph TD\n    A --> B\n", .expected = "A" },
+        .{ .source = "stateDiagram-v2\n    [*] --> Idle\n", .expected = "Idle" },
+        .{ .source = "sequenceDiagram\n    Alice->>Bob: hi\n", .expected = "hi" },
+        .{
+            .source =
+            \\classDiagram-v2
+            \\    class Animal
+            \\    Animal : +str name
+            ,
+            .expected = "Animal",
+        },
+        .{ .source = "erDiagram\n    CUSTOMER ||--o{ ORDER : places\n", .expected = "places" },
+        .{ .source = "gitGraph:\n    commit\n", .expected = "[main]" },
+        .{ .source = "xychart\ntitle \"Demo\"\n", .expected = "Demo" },
+    };
+
+    for (cases) |case| {
+        try expectPaintContains(case.source, case.expected, opts);
+    }
 }
 
 test "compile then paint accepts bare xychart source end-to-end" {
