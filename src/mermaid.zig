@@ -26,6 +26,7 @@ test {
     _ = @import("mermaid/paint_git.zig");
     _ = @import("mermaid/parse_xychart.zig");
     _ = @import("mermaid/paint_xychart.zig");
+    _ = @import("mermaid/parse_source_test.zig");
     _ = @import("mermaid/directive.zig");
     _ = @import("mermaid/paint_flowchart.zig");
     _ = @import("mermaid/compile.zig");

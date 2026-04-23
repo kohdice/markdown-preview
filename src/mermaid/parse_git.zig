@@ -64,10 +64,7 @@ const Parser = struct {
 /// `source` must already be stripped of `%%{init: ...}%%` directives by
 /// `compile` or the caller. Parsing does not revisit directive semantics.
 pub fn parseSource(allocator: std.mem.Allocator, source: anytype) ParseError!types.GitGraph {
-    const owned_source: []u8 = if (@TypeOf(source) == Source) switch (source) {
-        .borrowed => |s| try allocator.dupe(u8, s),
-        .owned => |s| s,
-    } else try allocator.dupe(u8, source);
+    const owned_source = try source_mod.normalizeOwned(allocator, source);
     return parseFromOwned(allocator, owned_source);
 }
 
