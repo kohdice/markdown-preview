@@ -3,6 +3,7 @@ const render_buffer_mod = @import("render_buffer");
 const bench = @import("bench_support.zig");
 
 const RenderBuffer = render_buffer_mod.RenderBuffer;
+const timing_allocator = std.heap.smp_allocator;
 
 const Scenario = struct {
     name: []const u8,
@@ -11,11 +12,27 @@ const Scenario = struct {
     chunk_size: usize,
 };
 
-const Run = struct {
-    elapsed_ns: u64,
-    counts: bench.CounterSnapshot,
+const TimingResult = struct {
+    stats: bench.DurationStats,
     total_bytes: usize,
     total_lines: usize,
+};
+
+const Run = struct {
+    total_bytes: usize,
+    total_lines: usize,
+};
+
+const TimeRunner = struct {
+    allocator: std.mem.Allocator,
+    scenario: Scenario,
+    payload: []const u8,
+    last_run: Run = .{ .total_bytes = 0, .total_lines = 0 },
+
+    pub fn run(self: *@This()) !void {
+        self.last_run = try runBuffer(self.allocator, self.scenario, self.payload);
+        std.mem.doNotOptimizeAway(self.last_run.total_lines);
+    }
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -37,36 +54,64 @@ pub fn main(init: std.process.Init) !void {
         const payload = try makePayload(allocator, scenario.total_bytes, scenario.line_length);
         defer allocator.free(payload);
 
-        const cold = try runOnce(io, scenario, payload);
-        const warm = try runOnce(io, scenario, payload);
+        const timing = try measureTiming(allocator, io, scenario, payload);
+        const counts = try profileAllocations(scenario, payload);
 
-        const mib = @as(f64, @floatFromInt(scenario.total_bytes)) / (1024.0 * 1024.0);
         std.debug.print(
-            "{s}: cold={d:.3}ms ({d:.1} MiB/s) allocs={d} bytes_alloc={d}  warm={d:.3}ms ({d:.1} MiB/s) allocs={d} bytes_alloc={d}  lines={d}\n",
+            "{s}: n={d} median={d:.3}ms ({d:.1} MiB/s) [{d:.3}..{d:.3}] allocs={d} bytes_alloc={d} lines={d}\n",
             .{
                 scenario.name,
-                nsToMs(cold.elapsed_ns),
-                mib / (nsToMs(cold.elapsed_ns) / 1000.0),
-                cold.counts.alloc_count,
-                cold.counts.bytes_allocated,
-                nsToMs(warm.elapsed_ns),
-                mib / (nsToMs(warm.elapsed_ns) / 1000.0),
-                warm.counts.alloc_count,
-                warm.counts.bytes_allocated,
-                cold.total_lines,
+                timing.stats.sample_count,
+                bench.nsToMs(timing.stats.median_ns),
+                bench.throughputMiBps(scenario.total_bytes, timing.stats.median_ns),
+                bench.nsToMs(timing.stats.min_ns),
+                bench.nsToMs(timing.stats.max_ns),
+                counts.alloc_count,
+                counts.bytes_allocated,
+                timing.total_lines,
             },
         );
     }
 }
 
-fn runOnce(io: std.Io, scenario: Scenario, payload: []const u8) !Run {
-    var counting = bench.CountingAllocator.init(std.heap.smp_allocator);
-    var rb: RenderBuffer = undefined;
-    rb.init(counting.allocator());
-    defer rb.deinit();
+fn measureTiming(
+    sample_allocator: std.mem.Allocator,
+    io: std.Io,
+    scenario: Scenario,
+    payload: []const u8,
+) !TimingResult {
+    var runner = TimeRunner{
+        .allocator = timing_allocator,
+        .scenario = scenario,
+        .payload = payload,
+    };
 
+    return .{
+        .stats = try bench.measure(io, sample_allocator, bench.default_measure_options, &runner),
+        .total_bytes = runner.last_run.total_bytes,
+        .total_lines = runner.last_run.total_lines,
+    };
+}
+
+fn profileAllocations(scenario: Scenario, payload: []const u8) !bench.CounterSnapshot {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+
+    var counting = bench.CountingAllocator.init(gpa.allocator());
     const before = counting.snapshot();
-    const timer = bench.BenchTimer.start(io);
+    _ = try runBuffer(counting.allocator(), scenario, payload);
+    const after = counting.snapshot();
+    return bench.CounterSnapshot.diff(after, before);
+}
+
+fn runBuffer(
+    allocator: std.mem.Allocator,
+    scenario: Scenario,
+    payload: []const u8,
+) !Run {
+    var rb: RenderBuffer = undefined;
+    rb.init(allocator);
+    defer rb.deinit();
 
     var pos: usize = 0;
     while (pos < payload.len) {
@@ -76,12 +121,7 @@ fn runOnce(io: std.Io, scenario: Scenario, payload: []const u8) !Run {
     }
     try rb.writer.flush();
 
-    const elapsed = timer.read();
-    const after = counting.snapshot();
-
     return .{
-        .elapsed_ns = elapsed,
-        .counts = bench.CounterSnapshot.diff(after, before),
         .total_bytes = rb.buffered().len,
         .total_lines = rb.totalLines(),
     };
@@ -96,8 +136,4 @@ fn makePayload(allocator: std.mem.Allocator, total: usize, line_length: usize) !
         buf[i] = if (col == line_length) '\n' else @intCast('a' + @as(u8, @intCast(i % 26)));
     }
     return buf;
-}
-
-fn nsToMs(ns: u64) f64 {
-    return @as(f64, @floatFromInt(ns)) / std.time.ns_per_ms;
 }

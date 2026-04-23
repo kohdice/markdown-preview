@@ -1,14 +1,55 @@
 const std = @import("std");
 const internals = @import("internals");
 const parse = internals.parse.parse;
+const Document = internals.parse.Document;
 const Renderer = internals.render.Renderer;
 const bench = @import("bench_support.zig");
+
+const timing_allocator = std.heap.smp_allocator;
 
 const Scenario = struct {
     name: []const u8,
     input: []const u8,
     enable_ansi: bool = false,
     wrap_width: ?usize = null,
+};
+
+const RenderTiming = struct {
+    stats: bench.DurationStats,
+    output_bytes: usize,
+};
+
+const RenderProfile = struct {
+    counts: bench.CounterSnapshot,
+    output_bytes: usize,
+};
+
+const ParseTimeRunner = struct {
+    allocator: std.mem.Allocator,
+    input: []const u8,
+
+    pub fn run(self: *@This()) !void {
+        var doc = try parse(self.allocator, .{ .borrowed = self.input });
+        defer doc.deinit();
+        std.mem.doNotOptimizeAway(doc.blocks.len);
+    }
+};
+
+const RenderTimeRunner = struct {
+    allocator: std.mem.Allocator,
+    renderer: *Renderer,
+    doc: *const Document,
+    wrap_width: ?usize,
+    last_output_bytes: usize = 0,
+
+    pub fn run(self: *@This()) !void {
+        self.last_output_bytes = try renderWithDiscarding(
+            self.renderer,
+            self.doc,
+            self.wrap_width,
+            self.allocator,
+        );
+    }
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -33,57 +74,131 @@ pub fn main(init: std.process.Init) !void {
 
     std.debug.print("inline benchmark\n", .{});
     for (scenarios) |scenario| {
-        try runScenario(io, scenario);
+        try runScenario(allocator, io, scenario);
     }
 }
 
-fn runScenario(io: std.Io, scenario: Scenario) !void {
-    var gpa: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-
-    var counting = bench.CountingAllocator.init(gpa.allocator());
-    const allocator = counting.allocator();
-
-    const before_parse = counting.snapshot();
-    var timer = bench.BenchTimer.start(io);
-    var doc = try parse(allocator, .{ .borrowed = scenario.input });
-    defer doc.deinit();
-    const parse_elapsed_ns = timer.read();
-    const after_parse = counting.snapshot();
-
+fn runScenario(sample_allocator: std.mem.Allocator, io: std.Io, scenario: Scenario) !void {
     const wrap_width: ?usize = scenario.wrap_width orelse 80;
-    var renderer = Renderer.init(allocator, .{ .enable_ansi = scenario.enable_ansi });
-    defer renderer.deinit();
-
-    var sink: [512]u8 = undefined;
-    var discarding: std.Io.Writer.Discarding = .init(&sink);
-    timer = bench.BenchTimer.start(io);
-    try renderer.render(&discarding.writer, &doc, wrap_width, allocator);
-    const render_elapsed_ns = timer.read();
-    const after_render = counting.snapshot();
-
-    const parse_counts = bench.CounterSnapshot.diff(after_parse, before_parse);
-    const render_counts = bench.CounterSnapshot.diff(after_render, after_parse);
+    const parse_time = try measureParse(sample_allocator, io, scenario);
+    const render_time = try measureRender(sample_allocator, io, scenario, wrap_width);
+    const parse_profile = try profileParse(scenario);
+    const render_profile = try profileRender(scenario, wrap_width);
 
     std.debug.print(
-        "{s}: parse={d:.3}ms render={d:.3}ms parse_allocs={d} parse_resizes={d} parse_bytes={d} render_allocs={d} render_resizes={d} render_bytes={d} output_bytes={d}\n",
+        "{s}: n={d} parse_median={d:.3}ms [{d:.3}..{d:.3}] render_median={d:.3}ms [{d:.3}..{d:.3}] parse_allocs={d} parse_resizes={d} parse_bytes={d} render_allocs={d} render_resizes={d} render_bytes={d} out={d}\n",
         .{
             scenario.name,
-            nsToMs(parse_elapsed_ns),
-            nsToMs(render_elapsed_ns),
-            parse_counts.alloc_count,
-            parse_counts.resize_count,
-            parse_counts.bytes_allocated,
-            render_counts.alloc_count,
-            render_counts.resize_count,
-            render_counts.bytes_allocated,
-            discarding.fullCount(),
+            parse_time.sample_count,
+            bench.nsToMs(parse_time.median_ns),
+            bench.nsToMs(parse_time.min_ns),
+            bench.nsToMs(parse_time.max_ns),
+            bench.nsToMs(render_time.stats.median_ns),
+            bench.nsToMs(render_time.stats.min_ns),
+            bench.nsToMs(render_time.stats.max_ns),
+            parse_profile.alloc_count,
+            parse_profile.resize_count,
+            parse_profile.bytes_allocated,
+            render_profile.counts.alloc_count,
+            render_profile.counts.resize_count,
+            render_profile.counts.bytes_allocated,
+            render_time.output_bytes,
         },
     );
 }
 
-fn nsToMs(ns: u64) f64 {
-    return @as(f64, @floatFromInt(ns)) / std.time.ns_per_ms;
+fn measureParse(
+    sample_allocator: std.mem.Allocator,
+    io: std.Io,
+    scenario: Scenario,
+) !bench.DurationStats {
+    var runner = ParseTimeRunner{
+        .allocator = timing_allocator,
+        .input = scenario.input,
+    };
+    return bench.measure(io, sample_allocator, bench.default_measure_options, &runner);
+}
+
+fn measureRender(
+    sample_allocator: std.mem.Allocator,
+    io: std.Io,
+    scenario: Scenario,
+    wrap_width: ?usize,
+) !RenderTiming {
+    var doc = try parse(timing_allocator, .{ .borrowed = scenario.input });
+    defer doc.deinit();
+
+    var renderer = Renderer.init(timing_allocator, .{
+        .enable_ansi = scenario.enable_ansi,
+    });
+    defer renderer.deinit();
+
+    var runner = RenderTimeRunner{
+        .allocator = timing_allocator,
+        .renderer = &renderer,
+        .doc = &doc,
+        .wrap_width = wrap_width,
+    };
+
+    return .{
+        .stats = try bench.measure(io, sample_allocator, bench.default_measure_options, &runner),
+        .output_bytes = runner.last_output_bytes,
+    };
+}
+
+fn profileParse(scenario: Scenario) !bench.CounterSnapshot {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+
+    var counting = bench.CountingAllocator.init(gpa.allocator());
+    const before = counting.snapshot();
+    var doc = try parse(counting.allocator(), .{ .borrowed = scenario.input });
+    defer doc.deinit();
+    const after = counting.snapshot();
+    return bench.CounterSnapshot.diff(after, before);
+}
+
+fn profileRender(scenario: Scenario, wrap_width: ?usize) !RenderProfile {
+    var parse_gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = parse_gpa.deinit();
+
+    var doc = try parse(parse_gpa.allocator(), .{ .borrowed = scenario.input });
+    defer doc.deinit();
+
+    var render_gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = render_gpa.deinit();
+
+    var counting = bench.CountingAllocator.init(render_gpa.allocator());
+    var renderer = Renderer.init(counting.allocator(), .{
+        .enable_ansi = scenario.enable_ansi,
+    });
+    defer renderer.deinit();
+
+    _ = try renderWithDiscarding(&renderer, &doc, wrap_width, counting.allocator());
+
+    const before = counting.snapshot();
+    const output_bytes = try renderWithDiscarding(&renderer, &doc, wrap_width, counting.allocator());
+    const after = counting.snapshot();
+
+    return .{
+        .counts = bench.CounterSnapshot.diff(after, before),
+        .output_bytes = output_bytes,
+    };
+}
+
+fn renderWithDiscarding(
+    renderer: *Renderer,
+    doc: *const Document,
+    wrap_width: ?usize,
+    cycle_allocator: std.mem.Allocator,
+) !usize {
+    var sink: [512]u8 = undefined;
+    var discarding: std.Io.Writer.Discarding = .init(&sink);
+    try renderer.render(&discarding.writer, doc, wrap_width, cycle_allocator);
+    try discarding.writer.flush();
+    const output_bytes = discarding.fullCount();
+    std.mem.doNotOptimizeAway(output_bytes);
+    return output_bytes;
 }
 
 fn makeParagraphInput(allocator: std.mem.Allocator, line_count: usize, line: []const u8) ![]u8 {

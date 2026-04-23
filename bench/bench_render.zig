@@ -1,10 +1,12 @@
 const std = @import("std");
 const internals = @import("internals");
 const parse = internals.parse.parse;
+const Document = internals.parse.Document;
 const Renderer = internals.render.Renderer;
 const bench = @import("bench_support.zig");
 
 const AmbiguousWidth = internals.term.width.AmbiguousWidth;
+const timing_allocator = std.heap.smp_allocator;
 
 const Scenario = struct {
     name: []const u8,
@@ -13,10 +15,29 @@ const Scenario = struct {
     ambiguous_width: AmbiguousWidth = .narrow,
 };
 
-const RenderResult = struct {
-    elapsed_ns: u64,
+const RenderTiming = struct {
+    stats: bench.DurationStats,
+    output_bytes: usize,
+};
+
+const RenderProfile = struct {
     counts: bench.CounterSnapshot,
     output_bytes: usize,
+};
+
+const RenderTimeRunner = struct {
+    allocator: std.mem.Allocator,
+    renderer: *Renderer,
+    doc: *const Document,
+    last_output_bytes: usize = 0,
+
+    pub fn run(self: *@This()) !void {
+        self.last_output_bytes = try renderWithDiscarding(
+            self.renderer,
+            self.doc,
+            self.allocator,
+        );
+    }
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -38,11 +59,57 @@ pub fn main(init: std.process.Init) !void {
 
     std.debug.print("render benchmark\n", .{});
     for (scenarios) |scenario| {
-        try runScenario(io, scenario);
+        try runScenario(allocator, io, scenario);
     }
 }
 
-fn runScenario(io: std.Io, scenario: Scenario) !void {
+fn runScenario(sample_allocator: std.mem.Allocator, io: std.Io, scenario: Scenario) !void {
+    const render_time = try measureRender(sample_allocator, io, scenario);
+    const render_profile = try profileRender(scenario);
+
+    std.debug.print(
+        "{s}: n={d} steady_render_median={d:.3}ms [{d:.3}..{d:.3}] render_allocs={d} render_resizes={d} render_bytes={d} out={d}\n",
+        .{
+            scenario.name,
+            render_time.stats.sample_count,
+            bench.nsToMs(render_time.stats.median_ns),
+            bench.nsToMs(render_time.stats.min_ns),
+            bench.nsToMs(render_time.stats.max_ns),
+            render_profile.counts.alloc_count,
+            render_profile.counts.resize_count,
+            render_profile.counts.bytes_allocated,
+            render_time.output_bytes,
+        },
+    );
+}
+
+fn measureRender(
+    sample_allocator: std.mem.Allocator,
+    io: std.Io,
+    scenario: Scenario,
+) !RenderTiming {
+    var doc = try parse(timing_allocator, .{ .borrowed = scenario.input });
+    defer doc.deinit();
+
+    var renderer = Renderer.init(timing_allocator, .{
+        .enable_ansi = scenario.enable_ansi,
+        .ambiguous_width = scenario.ambiguous_width,
+    });
+    defer renderer.deinit();
+
+    var runner = RenderTimeRunner{
+        .allocator = timing_allocator,
+        .renderer = &renderer,
+        .doc = &doc,
+    };
+
+    return .{
+        .stats = try bench.measure(io, sample_allocator, bench.default_measure_options, &runner),
+        .output_bytes = runner.last_output_bytes,
+    };
+}
+
+fn profileRender(scenario: Scenario) !RenderProfile {
     var parse_gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = parse_gpa.deinit();
 
@@ -59,47 +126,30 @@ fn runScenario(io: std.Io, scenario: Scenario) !void {
     });
     defer renderer.deinit();
 
-    const cold = try renderOnce(io, &renderer, &doc, &counting);
-    const warm = try renderOnce(io, &renderer, &doc, &counting);
+    _ = try renderWithDiscarding(&renderer, &doc, counting.allocator());
 
-    std.debug.print(
-        "{s}: cold_render={d:.3}ms cold_allocs={d} cold_resizes={d} cold_bytes={d} warm_render={d:.3}ms warm_allocs={d} warm_resizes={d} warm_bytes={d} output_bytes={d}\n",
-        .{
-            scenario.name,
-            nsToMs(cold.elapsed_ns),
-            cold.counts.alloc_count,
-            cold.counts.resize_count,
-            cold.counts.bytes_allocated,
-            nsToMs(warm.elapsed_ns),
-            warm.counts.alloc_count,
-            warm.counts.resize_count,
-            warm.counts.bytes_allocated,
-            cold.output_bytes,
-        },
-    );
-}
-
-fn renderOnce(
-    io: std.Io,
-    renderer: *Renderer,
-    doc: anytype,
-    counting: *bench.CountingAllocator,
-) !RenderResult {
-    var sink: [512]u8 = undefined;
-    var discarding: std.Io.Writer.Discarding = .init(&sink);
     const before = counting.snapshot();
-    const timer = bench.BenchTimer.start(io);
-    try renderer.render(&discarding.writer, doc, null, counting.allocator());
+    const output_bytes = try renderWithDiscarding(&renderer, &doc, counting.allocator());
     const after = counting.snapshot();
+
     return .{
-        .elapsed_ns = timer.read(),
         .counts = bench.CounterSnapshot.diff(after, before),
-        .output_bytes = discarding.fullCount(),
+        .output_bytes = output_bytes,
     };
 }
 
-fn nsToMs(ns: u64) f64 {
-    return @as(f64, @floatFromInt(ns)) / std.time.ns_per_ms;
+fn renderWithDiscarding(
+    renderer: *Renderer,
+    doc: *const Document,
+    cycle_allocator: std.mem.Allocator,
+) !usize {
+    var sink: [512]u8 = undefined;
+    var discarding: std.Io.Writer.Discarding = .init(&sink);
+    try renderer.render(&discarding.writer, doc, null, cycle_allocator);
+    try discarding.writer.flush();
+    const output_bytes = discarding.fullCount();
+    std.mem.doNotOptimizeAway(output_bytes);
+    return output_bytes;
 }
 
 fn makeAsciiTableDocument(
