@@ -228,6 +228,8 @@ const Walker = struct {
             }
             try self.link_definition_scratch.appendSlice(self.allocator, line);
             lines_consumed += 1;
+            const needs_destination_continuation =
+                lines_consumed == 1 and parse_link.definitionNeedsDestinationContinuation(line);
 
             if (parse_link.definition(self.link_definition_scratch.items)) |def| {
                 const match: LinkDefinitionMatch = .{
@@ -243,9 +245,7 @@ const Walker = struct {
                 const next_line = next.peekLine() orelse return best_match;
                 if (!parse_link.lineCouldStartLinkTitle(next_line)) return best_match;
                 waiting_for_title_completion = true;
-            } else if (lines_consumed == 1 and parse_link.definitionNeedsDestinationContinuation(line)) {
-                // CommonMark allows the destination to begin on the next line.
-            } else if (!waiting_for_title_completion) {
+            } else if (!needs_destination_continuation and !waiting_for_title_completion) {
                 return null;
             }
 
