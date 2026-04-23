@@ -24,6 +24,13 @@ const list_bullet = struct {
     const level2 = "▪ ";
 };
 
+pub const MermaidCacheEntry = struct {
+    diagram: mermaid.Diagram,
+    used_in_render: bool = false,
+};
+
+pub const MermaidCache = std.StringHashMapUnmanaged(MermaidCacheEntry);
+
 fn bulletForDepth(depth: usize) []const u8 {
     return switch (depth % 3) {
         0 => list_bullet.level0,
@@ -62,7 +69,8 @@ pub const RenderSession = struct {
     wrap_writer: *width.WrapWriter,
     wrap_width: ?usize,
     highlighter: *highlight.Highlighter,
-    mermaid_cache: *std.StringHashMapUnmanaged(mermaid.Diagram),
+    mermaid_cache: *MermaidCache,
+    mermaid_compile_count: *usize,
 
     fn pushSegment(self: *RenderSession, segment: prefix_writer.PrefixStack.Segment) !void {
         // PrefixWriter applies the active stack at line-start; unflushed bytes
@@ -332,12 +340,42 @@ pub const RenderSession = struct {
             .ambiguous_width = self.ctx.ambiguous_width,
             .color_mode = self.ctx.color_mode,
         };
-        const gop = try self.mermaid_cache.getOrPut(self.cycle_allocator, content);
-        if (!gop.found_existing) {
-            errdefer _ = self.mermaid_cache.remove(content);
-            gop.value_ptr.* = try mermaid.compile(self.cycle_allocator, content);
+        if (self.mermaid_cache.getPtr(content)) |entry| {
+            entry.used_in_render = true;
+            try mermaid.paint(self.writer, self.scratch, &entry.diagram, opts);
+            return;
         }
-        try mermaid.paint(self.writer, self.scratch, gop.value_ptr, opts);
+
+        const owned_key = try self.persistent_allocator.dupe(u8, content);
+        const gop = try self.mermaid_cache.getOrPut(self.persistent_allocator, owned_key);
+        if (gop.found_existing) {
+            self.persistent_allocator.free(owned_key);
+            gop.value_ptr.used_in_render = true;
+            try mermaid.paint(self.writer, self.scratch, &gop.value_ptr.diagram, opts);
+            return;
+        }
+
+        var has_value = false;
+        errdefer {
+            if (self.mermaid_cache.fetchRemove(owned_key)) |removed| {
+                if (has_value) {
+                    var diagram = removed.value.diagram;
+                    diagram.deinit();
+                }
+                self.persistent_allocator.free(removed.key);
+            } else {
+                self.persistent_allocator.free(owned_key);
+            }
+        }
+
+        gop.value_ptr.* = .{
+            .diagram = try mermaid.compile(self.persistent_allocator, owned_key),
+            .used_in_render = true,
+        };
+        has_value = true;
+        self.mermaid_compile_count.* += 1;
+
+        try mermaid.paint(self.writer, self.scratch, &gop.value_ptr.diagram, opts);
     }
 
     fn writeMermaidFallback(self: *RenderSession, content: []const u8, err: mermaid.PaintError) !void {
@@ -451,8 +489,9 @@ test "RenderSession.write renders heading content without document trailing newl
         .palette = theme.default_palette,
         .syn_palette = theme.default_syntax_palette,
     };
-    var cache: std.StringHashMapUnmanaged(mermaid.Diagram) = .empty;
+    var cache: MermaidCache = .empty;
     defer cache.deinit(allocator);
+    var mermaid_compile_count: usize = 0;
 
     var session: RenderSession = .{
         .ctx = &ctx,
@@ -466,6 +505,7 @@ test "RenderSession.write renders heading content without document trailing newl
         .wrap_width = null,
         .highlighter = &highlighter,
         .mermaid_cache = &cache,
+        .mermaid_compile_count = &mermaid_compile_count,
     };
 
     try session.write(doc.blocks);

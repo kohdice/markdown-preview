@@ -1,5 +1,25 @@
 const std = @import("std");
+const internals = @import("internals");
+const parse = internals.parse;
+const render = internals.render;
 const helpers = @import("../helpers/render_from_source.zig");
+
+fn renderDocumentWithRenderer(
+    allocator: std.mem.Allocator,
+    renderer: *render.Renderer,
+    doc: *const parse.Document,
+    wrap_width: ?usize,
+) ![]u8 {
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    defer output.deinit();
+
+    var cycle_arena = std.heap.ArenaAllocator.init(allocator);
+    defer cycle_arena.deinit();
+
+    try renderer.render(&output.writer, doc, wrap_width, cycle_arena.allocator());
+    var list = output.toArrayList();
+    return list.toOwnedSlice(allocator);
+}
 
 test "mermaid fence renders diagram inside original backticks" {
     const allocator = std.testing.allocator;
@@ -42,6 +62,35 @@ test "mermaid no-space edge A-->B produces the same output as spaced form" {
     defer allocator.free(spaced);
 
     try std.testing.expectEqualStrings(spaced, nospace);
+}
+
+test "width-only rerender reuses cached Mermaid diagrams" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\```mermaid
+        \\graph TD
+        \\    A[AlphaBetaGammaDelta] --> B
+        \\```
+        \\
+    ;
+
+    var doc = try parse.parse(allocator, .{ .borrowed = source });
+    defer doc.deinit();
+
+    var renderer = render.Renderer.init(allocator, .{});
+    defer renderer.deinit();
+
+    const wide = try renderDocumentWithRenderer(allocator, &renderer, &doc, 40);
+    defer allocator.free(wide);
+    try std.testing.expectEqual(@as(usize, 1), renderer.mermaid_cache.count());
+    try std.testing.expectEqual(@as(usize, 1), renderer.mermaid_compile_count);
+
+    const narrow = try renderDocumentWithRenderer(allocator, &renderer, &doc, 10);
+    defer allocator.free(narrow);
+    try std.testing.expectEqual(@as(usize, 1), renderer.mermaid_cache.count());
+    try std.testing.expectEqual(@as(usize, 1), renderer.mermaid_compile_count);
+    try std.testing.expect(wide.len > 0);
+    try std.testing.expect(narrow.len > 0);
 }
 
 test "mermaid labeled edge renders the label text on the routed path" {

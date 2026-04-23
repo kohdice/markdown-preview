@@ -9,7 +9,6 @@ const render_block = @import("render/block.zig");
 const render_table = @import("render/table.zig");
 const render_context = @import("render/context.zig");
 const prefix_writer_mod = @import("render/prefix_writer.zig");
-const mermaid = @import("mermaid.zig");
 
 pub const RenderOptions = struct {
     enable_ansi: bool = false,
@@ -26,6 +25,8 @@ pub const Renderer = struct {
     table_scratch: render_table.TableScratch = .{},
     wrap_line_buf: std.ArrayListUnmanaged(u8) = .empty,
     scratch: std.heap.ArenaAllocator,
+    mermaid_cache: render_block.MermaidCache = .empty,
+    mermaid_compile_count: usize = 0,
 
     pub fn init(persistent_allocator: std.mem.Allocator, opts: RenderOptions) Renderer {
         return .{
@@ -41,6 +42,12 @@ pub const Renderer = struct {
     }
 
     pub fn deinit(self: *Renderer) void {
+        var mermaid_it = self.mermaid_cache.iterator();
+        while (mermaid_it.next()) |entry| {
+            entry.value_ptr.diagram.deinit();
+            self.persistent_allocator.free(entry.key_ptr.*);
+        }
+        self.mermaid_cache.deinit(self.persistent_allocator);
         self.highlighter.deinit();
         self.table_scratch.deinit(self.persistent_allocator);
         self.wrap_line_buf.deinit(self.persistent_allocator);
@@ -56,13 +63,8 @@ pub const Renderer = struct {
     ) !void {
         _ = self.scratch.reset(.retain_capacity);
         self.table_scratch.reset();
-
-        var mermaid_cache: std.StringHashMapUnmanaged(mermaid.Diagram) = .empty;
-        defer {
-            var it = mermaid_cache.valueIterator();
-            while (it.next()) |diagram| diagram.deinit();
-            mermaid_cache.deinit(cycle_allocator);
-        }
+        self.markMermaidCacheUnused();
+        errdefer self.pruneUnusedMermaidCache(self.scratch.allocator()) catch {};
 
         var prefix_stack: prefix_writer_mod.PrefixStack = .init(self.scratch.allocator());
         var prefix_w: prefix_writer_mod.PrefixWriter = undefined;
@@ -90,12 +92,38 @@ pub const Renderer = struct {
             .highlighter = &self.highlighter,
             .table_scratch = &self.table_scratch,
             .wrap_writer = &wrap_writer,
-            .mermaid_cache = &mermaid_cache,
+            .mermaid_cache = &self.mermaid_cache,
+            .mermaid_compile_count = &self.mermaid_compile_count,
         };
 
         try session.write(doc.blocks);
         if (doc.has_trailing_newline) try prefix_w.writer.writeByte('\n');
         try prefix_w.writer.flush();
+        try self.pruneUnusedMermaidCache(self.scratch.allocator());
+    }
+
+    fn markMermaidCacheUnused(self: *Renderer) void {
+        var it = self.mermaid_cache.valueIterator();
+        while (it.next()) |entry| entry.used_in_render = false;
+    }
+
+    fn pruneUnusedMermaidCache(self: *Renderer, allocator: std.mem.Allocator) !void {
+        var stale_keys: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer stale_keys.deinit(allocator);
+
+        var it = self.mermaid_cache.iterator();
+        while (it.next()) |entry| {
+            if (!entry.value_ptr.used_in_render) {
+                try stale_keys.append(allocator, entry.key_ptr.*);
+            }
+        }
+
+        for (stale_keys.items) |key| {
+            const removed = self.mermaid_cache.fetchRemove(key) orelse continue;
+            var diagram = removed.value.diagram;
+            diagram.deinit();
+            self.persistent_allocator.free(removed.key);
+        }
     }
 };
 
