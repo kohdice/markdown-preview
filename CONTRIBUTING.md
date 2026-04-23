@@ -55,7 +55,16 @@ Build the release binary used for benchmarking:
 zig build -Doptimize=ReleaseFast
 ```
 
-Compare `mp` against `cat` with `hyperfine` directly:
+Benchmark `mp` directly with `hyperfine`:
+
+```bash
+hyperfine \
+  --warmup 3 \
+  --min-runs 10 \
+  --command-name mp "./zig-out/bin/mp '.bench-cache/stress-cjk.md' > /dev/null"
+```
+
+To compare `mp` against `cat`, run:
 
 ```bash
 hyperfine \

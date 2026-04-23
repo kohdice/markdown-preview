@@ -1,4 +1,5 @@
 const std = @import("std");
+const env_like_contract = @import("src/term/env_like.zig");
 
 const TestRoot = struct {
     path: []const u8,
@@ -30,38 +31,409 @@ const test_roots = [_]TestRoot{
     .{ .path = "bench/bench_support.zig", .needs_tree_sitter = false },
 };
 
-const queries_wrapper_source =
-    \\pub const zig_highlights: []const u8 = @embedFile("zig_highlights.scm");
-    \\pub const c_highlights: []const u8 = @embedFile("c_highlights.scm");
-    \\pub const rust_highlights: []const u8 = @embedFile("rust_highlights.scm");
-    \\pub const go_highlights: []const u8 = @embedFile("go_highlights.scm");
-    \\pub const python_highlights: []const u8 = @embedFile("python_highlights.scm");
-    \\pub const bash_highlights: []const u8 = @embedFile("bash_highlights.scm");
-    \\pub const html_highlights: []const u8 = @embedFile("html_highlights.scm");
-    \\pub const css_highlights: []const u8 = @embedFile("css_highlights.scm");
-    \\pub const json_highlights: []const u8 = @embedFile("json_highlights.scm");
-    \\// Layered highlights for the javascript family. We concatenate
-    \\// from most generic to most specific so the more specific child
-    \\// patterns win under the highlighter's "later pattern wins" rule
-    \\// (e.g. `(jsx_attribute (property_identifier) @attribute)` needs
-    \\// to come after the generic `(property_identifier) @property`
-    \\// in the javascript base highlights, otherwise jsx attributes
-    \\// render as CSS-style properties).
-    \\const javascript_base_highlights: []const u8 = @embedFile("javascript_base_highlights.scm");
-    \\const javascript_jsx_highlights: []const u8 = @embedFile("javascript_jsx_highlights.scm");
-    \\const typescript_extra_highlights: []const u8 = @embedFile("typescript_extra_highlights.scm");
-    \\pub const javascript_highlights: []const u8 = javascript_base_highlights ++ "\n" ++ javascript_jsx_highlights;
-    \\pub const typescript_highlights: []const u8 = javascript_base_highlights ++ "\n" ++ typescript_extra_highlights;
-    \\pub const tsx_highlights: []const u8 = javascript_base_highlights ++ "\n" ++ javascript_jsx_highlights ++ "\n" ++ typescript_extra_highlights;
-    \\// cpp highlights.scm is similarly a semantic shim over c.
-    \\pub const cpp_highlights: []const u8 = c_highlights ++ "\n" ++ @embedFile("cpp_extra_highlights.scm");
-    \\// Locals queries. Upstream assigns typescript a [ts_extra, js]
-    \\// stack and tsx js-only; we mirror that here.
-    \\pub const javascript_locals: []const u8 = @embedFile("javascript_locals.scm");
-    \\pub const typescript_locals: []const u8 = @embedFile("typescript_extra_locals.scm") ++ "\n" ++ javascript_locals;
-    \\pub const tsx_locals: []const u8 = javascript_locals;
-    \\
-;
+const QueryAssetSpec = struct {
+    dep_path: []const u8,
+    output_name: []const u8,
+    binding_name: []const u8,
+    is_public: bool = true,
+};
+
+const QueryExportSpec = struct {
+    name: []const u8,
+    parts: []const []const u8,
+    is_public: bool = true,
+};
+
+const PackageDependencyStyle = enum {
+    plain,
+    targeted_static,
+};
+
+const PackageSpec = struct {
+    name: []const u8,
+    dependency_style: PackageDependencyStyle = .plain,
+    module_name: ?[]const u8 = null,
+};
+
+const package_specs = [_]PackageSpec{
+    .{
+        .name = "tree_sitter_zig",
+        .dependency_style = .targeted_static,
+        .module_name = "tree-sitter-zig",
+    },
+    .{ .name = "tree_sitter_c" },
+    .{ .name = "tree_sitter_rust" },
+    .{ .name = "tree_sitter_go" },
+    .{ .name = "tree_sitter_python" },
+    .{ .name = "tree_sitter_javascript" },
+    .{ .name = "tree_sitter_bash" },
+    .{ .name = "tree_sitter_cpp" },
+    .{ .name = "tree_sitter_typescript" },
+    .{ .name = "tree_sitter_html" },
+    .{ .name = "tree_sitter_css" },
+    .{ .name = "tree_sitter_json" },
+};
+
+fn packageIndexByName(comptime name: []const u8) usize {
+    inline for (package_specs, 0..) |spec, i| {
+        if (std.mem.eql(u8, spec.name, name)) return i;
+    }
+    @compileError("missing package spec for package " ++ name);
+}
+
+fn packageIndexByModuleName(comptime module_name: []const u8) usize {
+    inline for (package_specs, 0..) |spec, i| {
+        if (spec.module_name) |name| {
+            if (std.mem.eql(u8, name, module_name)) return i;
+        }
+    }
+    @compileError("missing package spec for module " ++ module_name);
+}
+
+const GrammarSpec = struct {
+    package_index: usize,
+    lib_name: ?[]const u8 = null,
+    has_scanner: bool = false,
+    src_subdir: ?[]const u8 = null,
+    query_assets: []const QueryAssetSpec = &.{},
+    query_exports: []const QueryExportSpec = &.{},
+};
+
+const grammar_specs = [_]GrammarSpec{
+    .{
+        .package_index = packageIndexByName("tree_sitter_zig"),
+        .query_assets = &.{
+            .{
+                .dep_path = "queries/highlights.scm",
+                .output_name = "zig_highlights.scm",
+                .binding_name = "zig_highlights",
+            },
+        },
+    },
+    .{
+        .package_index = packageIndexByName("tree_sitter_c"),
+        .lib_name = "tree-sitter-c",
+        .query_assets = &.{
+            .{
+                .dep_path = "queries/highlights.scm",
+                .output_name = "c_highlights.scm",
+                .binding_name = "c_highlights",
+            },
+        },
+    },
+    .{
+        .package_index = packageIndexByName("tree_sitter_rust"),
+        .lib_name = "tree-sitter-rust",
+        .has_scanner = true,
+        .query_assets = &.{
+            .{
+                .dep_path = "queries/highlights.scm",
+                .output_name = "rust_highlights.scm",
+                .binding_name = "rust_highlights",
+            },
+        },
+    },
+    .{
+        .package_index = packageIndexByName("tree_sitter_go"),
+        .lib_name = "tree-sitter-go",
+        .query_assets = &.{
+            .{
+                .dep_path = "queries/highlights.scm",
+                .output_name = "go_highlights.scm",
+                .binding_name = "go_highlights",
+            },
+        },
+    },
+    .{
+        .package_index = packageIndexByName("tree_sitter_python"),
+        .lib_name = "tree-sitter-python",
+        .has_scanner = true,
+        .query_assets = &.{
+            .{
+                .dep_path = "queries/highlights.scm",
+                .output_name = "python_highlights.scm",
+                .binding_name = "python_highlights",
+            },
+        },
+    },
+    .{
+        .package_index = packageIndexByName("tree_sitter_javascript"),
+        .lib_name = "tree-sitter-javascript",
+        .has_scanner = true,
+        .query_assets = &.{
+            .{
+                .dep_path = "queries/highlights.scm",
+                .output_name = "javascript_base_highlights.scm",
+                .binding_name = "javascript_base_highlights",
+                .is_public = false,
+            },
+            .{
+                .dep_path = "queries/highlights-jsx.scm",
+                .output_name = "javascript_jsx_highlights.scm",
+                .binding_name = "javascript_jsx_highlights",
+                .is_public = false,
+            },
+            .{
+                .dep_path = "queries/locals.scm",
+                .output_name = "javascript_locals.scm",
+                .binding_name = "javascript_locals",
+            },
+        },
+        .query_exports = &.{
+            .{
+                .name = "javascript_highlights",
+                .parts = &.{ "javascript_base_highlights", "javascript_jsx_highlights" },
+            },
+        },
+    },
+    .{
+        .package_index = packageIndexByName("tree_sitter_bash"),
+        .lib_name = "tree-sitter-bash",
+        .has_scanner = true,
+        .query_assets = &.{
+            .{
+                .dep_path = "queries/highlights.scm",
+                .output_name = "bash_highlights.scm",
+                .binding_name = "bash_highlights",
+            },
+        },
+    },
+    .{
+        .package_index = packageIndexByName("tree_sitter_cpp"),
+        .lib_name = "tree-sitter-cpp",
+        .has_scanner = true,
+        .query_assets = &.{
+            .{
+                .dep_path = "queries/highlights.scm",
+                .output_name = "cpp_extra_highlights.scm",
+                .binding_name = "cpp_extra_highlights",
+                .is_public = false,
+            },
+        },
+        .query_exports = &.{
+            .{
+                .name = "cpp_highlights",
+                .parts = &.{ "c_highlights", "cpp_extra_highlights" },
+            },
+        },
+    },
+    .{
+        .package_index = packageIndexByName("tree_sitter_typescript"),
+        .lib_name = "tree-sitter-typescript",
+        .has_scanner = true,
+        .src_subdir = "typescript/src",
+        .query_assets = &.{
+            .{
+                .dep_path = "queries/highlights.scm",
+                .output_name = "typescript_extra_highlights.scm",
+                .binding_name = "typescript_extra_highlights",
+                .is_public = false,
+            },
+            .{
+                .dep_path = "queries/locals.scm",
+                .output_name = "typescript_extra_locals.scm",
+                .binding_name = "typescript_extra_locals",
+                .is_public = false,
+            },
+        },
+        .query_exports = &.{
+            .{
+                .name = "typescript_highlights",
+                .parts = &.{ "javascript_base_highlights", "typescript_extra_highlights" },
+            },
+            .{
+                .name = "typescript_locals",
+                .parts = &.{ "typescript_extra_locals", "javascript_locals" },
+            },
+        },
+    },
+    .{
+        .package_index = packageIndexByName("tree_sitter_typescript"),
+        .lib_name = "tree-sitter-tsx",
+        .has_scanner = true,
+        .src_subdir = "tsx/src",
+        .query_exports = &.{
+            .{
+                .name = "tsx_highlights",
+                .parts = &.{ "javascript_base_highlights", "javascript_jsx_highlights", "typescript_extra_highlights" },
+            },
+            .{
+                .name = "tsx_locals",
+                .parts = &.{"javascript_locals"},
+            },
+        },
+    },
+    .{
+        .package_index = packageIndexByName("tree_sitter_html"),
+        .lib_name = "tree-sitter-html",
+        .has_scanner = true,
+        .query_assets = &.{
+            .{
+                .dep_path = "queries/highlights.scm",
+                .output_name = "html_highlights.scm",
+                .binding_name = "html_highlights",
+            },
+        },
+    },
+    .{
+        .package_index = packageIndexByName("tree_sitter_css"),
+        .lib_name = "tree-sitter-css",
+        .has_scanner = true,
+        .query_assets = &.{
+            .{
+                .dep_path = "queries/highlights.scm",
+                .output_name = "css_highlights.scm",
+                .binding_name = "css_highlights",
+            },
+        },
+    },
+    .{
+        .package_index = packageIndexByName("tree_sitter_json"),
+        .lib_name = "tree-sitter-json",
+        .query_assets = &.{
+            .{
+                .dep_path = "queries/highlights.scm",
+                .output_name = "json_highlights.scm",
+                .binding_name = "json_highlights",
+            },
+        },
+    },
+};
+
+fn queryAssetBindingExists(comptime binding_name: []const u8) bool {
+    inline for (grammar_specs) |spec| {
+        inline for (spec.query_assets) |asset| {
+            if (std.mem.eql(u8, asset.binding_name, binding_name)) return true;
+        }
+    }
+    return false;
+}
+
+fn validateGrammarSpecs() void {
+    inline for (grammar_specs, 0..) |spec, spec_index| {
+        if (spec.package_index >= package_specs.len) {
+            @compileError(std.fmt.comptimePrint(
+                "grammar_specs[{d}] references missing package index {d}",
+                .{ spec_index, spec.package_index },
+            ));
+        }
+
+        if (spec.lib_name == null) {
+            if (spec.has_scanner) {
+                @compileError(std.fmt.comptimePrint(
+                    "grammar_specs[{d}] cannot enable has_scanner without lib_name",
+                    .{spec_index},
+                ));
+            }
+            if (spec.src_subdir != null) {
+                @compileError(std.fmt.comptimePrint(
+                    "grammar_specs[{d}] cannot set src_subdir without lib_name",
+                    .{spec_index},
+                ));
+            }
+        }
+
+        inline for (spec.query_assets, 0..) |asset, asset_index| {
+            if (asset.dep_path.len == 0 or asset.output_name.len == 0 or asset.binding_name.len == 0) {
+                @compileError(std.fmt.comptimePrint(
+                    "grammar_specs[{d}].query_assets[{d}] must set dep_path, output_name, and binding_name",
+                    .{ spec_index, asset_index },
+                ));
+            }
+
+            inline for (grammar_specs, 0..) |other_spec, other_spec_index| {
+                inline for (other_spec.query_assets, 0..) |other_asset, other_asset_index| {
+                    if (other_spec_index < spec_index) continue;
+                    if (other_spec_index == spec_index and other_asset_index <= asset_index) continue;
+
+                    if (std.mem.eql(u8, asset.binding_name, other_asset.binding_name)) {
+                        @compileError(std.fmt.comptimePrint(
+                            "duplicate query asset binding '{s}' in grammar_specs[{d}].query_assets[{d}] and grammar_specs[{d}].query_assets[{d}]",
+                            .{ asset.binding_name, spec_index, asset_index, other_spec_index, other_asset_index },
+                        ));
+                    }
+
+                    if (std.mem.eql(u8, asset.output_name, other_asset.output_name)) {
+                        @compileError(std.fmt.comptimePrint(
+                            "duplicate query asset output '{s}' in grammar_specs[{d}].query_assets[{d}] and grammar_specs[{d}].query_assets[{d}]",
+                            .{ asset.output_name, spec_index, asset_index, other_spec_index, other_asset_index },
+                        ));
+                    }
+                }
+            }
+        }
+
+        inline for (spec.query_exports, 0..) |query_export, export_index| {
+            if (query_export.name.len == 0) {
+                @compileError(std.fmt.comptimePrint(
+                    "grammar_specs[{d}].query_exports[{d}] must set name",
+                    .{ spec_index, export_index },
+                ));
+            }
+            if (query_export.parts.len == 0) {
+                @compileError(std.fmt.comptimePrint(
+                    "grammar_specs[{d}].query_exports[{d}] must include at least one part",
+                    .{ spec_index, export_index },
+                ));
+            }
+
+            inline for (grammar_specs) |asset_spec| {
+                inline for (asset_spec.query_assets) |asset| {
+                    if (std.mem.eql(u8, query_export.name, asset.binding_name)) {
+                        @compileError(std.fmt.comptimePrint(
+                            "query export '{s}' conflicts with asset binding '{s}'",
+                            .{ query_export.name, asset.binding_name },
+                        ));
+                    }
+                }
+            }
+
+            inline for (grammar_specs, 0..) |other_spec, other_spec_index| {
+                inline for (other_spec.query_exports, 0..) |other_export, other_export_index| {
+                    if (other_spec_index < spec_index) continue;
+                    if (other_spec_index == spec_index and other_export_index <= export_index) continue;
+
+                    if (std.mem.eql(u8, query_export.name, other_export.name)) {
+                        @compileError(std.fmt.comptimePrint(
+                            "duplicate query export '{s}' in grammar_specs[{d}].query_exports[{d}] and grammar_specs[{d}].query_exports[{d}]",
+                            .{ query_export.name, spec_index, export_index, other_spec_index, other_export_index },
+                        ));
+                    }
+                }
+            }
+
+            inline for (query_export.parts, 0..) |part, part_index| {
+                if (part.len == 0) {
+                    @compileError(std.fmt.comptimePrint(
+                        "grammar_specs[{d}].query_exports[{d}].parts[{d}] must not be empty",
+                        .{ spec_index, export_index, part_index },
+                    ));
+                }
+                if (!queryAssetBindingExists(part)) {
+                    @compileError(std.fmt.comptimePrint(
+                        "query export '{s}' references unknown asset binding '{s}'",
+                        .{ query_export.name, part },
+                    ));
+                }
+            }
+        }
+    }
+}
+
+comptime {
+    @setEvalBranchQuota(10_000);
+    validateGrammarSpecs();
+}
+
+fn compiledGrammarCount() comptime_int {
+    var count: comptime_int = 0;
+    inline for (grammar_specs) |spec| {
+        if (spec.lib_name != null) count += 1;
+    }
+    return count;
+}
+
+const zig_package_index = packageIndexByModuleName("tree-sitter-zig");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -285,26 +657,81 @@ fn addTestStep(
     for (benches.compileTargets()) |bench_target| {
         test_step.dependOn(&bench_target.step);
     }
+
+    addExpectedCompileErrorTest(b, test_step, target, optimize, .{
+        .root_path = "test/compile_errors/env_get_contract.zig",
+        .module_name = "ansi",
+        .module_path = "src/term/ansi.zig",
+        .expected_tag = env_like_contract.missing_get_diagnostic_tag,
+    });
+    addExpectedCompileErrorTest(b, test_step, target, optimize, .{
+        .root_path = "test/compile_errors/env_get_receiver_contract.zig",
+        .module_name = "ansi",
+        .module_path = "src/term/ansi.zig",
+        .expected_tag = env_like_contract.invalid_get_receiver_diagnostic_tag,
+    });
+    addExpectedCompileErrorTest(b, test_step, target, optimize, .{
+        .root_path = "test/compile_errors/env_get_contract_width.zig",
+        .module_name = "width",
+        .module_path = "src/term/width.zig",
+        .expected_tag = env_like_contract.missing_get_diagnostic_tag,
+    });
+    addExpectedCompileErrorTest(b, test_step, target, optimize, .{
+        .root_path = "test/compile_errors/env_get_receiver_contract_width.zig",
+        .module_name = "width",
+        .module_path = "src/term/width.zig",
+        .expected_tag = env_like_contract.invalid_get_receiver_diagnostic_tag,
+    });
+    addExpectedCompileErrorTest(b, test_step, target, optimize, .{
+        .root_path = "test/compile_errors/env_get_name_param_contract.zig",
+        .module_name = "env_like",
+        .module_path = "src/term/env_like.zig",
+        .expected_tag = env_like_contract.invalid_get_name_param_diagnostic_tag,
+    });
+    addExpectedCompileErrorTest(b, test_step, target, optimize, .{
+        .root_path = "test/compile_errors/env_get_return_type_contract.zig",
+        .module_name = "env_like",
+        .module_path = "src/term/env_like.zig",
+        .expected_tag = env_like_contract.invalid_get_return_type_diagnostic_tag,
+    });
 }
 
-const GrammarDependencies = struct {
-    c: *std.Build.Dependency,
-    rust: *std.Build.Dependency,
-    go: *std.Build.Dependency,
-    python: *std.Build.Dependency,
-    javascript: *std.Build.Dependency,
-    bash: *std.Build.Dependency,
-    cpp: *std.Build.Dependency,
-    typescript: *std.Build.Dependency,
-    html: *std.Build.Dependency,
-    css: *std.Build.Dependency,
-    json: *std.Build.Dependency,
+const CompileErrorTestSpec = struct {
+    root_path: []const u8,
+    module_name: []const u8,
+    module_path: []const u8,
+    expected_tag: []const u8,
 };
+
+fn addExpectedCompileErrorTest(
+    b: *std.Build,
+    test_step: *std.Build.Step,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    spec: CompileErrorTestSpec,
+) void {
+    const test_mod = createModule(b, spec.root_path, target, optimize);
+    test_mod.addImport(spec.module_name, createModule(b, spec.module_path, target, optimize));
+    const compile_test = b.addTest(.{
+        .root_module = test_mod,
+    });
+    compile_test.expect_errors = .{
+        .contains = spec.expected_tag,
+    };
+    test_step.dependOn(&compile_test.step);
+}
 
 const TreeSitterDependencies = struct {
     runtime: *std.Build.Dependency,
-    zig: *std.Build.Dependency,
-    grammars: GrammarDependencies,
+    packages: [package_specs.len]*std.Build.Dependency,
+
+    fn depForPackage(self: @This(), comptime index: usize) *std.Build.Dependency {
+        return self.packages[index];
+    }
+
+    fn depForGrammar(self: @This(), comptime index: usize) *std.Build.Dependency {
+        return self.depForPackage(grammar_specs[index].package_index);
+    }
 };
 
 fn loadTreeSitterDependencies(
@@ -312,63 +739,28 @@ fn loadTreeSitterDependencies(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
 ) TreeSitterDependencies {
+    var packages: [package_specs.len]*std.Build.Dependency = undefined;
+    inline for (package_specs, 0..) |spec, i| {
+        packages[i] = switch (spec.dependency_style) {
+            .plain => b.dependency(spec.name, .{}),
+            .targeted_static => b.dependency(spec.name, .{
+                .target = target,
+                .optimize = optimize,
+                .@"build-shared" = false,
+            }),
+        };
+    }
+
     return .{
         .runtime = b.dependency("tree_sitter", .{
             .target = target,
             .optimize = optimize,
         }),
-        // build-shared=false forces tree-sitter-zig to compile as a static library
-        // so the installed `mp` binary does not keep a dlopen-style dependency on
-        // `libtree-sitter-zig.dylib` sitting inside .zig-cache.
-        .zig = b.dependency("tree_sitter_zig", .{
-            .target = target,
-            .optimize = optimize,
-            .@"build-shared" = false,
-        }),
-        .grammars = .{
-            .c = b.dependency("tree_sitter_c", .{}),
-            .rust = b.dependency("tree_sitter_rust", .{}),
-            .go = b.dependency("tree_sitter_go", .{}),
-            .python = b.dependency("tree_sitter_python", .{}),
-            .javascript = b.dependency("tree_sitter_javascript", .{}),
-            .bash = b.dependency("tree_sitter_bash", .{}),
-            .cpp = b.dependency("tree_sitter_cpp", .{}),
-            .typescript = b.dependency("tree_sitter_typescript", .{}),
-            .html = b.dependency("tree_sitter_html", .{}),
-            .css = b.dependency("tree_sitter_css", .{}),
-            .json = b.dependency("tree_sitter_json", .{}),
-        },
+        .packages = packages,
     };
 }
 
-/// Grammar C sources and query assets shipped inside each tree-sitter
-/// grammar tarball. Most grammars drop their Zig bindings upstream, so
-/// we compile `parser.c` (+ optional `scanner.c`) ourselves and embed
-/// `queries/highlights.scm` via a build-time wrapper module.
-const GrammarSource = struct {
-    dep: *std.Build.Dependency,
-    has_scanner: bool,
-    embed_name: []const u8,
-    /// Directory containing parser.c relative to the dep root. Defaults
-    /// to "src". tree-sitter-typescript uses "typescript/src" and
-    /// "tsx/src" because it ships two parsers in one repository.
-    src_subdir: ?[]const u8 = null,
-};
-
-const GrammarLibraries = struct {
-    c: *std.Build.Step.Compile,
-    rust: *std.Build.Step.Compile,
-    go: *std.Build.Step.Compile,
-    python: *std.Build.Step.Compile,
-    javascript: *std.Build.Step.Compile,
-    bash: *std.Build.Step.Compile,
-    cpp: *std.Build.Step.Compile,
-    typescript: *std.Build.Step.Compile,
-    tsx: *std.Build.Step.Compile,
-    html: *std.Build.Step.Compile,
-    css: *std.Build.Step.Compile,
-    json: *std.Build.Step.Compile,
-};
+const GrammarLibraries = [compiledGrammarCount()]*std.Build.Step.Compile;
 
 const TreeSitterSupport = struct {
     runtime_module: *std.Build.Module,
@@ -385,9 +777,9 @@ fn prepareTreeSitterSupport(
 ) TreeSitterSupport {
     return .{
         .runtime_module = deps.runtime.module("tree_sitter"),
-        .zig_module = deps.zig.module("tree-sitter-zig"),
+        .zig_module = deps.depForPackage(zig_package_index).module(package_specs[zig_package_index].module_name.?),
         .queries_module = createQueriesModule(b, target, optimize, deps),
-        .libs = compileGrammarLibraries(b, target, optimize, deps.grammars),
+        .libs = compileGrammarLibraries(b, target, optimize, deps),
     };
 }
 
@@ -395,72 +787,26 @@ fn compileGrammarLibraries(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    deps: GrammarDependencies,
+    deps: TreeSitterDependencies,
 ) GrammarLibraries {
-    return .{
-        .c = compileGrammarLibrary(b, target, optimize, .{
-            .dep = deps.c,
-            .has_scanner = false,
-            .embed_name = "c_highlights.scm",
-        }, "tree-sitter-c"),
-        .rust = compileGrammarLibrary(b, target, optimize, .{
-            .dep = deps.rust,
-            .has_scanner = true,
-            .embed_name = "rust_highlights.scm",
-        }, "tree-sitter-rust"),
-        .go = compileGrammarLibrary(b, target, optimize, .{
-            .dep = deps.go,
-            .has_scanner = false,
-            .embed_name = "go_highlights.scm",
-        }, "tree-sitter-go"),
-        .python = compileGrammarLibrary(b, target, optimize, .{
-            .dep = deps.python,
-            .has_scanner = true,
-            .embed_name = "python_highlights.scm",
-        }, "tree-sitter-python"),
-        .javascript = compileGrammarLibrary(b, target, optimize, .{
-            .dep = deps.javascript,
-            .has_scanner = true,
-            .embed_name = "javascript_highlights.scm",
-        }, "tree-sitter-javascript"),
-        .bash = compileGrammarLibrary(b, target, optimize, .{
-            .dep = deps.bash,
-            .has_scanner = true,
-            .embed_name = "bash_highlights.scm",
-        }, "tree-sitter-bash"),
-        .cpp = compileGrammarLibrary(b, target, optimize, .{
-            .dep = deps.cpp,
-            .has_scanner = true,
-            .embed_name = "cpp_extra_highlights.scm",
-        }, "tree-sitter-cpp"),
-        .typescript = compileGrammarLibrary(b, target, optimize, .{
-            .dep = deps.typescript,
-            .has_scanner = true,
-            .embed_name = "typescript_highlights.scm",
-            .src_subdir = "typescript/src",
-        }, "tree-sitter-typescript"),
-        .tsx = compileGrammarLibrary(b, target, optimize, .{
-            .dep = deps.typescript,
-            .has_scanner = true,
-            .embed_name = "tsx_highlights.scm",
-            .src_subdir = "tsx/src",
-        }, "tree-sitter-tsx"),
-        .html = compileGrammarLibrary(b, target, optimize, .{
-            .dep = deps.html,
-            .has_scanner = true,
-            .embed_name = "html_highlights.scm",
-        }, "tree-sitter-html"),
-        .css = compileGrammarLibrary(b, target, optimize, .{
-            .dep = deps.css,
-            .has_scanner = true,
-            .embed_name = "css_highlights.scm",
-        }, "tree-sitter-css"),
-        .json = compileGrammarLibrary(b, target, optimize, .{
-            .dep = deps.json,
-            .has_scanner = false,
-            .embed_name = "json_highlights.scm",
-        }, "tree-sitter-json"),
-    };
+    var libs: GrammarLibraries = undefined;
+    comptime var lib_index: usize = 0;
+
+    inline for (grammar_specs, 0..) |spec, spec_index| {
+        if (spec.lib_name) |lib_name| {
+            libs[lib_index] = compileGrammarLibrary(
+                b,
+                target,
+                optimize,
+                deps.depForGrammar(spec_index),
+                spec,
+                lib_name,
+            );
+            lib_index += 1;
+        }
+    }
+
+    return libs;
 }
 
 fn createQueriesModule(
@@ -471,7 +817,7 @@ fn createQueriesModule(
 ) *std.Build.Module {
     const queries = b.addWriteFiles();
     addGrammarQueries(queries, deps);
-    const wrapper = queries.add("mod.zig", queries_wrapper_source);
+    const wrapper = queries.add("mod.zig", createQueriesWrapperSource(b));
     return b.createModule(.{
         .root_source_file = wrapper,
         .target = target,
@@ -480,28 +826,50 @@ fn createQueriesModule(
 }
 
 fn addGrammarQueries(queries: anytype, deps: TreeSitterDependencies) void {
-    _ = queries.addCopyFile(deps.zig.path("queries/highlights.scm"), "zig_highlights.scm");
-    _ = queries.addCopyFile(deps.grammars.c.path("queries/highlights.scm"), "c_highlights.scm");
-    _ = queries.addCopyFile(deps.grammars.rust.path("queries/highlights.scm"), "rust_highlights.scm");
-    _ = queries.addCopyFile(deps.grammars.go.path("queries/highlights.scm"), "go_highlights.scm");
-    _ = queries.addCopyFile(deps.grammars.python.path("queries/highlights.scm"), "python_highlights.scm");
-    _ = queries.addCopyFile(deps.grammars.javascript.path("queries/highlights.scm"), "javascript_base_highlights.scm");
-    _ = queries.addCopyFile(deps.grammars.javascript.path("queries/highlights-jsx.scm"), "javascript_jsx_highlights.scm");
-    _ = queries.addCopyFile(deps.grammars.javascript.path("queries/locals.scm"), "javascript_locals.scm");
-    _ = queries.addCopyFile(deps.grammars.bash.path("queries/highlights.scm"), "bash_highlights.scm");
-    _ = queries.addCopyFile(deps.grammars.cpp.path("queries/highlights.scm"), "cpp_extra_highlights.scm");
-    _ = queries.addCopyFile(deps.grammars.typescript.path("queries/highlights.scm"), "typescript_extra_highlights.scm");
-    _ = queries.addCopyFile(deps.grammars.typescript.path("queries/locals.scm"), "typescript_extra_locals.scm");
-    _ = queries.addCopyFile(deps.grammars.html.path("queries/highlights.scm"), "html_highlights.scm");
-    _ = queries.addCopyFile(deps.grammars.css.path("queries/highlights.scm"), "css_highlights.scm");
-    _ = queries.addCopyFile(deps.grammars.json.path("queries/highlights.scm"), "json_highlights.scm");
+    inline for (grammar_specs, 0..) |spec, i| {
+        inline for (spec.query_assets) |asset| {
+            _ = queries.addCopyFile(deps.depForGrammar(i).path(asset.dep_path), asset.output_name);
+        }
+    }
+}
+
+fn createQueriesWrapperSource(b: *std.Build) []const u8 {
+    var sink: std.Io.Writer.Allocating = .init(b.allocator);
+    defer sink.deinit();
+
+    inline for (grammar_specs) |spec| {
+        inline for (spec.query_assets) |asset| {
+            const visibility = if (asset.is_public) "pub " else "";
+            sink.writer.print(
+                "{s}const {s}: []const u8 = @embedFile(\"{s}\");\n",
+                .{ visibility, asset.binding_name, asset.output_name },
+            ) catch @panic("out of memory");
+        }
+    }
+
+    inline for (grammar_specs) |spec| {
+        inline for (spec.query_exports) |query_export| {
+            const visibility = if (query_export.is_public) "pub " else "";
+            sink.writer.print("{s}const {s}: []const u8 = ", .{ visibility, query_export.name }) catch @panic("out of memory");
+            inline for (query_export.parts, 0..) |part, index| {
+                if (index > 0) {
+                    sink.writer.writeAll(" ++ \"\\n\" ++ ") catch @panic("out of memory");
+                }
+                sink.writer.print("{s}", .{part}) catch @panic("out of memory");
+            }
+            sink.writer.writeAll(";\n") catch @panic("out of memory");
+        }
+    }
+
+    return b.dupe(sink.writer.buffered());
 }
 
 fn compileGrammarLibrary(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    src: GrammarSource,
+    dep: *std.Build.Dependency,
+    spec: GrammarSpec,
     lib_name: []const u8,
 ) *std.Build.Step.Compile {
     const root_module = b.createModule(.{
@@ -514,20 +882,20 @@ fn compileGrammarLibrary(
         .linkage = .static,
         .root_module = root_module,
     });
-    const subdir = src.src_subdir orelse "src";
+    const subdir = spec.src_subdir orelse "src";
     const parser_path = b.fmt("{s}/parser.c", .{subdir});
     root_module.addCSourceFile(.{
-        .file = src.dep.path(parser_path),
+        .file = dep.path(parser_path),
         .flags = &.{"-std=c11"},
     });
-    if (src.has_scanner) {
+    if (spec.has_scanner) {
         const scanner_path = b.fmt("{s}/scanner.c", .{subdir});
         root_module.addCSourceFile(.{
-            .file = src.dep.path(scanner_path),
+            .file = dep.path(scanner_path),
             .flags = &.{"-std=c11"},
         });
     }
-    root_module.addIncludePath(src.dep.path(subdir));
+    root_module.addIncludePath(dep.path(subdir));
     return lib;
 }
 
@@ -537,7 +905,7 @@ fn attachTreeSitter(module: *std.Build.Module, support: TreeSitterSupport) void 
     // reuse its module directly.
     module.addImport("tree-sitter-zig", support.zig_module);
     module.addImport("ts_queries", support.queries_module);
-    inline for (std.meta.fields(GrammarLibraries)) |field| {
-        module.linkLibrary(@field(support.libs, field.name));
+    for (support.libs) |lib| {
+        module.linkLibrary(lib);
     }
 }

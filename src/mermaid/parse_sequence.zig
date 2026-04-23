@@ -65,10 +65,7 @@ fn validateLabel(label: []const u8) ParseError!void {
 }
 
 pub fn parseSource(allocator: std.mem.Allocator, source: anytype) ParseError!types.SequenceDiagram {
-    const owned_source: []u8 = if (@TypeOf(source) == Source) switch (source) {
-        .borrowed => |s| try allocator.dupe(u8, s),
-        .owned => |s| s,
-    } else try allocator.dupe(u8, source);
+    const owned_source = try source_mod.normalizeOwned(allocator, source);
     return parseFromOwned(allocator, owned_source);
 }
 
