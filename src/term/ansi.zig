@@ -1,4 +1,5 @@
 const std = @import("std");
+const env_like = @import("env_like.zig");
 const theme = @import("theme.zig");
 
 pub const reset_sequence = "\x1b[0m";
@@ -120,6 +121,9 @@ pub fn rgbToHsl(rgb: theme.Rgb) Hsl {
 }
 
 pub fn detectColorMode(env: anytype) ColorMode {
+    const Env = if (@TypeOf(env) == type) env else @TypeOf(env);
+    comptime env_like.requireGetContract(Env);
+
     if (env.get("NO_COLOR")) |_| return .none;
     if (env.get("COLORTERM")) |v| {
         if (std.mem.eql(u8, v, "truecolor") or std.mem.eql(u8, v, "24bit")) return .truecolor;
@@ -458,33 +462,40 @@ test "rgbToHsl converts pure blue RGB (0, 0, 255) to HSL (240, 1, 0.5)" {
     try testing.expectApproxEqAbs(@as(f32, 0.5), hsl.l, 0.01);
 }
 
-fn StubEnv(comptime pairs: anytype) type {
-    return struct {
-        pub fn get(name: []const u8) ?[]const u8 {
-            inline for (pairs) |pair| {
-                if (std.mem.eql(u8, name, pair[0])) return pair[1];
-            }
-            return null;
-        }
-    };
-}
-
 test "detectColorMode returns truecolor when COLORTERM=truecolor" {
-    const env = StubEnv(.{.{ "COLORTERM", "truecolor" }});
+    const env = env_like.StubEnv(.{.{ "COLORTERM", "truecolor" }});
     try testing.expectEqual(ColorMode.truecolor, detectColorMode(env));
 }
 
 test "detectColorMode returns ansi256 when TERM contains 256color" {
-    const env = StubEnv(.{.{ "TERM", "xterm-256color" }});
+    const env = env_like.StubEnv(.{.{ "TERM", "xterm-256color" }});
     try testing.expectEqual(ColorMode.ansi256, detectColorMode(env));
 }
 
 test "detectColorMode returns none when NO_COLOR is set" {
-    const env = StubEnv(.{
+    const env = env_like.StubEnv(.{
         .{ "NO_COLOR", "1" },
         .{ "COLORTERM", "truecolor" },
     });
     try testing.expectEqual(ColorMode.none, detectColorMode(env));
+}
+
+test "detectColorMode accepts pointer env adapters" {
+    const PointerEnv = struct {
+        no_color: ?[]const u8 = null,
+        colorterm: ?[]const u8 = null,
+        term: ?[]const u8 = null,
+
+        pub fn get(self: @This(), name: []const u8) ?[]const u8 {
+            if (std.mem.eql(u8, name, "NO_COLOR")) return self.no_color;
+            if (std.mem.eql(u8, name, "COLORTERM")) return self.colorterm;
+            if (std.mem.eql(u8, name, "TERM")) return self.term;
+            return null;
+        }
+    };
+
+    var env: PointerEnv = .{ .colorterm = "24bit" };
+    try testing.expectEqual(ColorMode.truecolor, detectColorMode(&env));
 }
 
 test "writeStyledRun first call emits prefix and text, no reset" {

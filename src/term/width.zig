@@ -1,5 +1,6 @@
 const std = @import("std");
 const ansi = @import("ansi.zig");
+const env_like = @import("env_like.zig");
 
 const ESC = 0x1b;
 
@@ -110,6 +111,9 @@ pub fn classifyLocale(locale: []const u8) AmbiguousWidth {
 }
 
 pub fn detectAmbiguousWidth(env: anytype) AmbiguousWidth {
+    const Env = if (@TypeOf(env) == type) env else @TypeOf(env);
+    comptime env_like.requireGetContract(Env);
+
     if (env.get("RUNEWIDTH_EASTASIAN")) |v| {
         if (v.len > 0) {
             return if (std.mem.eql(u8, v, "1")) .wide else .narrow;
@@ -1504,40 +1508,29 @@ test "classifyLocale narrow for long non-CJK locale" {
     try std.testing.expectEqual(AmbiguousWidth.narrow, classifyLocale(locale));
 }
 
-fn StubEnv(comptime pairs: anytype) type {
-    return struct {
-        pub fn get(name: []const u8) ?[]const u8 {
-            inline for (pairs) |pair| {
-                if (std.mem.eql(u8, name, pair[0])) return pair[1];
-            }
-            return null;
-        }
-    };
-}
-
 test "detectAmbiguousWidth RUNEWIDTH_EASTASIAN=1 forces wide" {
-    const env = StubEnv(.{
+    const env = env_like.StubEnv(.{
         .{ "RUNEWIDTH_EASTASIAN", "1" },
     });
     try std.testing.expectEqual(AmbiguousWidth.wide, detectAmbiguousWidth(env));
 }
 
 test "detectAmbiguousWidth RUNEWIDTH_EASTASIAN=0 forces narrow" {
-    const env = StubEnv(.{
+    const env = env_like.StubEnv(.{
         .{ "RUNEWIDTH_EASTASIAN", "0" },
     });
     try std.testing.expectEqual(AmbiguousWidth.narrow, detectAmbiguousWidth(env));
 }
 
 test "detectAmbiguousWidth RUNEWIDTH_EASTASIAN=true forces narrow" {
-    const env = StubEnv(.{
+    const env = env_like.StubEnv(.{
         .{ "RUNEWIDTH_EASTASIAN", "true" },
     });
     try std.testing.expectEqual(AmbiguousWidth.narrow, detectAmbiguousWidth(env));
 }
 
 test "detectAmbiguousWidth empty RUNEWIDTH_EASTASIAN falls through to locale" {
-    const env = StubEnv(.{
+    const env = env_like.StubEnv(.{
         .{ "RUNEWIDTH_EASTASIAN", "" },
         .{ "LANG", "ja_JP.UTF-8" },
     });
@@ -1545,7 +1538,7 @@ test "detectAmbiguousWidth empty RUNEWIDTH_EASTASIAN falls through to locale" {
 }
 
 test "detectAmbiguousWidth override beats CJK locale" {
-    const env = StubEnv(.{
+    const env = env_like.StubEnv(.{
         .{ "RUNEWIDTH_EASTASIAN", "0" },
         .{ "LANG", "ja_JP.UTF-8" },
     });
@@ -1553,7 +1546,7 @@ test "detectAmbiguousWidth override beats CJK locale" {
 }
 
 test "detectAmbiguousWidth override forces wide on narrow locale" {
-    const env = StubEnv(.{
+    const env = env_like.StubEnv(.{
         .{ "RUNEWIDTH_EASTASIAN", "1" },
         .{ "LANG", "en_US.UTF-8" },
     });
@@ -1561,14 +1554,14 @@ test "detectAmbiguousWidth override forces wide on narrow locale" {
 }
 
 test "detectAmbiguousWidth LC_ALL alone triggers wide" {
-    const env = StubEnv(.{
+    const env = env_like.StubEnv(.{
         .{ "LC_ALL", "ja_JP.UTF-8" },
     });
     try std.testing.expectEqual(AmbiguousWidth.wide, detectAmbiguousWidth(env));
 }
 
 test "detectAmbiguousWidth empty LC_ALL skipped to LC_CTYPE" {
-    const env = StubEnv(.{
+    const env = env_like.StubEnv(.{
         .{ "LC_ALL", "" },
         .{ "LC_CTYPE", "ja_JP.UTF-8" },
     });
@@ -1576,7 +1569,7 @@ test "detectAmbiguousWidth empty LC_ALL skipped to LC_CTYPE" {
 }
 
 test "detectAmbiguousWidth empty LC_ALL and LC_CTYPE skipped to LANG" {
-    const env = StubEnv(.{
+    const env = env_like.StubEnv(.{
         .{ "LC_ALL", "" },
         .{ "LC_CTYPE", "" },
         .{ "LANG", "ja_JP.UTF-8" },
@@ -1585,24 +1578,44 @@ test "detectAmbiguousWidth empty LC_ALL and LC_CTYPE skipped to LANG" {
 }
 
 test "detectAmbiguousWidth LANG en_US narrow" {
-    const env = StubEnv(.{
+    const env = env_like.StubEnv(.{
         .{ "LANG", "en_US.UTF-8" },
     });
     try std.testing.expectEqual(AmbiguousWidth.narrow, detectAmbiguousWidth(env));
 }
 
 test "detectAmbiguousWidth no env vars narrow" {
-    const env = StubEnv(.{});
+    const env = env_like.StubEnv(.{});
     try std.testing.expectEqual(AmbiguousWidth.narrow, detectAmbiguousWidth(env));
 }
 
 test "detectAmbiguousWidth LC_ALL beats LC_CTYPE and LANG" {
-    const env = StubEnv(.{
+    const env = env_like.StubEnv(.{
         .{ "LC_ALL", "en_US.UTF-8" },
         .{ "LC_CTYPE", "ja_JP.UTF-8" },
         .{ "LANG", "ja_JP.UTF-8" },
     });
     try std.testing.expectEqual(AmbiguousWidth.narrow, detectAmbiguousWidth(env));
+}
+
+test "detectAmbiguousWidth accepts pointer env adapters" {
+    const PointerEnv = struct {
+        east_asian: ?[]const u8 = null,
+        lc_all: ?[]const u8 = null,
+        lc_ctype: ?[]const u8 = null,
+        lang: ?[]const u8 = null,
+
+        pub fn get(self: @This(), name: []const u8) ?[]const u8 {
+            if (std.mem.eql(u8, name, "RUNEWIDTH_EASTASIAN")) return self.east_asian;
+            if (std.mem.eql(u8, name, "LC_ALL")) return self.lc_all;
+            if (std.mem.eql(u8, name, "LC_CTYPE")) return self.lc_ctype;
+            if (std.mem.eql(u8, name, "LANG")) return self.lang;
+            return null;
+        }
+    };
+
+    var env: PointerEnv = .{ .lang = "ja_JP.UTF-8" };
+    try std.testing.expectEqual(AmbiguousWidth.wide, detectAmbiguousWidth(&env));
 }
 
 fn wrapWriterCollect(input: []const u8, max_w: usize, ambiguous: AmbiguousWidth) ![]u8 {

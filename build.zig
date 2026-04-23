@@ -1,4 +1,5 @@
 const std = @import("std");
+const env_like_contract = @import("src/term/env_like.zig");
 
 const TestRoot = struct {
     path: []const u8,
@@ -656,6 +657,68 @@ fn addTestStep(
     for (benches.compileTargets()) |bench_target| {
         test_step.dependOn(&bench_target.step);
     }
+
+    addExpectedCompileErrorTest(b, test_step, target, optimize, .{
+        .root_path = "test/compile_errors/env_get_contract.zig",
+        .module_name = "ansi",
+        .module_path = "src/term/ansi.zig",
+        .expected_tag = env_like_contract.missing_get_diagnostic_tag,
+    });
+    addExpectedCompileErrorTest(b, test_step, target, optimize, .{
+        .root_path = "test/compile_errors/env_get_receiver_contract.zig",
+        .module_name = "ansi",
+        .module_path = "src/term/ansi.zig",
+        .expected_tag = env_like_contract.invalid_get_receiver_diagnostic_tag,
+    });
+    addExpectedCompileErrorTest(b, test_step, target, optimize, .{
+        .root_path = "test/compile_errors/env_get_contract_width.zig",
+        .module_name = "width",
+        .module_path = "src/term/width.zig",
+        .expected_tag = env_like_contract.missing_get_diagnostic_tag,
+    });
+    addExpectedCompileErrorTest(b, test_step, target, optimize, .{
+        .root_path = "test/compile_errors/env_get_receiver_contract_width.zig",
+        .module_name = "width",
+        .module_path = "src/term/width.zig",
+        .expected_tag = env_like_contract.invalid_get_receiver_diagnostic_tag,
+    });
+    addExpectedCompileErrorTest(b, test_step, target, optimize, .{
+        .root_path = "test/compile_errors/env_get_name_param_contract.zig",
+        .module_name = "env_like",
+        .module_path = "src/term/env_like.zig",
+        .expected_tag = env_like_contract.invalid_get_name_param_diagnostic_tag,
+    });
+    addExpectedCompileErrorTest(b, test_step, target, optimize, .{
+        .root_path = "test/compile_errors/env_get_return_type_contract.zig",
+        .module_name = "env_like",
+        .module_path = "src/term/env_like.zig",
+        .expected_tag = env_like_contract.invalid_get_return_type_diagnostic_tag,
+    });
+}
+
+const CompileErrorTestSpec = struct {
+    root_path: []const u8,
+    module_name: []const u8,
+    module_path: []const u8,
+    expected_tag: []const u8,
+};
+
+fn addExpectedCompileErrorTest(
+    b: *std.Build,
+    test_step: *std.Build.Step,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    spec: CompileErrorTestSpec,
+) void {
+    const test_mod = createModule(b, spec.root_path, target, optimize);
+    test_mod.addImport(spec.module_name, createModule(b, spec.module_path, target, optimize));
+    const compile_test = b.addTest(.{
+        .root_module = test_mod,
+    });
+    compile_test.expect_errors = .{
+        .contains = spec.expected_tag,
+    };
+    test_step.dependOn(&compile_test.step);
 }
 
 const TreeSitterDependencies = struct {
