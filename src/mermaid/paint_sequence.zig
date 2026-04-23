@@ -852,8 +852,8 @@ test "Note over two participants spans both lifelines" {
     const rest = out[arrow_pos..];
     const tl = std.mem.indexOf(u8, rest, "┌") orelse return error.WriteFailed;
     const tr = std.mem.indexOf(u8, rest, "┐") orelse return error.WriteFailed;
-    // A two-participant note should span far wider than a text-only "ok" box.
-    try std.testing.expect(tr > tl + 20);
+    const note_span = tr - tl;
+    try std.testing.expect(note_span > 20);
 }
 
 test "long Note over is not silently dropped" {

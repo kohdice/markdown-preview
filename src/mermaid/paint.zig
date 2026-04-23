@@ -433,9 +433,10 @@ test "paint draws composite state frame without routing to invisible node" {
     try std.testing.expect(std.mem.indexOf(u8, out, "Outer") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Inner") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "┌") != null);
-    // External transitions attach to the frame boundary via a tee glyph rather
-    // than the invisible composite node.
-    try std.testing.expect(std.mem.indexOf(u8, out, "├") != null or std.mem.indexOf(u8, out, "┤") != null);
+    const has_frame_boundary_tee =
+        std.mem.indexOf(u8, out, "├") != null or
+        std.mem.indexOf(u8, out, "┤") != null;
+    try std.testing.expect(has_frame_boundary_tee);
 }
 
 test "paint renders erDiagram" {
