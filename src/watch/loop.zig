@@ -55,9 +55,12 @@ pub fn eventLoop(
                     wrap_width.* = if (opts.enable_ansi) term_size.cols else null;
                     scroll_offset.* = 0;
                     debounce.clear();
-                    hash.reset();
                     session.pgr.invalidate();
-                    _ = session.refreshFrom(opts.io, opts.cwd, opts.path, wrap_width.*, hash);
+                    if (session.cachedDocument() != null) {
+                        _ = session.rerender(wrap_width.*);
+                    } else {
+                        _ = session.refreshFrom(opts.io, opts.cwd, opts.path, wrap_width.*, hash);
+                    }
                     needs_redisplay = true;
                 } else {
                     return .signal_exit;
