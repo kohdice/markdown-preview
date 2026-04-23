@@ -4,6 +4,8 @@ const builtin = @import("builtin");
 pub const WatchEvent = enum { none, modified, recreated };
 
 const kevent_batch_size: usize = 8;
+const vnode_registration_count: usize = 2;
+const inotify_read_buffer_size: usize = 4096;
 
 pub const FileWatcher = switch (builtin.os.tag) {
     .macos, .freebsd, .netbsd, .openbsd => KqueueWatcher,
@@ -94,7 +96,7 @@ const KqueueWatcher = struct {
     }
 
     fn registerAll(self: *Self) !void {
-        var changelist: [2]std.posix.Kevent = undefined;
+        var changelist: [vnode_registration_count]std.posix.Kevent = undefined;
         var n: usize = 0;
 
         changelist[n] = makeVnodeEvent(self.dir_fd, note_write | note_extend | note_link);
@@ -183,7 +185,7 @@ const InotifyWatcher = struct {
     }
 
     pub fn consumeEvents(self: *Self) !WatchEvent {
-        var buf: [4096]u8 align(@alignOf(std.os.linux.inotify_event)) = undefined;
+        var buf: [inotify_read_buffer_size]u8 align(@alignOf(std.os.linux.inotify_event)) = undefined;
         var result: WatchEvent = .none;
 
         while (true) {

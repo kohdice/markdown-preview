@@ -25,10 +25,21 @@ pub fn getTerminalWidth(handle: std.posix.fd_t) ?usize {
     return size.cols;
 }
 
+const windows_cp_shift_jis: u32 = 932;
+const windows_cp_euc_jp: u32 = 51932;
+const windows_cp_gbk: u32 = 936;
+const windows_cp_uhc: u32 = 949;
+const windows_cp_big5: u32 = 950;
+
 fn classifyWindowsCodePage(code_page: u32, wt_session_nonempty: bool) width.AmbiguousWidth {
     if (wt_session_nonempty) return .narrow;
     return switch (code_page) {
-        932, 51932, 936, 949, 950 => .wide,
+        windows_cp_shift_jis,
+        windows_cp_euc_jp,
+        windows_cp_gbk,
+        windows_cp_uhc,
+        windows_cp_big5,
+        => .wide,
         else => .narrow,
     };
 }
@@ -67,15 +78,15 @@ pub fn detectColorModeFromEnv(env: *const std.process.Environ.Map) ansi.ColorMod
 }
 
 test "classifyWindowsCodePage wide for classic CJK code pages" {
-    try std.testing.expectEqual(width.AmbiguousWidth.wide, classifyWindowsCodePage(932, false));
-    try std.testing.expectEqual(width.AmbiguousWidth.wide, classifyWindowsCodePage(51932, false));
-    try std.testing.expectEqual(width.AmbiguousWidth.wide, classifyWindowsCodePage(936, false));
-    try std.testing.expectEqual(width.AmbiguousWidth.wide, classifyWindowsCodePage(949, false));
-    try std.testing.expectEqual(width.AmbiguousWidth.wide, classifyWindowsCodePage(950, false));
+    try std.testing.expectEqual(width.AmbiguousWidth.wide, classifyWindowsCodePage(windows_cp_shift_jis, false));
+    try std.testing.expectEqual(width.AmbiguousWidth.wide, classifyWindowsCodePage(windows_cp_euc_jp, false));
+    try std.testing.expectEqual(width.AmbiguousWidth.wide, classifyWindowsCodePage(windows_cp_gbk, false));
+    try std.testing.expectEqual(width.AmbiguousWidth.wide, classifyWindowsCodePage(windows_cp_uhc, false));
+    try std.testing.expectEqual(width.AmbiguousWidth.wide, classifyWindowsCodePage(windows_cp_big5, false));
 }
 
 test "classifyWindowsCodePage WT_SESSION forces narrow" {
-    try std.testing.expectEqual(width.AmbiguousWidth.narrow, classifyWindowsCodePage(932, true));
+    try std.testing.expectEqual(width.AmbiguousWidth.narrow, classifyWindowsCodePage(windows_cp_shift_jis, true));
 }
 
 test "classifyWindowsCodePage narrow for UTF-8 and unknown code pages" {
