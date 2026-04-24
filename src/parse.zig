@@ -8,14 +8,17 @@ const source_mod = @import("source");
 pub const Document = ast.Document;
 pub const Source = source_mod.Source;
 
+const inline_capacity_reserve_min_separators: usize = 256;
+const inline_capacity_reserve_max_nodes: usize = 8192;
+
 fn estimateInlineNodeCapacity(bytes: []const u8) usize {
     // Scale the reserve with block boundaries (`\n\n`), not total line count:
     // a boundary is a reasonable proxy for the number of parseSlice /
     // parseLines calls that reach the builder, so single-paragraph inputs with
     // many internal soft breaks don't pre-allocate slots they won't use.
     const separator_count = std.mem.count(u8, bytes, "\n\n");
-    if (separator_count < 256) return 0;
-    return @min(separator_count, 8192);
+    if (separator_count < inline_capacity_reserve_min_separators) return 0;
+    return @min(separator_count, inline_capacity_reserve_max_nodes);
 }
 
 pub fn parse(allocator: std.mem.Allocator, src: Source) !Document {

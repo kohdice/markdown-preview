@@ -48,6 +48,12 @@ const LinkWhitespace = struct {
 };
 
 const max_reference_label_chars = 999;
+const link_definition_marker_len: usize = 2;
+const escaped_pair_len: usize = 2;
+const line_feed_len: usize = 1;
+const crlf_len: usize = 2;
+const ascii_space: u8 = 0x20;
+const ascii_delete: u8 = 0x7F;
 
 pub fn definition(text: []const u8) ?Definition {
     const indent = parse_block.countIndentUpTo(text, parse_block.max_block_indent);
@@ -59,7 +65,7 @@ pub fn definition(text: []const u8) ?Definition {
     const label = text[indent + 1 .. close];
     if (!hasReferenceLabelText(label)) return null;
 
-    const raw_target = parseTargetRaw(text[close + 2 ..]) orelse return null;
+    const raw_target = parseTargetRaw(text[close + link_definition_marker_len ..]) orelse return null;
     return .{
         .label = label,
         .url = raw_target.url_raw,
@@ -77,7 +83,7 @@ pub fn definitionNeedsDestinationContinuation(line: []const u8) bool {
     const label = line[indent + 1 .. close];
     if (!hasReferenceLabelText(label)) return false;
 
-    return std.mem.trim(u8, line[close + 2 ..], parse_block.horizontal_whitespace).len == 0;
+    return std.mem.trim(u8, line[close + link_definition_marker_len ..], parse_block.horizontal_whitespace).len == 0;
 }
 
 pub fn normalizeReferenceLabelInto(
@@ -97,9 +103,9 @@ pub fn findReferenceLabelEnd(text: []const u8, start: usize) ?usize {
         switch (text[pos]) {
             '\\' => {
                 if (pos + 1 < text.len and (text[pos + 1] == '[' or text[pos + 1] == ']')) {
-                    if (char_count + 2 > max_reference_label_chars) return null;
-                    char_count += 2;
-                    pos += 2;
+                    if (char_count + escaped_pair_len > max_reference_label_chars) return null;
+                    char_count += escaped_pair_len;
+                    pos += escaped_pair_len;
                     continue;
                 }
                 if (char_count + 1 > max_reference_label_chars) return null;
@@ -197,7 +203,7 @@ fn materializeLinkText(allocator: std.mem.Allocator, raw: []const u8) ![]const u
     while (pos < raw.len) {
         if (raw[pos] == '\\' and pos + 1 < raw.len and isEscapable(raw[pos + 1])) {
             try buffer.append(allocator, raw[pos + 1]);
-            pos += 2;
+            pos += escaped_pair_len;
             continue;
         }
 
@@ -319,7 +325,7 @@ fn scanLinkDestinationStatus(text: []const u8, start: usize) union(enum) {
             switch (text[pos]) {
                 '\\' => {
                     if (pos + 1 < text.len and isEscapable(text[pos + 1])) {
-                        pos += 2;
+                        pos += escaped_pair_len;
                     } else {
                         pos += 1;
                     }
@@ -342,7 +348,7 @@ fn scanLinkDestinationStatus(text: []const u8, start: usize) union(enum) {
         switch (text[pos]) {
             '\\' => {
                 if (pos + 1 < text.len and isEscapable(text[pos + 1])) {
-                    pos += 2;
+                    pos += escaped_pair_len;
                 } else {
                     pos += 1;
                 }
@@ -454,10 +460,10 @@ fn consumeLinkWhitespace(text: []const u8, start: usize) LinkWhitespace {
 
 fn consumeLineEnding(text: []const u8, start: usize) ?usize {
     if (start >= text.len) return null;
-    if (text[start] == '\n') return start + 1;
+    if (text[start] == '\n') return start + line_feed_len;
     if (text[start] != '\r') return null;
-    if (start + 1 < text.len and text[start + 1] == '\n') return start + 2;
-    return start + 1;
+    if (start + 1 < text.len and text[start + 1] == '\n') return start + crlf_len;
+    return start + line_feed_len;
 }
 
 fn lineEndingStartsBlankLine(text: []const u8, start: usize) bool {
@@ -496,6 +502,6 @@ fn isEscapable(char: u8) bool {
 }
 
 fn isInvalidBareDestinationByte(char: u8) bool {
-    if (char == 0x7F) return true;
-    return char < 0x20 and char != '\t' and char != '\n' and char != '\r';
+    if (char == ascii_delete) return true;
+    return char < ascii_space and char != '\t' and char != '\n' and char != '\r';
 }

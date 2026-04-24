@@ -6,8 +6,16 @@ const text_mod = @import("../text.zig");
 
 const DefMap = ast.LinkDefMap;
 
-const max_emphasis_delim_run: usize = 3;
-const max_strikethrough_delim_run: usize = 2;
+const strong_delim_len = 2;
+const bold_italic_delim_len = 3;
+const strikethrough_delim_len = 2;
+const max_emphasis_delim_run: usize = bold_italic_delim_len;
+const max_strikethrough_delim_run: usize = strikethrough_delim_len;
+const escaped_pair_len: usize = 2;
+const image_opener_text = "![";
+const link_tail_open_len: usize = 2;
+const ascii_control_max: u8 = 0x1f;
+const ascii_delete: u8 = 0x7f;
 const utf8_continuation_mask: u8 = 0xC0;
 const utf8_continuation_tag: u8 = 0x80;
 
@@ -204,8 +212,8 @@ const TempParser = struct {
                 '\\' => {
                     if (col + 1 < line.len and isEscapable(line[col + 1])) {
                         try self.appendText(line[plain_start..col]);
-                        try self.appendText(line[col + 1 .. col + 2]);
-                        col += 2;
+                        try self.appendText(line[col + 1 .. col + escaped_pair_len]);
+                        col += escaped_pair_len;
                         plain_start = col;
                         continue;
                     }
@@ -225,14 +233,14 @@ const TempParser = struct {
                 '!' => {
                     if (col + 1 < line.len and line[col + 1] == '[') {
                         try self.appendText(line[plain_start..col]);
-                        const ref = try self.appendNode(.{ .text = line[col .. col + 2] });
+                        const ref = try self.appendNode(.{ .text = line[col .. col + image_opener_text.len] });
                         try self.brackets.append(self.builder.allocator, .{
                             .node = ref,
                             .line_index = line_index,
-                            .content_start = col + 2,
+                            .content_start = col + image_opener_text.len,
                             .is_image = true,
                         });
-                        col += 2;
+                        col += image_opener_text.len;
                         plain_start = col;
                         continue;
                     }
@@ -459,7 +467,7 @@ const TempParser = struct {
         self.inline_link_scratch.clearRetainingCapacity();
 
         var line_index = start_line;
-        var line_start_col = close_col + 2;
+        var line_start_col = close_col + link_tail_open_len;
         while (line_index < self.lines.len) {
             const current_line = self.lines[line_index];
             if (self.inline_link_scratch.items.len > 0) {
@@ -474,7 +482,7 @@ const TempParser = struct {
                 .match => |target| {
                     const end_loc = self.inlineLinkOffsetToLocation(
                         start_line,
-                        close_col + 2,
+                        close_col + link_tail_open_len,
                         target.end,
                     );
                     return .{
@@ -546,7 +554,7 @@ const TempParser = struct {
 
         const line = self.lines[line_index];
         if (close_col + 1 < line.len and line[close_col + 1] == '[') {
-            const ref_start = close_col + 2;
+            const ref_start = close_col + link_tail_open_len;
             const ref_end = parse_link.findReferenceLabelEnd(line, ref_start) orelse return null;
             const label = if (ref_end > ref_start)
                 line[ref_start..ref_end]
@@ -640,8 +648,8 @@ const TempParser = struct {
         const container_node: ast.InlineNode = switch (opener.ch) {
             '~' => .{ .strikethrough = container_children },
             else => switch (use_len) {
-                3 => .{ .bold_italic = container_children },
-                2 => .{ .strong = container_children },
+                bold_italic_delim_len => .{ .bold_italic = container_children },
+                strong_delim_len => .{ .strong = container_children },
                 else => .{ .emphasis = container_children },
             },
         };
@@ -814,10 +822,13 @@ fn classifyStrikethroughDelimiter(
 
 fn chooseDelimiterUse(opener_len: u8, closer_len: u8, ch: u8) u8 {
     if (ch == '~') {
-        return if (opener_len >= 2 and closer_len >= 2) 2 else 1;
+        return if (opener_len >= strikethrough_delim_len and closer_len >= strikethrough_delim_len)
+            strikethrough_delim_len
+        else
+            1;
     }
-    if (opener_len >= 3 and closer_len >= 3) return 3;
-    if (opener_len >= 2 and closer_len >= 2) return 2;
+    if (opener_len >= bold_italic_delim_len and closer_len >= bold_italic_delim_len) return bold_italic_delim_len;
+    if (opener_len >= strong_delim_len and closer_len >= strong_delim_len) return strong_delim_len;
     return 1;
 }
 
@@ -889,6 +900,8 @@ fn nextCodepoint(text: []const u8, pos: usize) ?u21 {
 }
 
 fn cpClass(cp: ?u21) CharClass {
+    // CommonMark delimiter processing needs Unicode whitespace and punctuation
+    // buckets, but compact range checks avoid a runtime lookup table.
     const c = cp orelse return .whitespace;
     if (c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '\x0c') return .whitespace;
     if (c == 0x00A0) return .whitespace;
@@ -971,12 +984,10 @@ const BareUrlResult = struct {
 
 fn tryParseBareUrl(text: []const u8, start: usize) ?BareUrlResult {
     const rest = text[start..];
-    const https: []const u8 = "https://";
-    const http: []const u8 = "http://";
-    const prefix_len: usize = if (std.mem.startsWith(u8, rest, https))
-        https.len
-    else if (std.mem.startsWith(u8, rest, http))
-        http.len
+    const prefix_len: usize = if (std.mem.startsWith(u8, rest, https_scheme))
+        https_scheme.len
+    else if (std.mem.startsWith(u8, rest, http_scheme))
+        http_scheme.len
     else
         return null;
 
@@ -991,7 +1002,7 @@ fn tryParseBareUrl(text: []const u8, start: usize) ?BareUrlResult {
     var pos = start + prefix_len;
     while (pos < text.len) {
         switch (text[pos]) {
-            ' ', '<', '>', 0...0x1f, 0x7f => break,
+            ' ', '<', '>', 0...ascii_control_max, ascii_delete => break,
             else => pos += 1,
         }
     }

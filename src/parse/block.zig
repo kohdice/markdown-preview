@@ -5,6 +5,12 @@ const max_heading_level = 6;
 const min_fence_len = 3;
 const min_thematic_break_markers = 3;
 const max_ordered_digits = 9;
+const tab_stop_columns = 4;
+const checkbox_marker_len = 4;
+const checkbox_open_offset = 0;
+const checkbox_state_offset = 1;
+const checkbox_close_offset = 2;
+const checkbox_gap_offset = 3;
 const unordered_list_markers = "-*+";
 const ordered_list_markers = ".)";
 const thematic_break_markers = "-_*";
@@ -107,13 +113,15 @@ pub fn listItem(line: []const u8) ?ListItem {
 }
 
 fn checkbox(content: []const u8) struct { checked: ?bool, rest: []const u8 } {
-    if (content.len >= 4 and content[0] == '[' and content[2] == ']' and
-        isHorizontalWhitespace(content[3]))
+    if (content.len >= checkbox_marker_len and
+        content[checkbox_open_offset] == '[' and
+        content[checkbox_close_offset] == ']' and
+        isHorizontalWhitespace(content[checkbox_gap_offset]))
     {
-        if (content[1] == 'x' or content[1] == 'X') {
-            return .{ .checked = true, .rest = content[4..] };
-        } else if (isHorizontalWhitespace(content[1])) {
-            return .{ .checked = false, .rest = content[4..] };
+        if (content[checkbox_state_offset] == 'x' or content[checkbox_state_offset] == 'X') {
+            return .{ .checked = true, .rest = content[checkbox_marker_len..] };
+        } else if (isHorizontalWhitespace(content[checkbox_state_offset])) {
+            return .{ .checked = false, .rest = content[checkbox_marker_len..] };
         }
     }
     return .{ .checked = null, .rest = content };
@@ -243,10 +251,10 @@ pub fn indentedCodeContent(line: []const u8) ?[]const u8 {
     while (index < line.len and isHorizontalWhitespace(line[index])) : (index += 1) {
         columns = switch (line[index]) {
             ' ' => columns + 1,
-            '\t' => columns + (4 - (columns % 4)),
+            '\t' => columns + (tab_stop_columns - (columns % tab_stop_columns)),
             else => unreachable,
         };
-        if (columns >= 4) return line[index + 1 ..];
+        if (columns >= tab_stop_columns) return line[index + 1 ..];
     }
 
     return null;
@@ -287,7 +295,7 @@ fn indentBytesAtMost(line: []const u8, max_columns: usize) ?usize {
     while (index < line.len and isHorizontalWhitespace(line[index])) : (index += 1) {
         const next_columns = switch (line[index]) {
             ' ' => columns + 1,
-            '\t' => columns + (4 - (columns % 4)),
+            '\t' => columns + (tab_stop_columns - (columns % tab_stop_columns)),
             else => unreachable,
         };
         if (next_columns > max_columns) return null;
