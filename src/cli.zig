@@ -15,6 +15,7 @@ pub const RunOptions = struct {
     io: std.Io,
     cwd: std.Io.Dir,
     args: []const [:0]const u8,
+    version: []const u8,
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
     stdout_file: std.Io.File,
@@ -26,17 +27,23 @@ pub const RunOptions = struct {
 };
 
 const usage_message =
-    \\Usage: mp [--watch] [--] <FILE>
+    \\Usage: mp [options] [--] <FILE>
     \\
     \\Preview a Markdown file in the terminal.
-    \\Use --watch to live-reload on file changes.
-    \\Use -- before a file whose name starts with -- to disambiguate.
+    \\
+    \\Options:
+    \\  --watch       Live-reload on file changes
+    \\  --version     Show version number and quit
+    \\  -h, --help    Show this help and quit
+    \\  --            Treat the next argument as FILE
     \\
 ;
 
 pub const Command = union(enum) {
     render: RenderCommand,
     watch: WatchCommand,
+    version,
+    help,
 
     pub const RenderCommand = struct { path: []const u8 };
     pub const WatchCommand = struct { path: []const u8 };
@@ -64,6 +71,12 @@ pub fn parseArgs(args: []const [:0]const u8) ParseError!Command {
             if (std.mem.eql(u8, arg, "--watch")) {
                 watch_flag = true;
                 continue;
+            }
+            if (std.mem.eql(u8, arg, "--version")) {
+                return .version;
+            }
+            if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+                return .help;
             }
             if (std.mem.startsWith(u8, arg, "--")) {
                 return error.UnknownFlag;
@@ -103,7 +116,19 @@ pub fn executeCommand(opts: RunOptions, command: Command) !u8 {
             .color_mode = opts.color_mode,
         }),
         .render => |cmd| renderOnce(opts, cmd.path),
+        .version => writeVersion(opts.stdout, opts.version),
+        .help => writeHelp(opts.stdout),
     };
+}
+
+fn writeHelp(stdout: *std.Io.Writer) !u8 {
+    try stdout.writeAll(usage_message);
+    return exit_success;
+}
+
+fn writeVersion(stdout: *std.Io.Writer, version: []const u8) !u8 {
+    try stdout.print("mp (markdown-preview) {s}\n", .{version});
+    return exit_success;
 }
 
 fn renderOnce(opts: RunOptions, path: []const u8) !u8 {
@@ -150,6 +175,82 @@ test "parseArgs returns watch command when --watch follows path" {
     const parsed = try parseArgs(&args);
     try std.testing.expect(parsed == .watch);
     try std.testing.expectEqualStrings("foo.md", parsed.watch.path);
+}
+
+test "parseArgs returns version command for exact --version invocation" {
+    const args = [_][:0]const u8{ "mp", "--version" };
+    const parsed = try parseArgs(&args);
+    try std.testing.expect(parsed == .version);
+}
+
+test "parseArgs ignores trailing operands after --version" {
+    const args = [_][:0]const u8{ "mp", "--version", "extra.md" };
+    const parsed = try parseArgs(&args);
+    try std.testing.expect(parsed == .version);
+}
+
+test "parseArgs lets --version take precedence over watch and render arguments" {
+    const args = [_][:0]const u8{ "mp", "--watch", "--version", "example.md" };
+    const parsed = try parseArgs(&args);
+    try std.testing.expect(parsed == .version);
+}
+
+test "parseArgs lets --version take precedence after a render path" {
+    const args = [_][:0]const u8{ "mp", "README.md", "--version" };
+    const parsed = try parseArgs(&args);
+    try std.testing.expect(parsed == .version);
+}
+
+test "parseArgs returns help command for --help" {
+    const args = [_][:0]const u8{ "mp", "--help" };
+    const parsed = try parseArgs(&args);
+    try std.testing.expect(parsed == .help);
+}
+
+test "parseArgs returns help command for -h" {
+    const args = [_][:0]const u8{ "mp", "-h" };
+    const parsed = try parseArgs(&args);
+    try std.testing.expect(parsed == .help);
+}
+
+test "parseArgs treats bare version as a render path" {
+    const args = [_][:0]const u8{ "mp", "version" };
+    const parsed = try parseArgs(&args);
+    try std.testing.expect(parsed == .render);
+    try std.testing.expectEqualStrings("version", parsed.render.path);
+}
+
+test "parseArgs treats --version after -- as a render path" {
+    const args = [_][:0]const u8{ "mp", "--", "--version" };
+    const parsed = try parseArgs(&args);
+    try std.testing.expect(parsed == .render);
+    try std.testing.expectEqualStrings("--version", parsed.render.path);
+}
+
+test "parseArgs treats --help after -- as a render path" {
+    const args = [_][:0]const u8{ "mp", "--", "--help" };
+    const parsed = try parseArgs(&args);
+    try std.testing.expect(parsed == .render);
+    try std.testing.expectEqualStrings("--help", parsed.render.path);
+}
+
+test "parseArgs keeps version as a watch path when --watch is present" {
+    const args = [_][:0]const u8{ "mp", "--watch", "version" };
+    const parsed = try parseArgs(&args);
+    try std.testing.expect(parsed == .watch);
+    try std.testing.expectEqualStrings("version", parsed.watch.path);
+}
+
+test "parseArgs keeps version as a render path after the -- sentinel" {
+    const args = [_][:0]const u8{ "mp", "--", "version" };
+    const parsed = try parseArgs(&args);
+    try std.testing.expect(parsed == .render);
+    try std.testing.expectEqualStrings("version", parsed.render.path);
+}
+
+test "parseArgs rejects extra positional arguments after a bare version path" {
+    const args = [_][:0]const u8{ "mp", "version", "extra" };
+    try std.testing.expectError(error.TooManyPositional, parseArgs(&args));
 }
 
 test "parseArgs returns watch command when --watch precedes -- sentinel" {
@@ -202,6 +303,7 @@ test "run reports usage errors" {
         .io = std.testing.io,
         .cwd = std.Io.Dir.cwd(),
         .args = &.{"mp"},
+        .version = "",
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
         .stdout_file = invalid_file,
@@ -214,15 +316,119 @@ test "run reports usage errors" {
     try std.testing.expectEqual(exit_failure, exit_code);
     try std.testing.expectEqualStrings("", stdout.writer.buffered());
     try std.testing.expectEqualStrings(
-        \\Usage: mp [--watch] [--] <FILE>
+        \\Usage: mp [options] [--] <FILE>
         \\
         \\Preview a Markdown file in the terminal.
-        \\Use --watch to live-reload on file changes.
-        \\Use -- before a file whose name starts with -- to disambiguate.
+        \\
+        \\Options:
+        \\  --watch       Live-reload on file changes
+        \\  --version     Show version number and quit
+        \\  -h, --help    Show this help and quit
+        \\  --            Treat the next argument as FILE
         \\
     ,
         stderr.writer.buffered(),
     );
+}
+
+test "run writes help information for the help option" {
+    var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stderr.deinit();
+
+    const exit_code = try run(.{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .cwd = std.Io.Dir.cwd(),
+        .args = &.{ "mp", "--help" },
+        .version = "",
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+        .stdout_file = invalid_file,
+        .stdin_file = invalid_file,
+        .enable_ansi = false,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    });
+
+    try std.testing.expectEqual(exit_success, exit_code);
+    try std.testing.expectEqualStrings(
+        \\Usage: mp [options] [--] <FILE>
+        \\
+        \\Preview a Markdown file in the terminal.
+        \\
+        \\Options:
+        \\  --watch       Live-reload on file changes
+        \\  --version     Show version number and quit
+        \\  -h, --help    Show this help and quit
+        \\  --            Treat the next argument as FILE
+        \\
+    ,
+        stdout.writer.buffered(),
+    );
+    try std.testing.expectEqualStrings("", stderr.writer.buffered());
+}
+
+test "run writes compact version information for the version option" {
+    var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stderr.deinit();
+
+    const exit_code = try run(.{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .cwd = std.Io.Dir.cwd(),
+        .args = &.{ "mp", "--version" },
+        .version = "1.2.3",
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+        .stdout_file = invalid_file,
+        .stdin_file = invalid_file,
+        .enable_ansi = false,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    });
+
+    try std.testing.expectEqual(exit_success, exit_code);
+    try std.testing.expectEqualStrings("mp (markdown-preview) 1.2.3\n", stdout.writer.buffered());
+    try std.testing.expectEqualStrings("", stderr.writer.buffered());
+}
+
+test "run renders a file literally named version" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "version",
+        .data = "# Version File\n",
+    });
+
+    var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stderr.deinit();
+
+    const exit_code = try run(.{
+        .allocator = std.testing.allocator,
+        .io = io,
+        .cwd = tmp.dir,
+        .args = &.{ "mp", "version" },
+        .version = "",
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+        .stdout_file = invalid_file,
+        .stdin_file = invalid_file,
+        .enable_ansi = false,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    });
+
+    try std.testing.expectEqual(exit_success, exit_code);
+    try std.testing.expectEqualStrings("Version File\n", stdout.writer.buffered());
+    try std.testing.expectEqualStrings("", stderr.writer.buffered());
 }
 
 test "run reports missing files" {
@@ -240,6 +446,7 @@ test "run reports missing files" {
         .io = io,
         .cwd = tmp.dir,
         .args = &.{ "mp", "missing.md" },
+        .version = "",
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
         .stdout_file = invalid_file,
@@ -278,6 +485,7 @@ test "run renders markdown files" {
         .io = io,
         .cwd = tmp.dir,
         .args = &.{ "mp", "example.md" },
+        .version = "",
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
         .stdout_file = invalid_file,
@@ -318,6 +526,7 @@ test "run threads ambiguous_width through to the renderer" {
         .io = io,
         .cwd = tmp.dir,
         .args = &.{ "mp", "cont.md" },
+        .version = "",
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
         .stdout_file = invalid_file,
@@ -360,6 +569,7 @@ test "run frees the file buffer carried by the source loader" {
         .io = io,
         .cwd = tmp.dir,
         .args = &.{ "mp", "owned.md" },
+        .version = "",
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
         .stdout_file = invalid_file,

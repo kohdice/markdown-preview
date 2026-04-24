@@ -17,6 +17,7 @@ const thematic_break_display = "─" ** thematic_break_width;
 const blockquote_marker = "│ ";
 const checkbox_checked = "☑ ";
 const checkbox_unchecked = "☐ ";
+const list_bullet_count = 3;
 
 const list_bullet = struct {
     const level0 = "• ";
@@ -32,7 +33,7 @@ pub const MermaidCacheEntry = struct {
 pub const MermaidCache = std.StringHashMapUnmanaged(MermaidCacheEntry);
 
 fn bulletForDepth(depth: usize) []const u8 {
-    return switch (depth % 3) {
+    return switch (depth % list_bullet_count) {
         0 => list_bullet.level0,
         1 => list_bullet.level1,
         2 => list_bullet.level2,
