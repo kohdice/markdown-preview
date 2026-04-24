@@ -5,11 +5,15 @@ Command to preview Markdown
 ## Usage
 
 ```console
-mp [--watch] [--] <FILE>
+mp [options] [--] <FILE>
 ```
 
-Use a bare `--` to separate a file whose name starts with `--` from the
-argument list (for example, `mp -- --notes.md`).
+| Option       | Description                         |
+| ------------ | ----------------------------------- |
+| `--watch`    | Live-reload on file changes         |
+| `--version`  | Show version number and quit        |
+| `-h, --help` | Show help and quit                  |
+| `--`         | Treat the next argument as the file |
 
 ### Watch mode
 
@@ -73,3 +77,7 @@ with lane/series colors.
 
 Unrecognized headers, unsupported features, or parse errors fall back to a
 short placeholder line (`[mermaid: ...]`) in place of the diagram.
+
+## License
+
+MIT
