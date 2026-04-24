@@ -10,6 +10,13 @@ pub const RouteError = error{
 pub const gutter_w: usize = 2;
 pub const gutter_h: usize = 2;
 
+const astar_step_cost: u32 = 1;
+const astar_turn_penalty: u32 = 2;
+const connectivity_up_shift = 0;
+const connectivity_down_shift = 1;
+const connectivity_left_shift = 2;
+const connectivity_right_shift = 3;
+
 pub const Dir4 = enum { up, down, left, right };
 
 pub const Axis = enum { horizontal, vertical };
@@ -369,8 +376,8 @@ pub fn aStarPath(
             if (!at_goal and !at_start and isBoxInterior(layout, new_row, new_col, from_id, to_id)) continue;
             if (at_goal and n.dir != start_dir) continue;
 
-            const turn_penalty: u32 = if (n.dir != current.key.dir) 2 else 0;
-            const tentative_g = current.g + 1 + turn_penalty;
+            const turn_penalty: u32 = if (n.dir != current.key.dir) astar_turn_penalty else 0;
+            const tentative_g = current.g + astar_step_cost + turn_penalty;
 
             const neighbor_key: SearchKey = .{ .row = new_row, .col = new_col, .dir = n.dir };
             const existing_g = g_score.get(neighbor_key) orelse std.math.maxInt(u32);
@@ -905,7 +912,10 @@ fn isArrowHead(cp: u21, glyphs: *const canvas_mod.GlyphSet) bool {
 }
 
 fn glyphForConnectivity(u: bool, d: bool, l: bool, r: bool, glyphs: *const canvas_mod.GlyphSet) u21 {
-    const mask: u4 = (@as(u4, @intFromBool(u)) << 0) | (@as(u4, @intFromBool(d)) << 1) | (@as(u4, @intFromBool(l)) << 2) | (@as(u4, @intFromBool(r)) << 3);
+    const mask: u4 = (@as(u4, @intFromBool(u)) << connectivity_up_shift) |
+        (@as(u4, @intFromBool(d)) << connectivity_down_shift) |
+        (@as(u4, @intFromBool(l)) << connectivity_left_shift) |
+        (@as(u4, @intFromBool(r)) << connectivity_right_shift);
     return switch (mask) {
         0b0000 => ' ',
         0b0001, 0b0010, 0b0011 => glyphs.v_line,
