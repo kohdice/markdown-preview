@@ -2,7 +2,9 @@ const std = @import("std");
 const builtin = @import("builtin");
 const source_mod = @import("source");
 
+// Keep small files on the buffered path; mmap setup cost is not free.
 const mmap_threshold: u64 = 64 * 1024;
+const file_reader_buffer_size: usize = 8 * 1024;
 
 pub fn loadFile(
     allocator: std.mem.Allocator,
@@ -63,7 +65,7 @@ fn readFile(
     var buffer = try allocator.alloc(u8, len);
     errdefer allocator.free(buffer);
 
-    var read_buf: [8 * 1024]u8 = undefined;
+    var read_buf: [file_reader_buffer_size]u8 = undefined;
     var file_reader = file.reader(io, &read_buf);
     const filled = file_reader.interface.readSliceShort(buffer) catch |err| switch (err) {
         error.ReadFailed => return file_reader.err.?,
