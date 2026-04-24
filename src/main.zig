@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build_options");
 const cli = @import("cli.zig");
 const stdout_buffer_mod = @import("stdout_buffer.zig");
 const term = @import("term.zig");
@@ -36,6 +37,7 @@ pub fn main(init: std.process.Init) !u8 {
         .io = io,
         .cwd = std.Io.Dir.cwd(),
         .args = args,
+        .version = build_options.version,
         .stdout = &stdout_stream.interface,
         .stderr = &stderr_stream.interface,
         .stdout_file = stdout_file,

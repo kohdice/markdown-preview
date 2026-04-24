@@ -1,5 +1,6 @@
 const std = @import("std");
 const env_like_contract = @import("src/term/env_like.zig");
+const manifest = @import("build.zig.zon");
 
 const TestRoot = struct {
     path: []const u8,
@@ -553,7 +554,11 @@ fn addMpExecutable(
     ts_support: TreeSitterSupport,
 ) *std.Build.Step.Compile {
     const exe_mod = createTreeSitterModule(b, "src/main.zig", target, optimize, ts_support);
+    const build_options = b.addOptions();
+    build_options.addOption([]const u8, "version", manifest.version);
+
     exe_mod.addImport("source", source_mod);
+    exe_mod.addOptions("build_options", build_options);
     return addExecutableArtifact(b, name, exe_mod);
 }
 
