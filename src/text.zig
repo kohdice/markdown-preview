@@ -3,13 +3,17 @@ const std = @import("std");
 const max_entity_len = 32;
 const max_hex_digits = 6;
 const max_decimal_digits = 7;
+const utf8_max_bytes = 4;
+const hex_radix: u32 = 16;
+const decimal_radix: u32 = 10;
+const hex_alpha_offset: u32 = 10;
 
 const max_unicode_codepoint: u32 = 0x10FFFF;
 const surrogate_min: u32 = 0xD800;
 const surrogate_max: u32 = 0xDFFF;
 
 pub const DecodeResult = struct {
-    bytes: [4]u8,
+    bytes: [utf8_max_bytes]u8,
     len: u3,
     end: usize,
 };
@@ -41,7 +45,7 @@ pub fn decode(text: []const u8, start: usize) ?DecodeResult {
     }
 
     if (named_entities.get(entity_body)) |codepoint| {
-        var buf: [4]u8 = undefined;
+        var buf: [utf8_max_bytes]u8 = undefined;
         const len = std.unicode.utf8Encode(codepoint, &buf) catch return null;
         return .{ .bytes = buf, .len = len, .end = semi_pos + 1 };
     }
@@ -59,25 +63,25 @@ fn decodeNumeric(body: []const u8, end: usize) ?DecodeResult {
         if (hex_digits.len == 0 or hex_digits.len > max_hex_digits) return null;
         for (hex_digits) |c| {
             const digit: u32 = switch (c) {
-                '0'...'9' => c - '0',
-                'a'...'f' => c - 'a' + 10,
-                'A'...'F' => c - 'A' + 10,
+                '0'...'9' => @as(u32, c - '0'),
+                'a'...'f' => @as(u32, c - 'a') + hex_alpha_offset,
+                'A'...'F' => @as(u32, c - 'A') + hex_alpha_offset,
                 else => return null,
             };
-            codepoint = codepoint * 16 + digit;
+            codepoint = codepoint * hex_radix + digit;
         }
     } else {
         if (body.len > max_decimal_digits) return null;
         for (body) |c| {
             if (c < '0' or c > '9') return null;
-            codepoint = codepoint * 10 + (@as(u32, c) - '0');
+            codepoint = codepoint * decimal_radix + (@as(u32, c) - '0');
         }
     }
 
     if (codepoint == 0 or codepoint > max_unicode_codepoint) return null;
     if (codepoint >= surrogate_min and codepoint <= surrogate_max) return null;
 
-    var buf: [4]u8 = undefined;
+    var buf: [utf8_max_bytes]u8 = undefined;
     const len = std.unicode.utf8Encode(@intCast(codepoint), &buf) catch return null;
     return .{ .bytes = buf, .len = len, .end = end };
 }
