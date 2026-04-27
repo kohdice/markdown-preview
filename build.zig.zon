@@ -1,6 +1,6 @@
 .{
     .name = .markdown_preview,
-    .version = "0.0.0",
+    .version = "0.1.0",
     .fingerprint = 0x5ede8ef936bc293,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
