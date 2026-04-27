@@ -1,400 +1,452 @@
-# Markdown Preview Example
+# Markdown Preview Sample
 
-This document demonstrates all Markdown elements supported by the terminal preview tool.
+This file contains neutral Markdown examples.
 
-## Text Formatting
-
-### Basic Formatting
-
-This is **bold text** and this is *italic text*. You can also use `inline code` and combine ***bold and italic*** formatting.
-
-You can also use ~~strikethrough text~~ when needed.
-
-### Line Breaks
-
-This is the first line.  
-This is the second line with a hard break.
-
-This is a new paragraph after a blank line.
-
-## Headings
+## Heading Levels
 
 # Heading Level 1
+
 ## Heading Level 2
+
 ### Heading Level 3
+
 #### Heading Level 4
+
 ##### Heading Level 5
+
 ###### Heading Level 6
+
+## Paragraphs and Inline Styles
+
+This paragraph contains **bold text**, _italic text_, **_bold italic text_**, ~~strikethrough text~~, and `inline code`.
+It also includes HTML entities such as Fish &amp; Chips, tea &lt; coffee, and escaped characters like \*asterisks\* and \_underscores\_.
+
+This line ends with a hard break.  
+This line appears directly below it.
+
+This line ends with a backslash\
+and continues on the next line.
+
+## Links and Images
+
+[Inline link](https://example.com)
+
+[Link with title](https://example.com/title "Example Title")
+
+[Reference link][reference]
+
+<https://example.com/help>
+
+https://example.com/status?view=full
+
+![Image example](https://example.com/image.png)
 
 ## Blockquotes
 
-> This is a blockquote.
-> It can span multiple lines.
-> 
-> > You can also nest blockquotes.
-> > > And even deeper nesting is possible.
-> 
-> Back to the first level.
+> Blockquote line 1
+> Blockquote line 2
+>
+> > Nested blockquote line 1
+> > Nested blockquote line 2
+>
+> - Blockquote list item 1
+> - Blockquote list item 2
 
 ## Lists
 
-### Unordered Lists
+### Unordered List
 
-- First item
-- Second item
+- Item 1
+- Item 2
   - Nested item 2.1
   - Nested item 2.2
-    - Deep nested item
-- Third item
+    - Nested item 2.2.1
+- Item 3
+  continuation line
 
-### Ordered Lists
+### Ordered List
 
-1. First ordered item
-2. Second ordered item
-   1. Nested ordered item
-   2. Another nested item
-3. Third ordered item
+1. Item 1
+2. Item 2
+   1. Nested item 2.1
+   2. Nested item 2.2
+3. Item 3
 
-### Mixed Lists
+1) Alternate marker 1
+2) Alternate marker 2
 
-1. First ordered item
-   - Unordered sub-item
-   - Another unordered sub-item
-2. Second ordered item
-   1. Ordered sub-item
-   2. Another ordered sub-item
+### Task List
 
-## Links
+- [x] Completed task
+- [ ] Incomplete task
+  - [x] Nested completed task
+  - [ ] Nested incomplete task
 
-[This is an inline link](https://github.com)
+1. [x] Ordered completed task
+2. [ ] Ordered incomplete task
 
-[This is a link with title](https://github.com "GitHub Homepage")
-
-This is a reference-style link to [GitHub][1].
-
-[1]: https://github.com
-
-## Code
-
-### Inline Code
-
-Use `git status` to check your repository status.
-
-### Code Blocks
-
-```rust
-// Rust code example
-fn main() {
-    println!("Hello, Markdown Preview!");
-    
-    let numbers = vec![1, 2, 3, 4, 5];
-    for num in numbers {
-        println!("Number: {}", num);
-    }
-}
-```
-
-```python
-# Python code example
-def fibonacci(n):
-    """Generate Fibonacci sequence"""
-    if n <= 0:
-        return []
-    elif n == 1:
-        return [0]
-    elif n == 2:
-        return [0, 1]
-    
-    fib = [0, 1]
-    for i in range(2, n):
-        fib.append(fib[-1] + fib[-2])
-    return fib
-
-print(fibonacci(10))
-```
-
-```javascript
-// JavaScript code example
-const fetchData = async (url) => {
-    try {
-        const response = await fetch(url);
-        const data = await response.json();
-        console.log('Data received:', data);
-        return data;
-    } catch (error) {
-        console.error('Error fetching data:', error);
-    }
-};
-
-fetchData('https://api.example.com/data');
-```
-
-```bash
-#!/bin/bash
-# Bash script example
-
-echo "Starting deployment..."
-
-# Build the project
-cargo build --release
-
-# Run tests
-cargo test
-
-# Deploy
-if [ $? -eq 0 ]; then
-    echo "Tests passed. Deploying..."
-    ./deploy.sh
-else
-    echo "Tests failed. Aborting deployment."
-    exit 1
-fi
-```
-
-### Code Block without Language
-
-```
-This is a code block without syntax highlighting.
-It can contain any text format.
-    Including indented lines.
-```
+- List item with blockquote child
+  > Nested blockquote inside a list item
+- List item with code fence child
+  ```bash
+  printf 'sample\n'
+  ```
 
 ## Tables
 
-### Simple Table
+| Column  | Center |       Right |
+| :------ | :----: | ----------: |
+| Value A |   1    |       alpha |
+| Value B |   2    |        beta |
+| 日本語  |   3    | mixed ASCII |
 
-| Column 1 | Column 2 | Column 3 |
-|----------|----------|----------|
-| Data 1   | Data 2   | Data 3   |
-| Data 4   | Data 5   | Data 6   |
+## Code Fences
 
-### Table with Alignment
+```zig
+const std = @import("std");
 
-| Left Aligned | Center Aligned | Right Aligned |
-|:-------------|:--------------:|--------------:|
-| Left         | Center         | Right         |
-| 123          | 456            | 789           |
-| Lorem        | Ipsum          | Dolor         |
+fn sum(values: []const i32) i32 {
+    var total: i32 = 0;
+    for (values) |value| total += value;
+    return total;
+}
 
-### Complex Table
-
-| Feature | Description | Status | Priority |
-|---------|-------------|--------|----------|
-| **TUI Mode** | Terminal UI with file tree and preview | ✅ Complete | High |
-| **Syntax Highlighting** | Color coding for different Markdown elements | ✅ Complete | High |
-| **Tables** | Support for rendering tables | ✅ Complete | Medium |
-| **Code Blocks** | Syntax highlighted code blocks | ✅ Complete | High |
-| **Lists** | Nested lists support | ✅ Complete | Medium |
-| **Links** | Clickable links in terminal | 🚧 In Progress | Low |
-| **Images** | ASCII art representation | ❌ Not Started | Low |
-
-## Horizontal Rules
-
----
-
-***
-
-___
-
-## HTML Entities
-
-Common HTML entities: &copy; &reg; &trade; &nbsp; &amp; &lt; &gt; &quot;
-
-Mathematical symbols: &alpha; &beta; &gamma; &delta; &pi; &sum; &infin;
-
-## Special Characters
-
-Escaping special characters: \* \_ \[ \] \( \) \# \+ \- \. \!
-
-## Task Lists
-
-- [x] Completed task
-- [x] Another completed task
-- [ ] Incomplete task
-- [ ] Another incomplete task
-  - [x] Completed subtask
-  - [ ] Incomplete subtask
-
-## Emoji Support
-
-Some terminals support emoji: 🚀 ✨ 🎉 💻 📝 ✅ ❌ 🔧 📚
-
-## Long Content for Scrolling Test
-
-Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
-
-Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
-
-### Section 1: Architecture Overview
-
-The application is built using Rust and leverages several key libraries:
-
-- **Ratatui**: Terminal UI framework
-- **pulldown-cmark**: Markdown parser
-- **crossterm**: Terminal manipulation
-- **clap**: Command-line argument parsing
-
-### Section 2: Performance Optimizations
-
-1. **Caching Strategy**: Pre-parse Markdown content and cache the rendered widgets
-2. **Event-Driven Rendering**: Only redraw when user input is detected
-3. **Virtual Scrolling**: Render only visible portions of the content
-4. **Lazy Loading**: Load files on demand rather than all at once
-
-### Section 3: Features
-
-#### Core Features
-
-- Fast Markdown parsing and rendering
-- Syntax highlighting with customizable themes
-- File tree navigation
-- Keyboard shortcuts for efficient navigation
-- Support for all major Markdown elements
-
-#### Advanced Features
-
-- Multiple viewing modes (stdout, TUI)
-- Theme customization
-- Plugin system for extensions
-- Export to various formats
-
-### Section 4: Usage Examples
-
-```bash
-# Basic usage
-mp README.md
-
-# TUI mode
-mp --tui
-
-# With custom theme
-mp --theme dark README.md
-
-# Multiple files
-mp *.md
+pub fn main() void {
+    const values = [_]i32{ 1, 2, 3, 4 };
+    std.debug.print("sum={}\n", .{sum(&values)});
+}
 ```
 
-### Section 5: Contributing
+```c
+#include <stdio.h>
 
-We welcome contributions! Please follow these guidelines:
+static int sum(const int *values, int len) {
+    int total = 0;
+    for (int i = 0; i < len; ++i) {
+        total += values[i];
+    }
+    return total;
+}
 
-1. Fork the repository
-2. Create a feature branch
-3. Write tests for new features
-4. Ensure all tests pass
-5. Submit a pull request
-
-### Section 6: License
-
-This project is licensed under the MIT License. See the LICENSE file for details.
-
----
-
-## Performance Test Content
-
-The following sections are repeated content for testing scrolling performance:
-
-### Test Section 1
-
-Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vestibulum euismod, nisl eget ultricies tincidunt, nunc nisl aliquam nunc, eget aliquam nunc nisl eget nunc.
+int main(void) {
+    int values[] = {1, 2, 3, 4};
+    printf("sum=%d\n", sum(values, 4));
+    return 0;
+}
+```
 
 ```rust
-fn test_function_1() {
-    for i in 0..100 {
-        println!("Iteration: {}", i);
+fn sum(values: &[i32]) -> i32 {
+    values.iter().copied().sum()
+}
+
+fn main() {
+    let values = [1, 2, 3, 4];
+    println!("sum={}", sum(&values));
+}
+```
+
+```go
+package main
+
+import "fmt"
+
+func sum(values []int) int {
+	total := 0
+	for _, value := range values {
+		total += value
+	}
+	return total
+}
+
+func main() {
+	values := []int{1, 2, 3, 4}
+	fmt.Printf("sum=%d\n", sum(values))
+}
+```
+
+```json
+{
+  "name": "example",
+  "enabled": true,
+  "items": [
+    { "id": 1, "label": "alpha" },
+    { "id": 2, "label": "beta" }
+  ],
+  "meta": {
+    "count": 2,
+    "tag": "sample"
+  }
+}
+```
+
+```bash
+set -eu
+
+input="sample.md"
+
+if [ -f "$input" ]; then
+  mp "$input"
+else
+  printf 'missing: %s\n' "$input"
+fi
+```
+
+```
+Plain text fence
+Line 2 with symbols like | and *.
+Line 3 with indentation:
+    plain text stays as-is.
+```
+
+## Mermaid Diagrams
+
+The following Mermaid diagrams are rendered as ASCII art in place.
+
+### Flowchart
+
+#### Basic TD direction
+
+```mermaid
+flowchart TD
+    A(Input) --> B[Lexer]
+    B --> C[Parser]
+    C --> D{Valid?}
+    D -->|yes| E[Render]
+    D -->|no| F[Report error]
+    E --> G([Done])
+    F --> G
+```
+
+#### Basic LR direction
+
+```mermaid
+flowchart LR
+    Src(Markdown) --> Lex[Lexer]
+    Lex --> AST[AST Builder]
+    AST --> Render[Renderer]
+    Render --> Out([ANSI output])
+```
+
+#### Nested subgraph
+
+```mermaid
+flowchart TD
+    subgraph services [ServicesLayer]
+        Svc1[Receive request] --> Svc2[Validate payload]
+        subgraph adapters [AdaptersLayer]
+            A1[DB adapter] --> A2[Cache adapter]
+        end
+        Svc2 --> A1
+    end
+    A2 --> Out([Done])
+```
+
+### Sequence diagram
+
+#### Basic
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant B as Browser
+    participant API
+    participant DB
+
+    U->>B: Open /login
+    B->>API: POST /login
+    API->>DB: SELECT user
+    DB-->>API: user row
+    API-->>B: 200 OK + token
+    B-->>U: render dashboard
+```
+
+#### With `alt` / `else` / `par` and a note
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API
+    participant DB
+    Client->>API: GET /resource
+    alt cached
+        API-->>Client: 200 OK (cached)
+    else miss
+        API->>DB: SELECT resource
+        DB-->>API: row
+        API-->>Client: 200 OK
+    end
+    par warm cache
+        API->>DB: touch resource
+    and record metrics
+        API->>DB: insert metric
+    end
+    Note over Client,API: request completed
+```
+
+### Class diagram
+
+#### Basic
+
+```mermaid
+classDiagram
+    class Repository {
+        <<interface>>
+        +findById(id) Entity
+        +save(entity) void
+        +delete(id) void
     }
-}
+    class UserRepository {
+        -db Database
+        +findById(id) User
+        +save(user) void
+        +delete(id) void
+        +findByEmail(email) User
+    }
+    class User {
+        +id int
+        +email str
+        +name str
+        +hashedPassword str
+        +verify(password) bool
+    }
+    Repository <|.. UserRepository
+    UserRepository o-- User
 ```
 
-| Test | Value | Result |
-|------|-------|--------|
-| A    | 100   | Pass   |
-| B    | 200   | Pass   |
-| C    | 300   | Fail   |
+#### With namespace, annotation, and static/abstract members
 
-### Test Section 2
-
-Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.
-
-```python
-def test_function_2():
-    for i in range(100):
-        print(f"Iteration: {i}")
+```mermaid
+classDiagram
+    namespace Billing {
+        class Account {
+            <<abstract>>
+            +String ownerId
+            +int balance$
+            +apply(Transaction) void
+            +settle()*
+        }
+        class Transaction {
+            +String id
+            +int amount
+            +describe() String
+        }
+    }
+    Account o-- Transaction : records
 ```
 
-- List item 1
-- List item 2
-  - Nested item 2.1
-  - Nested item 2.2
-- List item 3
+### State diagram
 
-### Test Section 3
+#### Basic
 
-Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.
+```mermaid
+stateDiagram-v2
+    state "Waiting for payment" as Pending
+    state "Payment confirmed" as Confirmed
+    state "Being shipped" as Shipped
 
-> Important quote about software development.
-> It spans multiple lines for emphasis.
-
-### Test Section 4
-
-Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
-
-1. Ordered item 1
-2. Ordered item 2
-3. Ordered item 3
-   1. Nested ordered item
-   2. Another nested item
-
-### Test Section 5
-
-Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vestibulum euismod, nisl eget ultricies tincidunt.
-
-**Bold text** and *italic text* and ***bold italic text*** for testing rendering.
-
-### Test Section 6
-
-```javascript
-function testFunction6() {
-    const items = [1, 2, 3, 4, 5];
-    items.forEach(item => {
-        console.log(`Item: ${item}`);
-    });
-}
+    [*] --> Pending
+    Pending --> Confirmed : payment_received
+    Confirmed --> Shipped : dispatched
+    Shipped --> Delivered : arrived
+    Delivered --> [*]
 ```
 
-### Test Section 7
+#### Composite state
 
-| Header 1 | Header 2 | Header 3 | Header 4 |
-|----------|----------|----------|----------|
-| Cell 1   | Cell 2   | Cell 3   | Cell 4   |
-| Cell 5   | Cell 6   | Cell 7   | Cell 8   |
-| Cell 9   | Cell 10  | Cell 11  | Cell 12  |
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    state Active {
+        [*] --> Waiting
+        Waiting --> Working : request
+        Working --> Waiting : finished
+    }
+    Idle --> Active : start
+    Active --> Idle : stop
+    Idle --> [*]
+```
 
-### Test Section 8
+### ER diagram
 
-- [ ] Task 1
-- [x] Task 2
-- [ ] Task 3
-- [x] Task 4
+```mermaid
+erDiagram
+    authors ||--o{ books : writes
+    categories ||--o{ book_categories : tags
+    books ||--o{ book_categories : classified_as
 
-### Test Section 9
+    authors {
+        INT id PK
+        VARCHAR name
+        VARCHAR email
+        DATETIME created_at
+    }
+    books {
+        INT id PK
+        INT author_id FK
+        VARCHAR title
+        INT price
+        DATE published_at
+    }
+    categories {
+        INT id PK
+        VARCHAR name
+        VARCHAR slug
+    }
+    book_categories {
+        INT book_id FK
+        INT category_id FK
+    }
+```
 
-This section contains `inline code` examples and more text to test scrolling performance with various Markdown elements.
+### gitGraph
 
-### Test Section 10
+When the terminal supports color, each branch is rendered in its own color.
 
-Final section with mixed content:
+```mermaid
+gitGraph
+    commit id: "init"
+    commit tag: "v0.9"
+    branch develop
+    commit
+    branch feature
+    commit
+    commit
+    checkout develop
+    merge feature
+    commit
+    checkout main
+    merge develop tag: "v1.0" type: HIGHLIGHT
+    commit
+```
 
-1. **Bold ordered item**
-2. *Italic ordered item*
-3. `Code ordered item`
+### xychart
 
-> Blockquote at the end
-> With multiple lines
-> For testing purposes
+```mermaid
+xychart
+title "Quarterly Performance"
+x-axis ["Q1", "Q2", "Q3", "Q4"]
+y-axis 0 --> 100
+bar [30, 50, 40, 60]
+line [35, 45, 55, 65]
+```
+
+The `horizontal` orientation swaps the axes:
+
+```mermaid
+xychart horizontal
+title "Monthly Revenue"
+x-axis "Month" [Jan, Feb, Mar]
+y-axis "Revenue" 0 --> 300
+bar [120, 200, 260]
+```
+
+## Horizontal Rule
 
 ---
 
-## End of Document
+## Closing Line
 
-This marks the end of the Markdown preview example document. Thank you for testing!
+End of sample.
+
+[reference]: https://example.com/reference "Reference Title"

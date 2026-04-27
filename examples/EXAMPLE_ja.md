@@ -1,400 +1,452 @@
-# Markdownプレビュー例
+# Markdownプレビューサンプル
 
-このドキュメントは、ターミナルプレビューツールでサポートされるすべてのMarkdown要素を実演します。
+このファイルは中立的な Markdown の例をまとめたものです。
 
-## テキストの書式設定
+## 見出しレベル
 
-### 基本的な書式設定
+# 見出しレベル 1
 
-これは**太字のテキスト**で、これは*斜体のテキスト*です。`インラインコード`を使用したり、***太字と斜体***の書式を組み合わせることもできます。
+## 見出しレベル 2
 
-必要に応じて~~取り消し線テキスト~~も使用できます。
+### 見出しレベル 3
 
-### 改行
+#### 見出しレベル 4
 
-これは最初の行です。  
-これは改行を含む2行目です。
+##### 見出しレベル 5
 
-これは空白行の後の新しい段落です。
+###### 見出しレベル 6
 
-## 見出し
+## 段落とインライン装飾
 
-# 見出しレベル1
-## 見出しレベル2
-### 見出しレベル3
-#### 見出しレベル4
-##### 見出しレベル5
-###### 見出しレベル6
+この段落には**太字**、_斜体_、**_太字と斜体の組み合わせ_**、~~取り消し線~~、`インラインコード`が含まれています。
+さらに Fish &amp; Chips、tea &lt; coffee のような HTML エンティティと、\*アスタリスク\* や \_アンダースコア\_ のようなエスケープ例も入れています。
+
+この行はハードブレークで終わります。  
+この行はその直下に表示されます。
+
+この行はバックスラッシュで終わり\
+次の行へ続きます。
+
+## リンクと画像
+
+[インラインリンク](https://example.com)
+
+[タイトル付きリンク](https://example.com/title "Example Title")
+
+[参照リンク][reference]
+
+<https://example.com/help>
+
+https://example.com/status?view=full
+
+![画像の例](https://example.com/image.png)
 
 ## 引用
 
-> これは引用です。
-> 複数行にわたることができます。
-> 
-> > 引用をネストすることもできます。
-> > > さらに深いネストも可能です。
-> 
-> 最初のレベルに戻ります。
+> 引用行 1
+> 引用行 2
+>
+> > ネストした引用 1
+> > ネストした引用 2
+>
+> - 引用内リスト 1
+> - 引用内リスト 2
 
 ## リスト
 
-### 順序なしリスト
+### 順不同リスト
 
-- 最初の項目
-- 2番目の項目
-  - ネストした項目 2.1
-  - ネストした項目 2.2
-    - 深くネストした項目
-- 3番目の項目
+- 項目 1
+- 項目 2
+  - ネスト項目 2.1
+  - ネスト項目 2.2
+    - ネスト項目 2.2.1
+- 項目 3
+  継続行
 
 ### 順序付きリスト
 
-1. 最初の順序付き項目
-2. 2番目の順序付き項目
-   1. ネストした順序付き項目
-   2. 別のネストした項目
-3. 3番目の順序付き項目
+1. 項目 1
+2. 項目 2
+   1. ネスト項目 2.1
+   2. ネスト項目 2.2
+3. 項目 3
 
-### 混合リスト
+1) 別マーカー 1
+2) 別マーカー 2
 
-1. 最初の順序付き項目
-   - 順序なしサブ項目
-   - 別の順序なしサブ項目
-2. 2番目の順序付き項目
-   1. 順序付きサブ項目
-   2. 別の順序付きサブ項目
+### タスクリスト
 
-## リンク
+- [x] 完了したタスク
+- [ ] 未完了のタスク
+  - [x] ネストした完了タスク
+  - [ ] ネストした未完了タスク
 
-[これはインラインリンクです](https://github.com)
+1. [x] 順序付き完了タスク
+2. [ ] 順序付き未完了タスク
 
-[これはタイトル付きのリンクです](https://github.com "ギットハブホームページ")
+- 引用子要素を持つ項目
+  > リスト項目内のネストした引用
+- コードフェンス子要素を持つ項目
+  ```bash
+  printf 'sample\n'
+  ```
 
-これは[ギットハブ][1]への参照スタイルリンクです。
+## 表
 
-[1]: https://github.com
+| 列     | 中央 |          右 |
+| :----- | :--: | ----------: |
+| 値 A   |  1   |       alpha |
+| 値 B   |  2   |        beta |
+| 日本語 |  3   | mixed ASCII |
 
-## コード
+## コードフェンス
 
-### インラインコード
+```zig
+const std = @import("std");
 
-リポジトリの状態を確認するには`git status`を使用します。
+fn sum(values: []const i32) i32 {
+    var total: i32 = 0;
+    for (values) |value| total += value;
+    return total;
+}
 
-### コードブロック
-
-```rust
-// ラストコードの例
-fn main() {
-    println!("こんにちは、マークダウンプレビュー！");
-    
-    let numbers = vec![1, 2, 3, 4, 5];
-    for num in numbers {
-        println!("数値: {}", num);
-    }
+pub fn main() void {
+    const values = [_]i32{ 1, 2, 3, 4 };
+    std.debug.print("sum={}\n", .{sum(&values)});
 }
 ```
 
-```python
-# パイソンコードの例
-def fibonacci(n):
-    """フィボナッチ数列を生成"""
-    if n <= 0:
-        return []
-    elif n == 1:
-        return [0]
-    elif n == 2:
-        return [0, 1]
-    
-    fib = [0, 1]
-    for i in range(2, n):
-        fib.append(fib[-1] + fib[-2])
-    return fib
+```c
+#include <stdio.h>
 
-print(fibonacci(10))
+static int sum(const int *values, int len) {
+    int total = 0;
+    for (int i = 0; i < len; ++i) {
+        total += values[i];
+    }
+    return total;
+}
+
+int main(void) {
+    int values[] = {1, 2, 3, 4};
+    printf("sum=%d\n", sum(values, 4));
+    return 0;
+}
 ```
 
-```javascript
-// ジャバスクリプトコードの例
-const fetchData = async (url) => {
-    try {
-        const response = await fetch(url);
-        const data = await response.json();
-        console.log('データを受信:', data);
-        return data;
-    } catch (error) {
-        console.error('データ取得エラー:', error);
-    }
-};
+```rust
+fn sum(values: &[i32]) -> i32 {
+    values.iter().copied().sum()
+}
 
-fetchData('https://api.example.com/data');
+fn main() {
+    let values = [1, 2, 3, 4];
+    println!("sum={}", sum(&values));
+}
+```
+
+```go
+package main
+
+import "fmt"
+
+func sum(values []int) int {
+	total := 0
+	for _, value := range values {
+		total += value
+	}
+	return total
+}
+
+func main() {
+	values := []int{1, 2, 3, 4}
+	fmt.Printf("sum=%d\n", sum(values))
+}
+```
+
+```json
+{
+  "name": "example",
+  "enabled": true,
+  "items": [
+    { "id": 1, "label": "alpha" },
+    { "id": 2, "label": "beta" }
+  ],
+  "meta": {
+    "count": 2,
+    "tag": "sample"
+  }
+}
 ```
 
 ```bash
-#!/bin/bash
-# バッシュスクリプトの例
+set -eu
 
-echo "デプロイを開始しています..."
+input="sample.md"
 
-# プロジェクトをビルド
-cargo build --release
-
-# テストを実行
-cargo test
-
-# デプロイ
-if [ $? -eq 0 ]; then
-    echo "テストが成功しました。デプロイしています..."
-    ./deploy.sh
+if [ -f "$input" ]; then
+  mp "$input"
 else
-    echo "テストが失敗しました。デプロイを中止します。"
-    exit 1
+  printf 'missing: %s\n' "$input"
 fi
 ```
 
-### 言語指定なしのコードブロック
-
 ```
-これは構文ハイライトなしのコードブロックです。
-任意のテキスト形式を含むことができます。
-    インデントされた行も含めて。
+プレーンテキストのフェンス
+2 行目には | や * のような記号があります。
+3 行目はインデント付きです。
+    plain text stays as-is.
 ```
 
-## テーブル
+## Mermaid 図
 
-### 簡単なテーブル
+以下の Mermaid 図は ASCII アートとしてその場で描画されます。
 
-| 列 1     | 列 2     | 列 3     |
-|----------|----------|----------|
-| データ 1 | データ 2 | データ 3 |
-| データ 4 | データ 5 | データ 6 |
+### フローチャート (flowchart)
 
-### 配置指定付きテーブル
+#### 基本 (TD 方向)
 
-| 左揃え   | 中央揃え | 右揃え   |
-|:---------|:--------:|---------:|
-| 左       | 中央     | 右       |
-| 123      | 456      | 789      |
-| 文字列   | サンプル | テスト   |
+```mermaid
+flowchart TD
+    A(Input) --> B[Lexer]
+    B --> C[Parser]
+    C --> D{Valid?}
+    D -->|yes| E[Render]
+    D -->|no| F[Report error]
+    E --> G([Done])
+    F --> G
+```
 
-### 複雑なテーブル
+#### 基本 (LR 方向)
 
-| 機能 | 説明 | ステータス | 優先度 |
-|------|------|-----------|--------|
-| **TUIモード** | ファイルツリーとプレビュー付きターミナルUI | ✅ 完了 | 高 |
-| **構文ハイライト** | 異なるMarkdown要素の色分け | ✅ 完了 | 高 |
-| **テーブル** | テーブルレンダリングのサポート | ✅ 完了 | 中 |
-| **コードブロック** | 構文ハイライト付きコードブロック | ✅ 完了 | 高 |
-| **リスト** | ネストしたリストのサポート | ✅ 完了 | 中 |
-| **リンク** | ターミナルでのクリック可能なリンク | 🚧 進行中 | 低 |
-| **画像** | ASCII アート表現 | ⏸ 未開始 | 低 |
+```mermaid
+flowchart LR
+    Src(Markdown) --> Lex[Lexer]
+    Lex --> AST[AST Builder]
+    AST --> Render[Renderer]
+    Render --> Out([ANSI output])
+```
+
+#### ネストした subgraph
+
+```mermaid
+flowchart TD
+    subgraph services [ServicesLayer]
+        Svc1[Receive request] --> Svc2[Validate payload]
+        subgraph adapters [AdaptersLayer]
+            A1[DB adapter] --> A2[Cache adapter]
+        end
+        Svc2 --> A1
+    end
+    A2 --> Out([Done])
+```
+
+### シーケンス図 (sequenceDiagram)
+
+#### 基本
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant B as Browser
+    participant API
+    participant DB
+
+    U->>B: Open /login
+    B->>API: POST /login
+    API->>DB: SELECT user
+    DB-->>API: user row
+    API-->>B: 200 OK + token
+    B-->>U: render dashboard
+```
+
+#### `alt` / `else` / `par` と note
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API
+    participant DB
+    Client->>API: GET /resource
+    alt cached
+        API-->>Client: 200 OK (cached)
+    else miss
+        API->>DB: SELECT resource
+        DB-->>API: row
+        API-->>Client: 200 OK
+    end
+    par warm cache
+        API->>DB: touch resource
+    and record metrics
+        API->>DB: insert metric
+    end
+    Note over Client,API: request completed
+```
+
+### クラス図 (classDiagram)
+
+#### 基本
+
+```mermaid
+classDiagram
+    class Repository {
+        <<interface>>
+        +findById(id) Entity
+        +save(entity) void
+        +delete(id) void
+    }
+    class UserRepository {
+        -db Database
+        +findById(id) User
+        +save(user) void
+        +delete(id) void
+        +findByEmail(email) User
+    }
+    class User {
+        +id int
+        +email str
+        +name str
+        +hashedPassword str
+        +verify(password) bool
+    }
+    Repository <|.. UserRepository
+    UserRepository o-- User
+```
+
+#### namespace・annotation・static/abstract メンバー
+
+```mermaid
+classDiagram
+    namespace Billing {
+        class Account {
+            <<abstract>>
+            +String ownerId
+            +int balance$
+            +apply(Transaction) void
+            +settle()*
+        }
+        class Transaction {
+            +String id
+            +int amount
+            +describe() String
+        }
+    }
+    Account o-- Transaction : records
+```
+
+### 状態遷移図 (stateDiagram)
+
+#### 基本
+
+```mermaid
+stateDiagram-v2
+    state "Waiting for payment" as Pending
+    state "Payment confirmed" as Confirmed
+    state "Being shipped" as Shipped
+
+    [*] --> Pending
+    Pending --> Confirmed : payment_received
+    Confirmed --> Shipped : dispatched
+    Shipped --> Delivered : arrived
+    Delivered --> [*]
+```
+
+#### 複合状態 (composite state)
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    state Active {
+        [*] --> Waiting
+        Waiting --> Working : request
+        Working --> Waiting : finished
+    }
+    Idle --> Active : start
+    Active --> Idle : stop
+    Idle --> [*]
+```
+
+### ER 図 (erDiagram)
+
+```mermaid
+erDiagram
+    authors ||--o{ books : writes
+    categories ||--o{ book_categories : tags
+    books ||--o{ book_categories : classified_as
+
+    authors {
+        INT id PK
+        VARCHAR name
+        VARCHAR email
+        DATETIME created_at
+    }
+    books {
+        INT id PK
+        INT author_id FK
+        VARCHAR title
+        INT price
+        DATE published_at
+    }
+    categories {
+        INT id PK
+        VARCHAR name
+        VARCHAR slug
+    }
+    book_categories {
+        INT book_id FK
+        INT category_id FK
+    }
+```
+
+### gitGraph
+
+ターミナルがカラー対応していれば、branch ごとに色分けされて表示されます。
+
+```mermaid
+gitGraph
+    commit id: "init"
+    commit tag: "v0.9"
+    branch develop
+    commit
+    branch feature
+    commit
+    commit
+    checkout develop
+    merge feature
+    commit
+    checkout main
+    merge develop tag: "v1.0" type: HIGHLIGHT
+    commit
+```
+
+### XY チャート (xychart)
+
+```mermaid
+xychart
+title "Quarterly Performance"
+x-axis ["Q1", "Q2", "Q3", "Q4"]
+y-axis 0 --> 100
+bar [30, 50, 40, 60]
+line [35, 45, 55, 65]
+```
+
+`horizontal` を付けると軸を入れ替えた横向きレンダリングになります。
+
+```mermaid
+xychart horizontal
+title "Monthly Revenue"
+x-axis "Month" [Jan, Feb, Mar]
+y-axis "Revenue" 0 --> 300
+bar [120, 200, 260]
+```
 
 ## 水平線
 
 ---
 
-***
+## 終了行
 
-___
+サンプルはここで終わりです。
 
-## HTML記号
-
-一般的なHTML記号: &copy; &reg; &trade; &nbsp; &amp; &lt; &gt; &quot;
-
-数学記号: &alpha; &beta; &gamma; &delta; &pi; &sum; &infin;
-
-## 特殊文字
-
-特殊文字のエスケープ: \* \_ \[ \] \( \) \# \+ \- \. \!
-
-## タスクリスト
-
-- [x] 完了したタスク
-- [x] 別の完了したタスク
-- [ ] 未完了のタスク
-- [ ] 別の未完了のタスク
-  - [x] 完了したサブタスク
-  - [ ] 未完了のサブタスク
-
-## 絵文字サポート
-
-一部のターミナルは絵文字をサポートします: 🚀 ✨ 🎉 💻 📝 ✅ ⏸ 🔧 📚
-
-## スクロールテスト用の長いコンテンツ
-
-これはサンプルテキストです。アプリケーションのパフォーマンスをテストするために使用されます。長いドキュメントでのスクロール機能や表示機能を確認するためのものです。
-
-ユーザーインターフェースの応答性とレンダリング速度を評価するために、様々な種類のマークダウン要素を組み合わせたコンテンツを提供しています。
-
-### セクション 1: アーキテクチャ概要
-
-アプリケーションはラストを使用して構築され、いくつかの主要なライブラリを活用しています：
-
-- **ラタツイ**: ターミナルUIフレームワーク
-- **プルダウンマーク**: マークダウンパーサー
-- **クロスターム**: ターミナル操作
-- **クラップ**: コマンドライン引数の解析
-
-### セクション 2: パフォーマンス最適化
-
-1. **キャッシュ戦略**: マークダウンコンテンツを事前解析し、レンダリングされたウィジェットをキャッシュ
-2. **イベント駆動レンダリング**: ユーザー入力が検出された時のみ再描画
-3. **仮想スクロール**: コンテンツの可視部分のみをレンダリング
-4. **遅延読み込み**: 一度にすべてではなく、オンデマンドでファイルを読み込み
-
-### セクション 3: 機能
-
-#### コア機能
-
-- 高速なマークダウン解析とレンダリング
-- カスタマイズ可能なテーマによる構文ハイライト
-- ファイルツリーナビゲーション
-- 効率的なナビゲーションのためのキーボードショートカット
-- すべての主要なマークダウン要素のサポート
-
-#### 高度な機能
-
-- 複数の表示モード（標準出力、TUI）
-- テーマのカスタマイズ
-- 拡張機能用のプラグインシステム
-- 様々な形式へのエクスポート
-
-### セクション 4: 使用例
-
-```bash
-# 基本的な使用法
-mp README.md
-
-# TUIモード
-mp --tui
-
-# カスタムテーマで
-mp --theme dark README.md
-
-# 複数ファイル
-mp *.md
-```
-
-### セクション 5: 貢献
-
-貢献を歓迎します！以下のガイドラインに従ってください：
-
-1. リポジトリをフォーク
-2. 機能ブランチを作成
-3. 新機能のテストを書く
-4. すべてのテストが通ることを確認
-5. プルリクエストを提出
-
-### セクション 6: ライセンス
-
-このプロジェクトはMITライセンスの下でライセンスされています。詳細はライセンスファイルをご覧ください。
-
----
-
-## パフォーマンステストコンテンツ
-
-以下のセクションは、スクロールパフォーマンスをテストするための繰り返しコンテンツです：
-
-### テストセクション 1
-
-これはサンプルの段落です。アプリケーションのレンダリング機能をテストするために使用されます。様々な要素が混在する長いドキュメントでの表示性能を確認します。
-
-```rust
-fn test_function_1() {
-    for i in 0..100 {
-        println!("反復: {}", i);
-    }
-}
-```
-
-| テスト | 値  | 結果 |
-|--------|-----|------|
-| A      | 100 | 合格 |
-| B      | 200 | 合格 |
-| C      | 300 | 不合格 |
-
-### テストセクション 2
-
-テキストの処理とレンダリングの品質を確認するための追加コンテンツです。様々なマークダウン要素の組み合わせで性能をテストします。
-
-```python
-def test_function_2():
-    for i in range(100):
-        print(f"反復: {i}")
-```
-
-- リスト項目 1
-- リスト項目 2
-  - ネストした項目 2.1
-  - ネストした項目 2.2
-- リスト項目 3
-
-### テストセクション 3
-
-ユーザーインターフェースの応答性とスクロール機能の安定性を評価するためのコンテンツセクションです。
-
-> ソフトウェア開発に関する重要な引用。
-> 強調のために複数行にわたっています。
-
-### テストセクション 4
-
-アプリケーションの総合的な機能テストのために設計されたセクションです。様々な要素の組み合わせでの動作を確認します。
-
-1. 順序付き項目 1
-2. 順序付き項目 2
-3. 順序付き項目 3
-   1. ネストした順序付き項目
-   2. 別のネストした項目
-
-### テストセクション 5
-
-レンダリングエンジンのテストのためのコンテンツです。文字装飾とフォーマットの表示確認に使用されます。
-
-レンダリングテスト用の**太字テキスト**と*斜体テキスト*と***太字斜体テキスト***。
-
-### テストセクション 6
-
-```javascript
-function testFunction6() {
-    const items = [1, 2, 3, 4, 5];
-    items.forEach(item => {
-        console.log(`項目: ${item}`);
-    });
-}
-```
-
-### テストセクション 7
-
-| ヘッダー 1 | ヘッダー 2 | ヘッダー 3 | ヘッダー 4 |
-|------------|------------|------------|------------|
-| セル 1     | セル 2     | セル 3     | セル 4     |
-| セル 5     | セル 6     | セル 7     | セル 8     |
-| セル 9     | セル 10    | セル 11    | セル 12    |
-
-### テストセクション 8
-
-- [ ] タスク 1
-- [x] タスク 2
-- [ ] タスク 3
-- [x] タスク 4
-
-### テストセクション 9
-
-このセクションには`インラインコード`の例と、様々なマークダウン要素でのスクロールパフォーマンスをテストするためのテキストが含まれています。
-
-### テストセクション 10
-
-混合コンテンツを含む最終セクション：
-
-1. **太字の順序付き項目**
-2. *斜体の順序付き項目*
-3. `コードの順序付き項目`
-
-> 最後の引用
-> 複数行で
-> テスト目的のため
-
----
-
-## ドキュメント終了
-
-これでマークダウンプレビュー例ドキュメントの終わりです。テストしていただき、ありがとうございました！
+[reference]: https://example.com/reference "Reference Title"

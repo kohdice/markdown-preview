@@ -22,13 +22,15 @@
           inherit system;
           overlays = [ zig-overlay.overlays.default ];
         };
-        zig = pkgs.zigpkgs."0.15.2";
+        zig = pkgs.zigpkgs."0.16.0";
       in
       {
         devShells.default = pkgs.mkShell {
           name = "markdown-preview";
 
           nativeBuildInputs = with pkgs; [
+            goreleaser
+            hyperfine
             zig
           ];
         };
