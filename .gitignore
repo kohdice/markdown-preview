@@ -4,6 +4,9 @@ zig-out/
 *.o
 .bench-cache/
 
+# GoReleaser
+dist/
+
 # env file
 .env
 
