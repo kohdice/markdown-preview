@@ -61,5 +61,8 @@
         "build.zig",
         "build.zig.zon",
         "src",
+        "LICENSE",
+        "README.md",
+        "THIRD_PARTY_NOTICES.md",
     },
 }
