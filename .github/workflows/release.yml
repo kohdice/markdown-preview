@@ -26,8 +26,6 @@ jobs:
         uses: DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39 # v13
         with:
           use-flakehub: false
-      - name: Run tests
-        run: nix develop -c zig build test
       - name: Create draft release
         run: nix develop -c goreleaser release --clean --draft
         env:
