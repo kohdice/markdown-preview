@@ -29,6 +29,7 @@
           name = "markdown-preview";
 
           nativeBuildInputs = with pkgs; [
+            goreleaser
             hyperfine
             zig
           ];
