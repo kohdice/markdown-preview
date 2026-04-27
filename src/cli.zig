@@ -32,10 +32,11 @@ const usage_message =
     \\Preview a Markdown file in the terminal.
     \\
     \\Options:
-    \\  --watch       Live-reload on file changes
-    \\  --version     Show version number and quit
-    \\  -h, --help    Show this help and quit
-    \\  --            Treat the next argument as FILE
+    \\  --width <COLUMNS>  Override wrapping width for one-shot file rendering
+    \\  --watch            Live-reload in an interactive terminal
+    \\  --version          Show version number and quit
+    \\  -h, --help         Show this help and quit
+    \\  --                 Treat the next argument as FILE
     \\
 ;
 
@@ -45,18 +46,26 @@ pub const Command = union(enum) {
     version,
     help,
 
-    pub const RenderCommand = struct { path: []const u8 };
+    pub const RenderCommand = struct {
+        path: []const u8,
+        width_override: ?usize,
+    };
     pub const WatchCommand = struct { path: []const u8 };
 };
 
 const ParseError = error{
     MissingPath,
+    MissingWidth,
+    InvalidWidth,
+    DuplicateWidth,
+    WidthWithWatch,
     TooManyPositional,
     UnknownFlag,
 };
 
 pub fn parseArgs(args: []const [:0]const u8) ParseError!Command {
     var path: ?[]const u8 = null;
+    var width_override: ?usize = null;
     var positional_only = false;
     var watch_flag = false;
 
@@ -70,6 +79,13 @@ pub fn parseArgs(args: []const [:0]const u8) ParseError!Command {
             }
             if (std.mem.eql(u8, arg, "--watch")) {
                 watch_flag = true;
+                continue;
+            }
+            if (std.mem.eql(u8, arg, "--width")) {
+                if (width_override != null) return error.DuplicateWidth;
+                i += 1;
+                if (i >= args.len) return error.MissingWidth;
+                width_override = try parseWidth(args[i]);
                 continue;
             }
             if (std.mem.eql(u8, arg, "--version")) {
@@ -87,8 +103,15 @@ pub fn parseArgs(args: []const [:0]const u8) ParseError!Command {
     }
 
     const resolved_path = path orelse return error.MissingPath;
+    if (watch_flag and width_override != null) return error.WidthWithWatch;
     if (watch_flag) return .{ .watch = .{ .path = resolved_path } };
-    return .{ .render = .{ .path = resolved_path } };
+    return .{ .render = .{ .path = resolved_path, .width_override = width_override } };
+}
+
+fn parseWidth(value: []const u8) ParseError!usize {
+    const parsed = std.fmt.parseInt(usize, value, 10) catch return error.InvalidWidth;
+    if (parsed == 0) return error.InvalidWidth;
+    return parsed;
 }
 
 pub fn run(opts: RunOptions) !u8 {
@@ -115,7 +138,7 @@ pub fn executeCommand(opts: RunOptions, command: Command) !u8 {
             .ambiguous_width = opts.ambiguous_width,
             .color_mode = opts.color_mode,
         }),
-        .render => |cmd| renderOnce(opts, cmd.path),
+        .render => |cmd| renderOnce(opts, cmd.path, cmd.width_override),
         .version => writeVersion(opts.stdout, opts.version),
         .help => writeHelp(opts.stdout),
     };
@@ -131,7 +154,7 @@ fn writeVersion(stdout: *std.Io.Writer, version: []const u8) !u8 {
     return exit_success;
 }
 
-fn renderOnce(opts: RunOptions, path: []const u8) !u8 {
+fn renderOnce(opts: RunOptions, path: []const u8, width_override: ?usize) !u8 {
     const source = source_loader.loadFile(opts.allocator, opts.io, opts.cwd, path) catch |err| {
         try opts.stderr.print("mp: unable to read '{s}': {s}\n", .{ path, @errorName(err) });
         return exit_failure;
@@ -147,7 +170,7 @@ fn renderOnce(opts: RunOptions, path: []const u8) !u8 {
     });
     defer renderer.deinit();
 
-    try renderer.render(opts.stdout, &doc, opts.wrap_width, opts.allocator);
+    try renderer.render(opts.stdout, &doc, width_override orelse opts.wrap_width, opts.allocator);
     return exit_success;
 }
 
@@ -161,6 +184,56 @@ test "parseArgs returns render command for plain positional path" {
     const parsed = try parseArgs(&args);
     try std.testing.expect(parsed == .render);
     try std.testing.expectEqualStrings("foo.md", parsed.render.path);
+    try std.testing.expectEqual(@as(?usize, null), parsed.render.width_override);
+}
+
+test "parseArgs records width when --width precedes path" {
+    const args = [_][:0]const u8{ "mp", "--width", "72", "foo.md" };
+    const parsed = try parseArgs(&args);
+    try std.testing.expect(parsed == .render);
+    try std.testing.expectEqualStrings("foo.md", parsed.render.path);
+    try std.testing.expectEqual(@as(?usize, 72), parsed.render.width_override);
+}
+
+test "parseArgs records width when --width follows path" {
+    const args = [_][:0]const u8{ "mp", "foo.md", "--width", "72" };
+    const parsed = try parseArgs(&args);
+    try std.testing.expect(parsed == .render);
+    try std.testing.expectEqualStrings("foo.md", parsed.render.path);
+    try std.testing.expectEqual(@as(?usize, 72), parsed.render.width_override);
+}
+
+test "parseArgs treats --width after -- as a render path" {
+    const args = [_][:0]const u8{ "mp", "--", "--width" };
+    const parsed = try parseArgs(&args);
+    try std.testing.expect(parsed == .render);
+    try std.testing.expectEqualStrings("--width", parsed.render.path);
+    try std.testing.expectEqual(@as(?usize, null), parsed.render.width_override);
+}
+
+test "parseArgs rejects --width without a value" {
+    const args = [_][:0]const u8{ "mp", "--width" };
+    try std.testing.expectError(error.MissingWidth, parseArgs(&args));
+}
+
+test "parseArgs rejects non-numeric --width value" {
+    const args = [_][:0]const u8{ "mp", "--width", "wide", "foo.md" };
+    try std.testing.expectError(error.InvalidWidth, parseArgs(&args));
+}
+
+test "parseArgs rejects zero --width value" {
+    const args = [_][:0]const u8{ "mp", "--width", "0", "foo.md" };
+    try std.testing.expectError(error.InvalidWidth, parseArgs(&args));
+}
+
+test "parseArgs rejects duplicate --width values" {
+    const args = [_][:0]const u8{ "mp", "--width", "72", "foo.md", "--width", "80" };
+    try std.testing.expectError(error.DuplicateWidth, parseArgs(&args));
+}
+
+test "parseArgs rejects --width with --watch" {
+    const args = [_][:0]const u8{ "mp", "--watch", "--width", "72", "foo.md" };
+    try std.testing.expectError(error.WidthWithWatch, parseArgs(&args));
 }
 
 test "parseArgs returns watch command when --watch precedes path" {
@@ -321,17 +394,18 @@ test "run reports usage errors" {
         \\Preview a Markdown file in the terminal.
         \\
         \\Options:
-        \\  --watch       Live-reload on file changes
-        \\  --version     Show version number and quit
-        \\  -h, --help    Show this help and quit
-        \\  --            Treat the next argument as FILE
+        \\  --width <COLUMNS>  Override wrapping width for one-shot file rendering
+        \\  --watch            Live-reload in an interactive terminal
+        \\  --version          Show version number and quit
+        \\  -h, --help         Show this help and quit
+        \\  --                 Treat the next argument as FILE
         \\
     ,
         stderr.writer.buffered(),
     );
 }
 
-test "run writes help information for the help option" {
+test "run writes help information for width and watch options" {
     var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer stdout.deinit();
     var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
@@ -359,10 +433,11 @@ test "run writes help information for the help option" {
         \\Preview a Markdown file in the terminal.
         \\
         \\Options:
-        \\  --watch       Live-reload on file changes
-        \\  --version     Show version number and quit
-        \\  -h, --help    Show this help and quit
-        \\  --            Treat the next argument as FILE
+        \\  --width <COLUMNS>  Override wrapping width for one-shot file rendering
+        \\  --watch            Live-reload in an interactive terminal
+        \\  --version          Show version number and quit
+        \\  -h, --help         Show this help and quit
+        \\  --                 Treat the next argument as FILE
         \\
     ,
         stdout.writer.buffered(),
@@ -461,6 +536,57 @@ test "run reports missing files" {
     try std.testing.expect(std.mem.containsAtLeast(u8, stderr.writer.buffered(), 1, "missing.md"));
 }
 
+test "run reports missing files with --width like default file rendering" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var default_stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer default_stdout.deinit();
+    var default_stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer default_stderr.deinit();
+
+    const default_exit_code = try run(.{
+        .allocator = std.testing.allocator,
+        .io = io,
+        .cwd = tmp.dir,
+        .args = &.{ "mp", "missing.md" },
+        .version = "",
+        .stdout = &default_stdout.writer,
+        .stderr = &default_stderr.writer,
+        .stdout_file = invalid_file,
+        .stdin_file = invalid_file,
+        .enable_ansi = false,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    });
+
+    var width_stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer width_stdout.deinit();
+    var width_stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer width_stderr.deinit();
+
+    const width_exit_code = try run(.{
+        .allocator = std.testing.allocator,
+        .io = io,
+        .cwd = tmp.dir,
+        .args = &.{ "mp", "--width", "8", "missing.md" },
+        .version = "",
+        .stdout = &width_stdout.writer,
+        .stderr = &width_stderr.writer,
+        .stdout_file = invalid_file,
+        .stdin_file = invalid_file,
+        .enable_ansi = false,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    });
+
+    try std.testing.expectEqual(default_exit_code, width_exit_code);
+    try std.testing.expectEqual(exit_failure, width_exit_code);
+    try std.testing.expectEqualStrings(default_stdout.writer.buffered(), width_stdout.writer.buffered());
+    try std.testing.expectEqualStrings(default_stderr.writer.buffered(), width_stderr.writer.buffered());
+}
+
 test "run renders markdown files" {
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -503,6 +629,111 @@ test "run renders markdown files" {
     ,
         stdout.writer.buffered(),
     );
+    try std.testing.expectEqualStrings("", stderr.writer.buffered());
+}
+
+test "run uses detected wrap width when --width is not provided" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "plain.md",
+        .data = "Hello World",
+    });
+
+    var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stderr.deinit();
+
+    const exit_code = try run(.{
+        .allocator = std.testing.allocator,
+        .io = io,
+        .cwd = tmp.dir,
+        .args = &.{ "mp", "plain.md" },
+        .version = "",
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+        .stdout_file = invalid_file,
+        .stdin_file = invalid_file,
+        .enable_ansi = false,
+        .wrap_width = 8,
+        .ambiguous_width = .narrow,
+    });
+
+    try std.testing.expectEqual(exit_success, exit_code);
+    try std.testing.expectEqualStrings("Hello\nWorld", stdout.writer.buffered());
+    try std.testing.expectEqualStrings("", stderr.writer.buffered());
+}
+
+test "run applies --width when detected wrap width is absent" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "plain.md",
+        .data = "Hello World",
+    });
+
+    var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stderr.deinit();
+
+    const exit_code = try run(.{
+        .allocator = std.testing.allocator,
+        .io = io,
+        .cwd = tmp.dir,
+        .args = &.{ "mp", "--width", "8", "plain.md" },
+        .version = "",
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+        .stdout_file = invalid_file,
+        .stdin_file = invalid_file,
+        .enable_ansi = false,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    });
+
+    try std.testing.expectEqual(exit_success, exit_code);
+    try std.testing.expectEqualStrings("Hello\nWorld", stdout.writer.buffered());
+    try std.testing.expectEqualStrings("", stderr.writer.buffered());
+}
+
+test "run lets --width override detected wrap width" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "plain.md",
+        .data = "Hello World",
+    });
+
+    var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stderr.deinit();
+
+    const exit_code = try run(.{
+        .allocator = std.testing.allocator,
+        .io = io,
+        .cwd = tmp.dir,
+        .args = &.{ "mp", "plain.md", "--width", "8" },
+        .version = "",
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+        .stdout_file = invalid_file,
+        .stdin_file = invalid_file,
+        .enable_ansi = false,
+        .wrap_width = 80,
+        .ambiguous_width = .narrow,
+    });
+
+    try std.testing.expectEqual(exit_success, exit_code);
+    try std.testing.expectEqualStrings("Hello\nWorld", stdout.writer.buffered());
     try std.testing.expectEqualStrings("", stderr.writer.buffered());
 }
 

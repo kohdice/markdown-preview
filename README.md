@@ -8,12 +8,13 @@ Command to preview Markdown
 mp [options] [--] <FILE>
 ```
 
-| Option       | Description                         |
-| ------------ | ----------------------------------- |
-| `--watch`    | Live-reload on file changes         |
-| `--version`  | Show version number and quit        |
-| `-h, --help` | Show help and quit                  |
-| `--`         | Treat the next argument as the file |
+| Option              | Description                                         |
+| ------------------- | --------------------------------------------------- |
+| `--width <COLUMNS>` | Override wrapping width for one-shot file rendering |
+| `--watch`           | Live-reload on file changes                         |
+| `--version`         | Show version number and quit                        |
+| `-h, --help`        | Show help and quit                                  |
+| `--`                | Treat the next argument as the file                 |
 
 ### Watch mode
 
