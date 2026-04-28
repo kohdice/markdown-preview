@@ -346,7 +346,7 @@ fn matchLeftCardinality(line: []const u8, before_end: usize) ?LeftCardMatch {
     if (before_end < 2) return matchLeftSingle(line, before_end);
     const two = line[before_end - 2 .. before_end];
     if (std.mem.eql(u8, two, "||")) return .{ .kind = .exactly_one, .start = before_end - 2 };
-    if (std.mem.eql(u8, two, "o|")) return .{ .kind = .zero_or_one, .start = before_end - 2 };
+    if (std.mem.eql(u8, two, "|o")) return .{ .kind = .zero_or_one, .start = before_end - 2 };
     if (std.mem.eql(u8, two, "}o")) return .{ .kind = .zero_or_many, .start = before_end - 2 };
     if (std.mem.eql(u8, two, "}|")) return .{ .kind = .one_or_many, .start = before_end - 2 };
     return matchLeftSingle(line, before_end);
@@ -365,7 +365,7 @@ fn matchRightCardinality(line: []const u8, after_start: usize) ?RightCardMatch {
     if (after_start + 2 <= line.len) {
         const two = line[after_start .. after_start + 2];
         if (std.mem.eql(u8, two, "||")) return .{ .kind = .exactly_one, .len = 2 };
-        if (std.mem.eql(u8, two, "|o")) return .{ .kind = .zero_or_one, .len = 2 };
+        if (std.mem.eql(u8, two, "o|")) return .{ .kind = .zero_or_one, .len = 2 };
         if (std.mem.eql(u8, two, "o{")) return .{ .kind = .zero_or_many, .len = 2 };
         if (std.mem.eql(u8, two, "|{")) return .{ .kind = .one_or_many, .len = 2 };
     }
@@ -394,6 +394,54 @@ test "parses simple relation ||--o{" {
     try std.testing.expectEqual(types.ErCardinality.zero_or_many, d.relations[0].right);
     try std.testing.expect(d.relations[0].identifying);
     try std.testing.expectEqualStrings("places", d.relations[0].label);
+}
+
+test "parses right-side zero-or-one marker o|" {
+    var d = try parseSource(std.testing.allocator,
+        \\erDiagram
+        \\    BRAND_MST ||--o| BRAND_DETAIL_MST : extends
+    );
+    defer d.deinit();
+    try std.testing.expectEqual(@as(usize, 1), d.relations.len);
+    try std.testing.expectEqual(types.ErCardinality.zero_or_one, d.relations[0].right);
+}
+
+test "parses left-side zero-or-one marker |o" {
+    var d = try parseSource(std.testing.allocator,
+        \\erDiagram
+        \\    BRAND_MST |o--|| BRAND_DETAIL_MST : extends
+    );
+    defer d.deinit();
+    try std.testing.expectEqual(@as(usize, 1), d.relations.len);
+    try std.testing.expectEqual(types.ErCardinality.zero_or_one, d.relations[0].left);
+}
+
+test "rejects non-standard right-side zero-or-one marker |o" {
+    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+        \\erDiagram
+        \\    BRAND_MST ||--|o BRAND_DETAIL_MST : extends
+    ));
+}
+
+test "rejects non-standard left-side zero-or-one marker o|" {
+    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+        \\erDiagram
+        \\    BRAND_MST o|--|| BRAND_DETAIL_MST : extends
+    ));
+}
+
+test "keeps official right-side markers parsing" {
+    var d = try parseSource(std.testing.allocator,
+        \\erDiagram
+        \\    A ||--|| B : exactly
+        \\    C ||--o{ D : optional_many
+        \\    E ||--|{ F : required_many
+    );
+    defer d.deinit();
+    try std.testing.expectEqual(@as(usize, 3), d.relations.len);
+    try std.testing.expectEqual(types.ErCardinality.exactly_one, d.relations[0].right);
+    try std.testing.expectEqual(types.ErCardinality.zero_or_many, d.relations[1].right);
+    try std.testing.expectEqual(types.ErCardinality.one_or_many, d.relations[2].right);
 }
 
 test "parses entity with attributes PK/FK" {

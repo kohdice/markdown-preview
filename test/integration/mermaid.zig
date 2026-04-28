@@ -171,6 +171,23 @@ test "erDiagram is rendered as ASCII art" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid:") == null);
 }
 
+test "erDiagram renders right-side zero-or-one marker o|" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\```mermaid
+        \\erDiagram
+        \\    BRAND_MST ||--o| BRAND_DETAIL_MST : extends
+        \\```
+        \\
+    ;
+    const rendered = try helpers.renderToOwnedSlice(allocator, source, .{});
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "BRAND_MST") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "BRAND_DETAIL_MST") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid:") == null);
+}
+
 test "erDiagram standalone entity renders the box" {
     const allocator = std.testing.allocator;
     const source =
