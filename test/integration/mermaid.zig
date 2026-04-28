@@ -188,6 +188,33 @@ test "erDiagram renders right-side zero-or-one marker o|" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid:") == null);
 }
 
+test "erDiagram wraps wide same-level entities to the render width" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\```mermaid
+        \\erDiagram
+        \\    A
+        \\    B
+        \\    C
+        \\    D
+        \\```
+        \\
+    ;
+    const rendered = try helpers.renderToOwnedSlice(allocator, source, .{ .wrap_width = 14 });
+    defer allocator.free(rendered);
+
+    try std.testing.expect(std.mem.find(u8, rendered, "\u{2026}") == null);
+    try std.testing.expect(std.mem.find(u8, rendered, "A") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "B") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "C") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "D") != null);
+
+    var lines = std.mem.splitScalar(u8, rendered, '\n');
+    while (lines.next()) |line| {
+        try std.testing.expect(internals.term.width.displayWidth(line, .narrow) <= 14);
+    }
+}
+
 test "erDiagram standalone entity renders the box" {
     const allocator = std.testing.allocator;
     const source =

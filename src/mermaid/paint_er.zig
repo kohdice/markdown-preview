@@ -27,7 +27,7 @@ pub fn paintEr(
 
     if (diagram.entities.len == 0) return;
 
-    var layout = computeErLayout(allocator, &diagram, opts.ambiguous_width) catch |err| switch (err) {
+    var layout = computeErLayout(allocator, &diagram, opts.wrap_width, opts.ambiguous_width) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
     };
     defer layout.deinit();
@@ -68,6 +68,7 @@ pub const ErLayoutError = error{OutOfMemory};
 fn computeErLayout(
     allocator: std.mem.Allocator,
     diagram: *const types.ErDiagram,
+    wrap_width: ?usize,
     ambiguous: width_mod.AmbiguousWidth,
 ) ErLayoutError!types.Layout {
     const n = diagram.entities.len;
@@ -105,17 +106,41 @@ fn computeErLayout(
 
     for (0..n) |i| {
         const level = levels[i];
-        const col = level_counts[level];
         level_counts[level] += 1;
-        positions[i] = .{
-            .row = max_level - level,
-            .col = col,
-        };
     }
 
     var cols: usize = 0;
-    for (level_counts) |c| cols = @max(cols, c);
+    const cell_w = computeRequiredBoxWidth(diagram, ambiguous);
+    const cell_h = computeRequiredBoxHeight(diagram);
+    const max_cols_per_row = maxColumnsForWrap(wrap_width, cell_w, n);
+    for (level_counts) |c| cols = @max(cols, @min(c, max_cols_per_row));
     if (cols == 0) cols = 1;
+
+    const level_row_starts = try allocator.alloc(usize, max_level + 1);
+    defer allocator.free(level_row_starts);
+
+    var rows: usize = 0;
+    var level_cursor = max_level + 1;
+    while (level_cursor > 0) {
+        level_cursor -= 1;
+        level_row_starts[level_cursor] = rows;
+        rows += std.math.divCeil(usize, level_counts[level_cursor], max_cols_per_row) catch unreachable;
+    }
+    if (rows == 0) rows = 1;
+
+    const level_next_indices = try allocator.alloc(usize, max_level + 1);
+    defer allocator.free(level_next_indices);
+    @memset(level_next_indices, 0);
+
+    for (0..n) |i| {
+        const level = levels[i];
+        const local_idx = level_next_indices[level];
+        level_next_indices[level] += 1;
+        positions[i] = .{
+            .row = level_row_starts[level] + local_idx / max_cols_per_row,
+            .col = local_idx % max_cols_per_row,
+        };
+    }
 
     const truncated_labels = try allocator.alloc([]const u8, 0);
     errdefer allocator.free(truncated_labels);
@@ -125,11 +150,17 @@ fn computeErLayout(
         .positions = positions,
         .truncated_labels = truncated_labels,
         .truncation_buf = null,
-        .rows = max_level + 1,
+        .rows = rows,
         .cols = cols,
-        .cell_w = computeRequiredBoxWidth(diagram, ambiguous),
-        .cell_h = computeRequiredBoxHeight(diagram),
+        .cell_w = cell_w,
+        .cell_h = cell_h,
     };
+}
+
+fn maxColumnsForWrap(wrap_width: ?usize, cell_w: usize, entity_count: usize) usize {
+    const w = wrap_width orelse return @max(entity_count, 1);
+    if (w <= cell_w) return 1;
+    return 1 + (w - cell_w) / (cell_w + route_mod.gutter_w);
 }
 
 fn assignErLevels(
@@ -476,6 +507,34 @@ test "paintEr handles empty entity block" {
     try std.testing.expect(std.mem.indexOf(u8, out, "ORDER") != null);
 }
 
+test "paintEr wraps same-level entities to fit wrap_width" {
+    const alloc = std.testing.allocator;
+    var diagram = try compile_mod.compile(alloc,
+        \\erDiagram
+        \\    A
+        \\    B
+        \\    C
+        \\    D
+    );
+    defer diagram.deinit();
+
+    var sink: std.Io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+    try paintEr(&sink.writer, alloc, &diagram.er, .{ .wrap_width = 14, .ambiguous_width = .narrow });
+
+    const out = sink.writer.buffered();
+    try std.testing.expect(std.mem.find(u8, out, "\u{2026}") == null);
+    try std.testing.expect(std.mem.find(u8, out, "A") != null);
+    try std.testing.expect(std.mem.find(u8, out, "B") != null);
+    try std.testing.expect(std.mem.find(u8, out, "C") != null);
+    try std.testing.expect(std.mem.find(u8, out, "D") != null);
+
+    var lines = std.mem.splitScalar(u8, out, '\n');
+    while (lines.next()) |line| {
+        try std.testing.expect(width_mod.displayWidth(line, .narrow) <= 14);
+    }
+}
+
 test "computeErLayout places single entity at origin with rows=cols=1" {
     const alloc = std.testing.allocator;
     var compiled = try compile_mod.compile(alloc,
@@ -487,7 +546,7 @@ test "computeErLayout places single entity at origin with rows=cols=1" {
     defer compiled.deinit();
     const diagram = &compiled.er;
 
-    var layout = try computeErLayout(alloc, diagram, .narrow);
+    var layout = try computeErLayout(alloc, diagram, null, .narrow);
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), layout.positions.len);
@@ -506,7 +565,7 @@ test "computeErLayout has outer_pad 0 (ER has no namespaces)" {
     defer compiled.deinit();
     const diagram = &compiled.er;
 
-    var layout = try computeErLayout(alloc, diagram, .narrow);
+    var layout = try computeErLayout(alloc, diagram, null, .narrow);
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), layout.outer_pad);
@@ -521,7 +580,7 @@ test "computeErLayout stacks two-entity relation as bottom_up rows" {
     defer compiled.deinit();
     const diagram = &compiled.er;
 
-    var layout = try computeErLayout(alloc, diagram, .narrow);
+    var layout = try computeErLayout(alloc, diagram, null, .narrow);
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 2), layout.positions.len);
@@ -547,7 +606,7 @@ test "computeErLayout 1-parent 2-children branch separates siblings across colum
     defer compiled.deinit();
     const diagram = &compiled.er;
 
-    var layout = try computeErLayout(alloc, diagram, .narrow);
+    var layout = try computeErLayout(alloc, diagram, null, .narrow);
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 3), layout.positions.len);
@@ -584,7 +643,7 @@ test "computeErLayout 2-parents 1-child merge stacks parents in bottom row" {
     defer compiled.deinit();
     const diagram = &compiled.er;
 
-    var layout = try computeErLayout(alloc, diagram, .narrow);
+    var layout = try computeErLayout(alloc, diagram, null, .narrow);
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 3), layout.positions.len);
