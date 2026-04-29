@@ -27,13 +27,13 @@ const min_hard_break_spaces: usize = 2;
 
 pub const InlineBuilder = struct {
     allocator: std.mem.Allocator,
-    nodes: std.ArrayListUnmanaged(ast.InlineNode) = .empty,
-    next: std.ArrayListUnmanaged(ast.InlineRef) = .empty,
-    temp_prev: std.ArrayListUnmanaged(TokenRef) = .empty,
-    temp_delimiters: std.ArrayListUnmanaged(Delimiter) = .empty,
-    temp_brackets: std.ArrayListUnmanaged(Bracket) = .empty,
-    temp_reference_scratch: std.ArrayListUnmanaged(u8) = .empty,
-    temp_inline_link_scratch: std.ArrayListUnmanaged(u8) = .empty,
+    nodes: std.ArrayList(ast.InlineNode) = .empty,
+    next: std.ArrayList(ast.InlineRef) = .empty,
+    temp_prev: std.ArrayList(TokenRef) = .empty,
+    temp_delimiters: std.ArrayList(Delimiter) = .empty,
+    temp_brackets: std.ArrayList(Bracket) = .empty,
+    temp_reference_scratch: std.ArrayList(u8) = .empty,
+    temp_inline_link_scratch: std.ArrayList(u8) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) InlineBuilder {
         return .{
@@ -142,11 +142,11 @@ const TempParser = struct {
     lines: []const []const u8,
     link_defs: *const DefMap,
     start_index: usize,
-    prev: std.ArrayListUnmanaged(TokenRef),
-    delimiters: std.ArrayListUnmanaged(Delimiter),
-    brackets: std.ArrayListUnmanaged(Bracket),
-    reference_label_scratch: std.ArrayListUnmanaged(u8),
-    inline_link_scratch: std.ArrayListUnmanaged(u8),
+    prev: std.ArrayList(TokenRef),
+    delimiters: std.ArrayList(Delimiter),
+    brackets: std.ArrayList(Bracket),
+    reference_label_scratch: std.ArrayList(u8),
+    inline_link_scratch: std.ArrayList(u8),
     chain: InlineChain = .{},
 
     fn init(
@@ -841,7 +841,7 @@ fn violatesMultipleOfThree(opener_len: u8, closer_len: u8) bool {
 fn lookupReferenceDefinition(
     allocator: std.mem.Allocator,
     link_defs: *const DefMap,
-    scratch: *std.ArrayListUnmanaged(u8),
+    scratch: *std.ArrayList(u8),
     label: []const u8,
 ) !?ast.LinkDef {
     if (!parse_link.referenceLabelLengthFits(label)) return null;

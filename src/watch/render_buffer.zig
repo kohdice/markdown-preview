@@ -2,8 +2,8 @@ const std = @import("std");
 
 pub const RenderBuffer = struct {
     allocator: std.mem.Allocator,
-    bytes: std.ArrayListUnmanaged(u8) = .empty,
-    line_offsets: std.ArrayListUnmanaged(usize) = .empty,
+    bytes: std.ArrayList(u8) = .empty,
+    line_offsets: std.ArrayList(usize) = .empty,
     pending_newline: bool = false,
     writer: std.Io.Writer,
 

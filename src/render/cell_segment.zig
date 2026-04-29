@@ -10,8 +10,8 @@ pub const CellRecord = struct {
 
 pub const CellSegmentBuilder = struct {
     allocator: std.mem.Allocator,
-    parent_buf: *std.ArrayListUnmanaged(u8),
-    segments: *std.ArrayListUnmanaged(CellRecord),
+    parent_buf: *std.ArrayList(u8),
+    segments: *std.ArrayList(CellRecord),
 
     parent_writer: ParentBufWriter,
 
@@ -33,8 +33,8 @@ pub const CellSegmentBuilder = struct {
     pub fn init(
         self: *CellSegmentBuilder,
         allocator: std.mem.Allocator,
-        parent_buf: *std.ArrayListUnmanaged(u8),
-        segments: *std.ArrayListUnmanaged(CellRecord),
+        parent_buf: *std.ArrayList(u8),
+        segments: *std.ArrayList(CellRecord),
     ) void {
         self.allocator = allocator;
         self.parent_buf = parent_buf;
@@ -268,7 +268,7 @@ fn isStrippedControl(byte: u8) bool {
 }
 
 const ParentBufWriter = struct {
-    buf: *std.ArrayListUnmanaged(u8),
+    buf: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
     stack_buf: [512]u8,
     writer: std.Io.Writer,
@@ -279,7 +279,7 @@ const ParentBufWriter = struct {
         .rebase = std.Io.Writer.failingRebase,
     };
 
-    fn init(self: *ParentBufWriter, buf: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator) void {
+    fn init(self: *ParentBufWriter, buf: *std.ArrayList(u8), allocator: std.mem.Allocator) void {
         self.buf = buf;
         self.allocator = allocator;
         self.writer = .{
@@ -311,9 +311,9 @@ const testing = std.testing;
 
 test "CellSegmentBuilder emits one segment when text fits within wrap_width" {
     const allocator = testing.allocator;
-    var parent: std.ArrayListUnmanaged(u8) = .empty;
+    var parent: std.ArrayList(u8) = .empty;
     defer parent.deinit(allocator);
-    var segments: std.ArrayListUnmanaged(CellRecord) = .empty;
+    var segments: std.ArrayList(CellRecord) = .empty;
     defer segments.deinit(allocator);
 
     var builder: CellSegmentBuilder = undefined;
@@ -331,9 +331,9 @@ test "CellSegmentBuilder emits one segment when text fits within wrap_width" {
 
 test "CellSegmentBuilder soft-breaks on a space and drops the space character" {
     const allocator = testing.allocator;
-    var parent: std.ArrayListUnmanaged(u8) = .empty;
+    var parent: std.ArrayList(u8) = .empty;
     defer parent.deinit(allocator);
-    var segments: std.ArrayListUnmanaged(CellRecord) = .empty;
+    var segments: std.ArrayList(CellRecord) = .empty;
     defer segments.deinit(allocator);
 
     var builder: CellSegmentBuilder = undefined;
@@ -353,9 +353,9 @@ test "CellSegmentBuilder soft-breaks on a space and drops the space character" {
 
 test "CellSegmentBuilder hard-breaks mid-Japanese when no space is available" {
     const allocator = testing.allocator;
-    var parent: std.ArrayListUnmanaged(u8) = .empty;
+    var parent: std.ArrayList(u8) = .empty;
     defer parent.deinit(allocator);
-    var segments: std.ArrayListUnmanaged(CellRecord) = .empty;
+    var segments: std.ArrayList(CellRecord) = .empty;
     defer segments.deinit(allocator);
 
     var builder: CellSegmentBuilder = undefined;
@@ -378,9 +378,9 @@ test "CellSegmentBuilder hard-breaks mid-Japanese when no space is available" {
 
 test "CellSegmentBuilder strips C0 control bytes injected in cell text" {
     const allocator = testing.allocator;
-    var parent: std.ArrayListUnmanaged(u8) = .empty;
+    var parent: std.ArrayList(u8) = .empty;
     defer parent.deinit(allocator);
-    var segments: std.ArrayListUnmanaged(CellRecord) = .empty;
+    var segments: std.ArrayList(CellRecord) = .empty;
     defer segments.deinit(allocator);
 
     var builder: CellSegmentBuilder = undefined;
@@ -395,9 +395,9 @@ test "CellSegmentBuilder strips C0 control bytes injected in cell text" {
 
 test "CellSegmentBuilder soft-breaks at a space even when the tail exceeds the stack buffer" {
     const allocator = testing.allocator;
-    var parent: std.ArrayListUnmanaged(u8) = .empty;
+    var parent: std.ArrayList(u8) = .empty;
     defer parent.deinit(allocator);
-    var segments: std.ArrayListUnmanaged(CellRecord) = .empty;
+    var segments: std.ArrayList(CellRecord) = .empty;
     defer segments.deinit(allocator);
 
     const tail_run: usize = 1500;
@@ -421,9 +421,9 @@ test "CellSegmentBuilder soft-breaks at a space even when the tail exceeds the s
 
 test "CellSegmentBuilder strips tab and newline that would break the grid" {
     const allocator = testing.allocator;
-    var parent: std.ArrayListUnmanaged(u8) = .empty;
+    var parent: std.ArrayList(u8) = .empty;
     defer parent.deinit(allocator);
-    var segments: std.ArrayListUnmanaged(CellRecord) = .empty;
+    var segments: std.ArrayList(CellRecord) = .empty;
     defer segments.deinit(allocator);
 
     var builder: CellSegmentBuilder = undefined;
@@ -439,9 +439,9 @@ test "CellSegmentBuilder strips tab and newline that would break the grid" {
 
 test "CellSegmentBuilder reopens the style that was active at the soft-break space" {
     const allocator = testing.allocator;
-    var parent: std.ArrayListUnmanaged(u8) = .empty;
+    var parent: std.ArrayList(u8) = .empty;
     defer parent.deinit(allocator);
-    var segments: std.ArrayListUnmanaged(CellRecord) = .empty;
+    var segments: std.ArrayList(CellRecord) = .empty;
     defer segments.deinit(allocator);
 
     const style_bold: ansi.TextStyle = .{ .bold = true };
@@ -471,9 +471,9 @@ test "CellSegmentBuilder reopens the style that was active at the soft-break spa
 
 test "CellSegmentBuilder reopens the active style after a split" {
     const allocator = testing.allocator;
-    var parent: std.ArrayListUnmanaged(u8) = .empty;
+    var parent: std.ArrayList(u8) = .empty;
     defer parent.deinit(allocator);
-    var segments: std.ArrayListUnmanaged(CellRecord) = .empty;
+    var segments: std.ArrayList(CellRecord) = .empty;
     defer segments.deinit(allocator);
 
     var builder: CellSegmentBuilder = undefined;

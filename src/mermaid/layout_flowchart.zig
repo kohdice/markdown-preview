@@ -71,13 +71,13 @@ pub fn computeLayout(
     const sg_dirs = try computeSubgraphDirs(allocator, graph);
     defer allocator.free(sg_dirs);
 
-    var group_starts: std.ArrayListUnmanaged(usize) = .empty;
+    var group_starts: std.ArrayList(usize) = .empty;
     defer group_starts.deinit(allocator);
-    var group_widths: std.ArrayListUnmanaged(usize) = .empty;
+    var group_widths: std.ArrayList(usize) = .empty;
     defer group_widths.deinit(allocator);
-    var group_dirs: std.ArrayListUnmanaged(types.Direction) = .empty;
+    var group_dirs: std.ArrayList(types.Direction) = .empty;
     defer group_dirs.deinit(allocator);
-    var group_min_levels: std.ArrayListUnmanaged(usize) = .empty;
+    var group_min_levels: std.ArrayList(usize) = .empty;
     defer group_min_levels.deinit(allocator);
     const group_of = try allocator.alloc(usize, n);
     defer allocator.free(group_of);
@@ -239,7 +239,7 @@ fn computeSubgraphFrames(
     positions: []const types.GridPos,
     paths: []const []const u32,
 ) LayoutError![]types.SubgraphFrame {
-    var out: std.ArrayListUnmanaged(types.SubgraphFrame) = .empty;
+    var out: std.ArrayList(types.SubgraphFrame) = .empty;
     errdefer out.deinit(allocator);
 
     var counter: u32 = 0;
@@ -252,7 +252,7 @@ fn computeSubgraphFrames(
 
 fn appendFrame(
     allocator: std.mem.Allocator,
-    out: *std.ArrayListUnmanaged(types.SubgraphFrame),
+    out: *std.ArrayList(types.SubgraphFrame),
     sg: *const types.Subgraph,
     positions: []const types.GridPos,
     depth: usize,
@@ -353,7 +353,7 @@ fn computeNodePaths(
     errdefer allocator.free(paths);
     for (paths) |*p| p.* = &.{};
 
-    var stack: std.ArrayListUnmanaged(u32) = .empty;
+    var stack: std.ArrayList(u32) = .empty;
     defer stack.deinit(allocator);
     var counter: u32 = 0;
     try walkSubgraphsForPaths(allocator, graph.subgraphs, &stack, &counter, paths);
@@ -363,7 +363,7 @@ fn computeNodePaths(
 fn walkSubgraphsForPaths(
     allocator: std.mem.Allocator,
     subs: []const types.Subgraph,
-    stack: *std.ArrayListUnmanaged(u32),
+    stack: *std.ArrayList(u32),
     counter: *u32,
     paths: [][]const u32,
 ) LayoutError!void {
@@ -392,7 +392,7 @@ fn reassignLocalLevels(
     const n = graph.nodes.len;
     if (n == 0) return;
 
-    var sorted: std.ArrayListUnmanaged(types.NodeId) = .empty;
+    var sorted: std.ArrayList(types.NodeId) = .empty;
     defer sorted.deinit(allocator);
     try sorted.resize(allocator, n);
     for (0..n) |i| sorted.items[i] = @intCast(i);
@@ -437,7 +437,7 @@ fn reassignGroupLevels(
         remaining[to_local] += 1;
     }
 
-    var queue: std.ArrayListUnmanaged(usize) = .empty;
+    var queue: std.ArrayList(usize) = .empty;
     defer queue.deinit(allocator);
     for (0..m) |j| {
         if (remaining[j] == 0) try queue.append(allocator, j);
@@ -489,7 +489,7 @@ fn composeVirtualNodeLevels(
     if (n == 0) return;
 
     const GroupInfo = struct { base: usize, span: usize, path: []const u32 };
-    var groups: std.ArrayListUnmanaged(GroupInfo) = .empty;
+    var groups: std.ArrayList(GroupInfo) = .empty;
     defer groups.deinit(allocator);
 
     const virtual_id = try allocator.alloc(usize, n);
@@ -547,7 +547,7 @@ fn composeVirtualNodeLevels(
         remaining[vto] += 1;
     }
 
-    var queue: std.ArrayListUnmanaged(usize) = .empty;
+    var queue: std.ArrayList(usize) = .empty;
     defer queue.deinit(allocator);
     for (0..vn) |i| {
         if (remaining[i] == 0) try queue.append(allocator, i);
@@ -639,7 +639,7 @@ fn assignLevels(allocator: std.mem.Allocator, graph: *const types.MermaidGraph, 
     @memset(remaining, 0);
     for (graph.edges) |edge| remaining[edge.to] += 1;
 
-    var queue: std.ArrayListUnmanaged(types.NodeId) = .empty;
+    var queue: std.ArrayList(types.NodeId) = .empty;
     defer queue.deinit(allocator);
 
     for (0..n) |i| {

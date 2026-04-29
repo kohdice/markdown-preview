@@ -88,7 +88,7 @@ pub fn expectBodyLacksIgnoringWhitespace(
 }
 
 fn compactWhitespaceAlloc(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
-    var output: std.ArrayListUnmanaged(u8) = .empty;
+    var output: std.ArrayList(u8) = .empty;
     errdefer output.deinit(allocator);
 
     for (input) |byte| {

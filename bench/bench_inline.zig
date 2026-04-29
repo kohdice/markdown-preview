@@ -202,7 +202,7 @@ fn renderWithDiscarding(
 }
 
 fn makeParagraphInput(allocator: std.mem.Allocator, line_count: usize, line: []const u8) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
     for (0..line_count) |_| {
@@ -214,7 +214,7 @@ fn makeParagraphInput(allocator: std.mem.Allocator, line_count: usize, line: []c
 }
 
 fn makeRepeatedInlineInput(allocator: std.mem.Allocator, repeat_count: usize, segment: []const u8) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
     for (0..repeat_count) |_| {
@@ -225,7 +225,7 @@ fn makeRepeatedInlineInput(allocator: std.mem.Allocator, repeat_count: usize, se
 }
 
 fn makeNestedInlineInput(allocator: std.mem.Allocator, depth: usize) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
     for (0..depth) |index| {
@@ -251,7 +251,7 @@ fn makeNestedInlineInput(allocator: std.mem.Allocator, depth: usize) ![]u8 {
 }
 
 fn makeManyParagraphsInput(allocator: std.mem.Allocator, count: usize) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
     for (0..count) |i| {
@@ -262,7 +262,7 @@ fn makeManyParagraphsInput(allocator: std.mem.Allocator, count: usize) ![]u8 {
 }
 
 fn makeManyHeadingsInput(allocator: std.mem.Allocator, count: usize) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
     for (0..count) |i| {
@@ -275,7 +275,7 @@ fn makeManyHeadingsInput(allocator: std.mem.Allocator, count: usize) ![]u8 {
 }
 
 fn makeTableInput(allocator: std.mem.Allocator, rows: usize, cols: usize) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
     for (0..cols) |c| {
@@ -302,7 +302,7 @@ fn makeTableInput(allocator: std.mem.Allocator, rows: usize, cols: usize) ![]u8 
 }
 
 fn makeReferenceLinkInput(allocator: std.mem.Allocator, count: usize) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
     for (0..count) |index| {

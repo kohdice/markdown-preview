@@ -23,7 +23,7 @@ pub const Renderer = struct {
     syn_palette: theme.SyntaxPalette,
     highlighter: highlight.Highlighter,
     table_scratch: render_table.TableScratch = .{},
-    wrap_line_buf: std.ArrayListUnmanaged(u8) = .empty,
+    wrap_line_buf: std.ArrayList(u8) = .empty,
     scratch: std.heap.ArenaAllocator,
     mermaid_cache: render_block.MermaidCache = .empty,
     mermaid_compile_count: usize = 0,
@@ -108,7 +108,7 @@ pub const Renderer = struct {
     }
 
     fn pruneUnusedMermaidCache(self: *Renderer, allocator: std.mem.Allocator) !void {
-        var stale_keys: std.ArrayListUnmanaged([]const u8) = .empty;
+        var stale_keys: std.ArrayList([]const u8) = .empty;
         defer stale_keys.deinit(allocator);
 
         var it = self.mermaid_cache.iterator();

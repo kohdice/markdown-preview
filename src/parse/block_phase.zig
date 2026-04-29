@@ -49,19 +49,19 @@ const Walker = struct {
     allocator: std.mem.Allocator,
     builder: *parse_inline.InlineBuilder,
     link_defs: ast.LinkDefMap,
-    inline_work: std.ArrayListUnmanaged(InlineWork) = .empty,
-    pending_inline: std.ArrayListUnmanaged(PendingInline) = .empty,
-    link_definition_scratch: std.ArrayListUnmanaged(u8) = .empty,
-    link_label_scratch: std.ArrayListUnmanaged(u8) = .empty,
-    paragraph_lines: std.ArrayListUnmanaged([]const u8) = .empty,
-    code_lines: std.ArrayListUnmanaged([]const u8) = .empty,
+    inline_work: std.ArrayList(InlineWork) = .empty,
+    pending_inline: std.ArrayList(PendingInline) = .empty,
+    link_definition_scratch: std.ArrayList(u8) = .empty,
+    link_label_scratch: std.ArrayList(u8) = .empty,
+    paragraph_lines: std.ArrayList([]const u8) = .empty,
+    code_lines: std.ArrayList([]const u8) = .empty,
 
     fn pushPending(self: *Walker, entry: PendingInline) !void {
         try self.pending_inline.append(self.allocator, entry);
     }
 
     fn parseBlocks(self: *Walker, cursor: *BlockCursor) anyerror![]ast.BlockNode {
-        var blocks: std.ArrayListUnmanaged(ast.BlockNode) = .empty;
+        var blocks: std.ArrayList(ast.BlockNode) = .empty;
 
         while (cursor.peekLine()) |line| {
             if (block_cursor.isBlankLine(line)) {
@@ -405,7 +405,7 @@ const Walker = struct {
     }
 
     fn parseListBlock(self: *Walker, cursor: *BlockCursor, kind: ast.ListKind) anyerror!ast.BlockNode {
-        var items: std.ArrayListUnmanaged(ast.ListItem) = .empty;
+        var items: std.ArrayList(ast.ListItem) = .empty;
         var min_indent: ?usize = null;
         var prev_child_indent: ?usize = null;
         var list_marker: ?u8 = null;
@@ -504,7 +504,7 @@ const Walker = struct {
         cursor.advanceLine();
         cursor.advanceLine();
 
-        var rows: std.ArrayListUnmanaged([]ast.TableCell) = .empty;
+        var rows: std.ArrayList([]ast.TableCell) = .empty;
         while (cursor.peekLine()) |row_line| {
             if (block_cursor.isBlankLine(row_line)) break;
             if (parse_block.indentedCodeContent(row_line) != null) break;

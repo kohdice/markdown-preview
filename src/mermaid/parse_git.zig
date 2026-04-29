@@ -13,10 +13,10 @@ pub const ParseError = error{
 
 const Parser = struct {
     allocator: std.mem.Allocator,
-    branches: std.ArrayListUnmanaged(types.GitBranch) = .empty,
-    commits: std.ArrayListUnmanaged(types.GitCommit) = .empty,
+    branches: std.ArrayList(types.GitBranch) = .empty,
+    commits: std.ArrayList(types.GitCommit) = .empty,
     branch_index: std.StringHashMapUnmanaged(u16) = .empty,
-    owned_strings: std.ArrayListUnmanaged([]u8) = .empty,
+    owned_strings: std.ArrayList([]u8) = .empty,
     current_lane: u16 = 0,
 
     fn ensureMain(self: *Parser) ParseError!void {

@@ -14,9 +14,9 @@ pub const FixtureError = error{
 pub const RenderFixture = struct {
     state: State = .building,
     arena: ?std.heap.ArenaAllocator,
-    inline_nodes: std.ArrayListUnmanaged(ast.InlineNode) = .empty,
-    inline_next: std.ArrayListUnmanaged(ast.InlineRef) = .empty,
-    blocks: std.ArrayListUnmanaged(ast.BlockNode) = .empty,
+    inline_nodes: std.ArrayList(ast.InlineNode) = .empty,
+    inline_next: std.ArrayList(ast.InlineRef) = .empty,
+    blocks: std.ArrayList(ast.BlockNode) = .empty,
     output: ast.Document = .{
         .blocks = &.{},
         .link_defs = .{},

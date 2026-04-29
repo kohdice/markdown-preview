@@ -496,7 +496,7 @@ test "RenderSession.write renders heading content without document trailing newl
     defer buf.deinit();
     var table_scratch: render_table.TableScratch = .{};
     defer table_scratch.deinit(allocator);
-    var wrap_line_buf: std.ArrayListUnmanaged(u8) = .empty;
+    var wrap_line_buf: std.ArrayList(u8) = .empty;
     defer wrap_line_buf.deinit(allocator);
     var wrap: width.WrapWriter = undefined;
     wrap.init(undefined, 0, .narrow, allocator, &wrap_line_buf);

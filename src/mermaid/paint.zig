@@ -391,13 +391,13 @@ test "graph BT output is canvas vertical flip of graph TD" {
 }
 
 fn flipOutputForTest(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
-    var lines: std.ArrayListUnmanaged([]const u8) = .empty;
+    var lines: std.ArrayList([]const u8) = .empty;
     defer lines.deinit(alloc);
     var it = std.mem.splitScalar(u8, input, '\n');
     while (it.next()) |l| try lines.append(alloc, l);
     std.mem.reverse([]const u8, lines.items);
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    var buf: std.ArrayList(u8) = .empty;
     errdefer buf.deinit(alloc);
     for (lines.items, 0..) |line, i| {
         var view = std.unicode.Utf8View.init(line) catch return error.InvalidUtf8;

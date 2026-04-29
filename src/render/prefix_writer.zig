@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub const PrefixStack = struct {
     allocator: std.mem.Allocator,
-    segments: std.ArrayListUnmanaged(Segment) = .empty,
+    segments: std.ArrayList(Segment) = .empty,
 
     pub const Segment = struct {
         indent: usize = 0,

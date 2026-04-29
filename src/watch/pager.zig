@@ -55,8 +55,8 @@ pub fn applyAction(action: input.KeyAction, scroll_offset: *usize, total_lines: 
 
 pub const Pager = struct {
     allocator: std.mem.Allocator,
-    prev_row_hashes: std.ArrayListUnmanaged(u64) = .empty,
-    curr_row_hashes: std.ArrayListUnmanaged(u64) = .empty,
+    prev_row_hashes: std.ArrayList(u64) = .empty,
+    curr_row_hashes: std.ArrayList(u64) = .empty,
     prev_scroll: ?usize = null,
     prev_enable_ansi: ?bool = null,
     prev_color_mode: ?ansi.ColorMode = null,

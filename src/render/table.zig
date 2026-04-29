@@ -125,11 +125,11 @@ const border = struct {
 const BorderKind = enum { top, middle, bottom };
 
 pub const TableScratch = struct {
-    col_widths: std.ArrayListUnmanaged(usize) = .empty,
-    row_offsets: std.ArrayListUnmanaged(usize) = .empty,
-    bytes_buf: std.ArrayListUnmanaged(u8) = .empty,
-    cell_segments: std.ArrayListUnmanaged(CellRecord) = .empty,
-    cell_seg_offsets: std.ArrayListUnmanaged(u32) = .empty,
+    col_widths: std.ArrayList(usize) = .empty,
+    row_offsets: std.ArrayList(usize) = .empty,
+    bytes_buf: std.ArrayList(u8) = .empty,
+    cell_segments: std.ArrayList(CellRecord) = .empty,
+    cell_seg_offsets: std.ArrayList(u32) = .empty,
 
     pub fn beginTable(self: *TableScratch) void {
         self.reset();

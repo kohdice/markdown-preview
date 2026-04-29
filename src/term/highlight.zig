@@ -111,10 +111,10 @@ const Locals = struct {
         query: *const ts.Query,
         source: []const u8,
     ) !Locals {
-        var scopes = std.ArrayListUnmanaged(ScopeRef).empty;
+        var scopes = std.ArrayList(ScopeRef).empty;
         defer scopes.deinit(allocator);
 
-        var definitions = std.ArrayListUnmanaged(ts.Node).empty;
+        var definitions = std.ArrayList(ts.Node).empty;
         defer definitions.deinit(allocator);
 
         const cursor = ts.QueryCursor.create();
@@ -142,7 +142,7 @@ const Locals = struct {
             scopes.items[index].parent_index = findParentScopeIndex(scope.node, scopes.items);
         }
 
-        var resolved_definitions = std.ArrayListUnmanaged(LocalDefinition).empty;
+        var resolved_definitions = std.ArrayList(LocalDefinition).empty;
         defer resolved_definitions.deinit(allocator);
         for (definitions.items) |definition| {
             const scope_index = findEnclosingScopeIndex(definition, scopes.items) orelse continue;
@@ -290,7 +290,7 @@ pub const Highlighter = struct {
         // filtering the final `@memset` in the apply loop could clobber the
         // intended style depending on emit order. Skipping them here keeps
         // the comment/@comment styling intact.
-        var caps: std.ArrayListUnmanaged(CaptureSpan) = .empty;
+        var caps: std.ArrayList(CaptureSpan) = .empty;
         defer caps.deinit(allocator);
         while (cursor.nextCapture()) |entry| {
             const capture_index_in_match = entry[0];

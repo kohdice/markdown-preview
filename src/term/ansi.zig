@@ -424,7 +424,7 @@ fn skipCsi(input: []const u8, start: usize) ?usize {
 
 /// Return a copy of `input` with ANSI CSI sequences removed.
 pub fn stripCsiAlloc(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
-    var output: std.ArrayListUnmanaged(u8) = .empty;
+    var output: std.ArrayList(u8) = .empty;
     errdefer output.deinit(allocator);
 
     var i: usize = 0;

@@ -10,7 +10,7 @@ fn naiveLineOffsets(
     allocator: std.mem.Allocator,
     bytes: []const u8,
 ) ![]usize {
-    var offsets: std.ArrayListUnmanaged(usize) = .empty;
+    var offsets: std.ArrayList(usize) = .empty;
     if (bytes.len == 0) return offsets.toOwnedSlice(allocator);
     try offsets.append(allocator, 0);
     var i: usize = 0;

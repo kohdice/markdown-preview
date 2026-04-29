@@ -87,7 +87,7 @@ pub fn definitionNeedsDestinationContinuation(line: []const u8) bool {
 }
 
 pub fn normalizeReferenceLabelInto(
-    buffer: *std.ArrayListUnmanaged(u8),
+    buffer: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
     label: []const u8,
 ) ![]const u8 {
@@ -147,7 +147,7 @@ pub fn referenceLabelLengthFits(label: []const u8) bool {
 }
 
 fn appendNormalizedReferenceLabel(
-    normalized: *std.ArrayListUnmanaged(u8),
+    normalized: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
     label: []const u8,
 ) !void {
@@ -196,7 +196,7 @@ pub fn parseInlineTarget(allocator: std.mem.Allocator, text: []const u8) !Inline
 fn materializeLinkText(allocator: std.mem.Allocator, raw: []const u8) ![]const u8 {
     if (!needsLinkMaterialization(raw)) return raw;
 
-    var buffer: std.ArrayListUnmanaged(u8) = .empty;
+    var buffer: std.ArrayList(u8) = .empty;
     errdefer buffer.deinit(allocator);
 
     var pos: usize = 0;

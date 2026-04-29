@@ -16,7 +16,7 @@ pub fn stripInitDirectives(
 ) Error!Source {
     const first = firstDirectiveStart(source) orelse return .{ .borrowed = source };
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    var buf: std.ArrayList(u8) = .empty;
     errdefer buf.deinit(allocator);
 
     try buf.appendSlice(allocator, source[0..first]);
