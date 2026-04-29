@@ -49,7 +49,7 @@ pub fn paintEr(
         const pos = layout.positions[i];
         const top = route_mod.boxTop(&layout, pos.row);
         const left = route_mod.boxLeft(&layout, pos.col);
-        drawEntityBox(&canvas, top, left, actualBoxHeight(&entity), layout.cell_w, &entity, &glyphs, opts.ambiguous_width);
+        try drawEntityBox(&canvas, top, left, actualBoxHeight(&entity), layout.cell_w, &entity, &glyphs, opts.ambiguous_width);
     }
 
     for (diagram.relations) |rel| {
@@ -181,7 +181,7 @@ fn assignErLevels(
         if (rel.to < n) remaining[rel.to] += 1;
     }
 
-    var queue: std.ArrayListUnmanaged(types.NodeId) = .empty;
+    var queue: std.ArrayList(types.NodeId) = .empty;
     defer queue.deinit(allocator);
 
     for (0..n) |i| {
@@ -285,13 +285,13 @@ fn drawEntityBox(
     entity: *const types.ErEntity,
     glyphs: *const canvas_mod.GlyphSet,
     ambiguous: width_mod.AmbiguousWidth,
-) void {
+) error{OutOfMemory}!void {
     canvas.drawRect(top, left, height, width, glyphs);
 
     const inner_w = width - 2;
     const name_w = width_mod.displayWidth(entity.id_text, ambiguous);
     const name_col_off = if (inner_w > name_w) (inner_w - name_w) / 2 else 0;
-    canvas.drawLabel(top + 1, left + 1 + name_col_off, entity.id_text, ambiguous);
+    try canvas.drawLabel(top + 1, left + 1 + name_col_off, entity.id_text, ambiguous);
 
     if (entity.attributes.len == 0) return;
 
@@ -300,7 +300,7 @@ fn drawEntityBox(
     var row = top + 3;
     for (entity.attributes) |attr| {
         if (row + 1 >= top + height) break;
-        drawAttribute(canvas, row, left, &attr, ambiguous);
+        try drawAttribute(canvas, row, left, &attr, ambiguous);
         row += 1;
     }
 }
@@ -314,21 +314,21 @@ fn drawDivider(canvas: *canvas_mod.Canvas, row: usize, left: usize, width: usize
     canvas.setGlyph(row, left + width - 1, glyphs.tee_r);
 }
 
-fn drawAttribute(canvas: *canvas_mod.Canvas, row: usize, left: usize, attr: *const types.ErAttribute, ambiguous: width_mod.AmbiguousWidth) void {
+fn drawAttribute(canvas: *canvas_mod.Canvas, row: usize, left: usize, attr: *const types.ErAttribute, ambiguous: width_mod.AmbiguousWidth) error{OutOfMemory}!void {
     var col = left + 2;
     if (!attr.mark.isEmpty()) {
         var buf: [16]u8 = undefined;
         const text = writeMarkText(&buf, attr.mark);
-        canvas.drawLabel(row, col, text, ambiguous);
+        try canvas.drawLabel(row, col, text, ambiguous);
         col += text.len;
         canvas.setGlyph(row, col, ' ');
         col += 1;
     }
-    canvas.drawLabel(row, col, attr.type_text, ambiguous);
+    try canvas.drawLabel(row, col, attr.type_text, ambiguous);
     col += width_mod.displayWidth(attr.type_text, ambiguous);
     canvas.setGlyph(row, col, ' ');
     col += 1;
-    canvas.drawLabel(row, col, attr.name, ambiguous);
+    try canvas.drawLabel(row, col, attr.name, ambiguous);
 }
 
 fn actualBoxHeight(entity: *const types.ErEntity) usize {

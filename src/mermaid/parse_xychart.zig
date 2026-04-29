@@ -19,7 +19,7 @@ fn parseFromOwned(allocator: std.mem.Allocator, owned_source: []u8) ParseError!t
     var chart: types.XyChart = .{ .allocator = allocator };
     errdefer chart.deinit();
 
-    var owned: std.ArrayListUnmanaged([]u8) = .empty;
+    var owned: std.ArrayList([]u8) = .empty;
     errdefer {
         for (owned.items) |s| allocator.free(s);
         owned.deinit(allocator);
@@ -30,7 +30,7 @@ fn parseFromOwned(allocator: std.mem.Allocator, owned_source: []u8) ParseError!t
         try owned.append(allocator, owned_source);
     }
 
-    var series_list: std.ArrayListUnmanaged(types.XySeries) = .empty;
+    var series_list: std.ArrayList(types.XySeries) = .empty;
     errdefer {
         for (series_list.items) |s| if (s.data.len > 0) allocator.free(s.data);
         series_list.deinit(allocator);
@@ -90,8 +90,8 @@ fn validateHeader(line: []const u8, chart: *types.XyChart) ParseError!void {
 fn parseDirective(
     allocator: std.mem.Allocator,
     chart: *types.XyChart,
-    owned: *std.ArrayListUnmanaged([]u8),
-    series_list: *std.ArrayListUnmanaged(types.XySeries),
+    owned: *std.ArrayList([]u8),
+    series_list: *std.ArrayList(types.XySeries),
     line: []const u8,
 ) ParseError!void {
     if (takeKeyword(line, "title")) |rest| {
@@ -118,7 +118,7 @@ fn parseDirective(
 
 fn parseSeriesDirective(
     allocator: std.mem.Allocator,
-    series_list: *std.ArrayListUnmanaged(types.XySeries),
+    series_list: *std.ArrayList(types.XySeries),
     rest: []const u8,
     kind: types.XySeriesKind,
 ) ParseError!void {
@@ -132,7 +132,7 @@ fn parseNumberList(allocator: std.mem.Allocator, text: []const u8) ParseError![]
     if (text.len < 2 or text[0] != '[' or text[text.len - 1] != ']') return error.InvalidMermaid;
     const inner = text[1 .. text.len - 1];
 
-    var items: std.ArrayListUnmanaged(f64) = .empty;
+    var items: std.ArrayList(f64) = .empty;
     errdefer items.deinit(allocator);
 
     var i: usize = 0;
@@ -160,7 +160,7 @@ fn parseNumberList(allocator: std.mem.Allocator, text: []const u8) ParseError![]
 fn parseAxisDirective(
     allocator: std.mem.Allocator,
     axis: *types.XyAxis,
-    owned: *std.ArrayListUnmanaged([]u8),
+    owned: *std.ArrayList([]u8),
     rest: []const u8,
     allow_categories: bool,
 ) ParseError!void {
@@ -225,13 +225,13 @@ fn parseNumber(text: []const u8) ParseError!f64 {
 
 fn parseCategoryList(
     allocator: std.mem.Allocator,
-    owned: *std.ArrayListUnmanaged([]u8),
+    owned: *std.ArrayList([]u8),
     text: []const u8,
 ) ParseError![][]const u8 {
     if (text.len < 2 or text[0] != '[' or text[text.len - 1] != ']') return error.InvalidMermaid;
     const inner = text[1 .. text.len - 1];
 
-    var items: std.ArrayListUnmanaged([]const u8) = .empty;
+    var items: std.ArrayList([]const u8) = .empty;
     errdefer items.deinit(allocator);
 
     var i: usize = 0;

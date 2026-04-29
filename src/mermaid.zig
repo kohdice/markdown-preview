@@ -11,6 +11,8 @@ pub const PaintOptions = paint_mod.PaintOptions;
 
 test {
     _ = @import("mermaid/types.zig");
+    _ = @import("mermaid/label.zig");
+    _ = @import("mermaid/text_layout.zig");
     _ = @import("mermaid/canvas.zig");
     _ = @import("mermaid/parse_flowchart.zig");
     _ = @import("mermaid/layout_flowchart.zig");

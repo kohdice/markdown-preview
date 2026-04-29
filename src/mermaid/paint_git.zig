@@ -59,7 +59,7 @@ pub fn paintGit(
         const row = commit_base_row + @as(usize, br.lane) * lane_h;
         const role = laneRole(br.lane);
         canvas.setGlyphRole(row, 0, '[', role);
-        canvas.drawLabelRole(row, 1, br.name, role, opts.ambiguous_width);
+        try canvas.drawLabelRole(row, 1, br.name, role, opts.ambiguous_width);
         const name_w = width_mod.displayWidth(br.name, opts.ambiguous_width);
         canvas.setGlyphRole(row, 1 + name_w, ']', role);
     }
@@ -125,7 +125,7 @@ pub fn paintGit(
                 const tag_row = row - 1;
                 const tag_w = width_mod.displayWidth(t, opts.ambiguous_width);
                 if (col + tag_w <= canvas.cols) {
-                    canvas.drawLabel(tag_row, col, t, opts.ambiguous_width);
+                    try canvas.drawLabel(tag_row, col, t, opts.ambiguous_width);
                 }
             }
         }

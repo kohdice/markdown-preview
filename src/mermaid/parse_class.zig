@@ -1,7 +1,7 @@
 const std = @import("std");
 const source_mod = @import("source.zig");
 const types = @import("types.zig");
-const width_mod = @import("../term/width.zig");
+const label_mod = @import("label.zig");
 
 pub const Source = source_mod.Source;
 
@@ -14,12 +14,12 @@ pub const ParseError = error{
 
 const Parser = struct {
     allocator: std.mem.Allocator,
-    classes: std.ArrayListUnmanaged(BuildingClass) = .empty,
-    relations: std.ArrayListUnmanaged(types.ClassRelation) = .empty,
-    namespaces: std.ArrayListUnmanaged(BuildingNamespace) = .empty,
+    classes: std.ArrayList(BuildingClass) = .empty,
+    relations: std.ArrayList(types.ClassRelation) = .empty,
+    namespaces: std.ArrayList(BuildingNamespace) = .empty,
     interned: std.StringHashMapUnmanaged(types.NodeId) = .empty,
-    owned_labels: std.ArrayListUnmanaged([]u8) = .empty,
-    ctx_stack: std.ArrayListUnmanaged(Ctx) = .empty,
+    owned_labels: std.ArrayList([]u8) = .empty,
+    ctx_stack: std.ArrayList(Ctx) = .empty,
     in_block: bool = false,
     block_class: types.NodeId = 0,
 
@@ -27,13 +27,13 @@ const Parser = struct {
         id_text: []const u8,
         label: []const u8,
         annotation: ?[]const u8 = null,
-        attributes: std.ArrayListUnmanaged(types.ClassMember) = .empty,
-        methods: std.ArrayListUnmanaged(types.ClassMember) = .empty,
+        attributes: std.ArrayList(types.ClassMember) = .empty,
+        methods: std.ArrayList(types.ClassMember) = .empty,
     };
 
     const BuildingNamespace = struct {
         name: []const u8,
-        class_ids: std.ArrayListUnmanaged(types.NodeId) = .empty,
+        class_ids: std.ArrayList(types.NodeId) = .empty,
     };
 
     const CtxKind = enum { namespace };
@@ -66,20 +66,6 @@ const Parser = struct {
         }
     }
 };
-
-fn isDisplayDependent(cp: u21) bool {
-    var buf: [4]u8 = undefined;
-    const len = std.unicode.utf8Encode(cp, &buf) catch return true;
-    return width_mod.displayWidth(buf[0..len], .narrow) == 0;
-}
-
-fn validateLabel(label: []const u8) ParseError!void {
-    var view = std.unicode.Utf8View.init(label) catch return error.InvalidMermaid;
-    var it = view.iterator();
-    while (it.nextCodepoint()) |cp| {
-        if (isDisplayDependent(cp)) return error.InvalidMermaid;
-    }
-}
 
 fn validateIdent(text: []const u8) ParseError!void {
     if (text.len == 0) return error.InvalidMermaid;
@@ -269,7 +255,7 @@ fn parseClassDeclaration(parser: *Parser, rest: []const u8) ParseError!void {
         const after_name = std.mem.trim(u8, body[match.tail_start..], " \t");
         if (after_name.len != 0) {
             if (tryBracedStereotype(after_name)) |stereo| {
-                try validateLabel(stereo);
+                try label_mod.validate(stereo);
                 inline_annotation = stereo;
             } else {
                 return;
@@ -281,7 +267,7 @@ fn parseClassDeclaration(parser: *Parser, rest: []const u8) ParseError!void {
     try parser.recordClassId(id);
 
     if (match.generic) |gen| {
-        try validateLabel(gen);
+        try label_mod.validate(gen);
         const label = try std.fmt.allocPrint(parser.allocator, "{s}<{s}>", .{ name, gen });
         parser.classes.items[id].label = label;
         try parser.owned_labels.append(parser.allocator, label);
@@ -300,7 +286,7 @@ fn parseClassDeclaration(parser: *Parser, rest: []const u8) ParseError!void {
         if (after_open.len > 0 and std.mem.endsWith(u8, after_open, "}")) {
             const inner = std.mem.trim(u8, after_open[0 .. after_open.len - 1], " \t");
             if (tryInlineStereotype(inner)) |stereo| {
-                try validateLabel(stereo);
+                try label_mod.validate(stereo);
                 parser.classes.items[id].annotation = stereo;
             }
             parser.in_block = false;
@@ -378,13 +364,13 @@ fn parseBlockBodyLine(parser: *Parser, line: []const u8) ParseError!void {
     if (std.mem.startsWith(u8, line, "<<") and std.mem.endsWith(u8, line, ">>")) {
         const inner = std.mem.trim(u8, line[2 .. line.len - 2], " \t");
         if (inner.len == 0) return error.InvalidMermaid;
-        try validateLabel(inner);
+        try label_mod.validate(inner);
         parser.classes.items[parser.block_class].annotation = inner;
         return;
     }
 
     const processed = try replaceTabsWithSpaces(parser, line);
-    try validateLabel(processed);
+    try label_mod.validate(processed);
     const member = try parseMemberExpr(processed);
     try appendMember(parser, parser.block_class, member);
 }
@@ -422,7 +408,7 @@ fn needsWhitespaceNormalize(s: []const u8) bool {
 }
 
 fn joinWhitespaceSeparated(allocator: std.mem.Allocator, s: []const u8) ParseError![]u8 {
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    var buf: std.ArrayList(u8) = .empty;
     errdefer buf.deinit(allocator);
     var it = std.mem.tokenizeAny(u8, s, " \t");
     var first = true;
@@ -536,7 +522,7 @@ fn parseMemberLine(parser: *Parser, line: []const u8) MemberError!void {
     validateIdent(name_part) catch return error.NotMember;
 
     const member_text = try replaceTabsWithSpaces(parser, raw_member_text);
-    try validateLabel(member_text);
+    try label_mod.validate(member_text);
 
     const parsed = try parseMemberExpr(member_text);
 
@@ -607,7 +593,7 @@ fn parseRelation(parser: *Parser, line: []const u8) ParseError!void {
         rhs_end = idx;
         const label_slice = std.mem.trim(u8, after[idx + 1 ..], " \t");
         if (label_slice.len > 0) {
-            try validateLabel(label_slice);
+            try label_mod.validate(label_slice);
             label = label_slice;
         }
     }
@@ -723,6 +709,13 @@ test "parses member fields and methods (upstream Type name split)" {
     try std.testing.expectEqual(types.Visibility.public, meth.visibility);
     try std.testing.expectEqualStrings("eat", meth.name);
     try std.testing.expectEqualStrings("", meth.params.?);
+}
+
+test "accepts labels containing display clusters with zero-width dependents" {
+    var d = try parseSource(std.testing.allocator, "classDiagram\n    Cafe : +str e\u{0301}\n    Cafe --> Heart : \u{2764}\u{FE0F}\n");
+    defer d.deinit();
+    try std.testing.expectEqualStrings("e\u{0301}", d.classes[0].attributes[0].name);
+    try std.testing.expectEqualStrings("\u{2764}\u{FE0F}", d.relations[0].label.?);
 }
 
 test "parses relation with label" {

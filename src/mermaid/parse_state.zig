@@ -2,7 +2,7 @@ const std = @import("std");
 const source_mod = @import("source.zig");
 const types = @import("types.zig");
 const unicode_letter = @import("unicode_letter.zig");
-const width_mod = @import("../term/width.zig");
+const label_mod = @import("label.zig");
 
 pub const Source = source_mod.Source;
 
@@ -21,21 +21,21 @@ const BuildingComposite = struct {
     title: ?[]const u8 = null,
     direction: ?types.Direction = null,
     representative_node: ?types.NodeId = null,
-    node_ids: std.ArrayListUnmanaged(types.NodeId) = .empty,
-    edge_indices: std.ArrayListUnmanaged(u32) = .empty,
-    children: std.ArrayListUnmanaged(BuildingComposite) = .empty,
+    node_ids: std.ArrayList(types.NodeId) = .empty,
+    edge_indices: std.ArrayList(u32) = .empty,
+    children: std.ArrayList(BuildingComposite) = .empty,
 };
 
 const Parser = struct {
     allocator: std.mem.Allocator,
-    nodes: std.ArrayListUnmanaged(types.Node) = .empty,
-    edges: std.ArrayListUnmanaged(types.Edge) = .empty,
+    nodes: std.ArrayList(types.Node) = .empty,
+    edges: std.ArrayList(types.Edge) = .empty,
     interned: std.StringHashMapUnmanaged(types.NodeId) = .empty,
-    owned_strings: std.ArrayListUnmanaged([]u8) = .empty,
-    ctx_stack: std.ArrayListUnmanaged(BuildingComposite) = .empty,
-    root_subgraphs: std.ArrayListUnmanaged(BuildingComposite) = .empty,
-    link_styles: std.ArrayListUnmanaged(types.LinkStyle) = .empty,
-    touched: std.ArrayListUnmanaged(types.NodeId) = .empty,
+    owned_strings: std.ArrayList([]u8) = .empty,
+    ctx_stack: std.ArrayList(BuildingComposite) = .empty,
+    root_subgraphs: std.ArrayList(BuildingComposite) = .empty,
+    link_styles: std.ArrayList(types.LinkStyle) = .empty,
+    touched: std.ArrayList(types.NodeId) = .empty,
     globally_owned: std.AutoHashMapUnmanaged(types.NodeId, void) = .empty,
 
     fn internKeyed(
@@ -92,20 +92,6 @@ const Parser = struct {
 fn containsNodeId(slice: []const types.NodeId, id: types.NodeId) bool {
     for (slice) |v| if (v == id) return true;
     return false;
-}
-
-fn isDisplayDependent(cp: u21) bool {
-    var buf: [4]u8 = undefined;
-    const len = std.unicode.utf8Encode(cp, &buf) catch return true;
-    return width_mod.displayWidth(buf[0..len], .narrow) == 0;
-}
-
-fn validateLabel(label: []const u8) ParseError!void {
-    var view = std.unicode.Utf8View.init(label) catch return error.InvalidMermaid;
-    var it = view.iterator();
-    while (it.nextCodepoint()) |cp| {
-        if (isDisplayDependent(cp)) return error.InvalidMermaid;
-    }
 }
 
 pub fn parseSource(allocator: std.mem.Allocator, source: anytype) ParseError!types.MermaidGraph {
@@ -192,7 +178,7 @@ fn freeBuildingComposite(allocator: std.mem.Allocator, bc: *BuildingComposite) v
 
 fn finalizeComposites(
     allocator: std.mem.Allocator,
-    list: *std.ArrayListUnmanaged(BuildingComposite),
+    list: *std.ArrayList(BuildingComposite),
 ) ParseError![]types.Subgraph {
     if (list.items.len == 0) {
         list.deinit(allocator);
@@ -366,7 +352,7 @@ fn parseStateDeclaration(parser: *Parser, rest: []const u8) ParseError!void {
             ident_tail = std.mem.trimEnd(u8, ident_tail[0 .. ident_tail.len - 1], " \t");
         }
         validateIdentDeclaration(ident_tail) catch return;
-        validateLabel(raw_label) catch return;
+        label_mod.validate(raw_label) catch return;
         const label = try normalizeLabel(parser, raw_label);
         const id = try parser.internKeyed(ident_tail, ident_tail, label, .stadium);
         parser.nodes.items[id].label = label;
@@ -408,7 +394,7 @@ fn parseStateDescription(parser: *Parser, line: []const u8, colon: usize) ParseE
     if (ident.len == 0 or raw_label.len == 0) return error.InvalidMermaid;
     if (std.mem.eql(u8, ident, start_end_id)) return error.InvalidMermaid;
     try validateIdent(ident);
-    try validateLabel(raw_label);
+    try label_mod.validate(raw_label);
     const label = try normalizeLabel(parser, raw_label);
     const id = try parser.internKeyed(ident, ident, label, .stadium);
     parser.nodes.items[id].label = label;
@@ -424,7 +410,7 @@ fn parseTransition(parser: *Parser, line: []const u8, arrow_idx: usize) ParseErr
     if (std.mem.indexOfScalar(u8, rhs_with_label, ':')) |colon| {
         const label_slice = std.mem.trim(u8, rhs_with_label[colon + 1 ..], " \t");
         if (label_slice.len > 0) {
-            try validateLabel(label_slice);
+            try label_mod.validate(label_slice);
             label = try normalizeLabel(parser, label_slice);
         }
         rhs_with_label = std.mem.trimEnd(u8, rhs_with_label[0..colon], " \t");
@@ -565,6 +551,13 @@ test "parses inline state description (S : text)" {
     try std.testing.expectEqualStrings("Waiting for input", g.nodes[0].label);
 }
 
+test "accepts labels containing display clusters with zero-width dependents" {
+    var g = try parseSource(std.testing.allocator, "stateDiagram-v2\n    Idle : e\u{0301} \u{2764}\u{FE0F} \u{1F468}\u{200D}\u{1F469}\n    Idle --> Running : \u{1F44D}\u{1F3FB}\n");
+    defer g.deinit();
+    try std.testing.expectEqualStrings("e\u{0301} \u{2764}\u{FE0F} \u{1F468}\u{200D}\u{1F469}", g.nodes[0].label);
+    try std.testing.expectEqualStrings("\u{1F44D}\u{1F3FB}", g.edges[0].label.?);
+}
+
 test "preserves composite state block as subgraph with inner transitions" {
     var g = try parseSource(std.testing.allocator,
         \\stateDiagram-v2
@@ -584,13 +577,13 @@ test "preserves composite state block as subgraph with inner transitions" {
     try std.testing.expect(g.subgraphs[0].edge_indices.len >= 1);
 }
 
-test "normalises <br> in transition label" {
+test "preserves <br> in transition label as hard-break markers" {
     var g = try parseSource(std.testing.allocator,
         \\stateDiagram-v2
         \\    A --> B : step<br>one<br/>two
     );
     defer g.deinit();
-    try std.testing.expectEqualStrings("step one two", g.edges[0].label.?);
+    try std.testing.expectEqualStrings("step\none\ntwo", g.edges[0].label.?);
 }
 
 test "accepts top-level direction line and updates graph.direction" {

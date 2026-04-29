@@ -1,7 +1,7 @@
 const std = @import("std");
 const source_mod = @import("source.zig");
 const types = @import("types.zig");
-const width_mod = @import("../term/width.zig");
+const label_mod = @import("label.zig");
 
 pub const Source = source_mod.Source;
 
@@ -17,19 +17,19 @@ const BlockContext = struct {
     label: []const u8,
     start_index: u32,
     source_order: u32,
-    dividers: std.ArrayListUnmanaged(types.SequenceBlockDivider),
+    dividers: std.ArrayList(types.SequenceBlockDivider),
 };
 
 const Parser = struct {
     allocator: std.mem.Allocator,
-    participants: std.ArrayListUnmanaged(types.Participant) = .empty,
-    messages: std.ArrayListUnmanaged(types.SequenceMessage) = .empty,
-    notes: std.ArrayListUnmanaged(types.SequenceNote) = .empty,
-    blocks: std.ArrayListUnmanaged(types.SequenceBlock) = .empty,
-    ctx_stack: std.ArrayListUnmanaged(BlockContext) = .empty,
+    participants: std.ArrayList(types.Participant) = .empty,
+    messages: std.ArrayList(types.SequenceMessage) = .empty,
+    notes: std.ArrayList(types.SequenceNote) = .empty,
+    blocks: std.ArrayList(types.SequenceBlock) = .empty,
+    ctx_stack: std.ArrayList(BlockContext) = .empty,
     block_counter: u32 = 0,
     interned: std.StringHashMapUnmanaged(types.ParticipantId) = .empty,
-    owned_strings: std.ArrayListUnmanaged([]u8) = .empty,
+    owned_strings: std.ArrayList([]u8) = .empty,
 
     fn intern(self: *Parser, id_text: []const u8, label: []const u8) ParseError!types.ParticipantId {
         const gop = try self.interned.getOrPut(self.allocator, id_text);
@@ -49,20 +49,6 @@ const Parser = struct {
         self.participants.items[id].label = label;
     }
 };
-
-fn isDisplayDependent(cp: u21) bool {
-    var buf: [4]u8 = undefined;
-    const len = std.unicode.utf8Encode(cp, &buf) catch return true;
-    return width_mod.displayWidth(buf[0..len], .narrow) == 0;
-}
-
-fn validateLabel(label: []const u8) ParseError!void {
-    var view = std.unicode.Utf8View.init(label) catch return error.InvalidMermaid;
-    var it = view.iterator();
-    while (it.nextCodepoint()) |cp| {
-        if (isDisplayDependent(cp)) return error.InvalidMermaid;
-    }
-}
 
 pub fn parseSource(allocator: std.mem.Allocator, source: anytype) ParseError!types.SequenceDiagram {
     const owned_source = try source_mod.normalizeOwned(allocator, source);
@@ -346,7 +332,7 @@ fn tryParseNote(parser: *Parser, line: []const u8) ParseError!bool {
         ids_len = 1;
     }
 
-    try validateLabel(raw_text);
+    try label_mod.validate(raw_text);
     const text = try normalizeLabel(parser, raw_text);
 
     const actor_ids = try parser.allocator.alloc(types.ParticipantId, ids_len);
@@ -395,7 +381,7 @@ fn tryParseParticipant(parser: *Parser, line: []const u8) ParticipantError!void 
         const raw_label = std.mem.trimStart(u8, trimmed[idx + as_marker.len ..], " \t");
         if (id_text.len == 0 or raw_label.len == 0) return error.InvalidMermaid;
         try validateSequenceActorId(id_text);
-        try validateLabel(raw_label);
+        try label_mod.validate(raw_label);
         const label = try normalizeLabel(parser, raw_label);
         const id = try parser.intern(id_text, label);
         parser.updateLabel(id, label);
@@ -480,7 +466,7 @@ fn parseMessage(parser: *Parser, line: []const u8) ParseError!void {
 
     try validateSequenceActorId(from_text);
     try validateSequenceActorId(to_text);
-    try validateLabel(raw_label);
+    try label_mod.validate(raw_label);
     const label = try normalizeLabel(parser, raw_label);
 
     const from_id = try parser.intern(from_text, from_text);
@@ -552,6 +538,23 @@ test "silently ignores label containing zero-width codepoint" {
     var d = try parseSource(std.testing.allocator, "sequenceDiagram\n    A->>B: foo\u{200D}bar\n");
     defer d.deinit();
     try std.testing.expectEqual(@as(usize, 0), d.messages.len);
+}
+
+test "accepts message label containing display clusters with zero-width dependents" {
+    var d = try parseSource(std.testing.allocator, "sequenceDiagram\n    A->>B: e\u{0301} \u{2764}\u{FE0F} \u{1F468}\u{200D}\u{1F469}\n");
+    defer d.deinit();
+    try std.testing.expectEqual(@as(usize, 1), d.messages.len);
+    try std.testing.expectEqualStrings("e\u{0301} \u{2764}\u{FE0F} \u{1F468}\u{200D}\u{1F469}", d.messages[0].label);
+}
+
+test "preserves <br> in message label as hard-break markers" {
+    var d = try parseSource(std.testing.allocator,
+        \\sequenceDiagram
+        \\    A->>B: first<br/>second<br>third<BR>fourth
+    );
+    defer d.deinit();
+    try std.testing.expectEqual(@as(usize, 1), d.messages.len);
+    try std.testing.expectEqualStrings("first\nsecond\nthird\nfourth", d.messages[0].label);
 }
 
 test "auto-interns participants from messages" {

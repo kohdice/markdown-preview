@@ -159,7 +159,7 @@ fn writeVertical(
     const plot_bottom = plot_top + PLOT_ROWS - 1;
     const axis_row = plot_top + PLOT_ROWS;
 
-    if (chart.title) |t| canvas.drawLabel(0, 0, t, opts.ambiguous_width);
+    if (chart.title) |t| try canvas.drawLabel(0, 0, t, opts.ambiguous_width);
 
     var r: usize = plot_top;
     while (r <= plot_bottom) : (r += 1) canvas.setGlyph(r, y_axis_col, xy.v_line);
@@ -178,7 +178,7 @@ fn writeVertical(
     for (tick_values, 0..) |t, i| {
         const tick_row = yPosForValue(t, yr, plot_bottom);
         const tick_w = width_mod.displayWidth(tick_strs[i], opts.ambiguous_width);
-        canvas.drawLabel(tick_row, max_tick_w - tick_w, tick_strs[i], opts.ambiguous_width);
+        try canvas.drawLabel(tick_row, max_tick_w - tick_w, tick_strs[i], opts.ambiguous_width);
         canvas.setGlyph(tick_row, y_axis_col, xy.y_tick);
     }
 
@@ -226,7 +226,7 @@ fn writeVertical(
         const label_row = axis_row + 1;
         for (chart.x_axis.categories, 0..) |label, i| {
             const slot_start = plot_left + i * band_w;
-            canvas.drawLabel(label_row, slot_start, label, opts.ambiguous_width);
+            try canvas.drawLabel(label_row, slot_start, label, opts.ambiguous_width);
         }
     }
 
@@ -235,14 +235,14 @@ fn writeVertical(
         const x_title_row = axis_row + 1 + x_label_rows;
         const x_title_w = width_mod.displayWidth(x_title, opts.ambiguous_width);
         const x_title_start: usize = if (canvas_cols > x_title_w) (canvas_cols - x_title_w) / 2 else 0;
-        canvas.drawLabel(x_title_row, x_title_start, x_title, opts.ambiguous_width);
+        try canvas.drawLabel(x_title_row, x_title_start, x_title, opts.ambiguous_width);
     }
 
     if (has_legend) {
         const legend_row: usize = if (chart.title != null) 1 else 0;
         const legend_w = computeLegendWidth(chart, opts.ambiguous_width);
         const legend_start: usize = if (canvas_cols > legend_w) (canvas_cols - legend_w) / 2 else 0;
-        drawLegend(&canvas, legend_row, legend_start, chart, opts.ambiguous_width, &xy);
+        try drawLegend(&canvas, legend_row, legend_start, chart, opts.ambiguous_width, &xy);
     }
 
     if (opts.enable_ansi and chart.series.len > 0) {
@@ -314,7 +314,7 @@ fn writeHorizontal(
     const axis_row = plot_top + PLOT_ROWS;
     const tick_label_row = axis_row + 1;
 
-    if (chart.title) |t| canvas.drawLabel(0, 0, t, opts.ambiguous_width);
+    if (chart.title) |t| try canvas.drawLabel(0, 0, t, opts.ambiguous_width);
 
     var r: usize = plot_top;
     while (r <= plot_bottom) : (r += 1) canvas.setGlyph(r, y_axis_col, xy.v_line);
@@ -338,7 +338,7 @@ fn writeHorizontal(
         const col = tickColHorizontal(t, yr, plot_left, plot_w);
         const tick_w = width_mod.displayWidth(tick_strs[i], opts.ambiguous_width);
         const start_col: usize = if (col >= tick_w / 2) col - tick_w / 2 else 0;
-        canvas.drawLabel(tick_label_row, start_col, tick_strs[i], opts.ambiguous_width);
+        try canvas.drawLabel(tick_label_row, start_col, tick_strs[i], opts.ambiguous_width);
     }
 
     if (has_x_labels) {
@@ -346,7 +346,7 @@ fn writeHorizontal(
             const row = bandRowHorizontal(i, data_count, plot_top);
             const cat_w = width_mod.displayWidth(cat, opts.ambiguous_width);
             const start: usize = if (y_axis_col > cat_w) y_axis_col - cat_w else 0;
-            canvas.drawLabel(row, start, cat, opts.ambiguous_width);
+            try canvas.drawLabel(row, start, cat, opts.ambiguous_width);
         }
     }
 
@@ -386,7 +386,7 @@ fn writeHorizontal(
         const legend_row: usize = if (chart.title != null) 1 else 0;
         const legend_w = computeLegendWidth(chart, opts.ambiguous_width);
         const legend_start: usize = if (canvas_cols > legend_w) (canvas_cols - legend_w) / 2 else 0;
-        drawLegend(&canvas, legend_row, legend_start, chart, opts.ambiguous_width, &xy);
+        try drawLegend(&canvas, legend_row, legend_start, chart, opts.ambiguous_width, &xy);
     }
 
     if (has_x_title) {
@@ -394,7 +394,7 @@ fn writeHorizontal(
         const x_title_row = tick_label_row + 1;
         const x_title_w = width_mod.displayWidth(x_title, opts.ambiguous_width);
         const x_title_start: usize = if (canvas_cols > x_title_w) (canvas_cols - x_title_w) / 2 else 0;
-        canvas.drawLabel(x_title_row, x_title_start, x_title, opts.ambiguous_width);
+        try canvas.drawLabel(x_title_row, x_title_start, x_title, opts.ambiguous_width);
     }
 
     if (has_y_title) {
@@ -402,7 +402,7 @@ fn writeHorizontal(
         const y_title_row = canvas_rows - 1;
         const y_title_w = width_mod.displayWidth(y_title, opts.ambiguous_width);
         const y_title_start: usize = if (canvas_cols > y_title_w) (canvas_cols - y_title_w) / 2 else 0;
-        canvas.drawLabel(y_title_row, y_title_start, y_title, opts.ambiguous_width);
+        try canvas.drawLabel(y_title_row, y_title_start, y_title, opts.ambiguous_width);
     }
 
     if (opts.enable_ansi and chart.series.len > 0) {
@@ -530,7 +530,7 @@ fn drawLegend(
     chart: *const types.XyChart,
     ambiguous: width_mod.AmbiguousWidth,
     xy: *const XyGlyphs,
-) void {
+) error{OutOfMemory}!void {
     var col = start_col;
     var bar_n: usize = 0;
     var line_n: usize = 0;
@@ -553,7 +553,7 @@ fn drawLegend(
                 break :blk std.fmt.bufPrint(&buf, "Line {d}", .{line_n}) catch "";
             },
         };
-        canvas.drawLabel(row, col, name, ambiguous);
+        try canvas.drawLabel(row, col, name, ambiguous);
         col += width_mod.displayWidth(name, ambiguous) + 2;
     }
 }
@@ -1641,7 +1641,7 @@ test "paintXyChart use_ascii=true substitutes +|-#. for unicode drawing glyphs" 
 }
 
 test "paintXyChart returns UnsupportedFeature for series exceeding 1024 points" {
-    var source: std.ArrayListUnmanaged(u8) = .empty;
+    var source: std.ArrayList(u8) = .empty;
     defer source.deinit(std.testing.allocator);
     try source.appendSlice(std.testing.allocator, "xychart\nline [1");
     var k: usize = 0;

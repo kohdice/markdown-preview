@@ -1,7 +1,7 @@
 const std = @import("std");
 const source_mod = @import("source.zig");
 const types = @import("types.zig");
-const width_mod = @import("../term/width.zig");
+const label_mod = @import("label.zig");
 
 pub const Source = source_mod.Source;
 
@@ -16,25 +16,25 @@ const BuildingSubgraph = struct {
     id_text: []const u8,
     title: ?[]const u8 = null,
     direction: ?types.Direction = null,
-    node_ids: std.ArrayListUnmanaged(types.NodeId) = .empty,
-    edge_indices: std.ArrayListUnmanaged(u32) = .empty,
-    children: std.ArrayListUnmanaged(BuildingSubgraph) = .empty,
+    node_ids: std.ArrayList(types.NodeId) = .empty,
+    edge_indices: std.ArrayList(u32) = .empty,
+    children: std.ArrayList(BuildingSubgraph) = .empty,
 };
 
 const Parser = struct {
     allocator: std.mem.Allocator,
-    nodes: std.ArrayListUnmanaged(types.Node) = .empty,
-    edges: std.ArrayListUnmanaged(types.Edge) = .empty,
+    nodes: std.ArrayList(types.Node) = .empty,
+    edges: std.ArrayList(types.Edge) = .empty,
     interned: std.StringHashMapUnmanaged(types.NodeId) = .empty,
 
-    root_subgraphs: std.ArrayListUnmanaged(BuildingSubgraph) = .empty,
-    ctx_stack: std.ArrayListUnmanaged(BuildingSubgraph) = .empty,
-    class_defs: std.ArrayListUnmanaged(types.ClassDef) = .empty,
-    class_assignments: std.ArrayListUnmanaged(types.ClassAssignment) = .empty,
-    node_styles: std.ArrayListUnmanaged(types.NodeStyle) = .empty,
-    link_styles: std.ArrayListUnmanaged(types.LinkStyle) = .empty,
-    owned_strings: std.ArrayListUnmanaged([]u8) = .empty,
-    touched: std.ArrayListUnmanaged(types.NodeId) = .empty,
+    root_subgraphs: std.ArrayList(BuildingSubgraph) = .empty,
+    ctx_stack: std.ArrayList(BuildingSubgraph) = .empty,
+    class_defs: std.ArrayList(types.ClassDef) = .empty,
+    class_assignments: std.ArrayList(types.ClassAssignment) = .empty,
+    node_styles: std.ArrayList(types.NodeStyle) = .empty,
+    link_styles: std.ArrayList(types.LinkStyle) = .empty,
+    owned_strings: std.ArrayList([]u8) = .empty,
+    touched: std.ArrayList(types.NodeId) = .empty,
     /// Tracks which nodes have already been claimed by a subgraph so the same
     /// node is not registered in multiple subgraphs' node_ids. Implements the
     /// upstream "first-defined subgraph wins" deduplication rule.
@@ -87,20 +87,6 @@ const Parser = struct {
 fn containsNodeId(slice: []const types.NodeId, id: types.NodeId) bool {
     for (slice) |v| if (v == id) return true;
     return false;
-}
-
-pub fn isDisplayDependent(cp: u21) bool {
-    var buf: [4]u8 = undefined;
-    const len = std.unicode.utf8Encode(cp, &buf) catch return true;
-    return width_mod.displayWidth(buf[0..len], .narrow) == 0;
-}
-
-fn validateLabel(label: []const u8) ParseError!void {
-    var view = std.unicode.Utf8View.init(label) catch return error.InvalidMermaid;
-    var it = view.iterator();
-    while (it.nextCodepoint()) |cp| {
-        if (isDisplayDependent(cp)) return error.InvalidMermaid;
-    }
 }
 
 pub fn parseSource(allocator: std.mem.Allocator, source: anytype) ParseError!types.MermaidGraph {
@@ -194,7 +180,7 @@ fn freeBuildingSubgraph(allocator: std.mem.Allocator, bs: *BuildingSubgraph) voi
 
 fn finalizeSubgraphs(
     allocator: std.mem.Allocator,
-    list: *std.ArrayListUnmanaged(BuildingSubgraph),
+    list: *std.ArrayList(BuildingSubgraph),
 ) ParseError![]types.Subgraph {
     if (list.items.len == 0) {
         list.deinit(allocator);
@@ -271,7 +257,7 @@ fn pushSubgraph(parser: *Parser, line: []const u8) ParseError!void {
         if (id_candidate.len > 0 and inner.len > 0) {
             id_text = id_candidate;
             title = inner;
-            try validateLabel(inner);
+            try label_mod.validate(inner);
         }
     }
 
@@ -280,7 +266,7 @@ fn pushSubgraph(parser: *Parser, line: []const u8) ParseError!void {
         try parser.owned_strings.append(parser.allocator, slug);
         id_text = slug;
         title = rest;
-        try validateLabel(rest);
+        try label_mod.validate(rest);
     }
 
     try parser.ctx_stack.append(parser.allocator, .{
@@ -301,7 +287,7 @@ fn popSubgraph(parser: *Parser) ParseError!void {
 }
 
 fn slugify(allocator: std.mem.Allocator, label: []const u8) ParseError![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     var i: usize = 0;
     var in_ws = false;
@@ -443,7 +429,7 @@ fn parseContentLine(parser: *Parser, trimmed: []const u8) ParseError!void {
     var after_arrow = trimmed[first_arrow.start + first_arrow.len ..];
 
     while (true) {
-        if (current_arrow.label) |l| try validateLabel(l);
+        if (current_arrow.label) |l| try label_mod.validate(l);
 
         const next_arrow = try findArrow(after_arrow);
         const rhs_text = if (next_arrow) |na|
@@ -765,7 +751,7 @@ fn matchCircle(text: []const u8, start: usize) ParseError!?ShapeMatch {
 }
 
 fn parseNodeSpecList(parser: *Parser, text: []const u8) ParseError![]types.NodeId {
-    var ids: std.ArrayListUnmanaged(types.NodeId) = .empty;
+    var ids: std.ArrayList(types.NodeId) = .empty;
     errdefer ids.deinit(parser.allocator);
 
     var i: usize = 0;
@@ -803,7 +789,7 @@ fn parseNodeSpecList(parser: *Parser, text: []const u8) ParseError![]types.NodeI
         var label: []const u8 = id_text;
         if (i < text.len) {
             if (try tryParseShape(text, i)) |sh| {
-                try validateLabel(sh.label);
+                try label_mod.validate(sh.label);
                 shape = sh.shape;
                 label = sh.label;
                 i = sh.end;
@@ -1359,31 +1345,24 @@ test "last-write-wins for redefined node" {
     try std.testing.expectEqualStrings("Second", graph.nodes[0].label);
 }
 
-test "rejects label containing ZWJ emoji sequence" {
-    try std.testing.expectError(
-        error.InvalidMermaid,
-        parseSource(std.testing.allocator, "graph TD\n    A[\u{1F468}\u{200D}\u{1F469}] --> B\n"),
+test "accepts labels containing display clusters with zero-width dependents" {
+    var graph = try parseSource(
+        std.testing.allocator,
+        "graph TD\n    A[e\u{0301}] --> B[\u{2764}\u{FE0F}] --> C[\u{1F44D}\u{1F3FB}] --> D[\u{1F468}\u{200D}\u{1F469}]\n",
     );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 4), graph.nodes.len);
+    try std.testing.expectEqualStrings("e\u{0301}", graph.nodes[0].label);
+    try std.testing.expectEqualStrings("\u{2764}\u{FE0F}", graph.nodes[1].label);
+    try std.testing.expectEqualStrings("\u{1F44D}\u{1F3FB}", graph.nodes[2].label);
+    try std.testing.expectEqualStrings("\u{1F468}\u{200D}\u{1F469}", graph.nodes[3].label);
 }
 
-test "rejects label containing combining mark" {
+test "rejects label containing standalone zero-width cluster" {
     try std.testing.expectError(
         error.InvalidMermaid,
-        parseSource(std.testing.allocator, "graph TD\n    A[e\u{0301}] --> B\n"),
-    );
-}
-
-test "rejects label containing emoji variation selector" {
-    try std.testing.expectError(
-        error.InvalidMermaid,
-        parseSource(std.testing.allocator, "graph TD\n    A[\u{2764}\u{FE0F}] --> B\n"),
-    );
-}
-
-test "rejects label containing emoji skin tone modifier" {
-    try std.testing.expectError(
-        error.InvalidMermaid,
-        parseSource(std.testing.allocator, "graph TD\n    A[\u{1F44D}\u{1F3FB}] --> B\n"),
+        parseSource(std.testing.allocator, "graph TD\n    A[foo\u{200D}bar] --> B\n"),
     );
 }
 
@@ -1400,22 +1379,6 @@ test "rejects label containing BOM, ZWSP, ZWNJ" {
         error.InvalidMermaid,
         parseSource(std.testing.allocator, "graph TD\n    A[foo\u{200C}bar] --> B\n"),
     );
-}
-
-test "isDisplayDependent covers every codepoint for which displayWidth returns 0" {
-    try std.testing.expect(isDisplayDependent(0x200D));
-    try std.testing.expect(isDisplayDependent(0x200B));
-    try std.testing.expect(isDisplayDependent(0x200C));
-    try std.testing.expect(isDisplayDependent(0xFEFF));
-    try std.testing.expect(isDisplayDependent(0xFE0F));
-    try std.testing.expect(isDisplayDependent(0x0301));
-    try std.testing.expect(isDisplayDependent(0x1F3FB));
-    try std.testing.expect(isDisplayDependent(0x1F3FF));
-
-    try std.testing.expect(!isDisplayDependent('A'));
-    try std.testing.expect(!isDisplayDependent(' '));
-    try std.testing.expect(!isDisplayDependent(0x65E5));
-    try std.testing.expect(!isDisplayDependent(0x1F680));
 }
 
 test "accepts plain CJK and single-codepoint emoji" {

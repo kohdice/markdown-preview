@@ -433,7 +433,7 @@ test "mermaid body width helper ignores unchanged fence opener width" {
 test "no-generated-clipping helper catches clipped canvas output" {
     var canvas = try canvas_mod.Canvas.init(std.testing.allocator, 1, 16);
     defer canvas.deinit();
-    canvas.drawLabel(0, 0, "abcdefghijklmnop", .narrow);
+    try canvas.drawLabel(0, 0, "abcdefghijklmnop", .narrow);
 
     var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();

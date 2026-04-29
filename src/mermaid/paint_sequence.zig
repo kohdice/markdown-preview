@@ -91,8 +91,8 @@ pub fn paintSequence(
     };
     defer canvas.deinit();
 
-    drawParticipantBoxes(&canvas, &diagram, cell_w, step_w, 0, &glyphs, ambig);
-    drawParticipantBoxes(&canvas, &diagram, cell_w, step_w, box_h + body_rows, &glyphs, ambig);
+    try drawParticipantBoxes(&canvas, &diagram, cell_w, step_w, 0, &glyphs, ambig);
+    try drawParticipantBoxes(&canvas, &diagram, cell_w, step_w, box_h + body_rows, &glyphs, ambig);
     drawLifelines(&canvas, n_part, cell_w, step_w, box_h, body_rows, &glyphs);
     drawBody(allocator, &canvas, &diagram, cell_w, step_w, box_h, &glyphs, ambig) catch return error.OutOfMemory;
 
@@ -181,14 +181,14 @@ fn drawParticipantBoxes(
     top_row: usize,
     glyphs: *const canvas_mod.GlyphSet,
     ambig: width_mod.AmbiguousWidth,
-) void {
+) RenderError!void {
     for (diagram.participants, 0..) |p, i| {
         const left = i * step_w;
         canvas.drawRect(top_row, left, box_h, cell_w, glyphs);
         const lw = width_mod.displayWidth(p.label, ambig);
         const inner = cell_w - 2;
         const offset = if (inner > lw) (inner - lw) / 2 else 0;
-        canvas.drawLabel(top_row + 1, left + 1 + offset, p.label, ambig);
+        try canvas.drawLabel(top_row + 1, left + 1 + offset, p.label, ambig);
     }
 }
 
@@ -226,10 +226,10 @@ fn drawBody(
     var row: usize = top_box_rows + 1;
     const total_cols = canvas.cols;
 
-    var active_blocks: std.ArrayListUnmanaged(ActiveBlock) = .empty;
+    var active_blocks: std.ArrayList(ActiveBlock) = .empty;
     defer active_blocks.deinit(allocator);
 
-    var closed_blocks: std.ArrayListUnmanaged(usize) = .empty;
+    var closed_blocks: std.ArrayList(usize) = .empty;
     defer closed_blocks.deinit(allocator);
 
     const n_msg: u32 = @intCast(diagram.messages.len);
@@ -294,7 +294,7 @@ fn drawBody(
                     drawFrameSideBorders(canvas, row, 1, d, total_cols, glyphs);
                 }
             }
-            drawBlockStartRow(canvas, row, b.kind, b.label, active_blocks.items.len, total_cols, glyphs, ambig);
+            try drawBlockStartRow(canvas, row, b.kind, b.label, active_blocks.items.len, total_cols, glyphs, ambig);
             try active_blocks.append(allocator, .{ .block_idx = bi });
             row += 1;
         }
@@ -311,7 +311,7 @@ fn drawBody(
                             drawFrameSideBorders(canvas, row, 1, d, total_cols, glyphs);
                         }
                     }
-                    drawElseSeparatorRow(canvas, row, div.label, ai, total_cols, glyphs, ambig);
+                    try drawElseSeparatorRow(canvas, row, div.label, ai, total_cols, glyphs, ambig);
                     row += 1;
                 }
             }
@@ -328,9 +328,9 @@ fn drawBody(
         const from_c = participantCenter(msg.from, cell_w, step_w);
         const to_c = participantCenter(msg.to, cell_w, step_w);
         if (from_c == to_c) {
-            drawSelfMessage(canvas, row, row + 1, from_c, cell_w, msg, glyphs, ambig);
+            try drawSelfMessage(canvas, row, row + 1, from_c, cell_w, msg, glyphs, ambig);
         } else {
-            drawMessageArrow(canvas, row, row + 1, from_c, to_c, msg, glyphs, ambig);
+            try drawMessageArrow(canvas, row, row + 1, from_c, to_c, msg, glyphs, ambig);
         }
 
         row += message_spacing;
@@ -341,7 +341,7 @@ fn drawBody(
                 while (d < active_blocks.items.len) : (d += 1) {
                     drawFrameSideBorders(canvas, row, note_height, d, total_cols, glyphs);
                 }
-                drawNoteAtRow(canvas, row, note, cell_w, step_w, glyphs, ambig);
+                try drawNoteAtRow(canvas, row, note, cell_w, step_w, glyphs, ambig);
                 row += note_height;
             }
         }
@@ -426,7 +426,7 @@ fn drawBlockStartRow(
     total_cols: usize,
     glyphs: *const canvas_mod.GlyphSet,
     ambig: width_mod.AmbiguousWidth,
-) void {
+) error{OutOfMemory}!void {
     if (total_cols <= indent * 2 + 2) return;
     const left = indent;
     const right = total_cols - 1 - indent;
@@ -442,13 +442,13 @@ fn drawBlockStartRow(
     const kind_w = width_mod.displayWidth(kind_text, ambig);
     if (left + 2 + kind_w < right) {
         canvas.setGlyph(row, left + 1, ' ');
-        canvas.drawLabel(row, left + 2, kind_text, ambig);
+        try canvas.drawLabel(row, left + 2, kind_text, ambig);
         if (label.len > 0) {
             const bracket_col = left + 2 + kind_w;
             if (bracket_col + 2 < right) {
                 canvas.setGlyph(row, bracket_col, ' ');
                 canvas.setGlyph(row, bracket_col + 1, '[');
-                canvas.drawLabel(row, bracket_col + 2, label, ambig);
+                try canvas.drawLabel(row, bracket_col + 2, label, ambig);
                 const close_col = bracket_col + 2 + width_mod.displayWidth(label, ambig);
                 if (close_col < right) {
                     canvas.setGlyph(row, close_col, ']');
@@ -484,7 +484,7 @@ fn drawElseSeparatorRow(
     total_cols: usize,
     glyphs: *const canvas_mod.GlyphSet,
     ambig: width_mod.AmbiguousWidth,
-) void {
+) error{OutOfMemory}!void {
     if (total_cols <= indent * 2 + 2) return;
     const left = indent;
     const right = total_cols - 1 - indent;
@@ -496,7 +496,7 @@ fn drawElseSeparatorRow(
     }
     if (label.len > 0 and left + 3 < right) {
         canvas.setGlyph(row, left + 1, ' ');
-        canvas.drawLabel(row, left + 2, label, ambig);
+        try canvas.drawLabel(row, left + 2, label, ambig);
     }
 }
 
@@ -508,7 +508,7 @@ fn drawNoteAtRow(
     step_w: usize,
     glyphs: *const canvas_mod.GlyphSet,
     ambig: width_mod.AmbiguousWidth,
-) void {
+) error{OutOfMemory}!void {
     const tw = width_mod.displayWidth(note.text, ambig);
     const text_note_w = @max(tw + 4, 6);
     if (note.actor_ids.len == 0) return;
@@ -543,7 +543,7 @@ fn drawNoteAtRow(
     if (tw > 0) {
         const inner = note_w - 2;
         const text_offset = if (inner > tw) (inner - tw) / 2 else 0;
-        canvas.drawLabel(row + 1, left + 1 + text_offset, note.text, ambig);
+        try canvas.drawLabel(row + 1, left + 1 + text_offset, note.text, ambig);
     }
 }
 
@@ -556,7 +556,7 @@ fn drawMessageArrow(
     msg: types.SequenceMessage,
     glyphs: *const canvas_mod.GlyphSet,
     ambig: width_mod.AmbiguousWidth,
-) void {
+) error{OutOfMemory}!void {
     const lo = @min(from_center, to_center);
     const hi = @max(from_center, to_center);
     const going_right = to_center > from_center;
@@ -566,7 +566,7 @@ fn drawMessageArrow(
         const mid = (from_center + to_center) / 2;
         const half = label_w / 2;
         const col = if (mid > half) mid - half else 0;
-        if (col + label_w <= canvas.cols) canvas.drawLabel(label_row, col, msg.label, ambig);
+        if (col + label_w <= canvas.cols) try canvas.drawLabel(label_row, col, msg.label, ambig);
     }
 
     const line_glyph: u21 = if (msg.line_style == .dashed) '╌' else glyphs.h_line;
@@ -596,7 +596,7 @@ fn drawSelfMessage(
     msg: types.SequenceMessage,
     glyphs: *const canvas_mod.GlyphSet,
     ambig: width_mod.AmbiguousWidth,
-) void {
+) error{OutOfMemory}!void {
     const loop_w: usize = @max(cell_w / 2, 4);
     const right = if (center + loop_w < canvas.cols) center + loop_w else canvas.cols - 1;
     if (right <= center) return;
@@ -616,7 +616,7 @@ fn drawSelfMessage(
     const lw = width_mod.displayWidth(msg.label, ambig);
     if (lw > 0 and label_row < canvas.rows) {
         const col = center + 2;
-        if (col + lw <= canvas.cols) canvas.drawLabel(label_row, col, msg.label, ambig);
+        if (col + lw <= canvas.cols) try canvas.drawLabel(label_row, col, msg.label, ambig);
     }
 }
 
@@ -652,6 +652,23 @@ test "paintSequence handles single participant with no messages" {
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "Alice") != null);
+}
+
+test "paintSequence keeps hard-break labels separated for single-line layout" {
+    const alloc = std.testing.allocator;
+    var diagram = try compile_mod.compile(alloc,
+        \\sequenceDiagram
+        \\    A->>B: first<br/>second
+    );
+    defer diagram.deinit();
+
+    var sink: std.Io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+    try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
+
+    const out = sink.writer.buffered();
+    try std.testing.expect(std.mem.find(u8, out, "first second") != null);
+    try std.testing.expect(std.mem.find(u8, out, "firstsecond") == null);
 }
 
 test "renderer draws filled and open arrow heads" {

@@ -61,7 +61,7 @@ pub fn paintMermaidGraph(
         const label_row = top + layout.cell_h / 2;
         const inner_w = layout.cell_w - 2;
         const label_col = left + 1 + (if (inner_w > label_w) (inner_w - label_w) / 2 else 0);
-        canvas.drawLabel(label_row, label_col, label, opts.ambiguous_width);
+        try canvas.drawLabel(label_row, label_col, label, opts.ambiguous_width);
     }
 
     const layout_dir = effective.direction.layoutDir();
@@ -94,7 +94,7 @@ pub fn paintMermaidGraph(
     };
 
     for (layout.subgraph_frames) |frame| {
-        drawSubgraphTitle(&canvas, &layout, frame, opts.ambiguous_width);
+        try drawSubgraphTitle(&canvas, &layout, frame, opts.ambiguous_width);
     }
 
     if (needs_vflip) canvas.flipVertical();
@@ -229,25 +229,13 @@ fn drawSubgraphTitle(
     layout: *const @import("types.zig").Layout,
     frame: @import("types.zig").SubgraphFrame,
     ambiguous: width_mod.AmbiguousWidth,
-) void {
+) PaintError!void {
     const title = frame.title orelse return;
     if (title.len == 0) return;
     const box = frameBox(layout, canvas.rows, canvas.cols, frame) orelse return;
     if (box.w <= 4) return;
     const budget = box.w - 4;
-    const clipped = clipToWidth(title, budget, ambiguous);
+    const clipped = width_mod.sliceToDisplayWidth(title, budget, ambiguous);
     if (clipped.len == 0) return;
-    canvas.drawLabel(box.top, box.left + 2, clipped, ambiguous);
-}
-
-fn clipToWidth(text: []const u8, budget: usize, ambiguous: width_mod.AmbiguousWidth) []const u8 {
-    var view = std.unicode.Utf8View.init(text) catch return "";
-    var it = view.iterator();
-    var kept: usize = 0;
-    while (it.nextCodepointSlice()) |cp| {
-        const next = kept + cp.len;
-        if (width_mod.displayWidth(text[0..next], ambiguous) > budget) break;
-        kept = next;
-    }
-    return text[0..kept];
+    try canvas.drawLabel(box.top, box.left + 2, clipped, ambiguous);
 }

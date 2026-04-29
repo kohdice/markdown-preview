@@ -72,10 +72,10 @@ pub fn paintClass(
     defer canvas.deinit();
 
     for (diagram.namespaces) |ns| {
-        drawNamespaceFrame(&canvas, &layout, &diagram, ns, &glyphs, opts.ambiguous_width);
+        try drawNamespaceFrame(&canvas, &layout, &diagram, ns, &glyphs, opts.ambiguous_width);
     }
 
-    var spans: std.ArrayListUnmanaged(StyledSpan) = .empty;
+    var spans: std.ArrayList(StyledSpan) = .empty;
     defer spans.deinit(allocator);
 
     for (diagram.classes, 0..) |cls, i| {
@@ -285,7 +285,7 @@ fn assignClassLevels(
         if (rel.to < n) remaining[rel.to] += 1;
     }
 
-    var queue: std.ArrayListUnmanaged(types.NodeId) = .empty;
+    var queue: std.ArrayList(types.NodeId) = .empty;
     defer queue.deinit(allocator);
 
     for (0..n) |i| {
@@ -354,7 +354,7 @@ fn drawNamespaceFrame(
     ns: types.ClassNamespace,
     glyphs: *const canvas_mod.GlyphSet,
     ambiguous: width_mod.AmbiguousWidth,
-) void {
+) RenderError!void {
     if (ns.class_ids.len == 0) return;
 
     var min_row: usize = std.math.maxInt(usize);
@@ -396,7 +396,7 @@ fn drawNamespaceFrame(
     const name_w = width_mod.displayWidth(ns.name, ambiguous);
     if (w > name_w + class_box_side_spacing) {
         const title_col = left + class_box_content_offset;
-        canvas.drawLabel(top, title_col, ns.name, ambiguous);
+        try canvas.drawLabel(top, title_col, ns.name, ambiguous);
     }
 }
 
@@ -410,7 +410,7 @@ fn drawClassBox(
     cls: *const types.ClassNode,
     glyphs: *const canvas_mod.GlyphSet,
     ambiguous: width_mod.AmbiguousWidth,
-    spans: ?*std.ArrayListUnmanaged(StyledSpan),
+    spans: ?*std.ArrayList(StyledSpan),
 ) RenderError!void {
     canvas.drawRect(top, left, height, width, glyphs);
 
@@ -422,13 +422,13 @@ fn drawClassBox(
         const wrapped = std.fmt.bufPrint(&buf, "«{s}»", .{st}) catch st;
         const stereo_w = width_mod.displayWidth(wrapped, ambiguous);
         const stereo_off = if (inner_w > stereo_w) (inner_w - stereo_w) / 2 else 0;
-        canvas.drawLabel(name_row, left + 1 + stereo_off, wrapped, ambiguous);
+        try canvas.drawLabel(name_row, left + 1 + stereo_off, wrapped, ambiguous);
         name_row += 1;
     }
 
     const label_w = width_mod.displayWidth(cls.label, ambiguous);
     const name_col_off = if (inner_w > label_w) (inner_w - label_w) / 2 else 0;
-    canvas.drawLabel(name_row, left + 1 + name_col_off, cls.label, ambiguous);
+    try canvas.drawLabel(name_row, left + 1 + name_col_off, cls.label, ambiguous);
 
     const has_fields = cls.attributes.len > 0;
     const has_methods = cls.methods.len > 0;
@@ -477,7 +477,7 @@ fn drawMember(
     member: *const types.ClassMember,
     is_method: bool,
     ambiguous: width_mod.AmbiguousWidth,
-    spans: ?*std.ArrayListUnmanaged(StyledSpan),
+    spans: ?*std.ArrayList(StyledSpan),
 ) RenderError!void {
     var col = left + class_box_content_offset;
     if (visibilitySigil(member.visibility)) |s| {
@@ -487,13 +487,13 @@ fn drawMember(
         col += 1;
     }
     const label_start = col;
-    canvas.drawLabel(row, col, member.name, ambiguous);
+    try canvas.drawLabel(row, col, member.name, ambiguous);
     col += width_mod.displayWidth(member.name, ambiguous);
     if (is_method) {
         canvas.setGlyph(row, col, '(');
         col += 1;
         if (member.params) |p| {
-            canvas.drawLabel(row, col, p, ambiguous);
+            try canvas.drawLabel(row, col, p, ambiguous);
             col += width_mod.displayWidth(p, ambiguous);
         }
         canvas.setGlyph(row, col, ')');
@@ -504,7 +504,7 @@ fn drawMember(
         col += 1;
         canvas.setGlyph(row, col, ' ');
         col += 1;
-        canvas.drawLabel(row, col, t, ambiguous);
+        try canvas.drawLabel(row, col, t, ambiguous);
         col += width_mod.displayWidth(t, ambiguous);
     }
 
@@ -582,8 +582,8 @@ fn drawRelation(
         .from => replaceArrowHeadAtTop(canvas, src_top, src_left, src_box_h, layout.cell_w, rel, glyphs),
     }
 
-    if (rel.from_cardinality) |c| drawCardinalityLabel(canvas, start_row, start_col, c, ambiguous, .source);
-    if (rel.to_cardinality) |c| drawCardinalityLabel(canvas, goal_row, goal_col, c, ambiguous, .target);
+    if (rel.from_cardinality) |c| try drawCardinalityLabel(canvas, start_row, start_col, c, ambiguous, .source);
+    if (rel.to_cardinality) |c| try drawCardinalityLabel(canvas, goal_row, goal_col, c, ambiguous, .target);
 }
 
 const CardinalitySide = enum { source, target };
@@ -595,7 +595,7 @@ fn drawCardinalityLabel(
     text: []const u8,
     ambiguous: width_mod.AmbiguousWidth,
     side: CardinalitySide,
-) void {
+) error{OutOfMemory}!void {
     if (text.len == 0) return;
     const text_w = width_mod.displayWidth(text, ambiguous);
     const col = endpoint_col + cardinality_label_gap;
@@ -607,7 +607,7 @@ fn drawCardinalityLabel(
     };
     if (row >= canvas.rows) return;
 
-    canvas.drawLabel(row, col, text, ambiguous);
+    try canvas.drawLabel(row, col, text, ambiguous);
 }
 
 fn replaceArrowHeadAtBottom(

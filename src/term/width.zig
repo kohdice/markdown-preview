@@ -289,7 +289,7 @@ fn wrapText(
 ) ![]u8 {
     if (max_width == 0) return try allocator.dupe(u8, text);
 
-    var result: std.ArrayListUnmanaged(u8) = .empty;
+    var result: std.ArrayList(u8) = .empty;
     errdefer result.deinit(allocator);
 
     var col: usize = 0;
@@ -322,7 +322,7 @@ fn wrapText(
         };
         if (i + len > text.len) break;
 
-        const cp = std.unicode.utf8Decode(text[i..][0..len]) catch {
+        const cp = decodeCodepointExact(text[i..][0..len]) catch {
             try result.append(allocator, text[i]);
             i += 1;
             col += 1;
@@ -384,7 +384,7 @@ fn wrapText(
 
 pub const WrapWriter = struct {
     parent: *std.Io.Writer,
-    line_buf: *std.ArrayListUnmanaged(u8),
+    line_buf: *std.ArrayList(u8),
     col: usize,
     last_space_buf: ?usize,
     col_after_last_space: usize,
@@ -405,7 +405,7 @@ pub const WrapWriter = struct {
         max_width: usize,
         ambiguous: AmbiguousWidth,
         allocator: std.mem.Allocator,
-        line_buf: *std.ArrayListUnmanaged(u8),
+        line_buf: *std.ArrayList(u8),
     ) void {
         line_buf.clearRetainingCapacity();
         self.* = .{
@@ -638,7 +638,7 @@ pub const WrapWriter = struct {
             try self.appendCharAdvance(self.pending[0..1], 1);
             const leftover = p - 1;
             if (leftover > 0) {
-                std.mem.copyForwards(u8, self.pending[0..leftover], self.pending[1..p]);
+                @memmove(self.pending[0..leftover], self.pending[1..p]);
                 self.pending_len = @intCast(leftover);
             } else {
                 self.pending_len = 0;
@@ -656,11 +656,11 @@ pub const WrapWriter = struct {
         @memcpy(self.pending[p .. p + still_needed], bytes[0..still_needed]);
 
         const char_bytes = self.pending[0..seq_len];
-        const cp = std.unicode.utf8Decode(char_bytes) catch {
+        const cp = decodeCodepointExact(char_bytes) catch {
             try self.appendCharAdvance(self.pending[0..1], 1);
             const leftover = seq_len - 1;
             if (leftover > 0) {
-                std.mem.copyForwards(u8, self.pending[0..leftover], self.pending[1..seq_len]);
+                @memmove(self.pending[0..leftover], self.pending[1..seq_len]);
                 self.pending_len = @intCast(leftover);
             } else {
                 self.pending_len = 0;
@@ -718,7 +718,7 @@ pub const WrapWriter = struct {
             try self.line_buf.appendSlice(self.allocator, self.pending[0..1]);
             const leftover = p - 1;
             if (leftover > 0) {
-                std.mem.copyForwards(u8, self.pending[0..leftover], self.pending[1..p]);
+                @memmove(self.pending[0..leftover], self.pending[1..p]);
                 self.pending_len = @intCast(leftover);
             } else {
                 self.pending_len = 0;
@@ -783,7 +783,7 @@ pub const WrapWriter = struct {
             try self.parent.writeAll(items[0 .. pos + 1]);
             const remaining = items.len - (pos + 1);
             if (remaining > 0) {
-                std.mem.copyForwards(u8, items[0..remaining], items[pos + 1 ..]);
+                @memmove(items[0..remaining], items[pos + 1 ..]);
             }
             self.line_buf.shrinkRetainingCapacity(remaining);
         }
@@ -1054,8 +1054,132 @@ pub fn nextCodepoint(bytes: []const u8, i: usize) DecodeResult {
     if (first < 0x80) return .{ .ok = .{ .cp = first, .len = 1 } };
     const len = std.unicode.utf8ByteSequenceLength(first) catch return .invalid;
     if (i + len > bytes.len) return .incomplete;
-    const cp = std.unicode.utf8Decode(bytes[i..][0..len]) catch return .invalid;
+    const cp = decodeCodepointExact(bytes[i..][0..len]) catch return .invalid;
     return .{ .ok = .{ .cp = cp, .len = len } };
+}
+
+fn decodeCodepointExact(bytes: []const u8) !u21 {
+    return switch (bytes.len) {
+        1 => bytes[0],
+        2 => std.unicode.utf8Decode2(bytes[0..2].*),
+        3 => std.unicode.utf8Decode3(bytes[0..3].*),
+        4 => std.unicode.utf8Decode4(bytes[0..4].*),
+        else => error.InvalidUtf8,
+    };
+}
+
+pub const DisplayCluster = struct {
+    bytes: []const u8,
+    width: usize,
+    start: usize,
+    end: usize,
+};
+
+pub const DisplayClusterIterator = struct {
+    text: []const u8,
+    ambiguous: AmbiguousWidth,
+    index: usize = 0,
+
+    pub fn init(text: []const u8, ambiguous: AmbiguousWidth) DisplayClusterIterator {
+        return .{
+            .text = text,
+            .ambiguous = ambiguous,
+        };
+    }
+
+    pub fn next(self: *DisplayClusterIterator) ?DisplayCluster {
+        if (self.index >= self.text.len) return null;
+
+        const start = self.index;
+        if (skipAnsiCsi(self.text, start)) |after| {
+            self.index = after;
+            return .{
+                .bytes = self.text[start..after],
+                .width = 0,
+                .start = start,
+                .end = after,
+            };
+        }
+
+        const first = switch (nextCodepoint(self.text, start)) {
+            .ok => |decoded| decoded,
+            .invalid => {
+                self.index += 1;
+                return .{
+                    .bytes = self.text[start..self.index],
+                    .width = 1,
+                    .start = start,
+                    .end = self.index,
+                };
+            },
+            .incomplete => {
+                self.index = self.text.len;
+                return .{
+                    .bytes = self.text[start..self.index],
+                    .width = 0,
+                    .start = start,
+                    .end = self.index,
+                };
+            },
+        };
+        self.index += first.len;
+
+        var include_joined = false;
+        var cluster_has_emoji = isEmoji(first.cp);
+        while (self.index < self.text.len) {
+            if (skipAnsiCsi(self.text, self.index) != null) break;
+
+            const decoded = switch (nextCodepoint(self.text, self.index)) {
+                .ok => |d| d,
+                .invalid, .incomplete => break,
+            };
+            const cp_end = self.index + decoded.len;
+
+            if (include_joined) {
+                self.index = cp_end;
+                include_joined = false;
+                cluster_has_emoji = cluster_has_emoji or isEmoji(decoded.cp);
+                continue;
+            }
+
+            if (decoded.cp == ZWJ) {
+                const next_decoded = switch (nextCodepoint(self.text, cp_end)) {
+                    .ok => |d| d,
+                    .invalid, .incomplete => break,
+                };
+                if (!cluster_has_emoji or !isEmoji(next_decoded.cp)) break;
+                self.index = cp_end;
+                include_joined = true;
+                continue;
+            }
+
+            if (isDisplayClusterExtender(decoded.cp)) {
+                self.index = cp_end;
+                continue;
+            }
+
+            break;
+        }
+
+        return .{
+            .bytes = self.text[start..self.index],
+            .width = displayWidth(self.text[start..self.index], self.ambiguous),
+            .start = start,
+            .end = self.index,
+        };
+    }
+};
+
+pub fn sliceToDisplayWidth(text: []const u8, max_width: usize, ambiguous: AmbiguousWidth) []const u8 {
+    var it = DisplayClusterIterator.init(text, ambiguous);
+    var width: usize = 0;
+    var end: usize = 0;
+    while (it.next()) |cluster| {
+        if (width + cluster.width > max_width) break;
+        width += cluster.width;
+        end = cluster.end;
+    }
+    return text[0..end];
 }
 
 const CodepointRange = [2]u21;
@@ -1127,6 +1251,10 @@ pub fn codepointWidth(cp: u21, ambiguous: AmbiguousWidth) usize {
     return 1;
 }
 
+fn isDisplayClusterExtender(cp: u21) bool {
+    return inSortedRanges(cp, &zero_width_ranges);
+}
+
 test "ASCII string width" {
     try std.testing.expectEqual(@as(usize, 5), displayWidth("hello", .narrow));
     try std.testing.expectEqual(@as(usize, 0), displayWidth("", .narrow));
@@ -1158,6 +1286,46 @@ test "nextCodepoint reports invalid for a bare continuation byte" {
 
 test "nextCodepoint returns incomplete when starting past the end" {
     try std.testing.expect(nextCodepoint("abc", 3) == .incomplete);
+}
+
+test "DisplayClusterIterator keeps zero-width dependents with their base" {
+    const text = "e\u{0301}\u{2764}\u{FE0F}\u{1F44B}\u{1F3FD}\u{1F468}\u{200D}\u{1F469}";
+    var it = DisplayClusterIterator.init(text, .narrow);
+
+    const acute = it.next().?;
+    try std.testing.expectEqualStrings("e\u{0301}", acute.bytes);
+    try std.testing.expectEqual(@as(usize, 1), acute.width);
+
+    const heart = it.next().?;
+    try std.testing.expectEqualStrings("\u{2764}\u{FE0F}", heart.bytes);
+    try std.testing.expectEqual(@as(usize, 1), heart.width);
+
+    const wave = it.next().?;
+    try std.testing.expectEqualStrings("\u{1F44B}\u{1F3FD}", wave.bytes);
+    try std.testing.expectEqual(@as(usize, 2), wave.width);
+
+    const family = it.next().?;
+    try std.testing.expectEqualStrings("\u{1F468}\u{200D}\u{1F469}", family.bytes);
+    try std.testing.expectEqual(@as(usize, 2), family.width);
+
+    try std.testing.expectEqual(@as(?DisplayCluster, null), it.next());
+}
+
+test "DisplayClusterIterator exposes non-emoji ZWJ as a zero-width cluster" {
+    var it = DisplayClusterIterator.init("foo\u{200D}bar", .narrow);
+
+    try std.testing.expectEqualStrings("f", it.next().?.bytes);
+    try std.testing.expectEqualStrings("o", it.next().?.bytes);
+    try std.testing.expectEqualStrings("o", it.next().?.bytes);
+
+    const zwj = it.next().?;
+    try std.testing.expectEqualStrings("\u{200D}", zwj.bytes);
+    try std.testing.expectEqual(@as(usize, 0), zwj.width);
+}
+
+test "sliceToDisplayWidth does not split display clusters" {
+    try std.testing.expectEqualStrings("e\u{0301}", sliceToDisplayWidth("e\u{0301}e", 1, .narrow));
+    try std.testing.expectEqualStrings("\u{2764}\u{FE0F}", sliceToDisplayWidth("\u{2764}\u{FE0F}x", 1, .narrow));
 }
 
 test "CJK characters are width 2" {
@@ -1623,7 +1791,7 @@ fn wrapWriterCollect(input: []const u8, max_w: usize, ambiguous: AmbiguousWidth)
     var buf: std.Io.Writer.Allocating = .init(allocator);
     errdefer buf.deinit();
 
-    var line_buf: std.ArrayListUnmanaged(u8) = .empty;
+    var line_buf: std.ArrayList(u8) = .empty;
     defer line_buf.deinit(allocator);
     var ww: WrapWriter = undefined;
     ww.init(&buf.writer, max_w, ambiguous, allocator, &line_buf);
@@ -1690,7 +1858,7 @@ test "WrapWriter styled fragment boundaries" {
     var buf: std.Io.Writer.Allocating = .init(allocator);
     errdefer buf.deinit();
 
-    var line_buf: std.ArrayListUnmanaged(u8) = .empty;
+    var line_buf: std.ArrayList(u8) = .empty;
     defer line_buf.deinit(allocator);
     var ww: WrapWriter = undefined;
     ww.init(&buf.writer, 10, .narrow, allocator, &line_buf);
@@ -1748,7 +1916,7 @@ test "WrapWriter split ANSI CSI across writes" {
     var buf: std.Io.Writer.Allocating = .init(allocator);
     errdefer buf.deinit();
 
-    var line_buf: std.ArrayListUnmanaged(u8) = .empty;
+    var line_buf: std.ArrayList(u8) = .empty;
     defer line_buf.deinit(allocator);
     var ww: WrapWriter = undefined;
     ww.init(&buf.writer, 10, .narrow, allocator, &line_buf);
@@ -1774,7 +1942,7 @@ test "WrapWriter split ANSI ESC+[ across writes" {
     var buf: std.Io.Writer.Allocating = .init(allocator);
     errdefer buf.deinit();
 
-    var line_buf: std.ArrayListUnmanaged(u8) = .empty;
+    var line_buf: std.ArrayList(u8) = .empty;
     defer line_buf.deinit(allocator);
     var ww: WrapWriter = undefined;
     ww.init(&buf.writer, 10, .narrow, allocator, &line_buf);
@@ -1803,7 +1971,7 @@ test "WrapWriter split UTF-8 across writes" {
     var buf: std.Io.Writer.Allocating = .init(allocator);
     errdefer buf.deinit();
 
-    var line_buf: std.ArrayListUnmanaged(u8) = .empty;
+    var line_buf: std.ArrayList(u8) = .empty;
     defer line_buf.deinit(allocator);
     var ww: WrapWriter = undefined;
     ww.init(&buf.writer, 10, .narrow, allocator, &line_buf);

@@ -476,13 +476,13 @@ pub fn normalizeBrTags(allocator: std.mem.Allocator, text: []const u8) ![]const 
     }
     if (!needs_alloc) return text;
 
-    var out = try std.ArrayListUnmanaged(u8).initCapacity(allocator, text.len);
+    var out = try std.ArrayList(u8).initCapacity(allocator, text.len);
     errdefer out.deinit(allocator);
     var j: usize = 0;
     while (j < text.len) {
         if (text[j] == '<') {
             if (brTagLen(text, j)) |n| {
-                try out.append(allocator, ' ');
+                try out.append(allocator, '\n');
                 j += n;
                 continue;
             }
@@ -493,7 +493,7 @@ pub fn normalizeBrTags(allocator: std.mem.Allocator, text: []const u8) ![]const 
     return try out.toOwnedSlice(allocator);
 }
 
-fn brTagLen(text: []const u8, i: usize) ?usize {
+pub fn brTagLen(text: []const u8, i: usize) ?usize {
     if (i + 4 > text.len) return null;
     if (text[i] != '<') return null;
     const b1 = text[i + 1];

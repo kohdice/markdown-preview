@@ -95,7 +95,7 @@ pub fn routeEdge(
         drawAStarPath(canvas, path.items, glyphs, ports.initial_dir, edge.style);
 
         if (edge.label) |label| {
-            placeEdgeLabelOnPath(canvas, label, path.items, ambiguous);
+            try placeEdgeLabelOnPath(canvas, label, path.items, ambiguous);
         }
         return;
     }
@@ -142,7 +142,7 @@ pub fn routeEdgeWithPorts(
         drawAStarPath(canvas, path.items, glyphs, start_dir, edge_style);
 
         if (edge_label) |label| {
-            placeEdgeLabelOnPath(canvas, label, path.items, ambiguous);
+            try placeEdgeLabelOnPath(canvas, label, path.items, ambiguous);
         }
 
         const end_dir = if (path.items.len == 0) start_dir else path.items[path.items.len - 1].dir;
@@ -184,7 +184,7 @@ fn drawPortFallback(
     if (start_dir != .up) return;
     if (goal_row >= start_row) return;
 
-    var path: std.ArrayListUnmanaged(SearchKey) = .empty;
+    var path: std.ArrayList(SearchKey) = .empty;
     defer path.deinit(allocator);
 
     try path.append(allocator, .{
@@ -229,7 +229,7 @@ fn drawPortFallback(
     drawAStarPath(canvas, path.items, glyphs, start_dir, edge_style);
 
     if (edge_label) |label| {
-        placeEdgeLabelOnPath(canvas, label, path.items, ambiguous);
+        try placeEdgeLabelOnPath(canvas, label, path.items, ambiguous);
     }
 }
 
@@ -323,7 +323,7 @@ pub fn aStarPath(
     start_dir: Dir4,
     goal_row: usize,
     goal_col: usize,
-) RouteError!?std.ArrayListUnmanaged(SearchKey) {
+) RouteError!?std.ArrayList(SearchKey) {
     if (start_row >= canvas_rows_ or start_col >= canvas_cols_) return null;
     if (goal_row >= canvas_rows_ or goal_col >= canvas_cols_) return null;
 
@@ -397,8 +397,8 @@ fn reconstructPath(
     allocator: std.mem.Allocator,
     came_from: std.AutoHashMap(SearchKey, SearchKey),
     end: SearchKey,
-) !std.ArrayListUnmanaged(SearchKey) {
-    var path: std.ArrayListUnmanaged(SearchKey) = .empty;
+) !std.ArrayList(SearchKey) {
+    var path: std.ArrayList(SearchKey) = .empty;
     errdefer path.deinit(allocator);
 
     var cur = end;
@@ -528,7 +528,7 @@ fn placeEdgeLabelOnPath(
     label: []const u8,
     path: []const SearchKey,
     ambiguous: width_mod.AmbiguousWidth,
-) void {
+) RouteError!void {
     const label_w = width_mod.displayWidth(label, ambiguous);
     if (label_w == 0 or path.len < 2) return;
 
@@ -564,20 +564,20 @@ fn placeEdgeLabelOnPath(
         const half = label_w / 2;
         const col = if (mid.col > half) mid.col - half else 0;
         if (col + label_w <= canvas.cols) {
-            canvas.drawLabel(mid.row - 1, col, label, ambiguous);
+            try canvas.drawLabel(mid.row - 1, col, label, ambiguous);
         }
         return;
     }
 
     const col_right = mid.col + 2;
     if (col_right + label_w <= canvas.cols) {
-        canvas.drawLabel(mid.row, col_right, label, ambiguous);
+        try canvas.drawLabel(mid.row, col_right, label, ambiguous);
         return;
     }
     const half = label_w / 2;
     const col = if (mid.col > half) mid.col - half else 0;
     if (col + label_w <= canvas.cols) {
-        canvas.drawLabel(mid.row, col, label, ambiguous);
+        try canvas.drawLabel(mid.row, col, label, ambiguous);
     }
 }
 
@@ -673,7 +673,7 @@ fn routeVertical(
     }
 
     if (edge.label) |label| {
-        placeEdgeLabel(canvas, label, bend_row, src_center, tgt_center, ambiguous);
+        try placeEdgeLabel(canvas, label, bend_row, src_center, tgt_center, ambiguous);
     }
 }
 
@@ -750,7 +750,7 @@ fn routeHorizontal(
     }
 
     if (edge.label) |label| {
-        placeEdgeLabelHorizontal(canvas, label, src_center_row, tgt_center_row, bend_col, ambiguous);
+        try placeEdgeLabelHorizontal(canvas, label, src_center_row, tgt_center_row, bend_col, ambiguous);
     }
 }
 
@@ -833,7 +833,7 @@ fn placeEdgeLabel(
     src_center: usize,
     tgt_center: usize,
     ambiguous: width_mod.AmbiguousWidth,
-) void {
+) RouteError!void {
     const label_w = width_mod.displayWidth(label, ambiguous);
     if (label_w == 0) return;
 
@@ -843,13 +843,13 @@ fn placeEdgeLabel(
     if (src_center == tgt_center) {
         const col_right = src_center + 2;
         if (col_right + label_w <= canvas.cols) {
-            canvas.drawLabel(label_row, col_right, label, ambiguous);
+            try canvas.drawLabel(label_row, col_right, label, ambiguous);
             return;
         }
         const half = label_w / 2;
         const col = if (src_center > half) src_center - half else 0;
         if (col + label_w <= canvas.cols) {
-            canvas.drawLabel(label_row, col, label, ambiguous);
+            try canvas.drawLabel(label_row, col, label, ambiguous);
         }
         return;
     }
@@ -858,7 +858,7 @@ fn placeEdgeLabel(
     const half = label_w / 2;
     const col = if (mid > half) mid - half else 0;
     if (col + label_w <= canvas.cols) {
-        canvas.drawLabel(label_row, col, label, ambiguous);
+        try canvas.drawLabel(label_row, col, label, ambiguous);
     }
 }
 
@@ -869,7 +869,7 @@ fn placeEdgeLabelHorizontal(
     tgt_row: usize,
     bend_col: usize,
     ambiguous: width_mod.AmbiguousWidth,
-) void {
+) RouteError!void {
     const label_w = width_mod.displayWidth(label, ambiguous);
     if (label_w == 0) return;
 
@@ -882,7 +882,7 @@ fn placeEdgeLabelHorizontal(
     const label_col = if (bend_col > label_w + 1) bend_col - label_w - 1 else 0;
 
     if (label_row < canvas.rows and label_col + label_w <= canvas.cols) {
-        canvas.drawLabel(label_row, label_col, label, ambiguous);
+        try canvas.drawLabel(label_row, label_col, label, ambiguous);
     }
 }
 
@@ -1138,7 +1138,7 @@ test "routeEdgeWithPorts fallback draws a visible edge when A* is blocked" {
     const bottom_center_row = boxTop(&layout, 2);
     const top_center_row = boxTop(&layout, 0) + layout.cell_h - 1;
     try std.testing.expectEqual(
-        @as(?std.ArrayListUnmanaged(SearchKey), null),
+        @as(?std.ArrayList(SearchKey), null),
         try aStarPath(alloc, &layout, canvas_rows, canvas_cols, 2, 0, bottom_center_row, 0, .up, top_center_row, 0),
     );
 

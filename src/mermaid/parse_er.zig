@@ -13,14 +13,14 @@ pub const ParseError = error{
 
 const Parser = struct {
     allocator: std.mem.Allocator,
-    entities: std.ArrayListUnmanaged(BuildingEntity) = .empty,
-    relations: std.ArrayListUnmanaged(types.ErRelation) = .empty,
+    entities: std.ArrayList(BuildingEntity) = .empty,
+    relations: std.ArrayList(types.ErRelation) = .empty,
     interned: std.StringHashMapUnmanaged(types.NodeId) = .empty,
-    owned_strings: std.ArrayListUnmanaged([]u8) = .empty,
+    owned_strings: std.ArrayList([]u8) = .empty,
 
     const BuildingEntity = struct {
         id_text: []const u8,
-        attributes: std.ArrayListUnmanaged(types.ErAttribute) = .empty,
+        attributes: std.ArrayList(types.ErAttribute) = .empty,
     };
 
     fn intern(self: *Parser, id_text: []const u8) ParseError!types.NodeId {
@@ -480,16 +480,16 @@ test "parses attribute with multiple key constraints (PK + FK)" {
     try std.testing.expect(d.entities[0].attributes[1].mark.fk);
 }
 
-test "normalises <br> in relation label to a space" {
+test "preserves <br> in relation label as hard-break markers" {
     var d = try parseSource(std.testing.allocator,
         \\erDiagram
         \\    A ||--|| B : "one<br>per<BR>kind"
     );
     defer d.deinit();
-    try std.testing.expectEqualStrings("one per kind", d.relations[0].label);
+    try std.testing.expectEqualStrings("one\nper\nkind", d.relations[0].label);
 }
 
-test "normalises <br/> in attribute comment" {
+test "preserves <br/> in attribute comment as hard-break markers" {
     var d = try parseSource(std.testing.allocator,
         \\erDiagram
         \\    USER {
@@ -497,7 +497,7 @@ test "normalises <br/> in attribute comment" {
         \\    }
     );
     defer d.deinit();
-    try std.testing.expectEqualStrings("first second", d.entities[0].attributes[0].comment.?);
+    try std.testing.expectEqualStrings("first\nsecond", d.entities[0].attributes[0].comment.?);
 }
 
 test "parses attribute with PK UK combined" {

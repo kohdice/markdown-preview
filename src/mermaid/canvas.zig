@@ -7,6 +7,8 @@ pub const Cell = struct {
     cp: u21 = ' ',
     kind: Kind = .glyph,
     role: ?u8 = null,
+    text_start: usize = 0,
+    text_len: usize = 0,
 
     pub const Kind = enum { glyph, continuation };
 };
@@ -110,6 +112,7 @@ fn flipGlyph(cp: u21) u21 {
 pub const Canvas = struct {
     allocator: std.mem.Allocator,
     cells: []Cell,
+    text_storage: std.ArrayList(u8) = .empty,
     rows: usize,
     cols: usize,
 
@@ -125,6 +128,7 @@ pub const Canvas = struct {
     }
 
     pub fn deinit(self: *Canvas) void {
+        self.text_storage.deinit(self.allocator);
         self.allocator.free(self.cells);
     }
 
@@ -192,31 +196,68 @@ pub const Canvas = struct {
         }
     }
 
-    pub fn drawLabel(self: *Canvas, r: usize, c: usize, text: []const u8, ambiguous: width_mod.AmbiguousWidth) void {
-        var view = std.unicode.Utf8View.init(text) catch return;
-        var it = view.iterator();
+    pub fn drawLabel(self: *Canvas, r: usize, c: usize, text: []const u8, ambiguous: width_mod.AmbiguousWidth) std.mem.Allocator.Error!void {
+        var it = width_mod.DisplayClusterIterator.init(text, ambiguous);
         var col = c;
-        while (it.nextCodepoint()) |cp| {
-            var buf: [4]u8 = undefined;
-            const len = std.unicode.utf8Encode(cp, &buf) catch return;
-            const w = width_mod.displayWidth(buf[0..len], ambiguous);
-            if (w == 0) return;
-            self.drawCodepoint(r, col, cp, ambiguous);
-            col += w;
+        while (it.next()) |cluster| {
+            if (isHardBreak(cluster.bytes)) {
+                try self.drawCluster(r, col, " ", 1, null);
+                col += 1;
+                continue;
+            }
+            if (cluster.width == 0) continue;
+            try self.drawCluster(r, col, cluster.bytes, cluster.width, null);
+            col += cluster.width;
         }
     }
 
-    pub fn drawLabelRole(self: *Canvas, r: usize, c: usize, text: []const u8, role: u8, ambiguous: width_mod.AmbiguousWidth) void {
-        var view = std.unicode.Utf8View.init(text) catch return;
-        var it = view.iterator();
+    pub fn drawLabelRole(self: *Canvas, r: usize, c: usize, text: []const u8, role: u8, ambiguous: width_mod.AmbiguousWidth) std.mem.Allocator.Error!void {
+        var it = width_mod.DisplayClusterIterator.init(text, ambiguous);
         var col = c;
-        while (it.nextCodepoint()) |cp| {
-            var buf: [4]u8 = undefined;
-            const len = std.unicode.utf8Encode(cp, &buf) catch return;
-            const w = width_mod.displayWidth(buf[0..len], ambiguous);
-            if (w == 0) return;
-            self.drawCodepointRole(r, col, cp, role, ambiguous);
-            col += w;
+        while (it.next()) |cluster| {
+            if (isHardBreak(cluster.bytes)) {
+                try self.drawCluster(r, col, " ", 1, role);
+                col += 1;
+                continue;
+            }
+            if (cluster.width == 0) continue;
+            try self.drawCluster(r, col, cluster.bytes, cluster.width, role);
+            col += cluster.width;
+        }
+    }
+
+    fn drawCluster(self: *Canvas, r: usize, c: usize, text: []const u8, cluster_width: usize, role: ?u8) std.mem.Allocator.Error!void {
+        if (r >= self.rows or c >= self.cols or cluster_width == 0) return;
+        if (c + cluster_width > self.cols) return;
+        const decoded = switch (width_mod.nextCodepoint(text, 0)) {
+            .ok => |d| d,
+            .invalid, .incomplete => return,
+        };
+
+        var text_start: usize = 0;
+        var text_len: usize = 0;
+        if (decoded.len != text.len) {
+            text_start = self.text_storage.items.len;
+            try self.text_storage.appendSlice(self.allocator, text);
+            text_len = text.len;
+        }
+
+        const idx = r * self.cols + c;
+        self.cells[idx] = .{
+            .cp = decoded.cp,
+            .kind = .glyph,
+            .role = role,
+            .text_start = text_start,
+            .text_len = text_len,
+        };
+
+        var offset: usize = 1;
+        while (offset < cluster_width) : (offset += 1) {
+            self.cells[idx + offset] = .{
+                .cp = 0,
+                .kind = .continuation,
+                .role = role,
+            };
         }
     }
 
@@ -326,6 +367,10 @@ pub const Canvas = struct {
         }
     }
 };
+
+fn isHardBreak(text: []const u8) bool {
+    return text.len == 1 and text[0] == '\n';
+}
 
 pub fn writeCanvas(
     writer: *std.Io.Writer,
@@ -438,9 +483,7 @@ fn writeRowAnsi(
                     if (effective) |rl| try ansi_mod.writeSgrFg(writer, role_colors[rl], mode);
                     current_role = effective;
                 }
-                var buf: [4]u8 = undefined;
-                const len = std.unicode.utf8Encode(cell.cp, &buf) catch continue;
-                try writer.writeAll(buf[0..len]);
+                try writeCellText(writer, canvas, cell);
             },
             .continuation => {},
         }
@@ -467,13 +510,21 @@ fn writeRow(writer: *std.Io.Writer, canvas: *const Canvas, r: usize, cols: usize
         const cell = canvas.cells[r * canvas.cols + c];
         switch (cell.kind) {
             .glyph => {
-                var buf: [4]u8 = undefined;
-                const len = std.unicode.utf8Encode(cell.cp, &buf) catch continue;
-                try writer.writeAll(buf[0..len]);
+                try writeCellText(writer, canvas, cell);
             },
             .continuation => {},
         }
     }
+}
+
+fn writeCellText(writer: *std.Io.Writer, canvas: *const Canvas, cell: Cell) !void {
+    if (cell.text_len > 0) {
+        try writer.writeAll(canvas.text_storage.items[cell.text_start..][0..cell.text_len]);
+        return;
+    }
+    var buf: [4]u8 = undefined;
+    const len = std.unicode.utf8Encode(cell.cp, &buf) catch return;
+    try writer.writeAll(buf[0..len]);
 }
 
 fn expectCanvasOutput(canvas: *const Canvas, expected: []const u8) !void {
@@ -553,13 +604,90 @@ test "writeCanvasAnsi clips to wrap_width with trailing ellipsis" {
 test "writeCanvas clips over-wide plain rows with trailing ellipsis" {
     var canvas = try Canvas.init(std.testing.allocator, 1, 12);
     defer canvas.deinit();
-    canvas.drawLabel(0, 0, "abcdefghijkl", .narrow);
+    try canvas.drawLabel(0, 0, "abcdefghijkl", .narrow);
 
     var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     try writeCanvas(&sink.writer, &canvas, 5, .narrow);
 
     try std.testing.expectEqualStrings("abcd\u{2026}", sink.writer.buffered());
+}
+
+test "drawLabel preserves zero-width display-cluster content" {
+    var canvas = try Canvas.init(std.testing.allocator, 1, 12);
+    defer canvas.deinit();
+    try canvas.drawLabel(0, 0, "e\u{0301} \u{2764}\u{FE0F} \u{1F468}\u{200D}\u{1F469}", .narrow);
+
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    try writeCanvas(&sink.writer, &canvas, null, .narrow);
+
+    try std.testing.expectEqualStrings("e\u{0301} \u{2764}\u{FE0F} \u{1F468}\u{200D}\u{1F469}", sink.writer.buffered());
+}
+
+test "drawLabel owns display-cluster bytes" {
+    var canvas = try Canvas.init(std.testing.allocator, 1, 4);
+    defer canvas.deinit();
+
+    var text = [_]u8{ 'e', 0xcc, 0x81 };
+    try canvas.drawLabel(0, 0, text[0..], .narrow);
+    text[0] = 'x';
+
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    try writeCanvas(&sink.writer, &canvas, null, .narrow);
+
+    try std.testing.expectEqualStrings("e\u{0301}", sink.writer.buffered());
+}
+
+test "drawLabel returns OutOfMemory when cluster storage allocation fails" {
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{
+        .fail_index = 1,
+        .resize_fail_index = 0,
+    });
+    var canvas = try Canvas.init(failing.allocator(), 1, 4);
+    defer canvas.deinit();
+
+    try std.testing.expectError(error.OutOfMemory, canvas.drawLabel(0, 0, "e\u{0301}", .narrow));
+}
+
+test "drawLabel renders hard breaks as inline spaces for single-line callers" {
+    var canvas = try Canvas.init(std.testing.allocator, 1, 16);
+    defer canvas.deinit();
+    try canvas.drawLabel(0, 0, "first\nsecond", .narrow);
+
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    try writeCanvas(&sink.writer, &canvas, null, .narrow);
+
+    try std.testing.expectEqualStrings("first second", sink.writer.buffered());
+}
+
+test "writeCanvas clipping preserves display clusters" {
+    var canvas = try Canvas.init(std.testing.allocator, 1, 5);
+    defer canvas.deinit();
+    try canvas.drawLabel(0, 0, "a\u{1F468}\u{200D}\u{1F469}bc", .narrow);
+
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    try writeCanvas(&sink.writer, &canvas, 4, .narrow);
+
+    try std.testing.expectEqualStrings("a\u{1F468}\u{200D}\u{1F469}\u{2026}", sink.writer.buffered());
+}
+
+test "writeCanvasAnsi clipping preserves display clusters" {
+    var canvas = try Canvas.init(std.testing.allocator, 1, 5);
+    defer canvas.deinit();
+    try canvas.drawLabelRole(0, 0, "a\u{1F468}\u{200D}\u{1F469}bc", 0, .narrow);
+
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    const colors = [_]theme.Rgb{.{ .r = 255, .g = 0, .b = 0 }};
+    try writeCanvasAnsi(&sink.writer, &canvas, 4, .narrow, &colors, .truecolor);
+
+    const out = sink.writer.buffered();
+    try std.testing.expect(std.mem.find(u8, out, "a\u{1F468}\u{200D}\u{1F469}") != null);
+    try std.testing.expect(std.mem.endsWith(u8, out, "\u{2026}"));
 }
 
 test "writeCanvasAnsi clips over-wide rows and resets before ellipsis" {
@@ -712,7 +840,7 @@ test "drawCodepoint places wide char and continuation sentinel" {
 test "drawLabel advances by display width" {
     var canvas = try Canvas.init(std.testing.allocator, 1, 8);
     defer canvas.deinit();
-    canvas.drawLabel(0, 0, "日A", .narrow);
+    try canvas.drawLabel(0, 0, "日A", .narrow);
     try std.testing.expectEqual(@as(u21, '日'), canvas.at(0, 0).cp);
     try std.testing.expectEqual(Cell.Kind.continuation, canvas.at(0, 1).kind);
     try std.testing.expectEqual(@as(u21, 'A'), canvas.at(0, 2).cp);
