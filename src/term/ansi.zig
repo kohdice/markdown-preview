@@ -404,7 +404,58 @@ fn writeSanitized(writer: *std.Io.Writer, text: []const u8) !void {
     if (start < text.len) try writer.writeAll(text[start..]);
 }
 
+fn isCsiParamOrIntermediateByte(byte: u8) bool {
+    return byte >= 0x20 and byte <= 0x3f;
+}
+
+fn isCsiFinalByte(byte: u8) bool {
+    return byte >= 0x40 and byte <= 0x7e;
+}
+
+fn skipCsi(input: []const u8, start: usize) ?usize {
+    if (start + 1 >= input.len) return null;
+    if (input[start] != 0x1b or input[start + 1] != '[') return null;
+
+    var i = start + 2;
+    while (i < input.len and isCsiParamOrIntermediateByte(input[i])) : (i += 1) {}
+    if (i >= input.len or !isCsiFinalByte(input[i])) return null;
+    return i + 1;
+}
+
+/// Return a copy of `input` with ANSI CSI sequences removed.
+pub fn stripCsiAlloc(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+    var output: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer output.deinit(allocator);
+
+    var i: usize = 0;
+    while (i < input.len) {
+        if (skipCsi(input, i)) |after| {
+            i = after;
+            continue;
+        }
+
+        try output.append(allocator, input[i]);
+        i += 1;
+    }
+
+    return output.toOwnedSlice(allocator);
+}
+
 const testing = std.testing;
+
+test "stripCsiAlloc removes complete CSI sequences" {
+    const stripped = try stripCsiAlloc(testing.allocator, "\x1b[31mred\x1b[0m plain");
+    defer testing.allocator.free(stripped);
+
+    try testing.expectEqualStrings("red plain", stripped);
+}
+
+test "stripCsiAlloc preserves incomplete CSI bytes" {
+    const stripped = try stripCsiAlloc(testing.allocator, "plain \x1b[31");
+    defer testing.allocator.free(stripped);
+
+    try testing.expectEqualStrings("plain \x1b[31", stripped);
+}
 
 test "writeSgrFg emits ESC[38;2;R;G;Bm in truecolor mode" {
     var buf: std.Io.Writer.Allocating = .init(testing.allocator);

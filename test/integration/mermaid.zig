@@ -3,6 +3,8 @@ const internals = @import("internals");
 const parse = internals.parse;
 const render = internals.render;
 const helpers = @import("../helpers/render_from_source.zig");
+const mermaid_helpers = @import("../helpers/mermaid_body.zig");
+const canvas_mod = internals.mermaid_canvas;
 
 fn renderDocumentWithRenderer(
     allocator: std.mem.Allocator,
@@ -91,6 +93,41 @@ test "width-only rerender reuses cached Mermaid diagrams" {
     try std.testing.expectEqual(@as(usize, 1), renderer.mermaid_compile_count);
     try std.testing.expect(wide.len > 0);
     try std.testing.expect(narrow.len > 0);
+}
+
+test "width-too-small Mermaid paint keeps compiled diagram cached for later wider render" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\```mermaid
+        \\graph TD
+        \\    A --> B
+        \\```
+        \\
+    ;
+
+    var doc = try parse.parse(allocator, .{ .borrowed = source });
+    defer doc.deinit();
+
+    var renderer = render.Renderer.init(allocator, .{});
+    defer renderer.deinit();
+
+    const narrow = try renderDocumentWithRenderer(allocator, &renderer, &doc, 1);
+    defer allocator.free(narrow);
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(
+        allocator,
+        narrow,
+        "[mermaid: terminal width too small to render diagram]",
+    );
+    try std.testing.expectEqual(@as(usize, 1), renderer.mermaid_cache.count());
+    try std.testing.expectEqual(@as(usize, 1), renderer.mermaid_compile_count);
+
+    const wide = try renderDocumentWithRenderer(allocator, &renderer, &doc, 40);
+    defer allocator.free(wide);
+    try std.testing.expect(std.mem.indexOf(u8, wide, "[mermaid:") == null);
+    try std.testing.expect(std.mem.indexOf(u8, wide, "A") != null);
+    try std.testing.expect(std.mem.indexOf(u8, wide, "B") != null);
+    try std.testing.expectEqual(@as(usize, 1), renderer.mermaid_cache.count());
+    try std.testing.expectEqual(@as(usize, 1), renderer.mermaid_compile_count);
 }
 
 test "mermaid labeled edge renders the label text on the routed path" {
@@ -375,6 +412,158 @@ test "invalid mermaid emits parse-error diagnostic with raw source" {
 
     try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid: parse error]") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "not a real diagram") != null);
+}
+
+test "mermaid body width helper ignores unchanged fence opener width" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\gantt
+        \\    title alpha beta gamma delta
+        \\    section one
+        \\    task one :a, 0, 1d
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 1 });
+    defer fixture.deinit();
+
+    try std.testing.expect(std.mem.startsWith(u8, fixture.plain, "```mermaid"));
+    try std.testing.expect(internals.term.width.displayWidth("```mermaid", .narrow) > 1);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 1, .narrow);
+}
+
+test "no-generated-clipping helper catches clipped canvas output" {
+    var canvas = try canvas_mod.Canvas.init(std.testing.allocator, 1, 16);
+    defer canvas.deinit();
+    canvas.drawLabel(0, 0, "abcdefghijklmnop", .narrow);
+
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    try canvas_mod.writeCanvas(&sink.writer, &canvas, 5, .narrow);
+
+    try std.testing.expectError(
+        error.TestUnexpectedResult,
+        mermaid_helpers.expectNoGeneratedClipping("graph TD\n    A --> B\n", sink.writer.buffered()),
+    );
+}
+
+test "no-generated-clipping helper allows source literal ellipsis" {
+    try mermaid_helpers.expectNoGeneratedClipping("graph TD\n    A[already …]\n", "already …");
+}
+
+test "no-generated-clipping helper catches extra ellipsis with source literal ellipsis" {
+    try std.testing.expectError(
+        error.TestUnexpectedResult,
+        mermaid_helpers.expectNoGeneratedClipping("graph TD\n    A[already …]\n", "already …\nclipped …"),
+    );
+}
+
+test "paint-level width too small uses terminal-width diagnostic instead of parse error" {
+    const allocator = std.testing.allocator;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator,
+        \\graph TD
+        \\    A --> B
+    , .{ .wrap_width = 1 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(
+        allocator,
+        fixture.body,
+        "[mermaid: terminal width too small to render diagram]",
+    );
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid: parse error]");
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 1, .narrow);
+}
+
+test "renderer-local width too small reaches terminal-width diagnostic" {
+    const allocator = std.testing.allocator;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator,
+        \\erDiagram
+        \\    CUSTOMER
+    , .{ .wrap_width = 2 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(
+        allocator,
+        fixture.body,
+        "[mermaid: terminal width too small to render diagram]",
+    );
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid: parse error]");
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 2, .narrow);
+}
+
+test "unsupported mermaid fallback wraps diagnostic and source body rows" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\gantt
+        \\    title alpha beta gamma delta epsilon zeta
+        \\    section one
+        \\    task one :a, 0, 1d
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 12 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(
+        allocator,
+        fixture.body,
+        "[mermaid: diagram type not yet supported by mp]",
+    );
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "gantt") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "epsilon") != null);
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 12, .narrow);
+}
+
+test "unknown mermaid fallback wraps parse diagnostic and source body rows" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\unknownDiagram alpha beta gamma delta epsilon zeta
+        \\    long source line with several words to wrap
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 10 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "[mermaid: parse error]");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "unknownDiagram");
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "several") != null);
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 10, .narrow);
+}
+
+test "implemented mermaid width zero uses width-too-small route without zero-width cap" {
+    const allocator = std.testing.allocator;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator,
+        \\graph TD
+        \\    A --> B
+    , .{ .wrap_width = 0 });
+    defer fixture.deinit();
+
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "[mermaid: terminal width too small to render diagram]") != null);
+    try std.testing.expect(internals.term.width.displayWidth(fixture.body, .narrow) > 0);
+}
+
+test "every implemented mermaid target uses width-too-small fallback at width one" {
+    const allocator = std.testing.allocator;
+    const cases = [_][]const u8{
+        "graph TD\n    A --> B",
+        "stateDiagram-v2\n    [*] --> Idle",
+        "sequenceDiagram\n    Alice->>Bob: hi",
+        "classDiagram\n    class Animal",
+        "erDiagram\n    CUSTOMER",
+        "gitGraph\n    commit",
+        "xychart\n    bar [1, 2, 3]",
+    };
+
+    for (cases) |mermaid_source| {
+        var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 1 });
+        defer fixture.deinit();
+
+        try mermaid_helpers.expectBodyContainsIgnoringWhitespace(
+            allocator,
+            fixture.body,
+            "[mermaid: terminal width too small to render diagram]",
+        );
+        try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+        try mermaid_helpers.expectBodyRowsFit(fixture.body, 1, .narrow);
+    }
 }
 
 test "non-mermaid code fences are byte-identical to their input" {

@@ -8,6 +8,7 @@ const width_mod = @import("../term/width.zig");
 pub const RenderError = error{
     InvalidMermaid,
     UnsupportedFeature,
+    WidthTooSmall,
     OutOfMemory,
     WriteFailed,
 };
@@ -28,6 +29,7 @@ pub fn paintEr(
     if (diagram.entities.len == 0) return;
 
     var layout = computeErLayout(allocator, &diagram, opts.wrap_width, opts.ambiguous_width) catch |err| switch (err) {
+        error.WidthTooSmall => return error.WidthTooSmall,
         error.OutOfMemory => return error.OutOfMemory,
     };
     defer layout.deinit();
@@ -63,7 +65,7 @@ pub fn paintEr(
     canvas_mod.writeCanvas(writer, &canvas, opts.wrap_width, opts.ambiguous_width) catch return error.WriteFailed;
 }
 
-pub const ErLayoutError = error{OutOfMemory};
+pub const ErLayoutError = error{ OutOfMemory, WidthTooSmall };
 
 fn computeErLayout(
     allocator: std.mem.Allocator,
@@ -112,6 +114,9 @@ fn computeErLayout(
     var cols: usize = 0;
     const cell_w = computeRequiredBoxWidth(diagram, ambiguous);
     const cell_h = computeRequiredBoxHeight(diagram);
+    if (wrap_width) |w| {
+        if (w > 1 and w < cell_w) return error.WidthTooSmall;
+    }
     const max_cols_per_row = maxColumnsForWrap(wrap_width, cell_w, n);
     for (level_counts) |c| cols = @max(cols, @min(c, max_cols_per_row));
     if (cols == 0) cols = 1;

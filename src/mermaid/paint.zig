@@ -13,6 +13,7 @@ pub const PaintError = error{
     InvalidMermaid,
     UnsupportedDiagram,
     UnsupportedFeature,
+    WidthTooSmall,
     OutOfMemory,
     WriteFailed,
 };
@@ -75,45 +76,42 @@ fn paintWithTarget(
     diagram_data: anytype,
     opts: PaintOptions,
 ) PaintError!void {
+    try requireMinimumWidth(opts);
+
     return switch (target) {
         .graph => paint_flowchart.paintMermaidGraph(writer, allocator, diagram_data, opts),
         .sequence => paint_sequence.paintSequence(writer, allocator, diagram_data, .{
             .wrap_width = opts.wrap_width,
             .ambiguous_width = opts.ambiguous_width,
-        }) catch |err| mapRenderError(err),
+        }),
         .class_ => paint_class.paintClass(writer, allocator, diagram_data, .{
             .wrap_width = opts.wrap_width,
             .ambiguous_width = opts.ambiguous_width,
             .enable_ansi = opts.enable_ansi,
             .color_mode = opts.color_mode,
-        }) catch |err| mapRenderError(err),
+        }),
         .er => paint_er.paintEr(writer, allocator, diagram_data, .{
             .wrap_width = opts.wrap_width,
             .ambiguous_width = opts.ambiguous_width,
-        }) catch |err| mapRenderError(err),
+        }),
         .git_graph => paint_git.paintGit(writer, allocator, diagram_data, .{
             .wrap_width = opts.wrap_width,
             .ambiguous_width = opts.ambiguous_width,
             .enable_ansi = opts.enable_ansi,
             .color_mode = opts.color_mode,
-        }) catch |err| mapRenderError(err),
+        }),
         .xychart => paint_xychart.paintXyChart(writer, allocator, diagram_data, .{
             .wrap_width = opts.wrap_width,
             .ambiguous_width = opts.ambiguous_width,
             .enable_ansi = opts.enable_ansi,
             .color_mode = opts.color_mode,
-        }) catch |err| mapRenderError(err),
+        }),
     };
 }
 
-fn mapRenderError(err: anyerror) PaintError {
-    return switch (err) {
-        error.InvalidMermaid => error.InvalidMermaid,
-        error.UnsupportedFeature => error.UnsupportedFeature,
-        error.OutOfMemory => error.OutOfMemory,
-        error.WriteFailed => error.WriteFailed,
-        else => error.InvalidMermaid,
-    };
+fn requireMinimumWidth(opts: PaintOptions) PaintError!void {
+    const w = opts.wrap_width orelse return;
+    if (w <= 1) return error.WidthTooSmall;
 }
 
 fn expectPaintProducesOutput(source: []const u8, opts: PaintOptions) !void {
@@ -149,6 +147,19 @@ test "paint flowchart produces non-empty output" {
         .ambiguous_width = .narrow,
     };
     try expectPaintProducesOutput("graph TD\n    A --> B\n", opts);
+}
+
+test "paint preflight returns WidthTooSmall for impossible wrap width" {
+    var diagram = try compile_mod.compile(std.testing.allocator, "graph TD\n    A --> B\n");
+    defer diagram.deinit();
+
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    try std.testing.expectError(error.WidthTooSmall, paint(&sink.writer, std.testing.allocator, &diagram, .{
+        .enable_ansi = false,
+        .wrap_width = 1,
+        .ambiguous_width = .narrow,
+    }));
 }
 
 test "paint sequence produces non-empty output" {

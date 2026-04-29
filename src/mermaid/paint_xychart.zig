@@ -9,6 +9,7 @@ const width_mod = @import("../term/width.zig");
 pub const RenderError = error{
     InvalidMermaid,
     UnsupportedFeature,
+    WidthTooSmall,
     OutOfMemory,
     WriteFailed,
 };
@@ -1828,26 +1829,9 @@ test "vertical xychart with wrap_width=null and enable_ansi=true emits no ellips
 fn expectAllLinesFitAnsi(allocator: std.mem.Allocator, out: []const u8, limit: usize) !void {
     var it = std.mem.splitScalar(u8, out, '\n');
     while (it.next()) |line| {
-        const stripped = try stripAnsi(allocator, line);
+        const stripped = try ansi_mod.stripCsiAlloc(allocator, line);
         defer allocator.free(stripped);
         const w = width_mod.displayWidth(stripped, .narrow);
         try std.testing.expect(w <= limit);
     }
-}
-
-fn stripAnsi(allocator: std.mem.Allocator, line: []const u8) ![]u8 {
-    var buf: std.ArrayList(u8) = .empty;
-    errdefer buf.deinit(allocator);
-    var i: usize = 0;
-    while (i < line.len) {
-        if (line[i] == 0x1b and i + 1 < line.len and line[i + 1] == '[') {
-            i += 2;
-            while (i < line.len and line[i] != 'm') : (i += 1) {}
-            if (i < line.len) i += 1;
-            continue;
-        }
-        try buf.append(allocator, line[i]);
-        i += 1;
-    }
-    return buf.toOwnedSlice(allocator);
 }

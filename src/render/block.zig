@@ -311,7 +311,7 @@ pub const RenderSession = struct {
             if (code_fence.content.len > 0) {
                 try self.writer.writeByte('\n');
                 self.writeMermaidBody(code_fence.content) catch |err| switch (err) {
-                    error.InvalidMermaid, error.UnsupportedDiagram, error.UnsupportedFeature => try self.writeMermaidFallback(code_fence.content, err),
+                    error.InvalidMermaid, error.UnsupportedDiagram, error.UnsupportedFeature, error.WidthTooSmall => try self.writeMermaidFallback(code_fence.content, err),
                     else => return err,
                 };
             }
@@ -357,15 +357,17 @@ pub const RenderSession = struct {
         }
 
         var has_value = false;
-        errdefer {
-            if (self.mermaid_cache.fetchRemove(owned_key)) |removed| {
-                if (has_value) {
-                    var diagram = removed.value.diagram;
-                    diagram.deinit();
+        errdefer |err| {
+            if (!has_value or err != error.WidthTooSmall) {
+                if (self.mermaid_cache.fetchRemove(owned_key)) |removed| {
+                    if (has_value) {
+                        var diagram = removed.value.diagram;
+                        diagram.deinit();
+                    }
+                    self.persistent_allocator.free(removed.key);
+                } else {
+                    self.persistent_allocator.free(owned_key);
                 }
-                self.persistent_allocator.free(removed.key);
-            } else {
-                self.persistent_allocator.free(owned_key);
             }
         }
 
@@ -381,15 +383,37 @@ pub const RenderSession = struct {
 
     fn writeMermaidFallback(self: *RenderSession, content: []const u8, err: mermaid.PaintError) !void {
         const label = switch (err) {
-            error.UnsupportedDiagram => "[mermaid: diagram type not yet supported by mp]\n",
-            error.UnsupportedFeature => "[mermaid: feature not yet supported by mp]\n",
-            error.InvalidMermaid => "[mermaid: parse error]\n",
-            else => "[mermaid: render error]\n",
+            error.UnsupportedDiagram => "[mermaid: diagram type not yet supported by mp]",
+            error.UnsupportedFeature => "[mermaid: feature not yet supported by mp]",
+            error.InvalidMermaid => "[mermaid: parse error]",
+            error.WidthTooSmall => "[mermaid: terminal width too small to render diagram]",
+            else => "[mermaid: render error]",
         };
+        if (self.wrap_width) |wrap_w| {
+            if (wrap_w > 0) {
+                try self.writeWrappedMermaidFallback(label, content, wrap_w);
+                return;
+            }
+        }
         try ansi.writeStyled(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, .{
             .fg = self.ctx.palette.inline_code,
         }, label);
+        try self.writer.writeByte('\n');
         try self.writeFenceBody(content, null);
+    }
+
+    fn writeWrappedMermaidFallback(self: *RenderSession, label: []const u8, content: []const u8, wrap_w: usize) !void {
+        try self.writeWrappedMermaidFallbackText(label, wrap_w);
+        try self.writer.writeByte('\n');
+        try self.writeWrappedMermaidFallbackText(content, wrap_w);
+    }
+
+    fn writeWrappedMermaidFallbackText(self: *RenderSession, text: []const u8, wrap_w: usize) !void {
+        self.wrap_writer.reset(self.writer, wrap_w);
+        try ansi.writeStyled(&self.wrap_writer.writer, self.ctx.enable_ansi, self.ctx.color_mode, .{
+            .fg = self.ctx.palette.inline_code,
+        }, text);
+        try self.wrap_writer.finish();
     }
 
     fn writeFenceBody(self: *RenderSession, content: []const u8, language: ?highlight.Language) !void {

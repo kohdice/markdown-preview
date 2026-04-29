@@ -8,6 +8,7 @@ const width_mod = @import("../term/width.zig");
 pub const RenderError = error{
     InvalidMermaid,
     UnsupportedFeature,
+    WidthTooSmall,
     OutOfMemory,
     WriteFailed,
 };

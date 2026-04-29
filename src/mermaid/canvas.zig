@@ -550,6 +550,36 @@ test "writeCanvasAnsi clips to wrap_width with trailing ellipsis" {
     try std.testing.expect(reset_pos < ellipsis_pos);
 }
 
+test "writeCanvas clips over-wide plain rows with trailing ellipsis" {
+    var canvas = try Canvas.init(std.testing.allocator, 1, 12);
+    defer canvas.deinit();
+    canvas.drawLabel(0, 0, "abcdefghijkl", .narrow);
+
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    try writeCanvas(&sink.writer, &canvas, 5, .narrow);
+
+    try std.testing.expectEqualStrings("abcd\u{2026}", sink.writer.buffered());
+}
+
+test "writeCanvasAnsi clips over-wide rows and resets before ellipsis" {
+    var canvas = try Canvas.init(std.testing.allocator, 1, 12);
+    defer canvas.deinit();
+    var c: usize = 0;
+    while (c < 12) : (c += 1) canvas.drawCodepointRole(0, c, 'R', 0, .narrow);
+
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    const colors = [_]theme.Rgb{.{ .r = 255, .g = 0, .b = 0 }};
+    try writeCanvasAnsi(&sink.writer, &canvas, 5, .narrow, &colors, .truecolor);
+
+    const out = sink.writer.buffered();
+    try std.testing.expect(std.mem.endsWith(u8, out, "\u{2026}"));
+    const reset_pos = std.mem.lastIndexOf(u8, out, ansi_mod.reset_sequence).?;
+    const ellipsis_pos = std.mem.indexOf(u8, out, "\u{2026}").?;
+    try std.testing.expect(reset_pos < ellipsis_pos);
+}
+
 test "writeCanvasAnsi with wrap_width null emits full-width output unchanged" {
     var canvas = try Canvas.init(std.testing.allocator, 1, 40);
     defer canvas.deinit();
@@ -608,6 +638,12 @@ test "writeCanvasAnsi with wrap_width leq ellipsis width does not clip" {
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "\u{2026}") == null);
     try std.testing.expect(std.mem.count(u8, out, "B") == 10);
+
+    var sink_zero: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink_zero.deinit();
+    try writeCanvasAnsi(&sink_zero.writer, &canvas, 0, .narrow, &colors, .truecolor);
+    try std.testing.expect(std.mem.indexOf(u8, sink_zero.writer.buffered(), "\u{2026}") == null);
+    try std.testing.expect(std.mem.count(u8, sink_zero.writer.buffered(), "B") == 10);
 }
 
 test "flipVertical reverses rows and remaps directional glyphs" {
