@@ -1,0 +1,19 @@
+flowchart LR
+    OLD[item_mst]
+    NEW_SALES[sales_item_mst]
+    NEW_PRODUCT[product_mst]
+    NEW_BRAND[brand_mst / brand_detail_mst]
+    CHILDREN[Existing child tables<br/>stock, staff_review, orders, favorites]
+    VIEW[shopify_logiless_csv]
+    DROP[DROP TABLE item_mst]
+
+    OLD -->|split brand data| NEW_BRAND
+    OLD -->|split vintage data| NEW_PRODUCT
+    OLD -->|move all item_cd rows| NEW_SALES
+    NEW_BRAND --> NEW_PRODUCT
+    NEW_PRODUCT --> NEW_SALES
+    CHILDREN -. current FK .-> OLD
+    CHILDREN -->|new FK| NEW_SALES
+    VIEW -. current read .-> OLD
+    VIEW -->|rebuild from new tables| NEW_SALES
+    NEW_SALES --> DROP

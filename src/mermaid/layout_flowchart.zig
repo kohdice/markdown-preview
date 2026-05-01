@@ -1,18 +1,24 @@
 const std = @import("std");
 const types = @import("types.zig");
+const text_layout = @import("text_layout.zig");
+const route_mod = @import("route.zig");
 const width_mod = @import("../term/width.zig");
 
 pub const LayoutError = error{
     OutOfMemory,
+    WidthTooSmall,
 };
 
-const label_cap: usize = 40;
-const ellipsis = "\u{2026}";
 const cell_horizontal_padding: usize = 4;
 const min_cell_width: usize = 6;
 const regular_cell_height: usize = 3;
 const diamond_cell_height: usize = 5;
 const framed_subgraph_outer_padding: usize = 1;
+
+pub const LayoutOptions = struct {
+    wrap_width: ?usize = null,
+    ambiguous_width: width_mod.AmbiguousWidth = .narrow,
+};
 
 /// Subgraph-aware layout: each subgraph group's internal edges determine
 /// its members' local levels independently, so cross-boundary edges do not
@@ -23,7 +29,7 @@ const framed_subgraph_outer_padding: usize = 1;
 pub fn computeLayout(
     allocator: std.mem.Allocator,
     graph: *const types.MermaidGraph,
-    ambiguous: width_mod.AmbiguousWidth,
+    opts: LayoutOptions,
 ) LayoutError!types.Layout {
     const layout_dir = graph.direction.layoutDir();
     const n = graph.nodes.len;
@@ -31,12 +37,11 @@ pub fn computeLayout(
     if (n == 0) {
         const positions = try allocator.alloc(types.GridPos, 0);
         errdefer allocator.free(positions);
-        const labels = try allocator.alloc([]const u8, 0);
+        const labels = try allocator.alloc(types.NodeLabelLayout, 0);
         return .{
             .allocator = allocator,
             .positions = positions,
-            .truncated_labels = labels,
-            .truncation_buf = null,
+            .node_labels = labels,
             .rows = 0,
             .cols = 0,
             .cell_w = 0,
@@ -163,71 +168,501 @@ pub fn computeLayout(
         max_row = @max(max_row, pos.row);
         max_col = @max(max_col, pos.col);
     }
-    const grid_rows = max_row + 1;
-    const grid_cols = max_col + 1;
 
-    const truncated_labels = try allocator.alloc([]const u8, n);
-    errdefer allocator.free(truncated_labels);
+    var grid_rows = max_row + 1;
+    var grid_cols = max_col + 1;
 
-    var truncation_buf: ?[]u8 = null;
-    errdefer if (truncation_buf) |buf| allocator.free(buf);
+    const preliminary_frames = try computeSubgraphFrames(allocator, graph, positions, paths);
+    defer allocator.free(preliminary_frames);
+    const preliminary_outer_pad = baseOuterPad(preliminary_frames);
 
-    var required_bytes: usize = 0;
-    for (graph.nodes) |node| {
-        if (width_mod.displayWidth(node.label, ambiguous) > label_cap) {
-            required_bytes += node.label.len + ellipsis.len;
-        }
-    }
-    if (required_bytes > 0) {
-        truncation_buf = try allocator.alloc(u8, required_bytes);
-    }
+    var node_labels = try computeNodeLabelLayouts(allocator, graph.nodes, null, opts.ambiguous_width);
+    errdefer deinitNodeLabelLayouts(allocator, node_labels);
+    var cell_metrics = computeCellMetrics(graph.nodes, node_labels);
+    var cell_w = cell_metrics.w;
+    var cell_h = cell_metrics.h;
 
-    var buf_pos: usize = 0;
-    for (graph.nodes, 0..) |node, i| {
-        if (width_mod.displayWidth(node.label, ambiguous) <= label_cap) {
-            truncated_labels[i] = node.label;
-        } else {
-            const dest = truncation_buf.?[buf_pos..];
-            const effective = truncateLabel(node.label, dest, ambiguous);
-            truncated_labels[i] = effective;
-            buf_pos += effective.len;
+    if (opts.wrap_width) |w| {
+        if (layoutNeedsLabelWrapping(w, layout_dir, grid_cols, cell_w, preliminary_outer_pad)) {
+            const constrained_budget = try constrainedNodeLabelBudget(w, layout_dir, grid_cols, preliminary_outer_pad);
+            const wrapped_labels = try computeNodeLabelLayouts(allocator, graph.nodes, constrained_budget, opts.ambiguous_width);
+            deinitNodeLabelLayouts(allocator, node_labels);
+            node_labels = wrapped_labels;
+            cell_metrics = computeCellMetrics(graph.nodes, node_labels);
+            cell_w = cell_metrics.w;
+            cell_h = cell_metrics.h;
         }
     }
 
-    var label_w: usize = 0;
-    for (truncated_labels) |label| {
-        label_w = @max(label_w, width_mod.displayWidth(label, ambiguous));
+    if (layout_dir.isHorizontal()) {
+        const banding = try computeHorizontalBanding(
+            allocator,
+            graph,
+            grid_cols,
+            cell_w,
+            preliminary_outer_pad,
+            opts.wrap_width,
+            opts.ambiguous_width,
+        );
+        const label_gap_rows = try horizontalBandLabelGapRows(
+            allocator,
+            graph,
+            cell_h,
+            banding.canvas_cols,
+            opts.ambiguous_width,
+        );
+        applyHorizontalBanding(positions, &grid_rows, &grid_cols, banding.cols_per_band, label_gap_rows);
+    } else {
+        const label_gap_rows = try verticalRouteLabelGapRows(
+            allocator,
+            graph,
+            grid_cols,
+            cell_w,
+            preliminary_outer_pad,
+            cell_h,
+            opts.wrap_width,
+            opts.ambiguous_width,
+        );
+        applyVerticalSpacing(positions, &grid_rows, label_gap_rows);
     }
-    var cell_w: usize = label_w + cell_horizontal_padding;
-    if (cell_w < min_cell_width) cell_w = min_cell_width;
-
-    var any_diamond = false;
-    for (graph.nodes) |node| {
-        if (node.shape == .diamond) {
-            any_diamond = true;
-            break;
-        }
-    }
-    const cell_h: usize = if (any_diamond) diamond_cell_height else regular_cell_height;
 
     const subgraph_frames = try computeSubgraphFrames(allocator, graph, positions, paths);
     errdefer allocator.free(subgraph_frames);
 
-    var max_depth: usize = 0;
-    for (subgraph_frames) |f| max_depth = @max(max_depth, f.depth);
-    const outer_pad: usize = if (subgraph_frames.len > 0) max_depth + framed_subgraph_outer_padding else 0;
+    const base_outer_pad = baseOuterPad(subgraph_frames);
+    var outer_pad = base_outer_pad;
+    outer_pad = try routeLabelAwareOuterPad(
+        allocator,
+        graph,
+        layout_dir,
+        grid_cols,
+        cell_w,
+        outer_pad,
+        opts.wrap_width,
+        opts.ambiguous_width,
+    );
+    const outer_pad_y = try titleAwareOuterPad(
+        allocator,
+        subgraph_frames,
+        cell_w,
+        outer_pad,
+        opts.wrap_width,
+        opts.ambiguous_width,
+    );
 
     return .{
         .allocator = allocator,
         .positions = positions,
-        .truncated_labels = truncated_labels,
-        .truncation_buf = truncation_buf,
+        .node_labels = node_labels,
         .rows = grid_rows,
         .cols = grid_cols,
         .cell_w = cell_w,
         .cell_h = cell_h,
         .subgraph_frames = subgraph_frames,
         .outer_pad = outer_pad,
+        .outer_pad_y = outer_pad_y,
+    };
+}
+
+const CellMetrics = struct {
+    w: usize,
+    h: usize,
+};
+
+fn computeCellMetrics(nodes: []const types.Node, labels: []const types.NodeLabelLayout) CellMetrics {
+    var label_w: usize = 0;
+    var label_lines: usize = 1;
+    for (labels) |label| {
+        label_w = @max(label_w, label.max_line_width);
+        label_lines = @max(label_lines, label.lines.len);
+    }
+
+    var cell_w = label_w + cell_horizontal_padding;
+    if (cell_w < min_cell_width) cell_w = min_cell_width;
+
+    var any_diamond = false;
+    for (nodes) |node| {
+        if (node.shape == .diamond) {
+            any_diamond = true;
+            break;
+        }
+    }
+    var cell_h: usize = if (any_diamond) diamond_cell_height else regular_cell_height;
+    cell_h = @max(cell_h, label_lines + 2);
+
+    return .{ .w = cell_w, .h = cell_h };
+}
+
+fn layoutNeedsLabelWrapping(
+    wrap_width: usize,
+    layout_dir: types.Direction,
+    grid_cols: usize,
+    cell_w: usize,
+    outer_pad: usize,
+) bool {
+    const cols = if (layout_dir.isHorizontal())
+        maxColumnsForWrap(wrap_width, cell_w, grid_cols, outer_pad)
+    else
+        grid_cols;
+    return canvasColsFor(cols, cell_w, outer_pad) > wrap_width;
+}
+
+fn constrainedNodeLabelBudget(
+    wrap_width: usize,
+    layout_dir: types.Direction,
+    grid_cols: usize,
+    outer_pad: usize,
+) LayoutError!?usize {
+    const cols = if (layout_dir.isHorizontal()) 1 else grid_cols;
+    const gutters = if (cols > 1) (cols - 1) * route_mod.gutter_w else 0;
+    const frame_overhead = 2 * outer_pad + gutters;
+    if (wrap_width <= frame_overhead) return error.WidthTooSmall;
+
+    const cell_budget = (wrap_width - frame_overhead) / cols;
+    if (cell_budget < min_cell_width) return error.WidthTooSmall;
+    if (cell_budget <= cell_horizontal_padding) return error.WidthTooSmall;
+    return cell_budget - cell_horizontal_padding;
+}
+
+fn computeNodeLabelLayouts(
+    allocator: std.mem.Allocator,
+    nodes: []const types.Node,
+    max_width: ?usize,
+    ambiguous: width_mod.AmbiguousWidth,
+) LayoutError![]types.NodeLabelLayout {
+    const labels = try allocator.alloc(types.NodeLabelLayout, nodes.len);
+    for (labels) |*label| {
+        label.* = .{ .backing = &.{}, .lines = &.{}, .max_line_width = 0 };
+    }
+    errdefer deinitNodeLabelLayouts(allocator, labels);
+
+    for (nodes, 0..) |node, i| {
+        const layout = text_layout.layoutLabel(allocator, node.label, max_width, ambiguous) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        labels[i] = .{
+            .backing = layout.backing,
+            .lines = layout.lines,
+            .max_line_width = layout.max_line_width,
+        };
+    }
+
+    return labels;
+}
+
+fn deinitNodeLabelLayouts(allocator: std.mem.Allocator, labels: []types.NodeLabelLayout) void {
+    for (labels) |*label| label.deinit(allocator);
+    allocator.free(labels);
+}
+
+const HorizontalBanding = struct {
+    cols_per_band: usize,
+    canvas_cols: usize,
+};
+
+fn computeHorizontalBanding(
+    allocator: std.mem.Allocator,
+    graph: *const types.MermaidGraph,
+    current_cols: usize,
+    cell_w: usize,
+    base_outer_pad: usize,
+    wrap_width: ?usize,
+    ambiguous: width_mod.AmbiguousWidth,
+) LayoutError!HorizontalBanding {
+    const w = wrap_width orelse return .{
+        .cols_per_band = current_cols,
+        .canvas_cols = canvasColsFor(current_cols, cell_w, base_outer_pad),
+    };
+    if (current_cols <= 1) {
+        const outer_pad = try routeLabelAwareOuterPad(allocator, graph, .left_right, current_cols, cell_w, base_outer_pad, wrap_width, ambiguous);
+        return .{
+            .cols_per_band = @max(current_cols, 1),
+            .canvas_cols = canvasColsFor(@max(current_cols, 1), cell_w, outer_pad),
+        };
+    }
+
+    var cols = current_cols;
+    while (cols > 1) : (cols -= 1) {
+        const outer_pad = try routeLabelAwareOuterPad(allocator, graph, .left_right, cols, cell_w, base_outer_pad, wrap_width, ambiguous);
+        const candidate_cols = canvasColsFor(cols, cell_w, outer_pad);
+        if (candidate_cols > w) continue;
+        if (!try horizontalRouteLabelsFitWithoutBanding(allocator, graph, cols, cell_w, base_outer_pad, w, ambiguous)) continue;
+        return .{
+            .cols_per_band = cols,
+            .canvas_cols = candidate_cols,
+        };
+    }
+
+    const outer_pad = try routeLabelAwareOuterPad(allocator, graph, .left_right, 1, cell_w, base_outer_pad, wrap_width, ambiguous);
+    return .{
+        .cols_per_band = 1,
+        .canvas_cols = canvasColsFor(1, cell_w, outer_pad),
+    };
+}
+
+fn horizontalRouteLabelsFitWithoutBanding(
+    allocator: std.mem.Allocator,
+    graph: *const types.MermaidGraph,
+    cols: usize,
+    cell_w: usize,
+    base_outer_pad: usize,
+    wrap_width: usize,
+    ambiguous: width_mod.AmbiguousWidth,
+) LayoutError!bool {
+    const unpadded_cols = canvasColsFor(cols, cell_w, 0);
+    if (wrap_width < unpadded_cols) return false;
+    const max_pad_that_fits = (wrap_width - unpadded_cols) / 2;
+    if (max_pad_that_fits < base_outer_pad) return false;
+
+    for (graph.edges) |edge| {
+        const label = edge.label orelse continue;
+        if (label.len == 0) continue;
+
+        const choice = try routeLabelOuterPadFor(
+            allocator,
+            label,
+            unpadded_cols,
+            base_outer_pad,
+            max_pad_that_fits,
+            ambiguous,
+        );
+        if (choice.fits_in_outer_pad) continue;
+
+        const canvas_cols = unpadded_cols + 2 * max_pad_that_fits;
+        var label_layout = text_layout.layoutLabel(allocator, label, text_layout.edgeLabelWrapWidth(canvas_cols), ambiguous) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        const line_count = label_layout.lines.len;
+        label_layout.deinit();
+        if (line_count > 1) return false;
+    }
+
+    return true;
+}
+
+fn applyHorizontalBanding(
+    positions: []types.GridPos,
+    grid_rows: *usize,
+    grid_cols: *usize,
+    cols_per_band: usize,
+    extra_rows_between_bands: usize,
+) void {
+    if (positions.len == 0 or grid_cols.* == 0) return;
+    if (cols_per_band >= grid_cols.*) return;
+
+    const original_rows = grid_rows.*;
+    const band_row_span = original_rows + extra_rows_between_bands;
+    var max_row: usize = 0;
+    var max_col: usize = 0;
+    for (positions) |*pos| {
+        const band = pos.col / cols_per_band;
+        pos.row = band * band_row_span + pos.row;
+        pos.col = pos.col % cols_per_band;
+        max_row = @max(max_row, pos.row);
+        max_col = @max(max_col, pos.col);
+    }
+
+    grid_rows.* = max_row + 1;
+    grid_cols.* = max_col + 1;
+}
+
+fn horizontalBandLabelGapRows(
+    allocator: std.mem.Allocator,
+    graph: *const types.MermaidGraph,
+    cell_h: usize,
+    canvas_cols: usize,
+    ambiguous: width_mod.AmbiguousWidth,
+) LayoutError!usize {
+    if (canvas_cols == 0) return 0;
+    var max_lines: usize = 0;
+    for (graph.edges) |edge| {
+        const label = edge.label orelse continue;
+        if (label.len == 0) continue;
+
+        var label_layout = text_layout.layoutLabel(allocator, label, text_layout.edgeLabelWrapWidth(canvas_cols), ambiguous) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        const line_count = label_layout.lines.len;
+        label_layout.deinit();
+        max_lines = @max(max_lines, line_count);
+    }
+    if (max_lines == 0) return 0;
+    return std.math.divCeil(usize, max_lines, cell_h) catch unreachable;
+}
+
+fn applyVerticalSpacing(
+    positions: []types.GridPos,
+    grid_rows: *usize,
+    extra_rows_between_levels: usize,
+) void {
+    if (extra_rows_between_levels == 0 or positions.len == 0) return;
+
+    var max_row: usize = 0;
+    for (positions) |*pos| {
+        pos.row += pos.row * extra_rows_between_levels;
+        max_row = @max(max_row, pos.row);
+    }
+    grid_rows.* = max_row + 1;
+}
+
+fn verticalRouteLabelGapRows(
+    allocator: std.mem.Allocator,
+    graph: *const types.MermaidGraph,
+    grid_cols: usize,
+    cell_w: usize,
+    outer_pad: usize,
+    cell_h: usize,
+    wrap_width: ?usize,
+    ambiguous: width_mod.AmbiguousWidth,
+) LayoutError!usize {
+    const w = wrap_width orelse return 0;
+    if (grid_cols == 0) return 0;
+
+    const current_cols = canvasColsFor(grid_cols, cell_w, outer_pad);
+    var max_lines: usize = 0;
+    for (graph.edges) |edge| {
+        const label = edge.label orelse continue;
+        if (label.len == 0) continue;
+        if (width_mod.displayWidth(label, ambiguous) <= current_cols) continue;
+
+        var label_layout = text_layout.layoutLabel(allocator, label, text_layout.edgeLabelWrapWidth(w), ambiguous) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        const line_count = label_layout.lines.len;
+        label_layout.deinit();
+        max_lines = @max(max_lines, line_count);
+    }
+    if (max_lines <= route_mod.gutter_h) return 0;
+    return std.math.divCeil(usize, max_lines - route_mod.gutter_h, cell_h) catch unreachable;
+}
+
+fn maxColumnsForWrap(wrap_width: usize, cell_w: usize, current_cols: usize, outer_pad: usize) usize {
+    if (current_cols <= 1) return @max(current_cols, 1);
+    var cols = current_cols;
+    while (cols > 1) : (cols -= 1) {
+        if (canvasColsFor(cols, cell_w, outer_pad) <= wrap_width) return cols;
+    }
+    return 1;
+}
+
+fn canvasColsFor(cols: usize, cell_w: usize, outer_pad: usize) usize {
+    if (cols == 0) return 0;
+    return cols * cell_w + (cols - 1) * route_mod.gutter_w + 2 * outer_pad;
+}
+
+fn baseOuterPad(frames: []const types.SubgraphFrame) usize {
+    if (frames.len == 0) return 0;
+    var max_depth: usize = 0;
+    for (frames) |frame| max_depth = @max(max_depth, frame.depth);
+    return max_depth + framed_subgraph_outer_padding;
+}
+
+fn titleAwareOuterPad(
+    allocator: std.mem.Allocator,
+    frames: []const types.SubgraphFrame,
+    cell_w: usize,
+    base_outer_pad: usize,
+    wrap_width: ?usize,
+    ambiguous: width_mod.AmbiguousWidth,
+) LayoutError!usize {
+    if (wrap_width == null or frames.len == 0) return base_outer_pad;
+
+    var required = base_outer_pad;
+    for (frames) |frame| {
+        const title = frame.title orelse continue;
+        if (title.len == 0) continue;
+
+        const pad = if (base_outer_pad > frame.depth) base_outer_pad - frame.depth else 1;
+        const col_span = frame.col_end - frame.col_start + 1;
+        const frame_w = col_span * cell_w + (col_span - 1) * route_mod.gutter_w + 2 * pad;
+        if (frame_w <= 4) return error.WidthTooSmall;
+
+        var title_layout = text_layout.layoutLabel(allocator, title, frame_w - 4, ambiguous) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        const title_lines = title_layout.lines.len;
+        title_layout.deinit();
+        if (title_lines == 0) continue;
+        required = @max(required, frame.depth + title_lines);
+    }
+    return required;
+}
+
+fn routeLabelAwareOuterPad(
+    allocator: std.mem.Allocator,
+    graph: *const types.MermaidGraph,
+    layout_dir: types.Direction,
+    grid_cols: usize,
+    cell_w: usize,
+    base_outer_pad: usize,
+    wrap_width: ?usize,
+    ambiguous: width_mod.AmbiguousWidth,
+) LayoutError!usize {
+    const w = wrap_width orelse return base_outer_pad;
+    if (grid_cols == 0) return base_outer_pad;
+
+    const current_cols = canvasColsFor(grid_cols, cell_w, base_outer_pad);
+    var required = base_outer_pad;
+    const unpadded_cols = canvasColsFor(grid_cols, cell_w, 0);
+    if (w <= unpadded_cols) return base_outer_pad;
+    const max_pad_that_fits = (w - unpadded_cols) / 2;
+    if (max_pad_that_fits <= base_outer_pad) return base_outer_pad;
+
+    for (graph.edges) |edge| {
+        const label = edge.label orelse continue;
+        const label_w = width_mod.displayWidth(label, ambiguous);
+        const needs_pad = if (layout_dir.isHorizontal())
+            true
+        else
+            label_w > current_cols;
+        if (!needs_pad) continue;
+
+        const pad = try routeLabelOuterPadFor(
+            allocator,
+            label,
+            unpadded_cols,
+            base_outer_pad,
+            max_pad_that_fits,
+            ambiguous,
+        );
+        required = @max(required, pad.pad);
+    }
+
+    return @min(required, max_pad_that_fits);
+}
+
+const RouteLabelPadChoice = struct {
+    pad: usize,
+    fits_in_outer_pad: bool,
+};
+
+fn routeLabelOuterPadFor(
+    allocator: std.mem.Allocator,
+    label: []const u8,
+    unpadded_cols: usize,
+    base_outer_pad: usize,
+    max_pad_that_fits: usize,
+    ambiguous: width_mod.AmbiguousWidth,
+) LayoutError!RouteLabelPadChoice {
+    var best = max_pad_that_fits;
+    var fits_in_outer_pad = false;
+    var pad = base_outer_pad;
+    while (pad <= max_pad_that_fits) : (pad += 1) {
+        const canvas_cols = unpadded_cols + 2 * pad;
+        var label_layout = text_layout.layoutLabel(allocator, label, text_layout.edgeLabelWrapWidth(canvas_cols), ambiguous) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        const line_count = label_layout.lines.len;
+        label_layout.deinit();
+        if (line_count <= pad) {
+            best = pad;
+            fits_in_outer_pad = true;
+            break;
+        }
+    }
+    return .{
+        .pad = best,
+        .fits_in_outer_pad = fits_in_outer_pad,
     };
 }
 
@@ -675,28 +1110,6 @@ fn gridPosFor(direction: types.Direction, level: usize, column: usize, max_level
     };
 }
 
-fn truncateLabel(label: []const u8, dest: []u8, ambiguous: width_mod.AmbiguousWidth) []const u8 {
-    const ellipsis_w = width_mod.displayWidth(ellipsis, ambiguous);
-    const budget = if (label_cap > ellipsis_w) label_cap - ellipsis_w else 0;
-
-    var kept_bytes: usize = 0;
-    var view = std.unicode.Utf8View.init(label) catch {
-        @memcpy(dest[0..ellipsis.len], ellipsis);
-        return dest[0..ellipsis.len];
-    };
-    var it = view.iterator();
-    while (it.nextCodepointSlice()) |cp_slice| {
-        const next_bytes = kept_bytes + cp_slice.len;
-        const next_width = width_mod.displayWidth(label[0..next_bytes], ambiguous);
-        if (next_width > budget) break;
-        kept_bytes = next_bytes;
-    }
-
-    @memcpy(dest[0..kept_bytes], label[0..kept_bytes]);
-    @memcpy(dest[kept_bytes .. kept_bytes + ellipsis.len], ellipsis);
-    return dest[0 .. kept_bytes + ellipsis.len];
-}
-
 fn makeNode(id: types.NodeId, id_text: []const u8, label: []const u8, shape: types.NodeShape) types.Node {
     return .{ .id = id, .id_text = id_text, .label = label, .shape = shape };
 }
@@ -714,6 +1127,14 @@ fn graphFor(allocator: std.mem.Allocator, direction: types.Direction, nodes: []c
     };
 }
 
+fn expectNodeLabelLines(layout: *const types.Layout, node_id: usize, expected: []const []const u8) !void {
+    const label = layout.node_labels[node_id];
+    try std.testing.expectEqual(expected.len, label.lines.len);
+    for (expected, 0..) |line, idx| {
+        try std.testing.expectEqualStrings(line, label.lines[idx].text);
+    }
+}
+
 test "subgraph members occupy a contiguous column band separate from external nodes" {
     const alloc = std.testing.allocator;
     const src =
@@ -729,7 +1150,7 @@ test "subgraph members occupy a contiguous column band separate from external no
     var graph = try parse_flowchart.parseSource(alloc, src);
     defer graph.deinit();
 
-    var layout = try computeLayout(alloc, &graph, .narrow);
+    var layout = try computeLayout(alloc, &graph, .{ .ambiguous_width = .narrow });
     defer layout.deinit();
 
     var id_start: ?types.NodeId = null;
@@ -766,7 +1187,7 @@ test "virtual node composition places external node after subgraph span" {
     );
     defer graph.deinit();
 
-    var layout = try computeLayout(alloc, &graph, .narrow);
+    var layout = try computeLayout(alloc, &graph, .{ .ambiguous_width = .narrow });
     defer layout.deinit();
 
     var id_c: ?types.NodeId = null;
@@ -787,7 +1208,7 @@ test "layout places single node at origin" {
     var graph = try graphFor(alloc, .top_down, &.{makeNode(0, "A", "A", .rect)}, &.{});
     defer graph.deinit();
 
-    var layout = try computeLayout(alloc, &graph, .narrow);
+    var layout = try computeLayout(alloc, &graph, .{ .ambiguous_width = .narrow });
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), layout.positions.len);
@@ -808,7 +1229,7 @@ test "layout TD assigns level as row" {
     var graph = try graphFor(alloc, .top_down, &nodes, &edges);
     defer graph.deinit();
 
-    var layout = try computeLayout(alloc, &graph, .narrow);
+    var layout = try computeLayout(alloc, &graph, .{ .ambiguous_width = .narrow });
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), layout.positions[0].row);
@@ -829,7 +1250,7 @@ test "layout LR assigns level as column" {
     var graph = try graphFor(alloc, .left_right, &nodes, &edges);
     defer graph.deinit();
 
-    var layout = try computeLayout(alloc, &graph, .narrow);
+    var layout = try computeLayout(alloc, &graph, .{ .ambiguous_width = .narrow });
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), layout.positions[0].col);
@@ -850,7 +1271,7 @@ test "layout groups siblings in same level" {
     var graph = try graphFor(alloc, .top_down, &nodes, &edges);
     defer graph.deinit();
 
-    var layout = try computeLayout(alloc, &graph, .narrow);
+    var layout = try computeLayout(alloc, &graph, .{ .ambiguous_width = .narrow });
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), layout.positions[0].row);
@@ -871,7 +1292,7 @@ test "layout handles cycle without hanging and assigns every node a position" {
     var graph = try graphFor(alloc, .top_down, &nodes, &edges);
     defer graph.deinit();
 
-    var layout = try computeLayout(alloc, &graph, .narrow);
+    var layout = try computeLayout(alloc, &graph, .{ .ambiguous_width = .narrow });
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 3), layout.positions.len);
@@ -889,7 +1310,7 @@ test "layout picks cell_h 5 when any node is a diamond" {
     }, &.{makeEdge(0, 1)});
     defer graph.deinit();
 
-    var layout = try computeLayout(alloc, &graph, .narrow);
+    var layout = try computeLayout(alloc, &graph, .{ .ambiguous_width = .narrow });
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 5), layout.cell_h);
@@ -903,7 +1324,7 @@ test "layout picks cell_h 3 when no diamond is present" {
     }, &.{makeEdge(0, 1)});
     defer graph.deinit();
 
-    var layout = try computeLayout(alloc, &graph, .narrow);
+    var layout = try computeLayout(alloc, &graph, .{ .ambiguous_width = .narrow });
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 3), layout.cell_h);
@@ -917,44 +1338,48 @@ test "layout sizes cell_w from max label display width plus padding" {
     }, &.{});
     defer graph.deinit();
 
-    var layout = try computeLayout(alloc, &graph, .narrow);
+    var layout = try computeLayout(alloc, &graph, .{ .ambiguous_width = .narrow });
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 14 + 4), layout.cell_w);
 }
 
-test "layout aliases node.label when display width is within cap" {
+test "layout stores complete node label text when width is unconstrained" {
     const alloc = std.testing.allocator;
     var graph = try graphFor(alloc, .top_down, &.{
         makeNode(0, "A", "short", .rect),
     }, &.{});
     defer graph.deinit();
 
-    var layout = try computeLayout(alloc, &graph, .narrow);
+    var layout = try computeLayout(alloc, &graph, .{ .ambiguous_width = .narrow });
     defer layout.deinit();
 
-    try std.testing.expectEqual(graph.nodes[0].label.ptr, layout.truncated_labels[0].ptr);
-    try std.testing.expectEqual(@as(?[]u8, null), layout.truncation_buf);
+    try expectNodeLabelLines(&layout, 0, &.{"short"});
+    try std.testing.expectEqual(@as(usize, 5), layout.node_labels[0].max_line_width);
 }
 
-test "layout truncates labels exceeding 40 display columns with ellipsis" {
+test "layout wraps overlong node labels without appending an ellipsis" {
     const alloc = std.testing.allocator;
-    const long_label = "0123456789012345678901234567890123456789XYZ";
+    const long_label = "alpha beta gamma delta";
     var graph = try graphFor(alloc, .top_down, &.{
         makeNode(0, "A", long_label, .rect),
     }, &.{});
     defer graph.deinit();
 
-    var layout = try computeLayout(alloc, &graph, .narrow);
+    var layout = try computeLayout(alloc, &graph, .{
+        .wrap_width = 16,
+        .ambiguous_width = .narrow,
+    });
     defer layout.deinit();
 
-    const effective = layout.truncated_labels[0];
-    try std.testing.expect(std.mem.endsWith(u8, effective, ellipsis));
-    try std.testing.expect(width_mod.displayWidth(effective, .narrow) <= label_cap);
-    try std.testing.expect(layout.truncation_buf != null);
+    try expectNodeLabelLines(&layout, 0, &.{ "alpha beta", "gamma delta" });
+    try std.testing.expect(layout.node_labels[0].max_line_width <= 12);
+    for (layout.node_labels[0].lines) |line| {
+        try std.testing.expect(std.mem.find(u8, line.text, "\u{2026}") == null);
+    }
 }
 
-test "layout truncation preserves UTF-8 codepoint boundaries" {
+test "layout wrapping preserves UTF-8 codepoint boundaries" {
     const alloc = std.testing.allocator;
     const long_jp = "日本語日本語日本語日本語日本語日本語日本語日本語日本語";
     var graph = try graphFor(alloc, .top_down, &.{
@@ -962,16 +1387,19 @@ test "layout truncation preserves UTF-8 codepoint boundaries" {
     }, &.{});
     defer graph.deinit();
 
-    var layout = try computeLayout(alloc, &graph, .narrow);
+    var layout = try computeLayout(alloc, &graph, .{
+        .wrap_width = 8,
+        .ambiguous_width = .narrow,
+    });
     defer layout.deinit();
 
-    const effective = layout.truncated_labels[0];
-    try std.testing.expect(std.unicode.utf8ValidateSlice(effective));
-    try std.testing.expect(std.mem.endsWith(u8, effective, ellipsis));
-    try std.testing.expect(width_mod.displayWidth(effective, .narrow) <= label_cap);
+    for (layout.node_labels[0].lines) |line| {
+        try std.testing.expect(std.unicode.utf8ValidateSlice(line.text));
+        try std.testing.expect(line.width <= 4);
+    }
 }
 
-test "layout frees truncation buffer via deinit" {
+test "layout owns wrapped node label buffers through deinit" {
     const alloc = std.testing.allocator;
     const long_label = "0123456789012345678901234567890123456789XYZABC";
     var graph = try graphFor(alloc, .top_down, &.{
@@ -980,8 +1408,9 @@ test "layout frees truncation buffer via deinit" {
     }, &.{makeEdge(0, 1)});
     defer graph.deinit();
 
-    var layout = try computeLayout(alloc, &graph, .narrow);
-    try std.testing.expect(layout.truncation_buf != null);
+    var layout = try computeLayout(alloc, &graph, .{ .ambiguous_width = .narrow });
+    try std.testing.expectEqual(@as(usize, 2), layout.node_labels.len);
+    try std.testing.expect(layout.node_labels[0].backing.len > 0);
     layout.deinit();
 }
 
@@ -993,7 +1422,7 @@ test "layout cell_w accommodates wide ambiguous-width labels" {
     }, &.{});
     defer graph.deinit();
 
-    var wide_layout = try computeLayout(alloc, &graph, .wide);
+    var wide_layout = try computeLayout(alloc, &graph, .{ .ambiguous_width = .wide });
     defer wide_layout.deinit();
 
     const label_w = width_mod.displayWidth(cjk_label, .wide);
@@ -1011,9 +1440,9 @@ test "layout cell_w differs between narrow and wide for EAW=A labels" {
     }, &.{});
     defer graph.deinit();
 
-    var narrow_layout = try computeLayout(alloc, &graph, .narrow);
+    var narrow_layout = try computeLayout(alloc, &graph, .{ .ambiguous_width = .narrow });
     defer narrow_layout.deinit();
-    var wide_layout = try computeLayout(alloc, &graph, .wide);
+    var wide_layout = try computeLayout(alloc, &graph, .{ .ambiguous_width = .wide });
     defer wide_layout.deinit();
 
     try std.testing.expect(wide_layout.cell_w > narrow_layout.cell_w);
@@ -1021,7 +1450,7 @@ test "layout cell_w differs between narrow and wide for EAW=A labels" {
     try std.testing.expect(narrow_layout.cell_w >= 3 + 4);
 }
 
-test "layout truncation uses the same ambiguous_width mode as rendering" {
+test "layout wrapping uses the same ambiguous_width mode as rendering" {
     const alloc = std.testing.allocator;
     const long_jp = "日本語日本語日本語日本語日本語日本語日本語日本語日本語";
     var graph = try graphFor(alloc, .top_down, &.{
@@ -1029,11 +1458,16 @@ test "layout truncation uses the same ambiguous_width mode as rendering" {
     }, &.{});
     defer graph.deinit();
 
-    var wide_layout = try computeLayout(alloc, &graph, .wide);
+    var wide_layout = try computeLayout(alloc, &graph, .{
+        .wrap_width = 12,
+        .ambiguous_width = .wide,
+    });
     defer wide_layout.deinit();
 
-    const effective = wide_layout.truncated_labels[0];
-    try std.testing.expect(width_mod.displayWidth(effective, .wide) <= label_cap);
+    for (wide_layout.node_labels[0].lines) |line| {
+        try std.testing.expect(line.width <= 8);
+        try std.testing.expectEqual(line.width, width_mod.displayWidth(line.text, .wide));
+    }
 }
 
 test "computeLayout returns empty layout for empty graph" {
@@ -1041,7 +1475,7 @@ test "computeLayout returns empty layout for empty graph" {
     var graph = try graphFor(alloc, .top_down, &.{}, &.{});
     defer graph.deinit();
 
-    var layout = try computeLayout(alloc, &graph, .narrow);
+    var layout = try computeLayout(alloc, &graph, .{ .ambiguous_width = .narrow });
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), layout.rows);

@@ -77,12 +77,11 @@ fn computeErLayout(
     if (n == 0) {
         const positions = try allocator.alloc(types.GridPos, 0);
         errdefer allocator.free(positions);
-        const labels = try allocator.alloc([]const u8, 0);
+        const labels = try allocator.alloc(types.NodeLabelLayout, 0);
         return .{
             .allocator = allocator,
             .positions = positions,
-            .truncated_labels = labels,
-            .truncation_buf = null,
+            .node_labels = labels,
             .rows = 0,
             .cols = 0,
             .cell_w = 0,
@@ -147,14 +146,13 @@ fn computeErLayout(
         };
     }
 
-    const truncated_labels = try allocator.alloc([]const u8, 0);
-    errdefer allocator.free(truncated_labels);
+    const node_labels = try allocator.alloc(types.NodeLabelLayout, 0);
+    errdefer allocator.free(node_labels);
 
     return .{
         .allocator = allocator,
         .positions = positions,
-        .truncated_labels = truncated_labels,
-        .truncation_buf = null,
+        .node_labels = node_labels,
         .rows = rows,
         .cols = cols,
         .cell_w = cell_w,
@@ -360,7 +358,7 @@ fn drawRelation(
     const goal_row = tgt_top + tgt_box_h;
     const goal_col = tgt_left + layout.cell_w / 2;
 
-    const endpoints = try route_mod.routeEdgeWithPorts(
+    var route = try route_mod.routeEdgeWithPorts(
         allocator,
         canvas,
         layout,
@@ -374,8 +372,11 @@ fn drawRelation(
         rel.label,
         if (rel.identifying) types.EdgeStyle.arrow else types.EdgeStyle.dotted,
         glyphs,
+        false,
         ambiguous,
     );
+    defer route.deinit(allocator);
+    const endpoints = route.endpoints;
 
     drawCardinality(canvas, start_row, start_col, endpoints.start_dir, rel.left);
     drawCardinality(canvas, goal_row, goal_col, endpoints.end_dir, rel.right);

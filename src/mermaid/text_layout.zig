@@ -3,15 +3,10 @@ const canvas_mod = @import("canvas.zig");
 const types = @import("types.zig");
 const width_mod = @import("../term/width.zig");
 
-pub const LabelLine = struct {
-    text: []const u8,
-    width: usize,
-};
-
 pub const LabelLayout = struct {
     allocator: std.mem.Allocator,
     backing: []u8,
-    lines: []LabelLine,
+    lines: []types.LabelLine,
     max_line_width: usize,
 
     pub fn deinit(self: *LabelLayout) void {
@@ -19,6 +14,11 @@ pub const LabelLayout = struct {
         self.allocator.free(self.lines);
     }
 };
+
+pub fn edgeLabelWrapWidth(canvas_cols: usize) usize {
+    if (canvas_cols <= 8) return canvas_cols;
+    return @max(@as(usize, 6), canvas_cols / 2);
+}
 
 const Range = struct {
     start: usize,
@@ -109,7 +109,7 @@ pub fn layoutLabel(
     const backing = try out.toOwnedSlice(allocator);
     errdefer allocator.free(backing);
 
-    const lines = try allocator.alloc(LabelLine, ranges.items.len);
+    const lines = try allocator.alloc(types.LabelLine, ranges.items.len);
     errdefer allocator.free(lines);
     for (ranges.items, 0..) |range, idx| {
         lines[idx] = .{
@@ -132,14 +132,14 @@ pub fn drawCenteredLabel(
     left: usize,
     height: usize,
     width: usize,
-    layout: *const LabelLayout,
+    lines: []const types.LabelLine,
     ambiguous: width_mod.AmbiguousWidth,
 ) std.mem.Allocator.Error!void {
-    if (height == 0 or width == 0 or layout.lines.len == 0) return;
-    const visible_lines = @min(height, layout.lines.len);
+    if (height == 0 or width == 0 or lines.len == 0) return;
+    const visible_lines = @min(height, lines.len);
     const row_offset = (height - visible_lines) / 2;
 
-    for (layout.lines[0..visible_lines], 0..) |line, idx| {
+    for (lines[0..visible_lines], 0..) |line, idx| {
         const col_offset = if (width > line.width) (width - line.width) / 2 else 0;
         try canvas.drawLabel(top + row_offset + idx, left + col_offset, line.text, ambiguous);
     }
@@ -272,7 +272,7 @@ test "drawCenteredLabel centers multiline labels inside a fixed rectangle" {
     var canvas = try canvas_mod.Canvas.init(allocator, 4, 8);
     defer canvas.deinit();
 
-    try drawCenteredLabel(&canvas, 0, 0, 4, 8, &layout, .narrow);
+    try drawCenteredLabel(&canvas, 0, 0, 4, 8, layout.lines, .narrow);
 
     var sink: std.Io.Writer.Allocating = .init(allocator);
     defer sink.deinit();

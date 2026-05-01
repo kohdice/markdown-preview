@@ -519,6 +519,22 @@ pub const SubgraphFrame = struct {
     representative_node: ?NodeId = null,
 };
 
+pub const LabelLine = struct {
+    text: []const u8,
+    width: usize,
+};
+
+pub const NodeLabelLayout = struct {
+    backing: []u8,
+    lines: []LabelLine,
+    max_line_width: usize,
+
+    pub fn deinit(self: *NodeLabelLayout, allocator: std.mem.Allocator) void {
+        allocator.free(self.backing);
+        allocator.free(self.lines);
+    }
+};
+
 pub const EndpointTarget = union(enum) {
     node: NodeId,
     frame: SubgraphFrame,
@@ -527,14 +543,18 @@ pub const EndpointTarget = union(enum) {
 pub const Layout = struct {
     allocator: std.mem.Allocator,
     positions: []GridPos,
-    truncated_labels: []const []const u8,
-    truncation_buf: ?[]u8,
+    node_labels: []NodeLabelLayout,
     rows: usize,
     cols: usize,
     cell_w: usize,
     cell_h: usize,
     subgraph_frames: []SubgraphFrame = &.{},
     outer_pad: usize = 0,
+    outer_pad_y: ?usize = null,
+
+    pub fn verticalOuterPad(self: *const Layout) usize {
+        return self.outer_pad_y orelse self.outer_pad;
+    }
 
     /// Returns `.frame` when the node is a composite with a rendered frame,
     /// `.node` for ordinary nodes, or `null` for a composite that has no
@@ -552,8 +572,8 @@ pub const Layout = struct {
 
     pub fn deinit(self: *Layout) void {
         self.allocator.free(self.positions);
-        self.allocator.free(self.truncated_labels);
-        if (self.truncation_buf) |buf| self.allocator.free(buf);
+        for (self.node_labels) |*label| label.deinit(self.allocator);
+        self.allocator.free(self.node_labels);
         self.allocator.free(self.subgraph_frames);
     }
 };

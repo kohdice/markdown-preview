@@ -674,6 +674,359 @@ test "mermaid CJK label preserves integrity and invariant" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "►") != null);
 }
 
+test "flowchart hard-break node labels render as centered multiline text" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\graph TD
+        \\    A[first<br/>second<br>third<BR>fourth] --> B
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 18 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "first");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "second");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "third");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "fourth");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 18, .narrow);
+}
+
+test "flowchart overlong node label wraps without generated clipping" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\graph LR
+        \\    A[AlphaBetaGammaDelta] --> B
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 12 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "AlphaBet");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "aGammaDe");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "lta");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 12, .narrow);
+}
+
+test "constrained flowchart LR chain reflows into width-bounded bands" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\flowchart LR
+        \\    A --> B --> C --> D
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 8 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "A");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "B");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "C");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "D");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 8, .narrow);
+}
+
+test "constrained flowchart reports width too small instead of dropping band-crossing edges" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\flowchart LR
+        \\    A --> C
+        \\    B --> C
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 8 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(
+        allocator,
+        fixture.body,
+        "[mermaid: terminal width too small to render diagram]",
+    );
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "A --> C");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "B --> C");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 8, .narrow);
+}
+
+test "constrained graph RL chain keeps normalized LR parity" {
+    const allocator = std.testing.allocator;
+    var lr = try mermaid_helpers.renderFencedDiagram(allocator,
+        \\graph LR
+        \\    A --> B --> C
+    , .{ .wrap_width = 8 });
+    defer lr.deinit();
+    var rl = try mermaid_helpers.renderFencedDiagram(allocator,
+        \\graph RL
+        \\    A --> B --> C
+    , .{ .wrap_width = 8 });
+    defer rl.deinit();
+
+    try std.testing.expectEqualStrings(lr.body, rl.body);
+    try mermaid_helpers.expectBodyRowsFit(rl.body, 8, .narrow);
+}
+
+test "constrained stateDiagram LR reflows without diagnostics" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\stateDiagram-v2
+        \\    direction LR
+        \\    [*] --> Idle
+        \\    Idle --> Active : begin long transition
+        \\    state Active {
+        \\        [*] --> Working
+        \\        Working --> [*] : done
+        \\    }
+        \\    Active --> [*] : finish
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 20 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Active");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Idle");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Working");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "begin");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "long");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "transitio");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "done");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "finish");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "●");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 20, .narrow);
+}
+
+test "top-down graph and state outputs stay unchanged when wrap width is wide" {
+    const allocator = std.testing.allocator;
+
+    const flowchart_source =
+        \\flowchart TD
+        \\    A -->|ready| B
+        \\    B --> C
+    ;
+    var flowchart_null = try mermaid_helpers.renderFencedDiagram(allocator, flowchart_source, .{});
+    defer flowchart_null.deinit();
+    var flowchart_wide = try mermaid_helpers.renderFencedDiagram(allocator, flowchart_source, .{ .wrap_width = 80 });
+    defer flowchart_wide.deinit();
+    try std.testing.expectEqualStrings(flowchart_null.body, flowchart_wide.body);
+
+    const state_source =
+        \\stateDiagram-v2
+        \\    [*] --> Idle
+        \\    Idle --> Working : request
+        \\    Working --> [*]
+    ;
+    var state_null = try mermaid_helpers.renderFencedDiagram(allocator, state_source, .{});
+    defer state_null.deinit();
+    var state_wide = try mermaid_helpers.renderFencedDiagram(allocator, state_source, .{ .wrap_width = 80 });
+    defer state_wide.deinit();
+    try std.testing.expectEqualStrings(state_null.body, state_wide.body);
+}
+
+test "flowchart banding preserves route labels and edge styles" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\flowchart LR
+        \\    item_mst -->|current FK| sales_item_mst
+        \\    sales_item_mst -->|split brand data| product_mst
+        \\    product_mst -.-> brand_mst
+        \\    brand_mst -->|rebuild from new tables| brand_detail_mst
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 20 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "item_mst");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "sales_item_mst");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "product_mst");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "brand_mst");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "brand_detail_mst");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "current FK");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "split brand data");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "rebuild");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "from new");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "tables");
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try std.testing.expect(std.mem.find(u8, fixture.body, "╌") != null or std.mem.find(u8, fixture.body, "╎") != null);
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 20, .narrow);
+}
+
+test "flowchart banding keeps deferred route labels from overwriting nodes" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\flowchart LR
+        \\    A -->|long label overwrites route maybe| B
+        \\    B --> C
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 20 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "A");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "B");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "C");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "long label");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "overwrites");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "route");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "maybe");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 20, .narrow);
+}
+
+test "horizontal flowchart wraps long route label without width diagnostic" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\flowchart LR
+        \\    A -->|AlphaBetaGammaDelta| B
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 20 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "AlphaBetaGammaDelta");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 20, .narrow);
+}
+
+test "horizontal flowchart uses planned wrap budget for canvas-width route labels" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\flowchart LR
+        \\    A -->|12345678901234567890| B
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 20 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try std.testing.expect(std.mem.find(u8, fixture.body, "12345678901234567890") == null);
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "12345678901234567890");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 20, .narrow);
+}
+
+test "horizontal flowchart bands when route label needs more rows than side padding" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\flowchart LR
+        \\    A -->|one two three four five six seven eight nine ten eleven twelve| B
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 20 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "one two three four five six seven eight nine ten eleven twelve");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 20, .narrow);
+}
+
+test "design flowchart keeps adjacent route labels separated" {
+    const allocator = std.testing.allocator;
+    const mermaid_source = @embedFile("../fixtures/mermaid_design_flowchart.mmd");
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 20 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "current read");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "split");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "vintage");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "data");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "rebuild");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "from new");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "tables");
+    try std.testing.expect(std.mem.find(u8, fixture.body, "rebuildvintage") == null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "newdata") == null);
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 20, .narrow);
+}
+
+test "top-down flowchart wraps route labels that would otherwise be omitted" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\flowchart TD
+        \\    A -->|AlphaBetaGammaDelta| B
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 12 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "A");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "B");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "AlphaB");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "etaGam");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "maDelt");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "a");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "▼");
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 12, .narrow);
+}
+
+test "top-down flowchart redraws deferred route labels with the planned wrap budget" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\flowchart TD
+        \\    A -->|AlphaBetaGammaDeltaEpsilon| B
+        \\    A --> C
+        \\    A --> D
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 24 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try std.testing.expect(std.mem.find(u8, fixture.body, "AlphaBetaGammaDeltaEpsil") == null);
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "AlphaBetaGam");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "maDeltaEpsil");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "on");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 24, .narrow);
+}
+
+test "top-down flowchart preserves route labels that do not fit the selected path segment" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\flowchart TD
+        \\    A -->|edge label| B
+        \\    A --> C
+        \\    A --> D
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 80 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "edge label");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 80, .narrow);
+}
+
+test "constrained flowchart subgraph title wraps without clipping" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\flowchart TD
+        \\    subgraph Long Name
+        \\        A --> B
+        \\    end
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 14 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Long");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Name");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 14, .narrow);
+}
+
+test "constrained flowchart subgraph title grows vertically without widening the frame" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\flowchart TD
+        \\    subgraph Very Very Very Very Long Name
+        \\        A --> B
+        \\    end
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 14 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try std.testing.expect(std.mem.count(u8, fixture.body, "Very") >= 4);
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Long");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Name");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 14, .narrow);
+}
+
 test "mermaid self-loop does not hang" {
     const allocator = std.testing.allocator;
     const source =

@@ -213,12 +213,11 @@ fn computeClassLayout(
     if (n == 0) {
         const positions = try allocator.alloc(types.GridPos, 0);
         errdefer allocator.free(positions);
-        const labels = try allocator.alloc([]const u8, 0);
+        const labels = try allocator.alloc(types.NodeLabelLayout, 0);
         return .{
             .allocator = allocator,
             .positions = positions,
-            .truncated_labels = labels,
-            .truncation_buf = null,
+            .node_labels = labels,
             .rows = 0,
             .cols = 0,
             .cell_w = 0,
@@ -256,14 +255,13 @@ fn computeClassLayout(
     for (level_counts) |c| cols = @max(cols, c);
     if (cols == 0) cols = 1;
 
-    const truncated_labels = try allocator.alloc([]const u8, 0);
-    errdefer allocator.free(truncated_labels);
+    const node_labels = try allocator.alloc(types.NodeLabelLayout, 0);
+    errdefer allocator.free(node_labels);
 
     return .{
         .allocator = allocator,
         .positions = positions,
-        .truncated_labels = truncated_labels,
-        .truncation_buf = null,
+        .node_labels = node_labels,
         .rows = max_level + 1,
         .cols = cols,
         .cell_w = computeRequiredBoxWidth(diagram, ambiguous),
@@ -560,7 +558,7 @@ fn drawRelation(
     const goal_row = tgt_top + tgt_box_h;
     const goal_col = tgt_left + layout.cell_w / 2;
 
-    _ = try route_mod.routeEdgeWithPorts(
+    var route = try route_mod.routeEdgeWithPorts(
         allocator,
         canvas,
         layout,
@@ -574,8 +572,10 @@ fn drawRelation(
         rel.label,
         edgeStyleFor(rel.kind),
         glyphs,
+        false,
         ambiguous,
     );
+    defer route.deinit(allocator);
 
     switch (rel.marker_at) {
         .to => replaceArrowHeadAtBottom(canvas, tgt_top, tgt_left, tgt_box_h, layout.cell_w, rel, glyphs),

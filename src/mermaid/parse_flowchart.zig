@@ -1091,7 +1091,7 @@ test "layout exposes subgraph frame bounding box with title" {
     );
     defer graph.deinit();
 
-    var layout = try @import("layout_flowchart.zig").computeLayout(std.testing.allocator, &graph, .narrow);
+    var layout = try @import("layout_flowchart.zig").computeLayout(std.testing.allocator, &graph, .{ .ambiguous_width = .narrow });
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), layout.subgraph_frames.len);
@@ -1112,7 +1112,7 @@ test "subgraph direction LR arranges members horizontally in a TD diagram" {
     );
     defer graph.deinit();
 
-    var layout = try @import("layout_flowchart.zig").computeLayout(std.testing.allocator, &graph, .narrow);
+    var layout = try @import("layout_flowchart.zig").computeLayout(std.testing.allocator, &graph, .{ .ambiguous_width = .narrow });
     defer layout.deinit();
 
     const row_a = layout.positions[0].row;

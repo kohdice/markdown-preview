@@ -35,6 +35,24 @@ pub const EdgeEndpoints = struct {
 
 pub const SearchKey = struct { row: u32, col: u32, dir: Dir4 };
 
+pub const RoutePath = struct {
+    points: []SearchKey = &.{},
+
+    pub fn deinit(self: *RoutePath, allocator: std.mem.Allocator) void {
+        allocator.free(self.points);
+        self.* = .{};
+    }
+};
+
+pub const EdgeRoute = struct {
+    endpoints: EdgeEndpoints,
+    label_path: RoutePath = .{},
+
+    pub fn deinit(self: *EdgeRoute, allocator: std.mem.Allocator) void {
+        self.label_path.deinit(allocator);
+    }
+};
+
 pub fn cellStepW(layout: *const types.Layout) usize {
     return layout.cell_w + gutter_w;
 }
@@ -45,7 +63,7 @@ pub fn cellStepH(layout: *const types.Layout) usize {
 
 pub fn canvasRows(layout: *const types.Layout) usize {
     if (layout.rows == 0) return 0;
-    return layout.rows * layout.cell_h + (layout.rows - 1) * gutter_h + 2 * layout.outer_pad;
+    return layout.rows * layout.cell_h + (layout.rows - 1) * gutter_h + 2 * layout.verticalOuterPad();
 }
 
 pub fn canvasCols(layout: *const types.Layout) usize {
@@ -54,7 +72,7 @@ pub fn canvasCols(layout: *const types.Layout) usize {
 }
 
 pub fn boxTop(layout: *const types.Layout, grid_row: usize) usize {
-    return layout.outer_pad + grid_row * cellStepH(layout);
+    return layout.verticalOuterPad() + grid_row * cellStepH(layout);
 }
 
 pub fn boxLeft(layout: *const types.Layout, grid_col: usize) usize {
@@ -68,9 +86,10 @@ pub fn routeEdge(
     edge: types.Edge,
     direction: types.Direction,
     glyphs: *const canvas_mod.GlyphSet,
+    defer_label_placement: bool,
     ambiguous: width_mod.AmbiguousWidth,
-) RouteError!void {
-    const ports = computePorts(layout, edge, direction) orelse return;
+) RouteError!?EdgeRoute {
+    const ports = computePorts(layout, edge, direction) orelse return null;
 
     const maybe_path = aStarPath(
         allocator,
@@ -90,17 +109,19 @@ pub fn routeEdge(
 
     if (maybe_path) |path_list| {
         var path = path_list;
-        defer path.deinit(allocator);
+        errdefer path.deinit(allocator);
 
         drawAStarPath(canvas, path.items, glyphs, ports.initial_dir, edge.style);
 
-        if (edge.label) |label| {
-            try placeEdgeLabelOnPath(canvas, label, path.items, ambiguous);
+        if (!defer_label_placement) {
+            if (edge.label) |label| {
+                try placeEdgeLabelOnPath(canvas, label, path.items, ambiguous);
+            }
         }
-        return;
+        return try edgeRouteFromPath(allocator, &path, ports.initial_dir, defer_label_placement);
     }
 
-    try routeFallback(canvas, layout, edge, direction, glyphs, ambiguous, edge.style);
+    return try routeFallback(allocator, canvas, layout, edge, direction, glyphs, defer_label_placement, ambiguous, edge.style);
 }
 
 pub fn routeEdgeWithPorts(
@@ -117,8 +138,9 @@ pub fn routeEdgeWithPorts(
     edge_label: ?[]const u8,
     edge_style: types.EdgeStyle,
     glyphs: *const canvas_mod.GlyphSet,
+    defer_label_placement: bool,
     ambiguous: width_mod.AmbiguousWidth,
-) RouteError!EdgeEndpoints {
+) RouteError!EdgeRoute {
     const maybe_path = aStarPath(
         allocator,
         layout,
@@ -137,19 +159,20 @@ pub fn routeEdgeWithPorts(
 
     if (maybe_path) |path_list| {
         var path = path_list;
-        defer path.deinit(allocator);
+        errdefer path.deinit(allocator);
 
         drawAStarPath(canvas, path.items, glyphs, start_dir, edge_style);
 
-        if (edge_label) |label| {
-            try placeEdgeLabelOnPath(canvas, label, path.items, ambiguous);
+        if (!defer_label_placement) {
+            if (edge_label) |label| {
+                try placeEdgeLabelOnPath(canvas, label, path.items, ambiguous);
+            }
         }
 
-        const end_dir = if (path.items.len == 0) start_dir else path.items[path.items.len - 1].dir;
-        return .{ .start_dir = start_dir, .end_dir = end_dir };
+        return try edgeRouteFromPath(allocator, &path, start_dir, defer_label_placement);
     }
 
-    try drawPortFallback(
+    return try drawPortFallback(
         allocator,
         canvas,
         start_row,
@@ -160,10 +183,9 @@ pub fn routeEdgeWithPorts(
         edge_label,
         edge_style,
         glyphs,
+        defer_label_placement,
         ambiguous,
     );
-
-    return .{ .start_dir = start_dir, .end_dir = .up };
 }
 
 fn drawPortFallback(
@@ -177,59 +199,143 @@ fn drawPortFallback(
     edge_label: ?[]const u8,
     edge_style: types.EdgeStyle,
     glyphs: *const canvas_mod.GlyphSet,
+    defer_label_placement: bool,
     ambiguous: width_mod.AmbiguousWidth,
-) RouteError!void {
-    if (start_row >= canvas.rows or start_col >= canvas.cols) return;
-    if (goal_row >= canvas.rows or goal_col >= canvas.cols) return;
-    if (start_dir != .up) return;
-    if (goal_row >= start_row) return;
+) RouteError!EdgeRoute {
+    if (start_row >= canvas.rows or start_col >= canvas.cols) return edgeRouteWithoutPath(start_dir, start_dir);
+    if (goal_row >= canvas.rows or goal_col >= canvas.cols) return edgeRouteWithoutPath(start_dir, start_dir);
 
     var path: std.ArrayList(SearchKey) = .empty;
-    defer path.deinit(allocator);
-
+    errdefer path.deinit(allocator);
     try path.append(allocator, .{
         .row = @intCast(start_row),
         .col = @intCast(start_col),
-        .dir = .up,
+        .dir = start_dir,
     });
 
-    const bend_row = if (start_col == goal_col) goal_row else (start_row + goal_row) / 2;
+    switch (axisOf(start_dir)) {
+        .vertical => {
+            const forward = switch (start_dir) {
+                .up => goal_row < start_row,
+                .down => goal_row > start_row,
+                else => unreachable,
+            };
+            if (!forward) {
+                path.deinit(allocator);
+                return edgeRouteWithoutPath(start_dir, start_dir);
+            }
 
-    var r: usize = start_row;
-    while (r > bend_row) : (r -= 1) {
-        try path.append(allocator, .{
-            .row = @intCast(r - 1),
-            .col = @intCast(start_col),
-            .dir = .up,
-        });
-    }
+            const bend_row = if (start_col == goal_col) goal_row else (start_row + goal_row) / 2;
+            try appendPortVerticalSegment(allocator, &path, start_row, bend_row, start_col, start_dir);
 
-    if (start_col != goal_col) {
-        const horiz_dir: Dir4 = if (goal_col > start_col) .right else .left;
-        var c: usize = start_col;
-        while (c != goal_col) {
-            if (goal_col > start_col) c += 1 else c -= 1;
-            try path.append(allocator, .{
-                .row = @intCast(bend_row),
-                .col = @intCast(c),
-                .dir = horiz_dir,
-            });
-        }
+            if (start_col != goal_col) {
+                const horiz_dir: Dir4 = if (goal_col > start_col) .right else .left;
+                try appendPortHorizontalSegment(allocator, &path, start_col, goal_col, bend_row, horiz_dir);
+                try appendPortVerticalSegment(allocator, &path, bend_row, goal_row, goal_col, start_dir);
+            }
+        },
+        .horizontal => {
+            const forward = switch (start_dir) {
+                .left => goal_col < start_col,
+                .right => goal_col > start_col,
+                else => unreachable,
+            };
+            if (!forward) {
+                path.deinit(allocator);
+                return edgeRouteWithoutPath(start_dir, start_dir);
+            }
 
-        r = bend_row;
-        while (r > goal_row) : (r -= 1) {
-            try path.append(allocator, .{
-                .row = @intCast(r - 1),
-                .col = @intCast(goal_col),
-                .dir = .up,
-            });
-        }
+            const bend_col = if (start_row == goal_row) goal_col else (start_col + goal_col) / 2;
+            try appendPortHorizontalSegment(allocator, &path, start_col, bend_col, start_row, start_dir);
+
+            if (start_row != goal_row) {
+                const vert_dir: Dir4 = if (goal_row > start_row) .down else .up;
+                try appendPortVerticalSegment(allocator, &path, start_row, goal_row, bend_col, vert_dir);
+                try appendPortHorizontalSegment(allocator, &path, bend_col, goal_col, goal_row, start_dir);
+            }
+        },
     }
 
     drawAStarPath(canvas, path.items, glyphs, start_dir, edge_style);
 
-    if (edge_label) |label| {
-        try placeEdgeLabelOnPath(canvas, label, path.items, ambiguous);
+    if (!defer_label_placement) {
+        if (edge_label) |label| {
+            try placeEdgeLabelOnPath(canvas, label, path.items, ambiguous);
+        }
+    }
+
+    return try edgeRouteFromPath(allocator, &path, start_dir, defer_label_placement);
+}
+
+fn appendPortVerticalSegment(
+    allocator: std.mem.Allocator,
+    path: *std.ArrayList(SearchKey),
+    from_row: usize,
+    to_row: usize,
+    col: usize,
+    dir: Dir4,
+) RouteError!void {
+    if (from_row == to_row) return;
+    var r = from_row;
+    while (r != to_row) {
+        if (to_row > from_row) r += 1 else r -= 1;
+        try path.append(allocator, .{
+            .row = @intCast(r),
+            .col = @intCast(col),
+            .dir = dir,
+        });
+    }
+}
+
+fn appendPortHorizontalSegment(
+    allocator: std.mem.Allocator,
+    path: *std.ArrayList(SearchKey),
+    from_col: usize,
+    to_col: usize,
+    row: usize,
+    dir: Dir4,
+) RouteError!void {
+    if (from_col == to_col) return;
+    var c = from_col;
+    while (c != to_col) {
+        if (to_col > from_col) c += 1 else c -= 1;
+        try path.append(allocator, .{
+            .row = @intCast(row),
+            .col = @intCast(c),
+            .dir = dir,
+        });
+    }
+}
+
+fn edgeRouteWithoutPath(start_dir: Dir4, end_dir: Dir4) EdgeRoute {
+    return .{ .endpoints = .{ .start_dir = start_dir, .end_dir = end_dir } };
+}
+
+fn edgeRouteFromPath(
+    allocator: std.mem.Allocator,
+    path: *std.ArrayList(SearchKey),
+    start_dir: Dir4,
+    keep_path: bool,
+) RouteError!EdgeRoute {
+    const end_dir = if (path.items.len == 0) start_dir else path.items[path.items.len - 1].dir;
+    if (keep_path) {
+        return .{
+            .endpoints = .{ .start_dir = start_dir, .end_dir = end_dir },
+            .label_path = .{ .points = try path.toOwnedSlice(allocator) },
+        };
+    }
+    path.deinit(allocator);
+    path.* = .empty;
+    return edgeRouteWithoutPath(start_dir, end_dir);
+}
+
+fn appendPathPoint(path: ?*std.ArrayList(SearchKey), allocator: std.mem.Allocator, row: usize, col: usize, dir: Dir4) RouteError!void {
+    if (path) |p| {
+        try p.append(allocator, .{
+            .row = @intCast(row),
+            .col = @intCast(col),
+            .dir = dir,
+        });
     }
 }
 
@@ -264,11 +370,34 @@ fn computePorts(layout: *const types.Layout, edge: types.Edge, direction: types.
             .goal_col = tgt_w_center,
         },
         .left_right => .{
-            .start_row = src_h_center,
-            .start_col = src_left + layout.cell_w - 1,
-            .initial_dir = .right,
-            .goal_row = tgt_h_center,
-            .goal_col = if (tgt_left == 0) 0 else tgt_left - 1,
+            .start_row = if (tgt_top > src_top and tgt_left <= src_left)
+                src_top + layout.cell_h - 1
+            else if (tgt_top < src_top and tgt_left <= src_left)
+                src_top
+            else
+                src_h_center,
+            .start_col = if (tgt_left <= src_left and tgt_top != src_top)
+                src_w_center
+            else
+                src_left + layout.cell_w - 1,
+            .initial_dir = if (tgt_top > src_top and tgt_left <= src_left)
+                .down
+            else if (tgt_top < src_top and tgt_left <= src_left)
+                .up
+            else
+                .right,
+            .goal_row = if (tgt_top > src_top and tgt_left <= src_left)
+                tgt_top - 1
+            else if (tgt_top < src_top and tgt_left <= src_left)
+                tgt_top + layout.cell_h
+            else
+                tgt_h_center,
+            .goal_col = if (tgt_left <= src_left and tgt_top != src_top)
+                tgt_w_center
+            else if (tgt_left == 0)
+                0
+            else
+                tgt_left - 1,
         },
         else => unreachable,
     };
@@ -323,7 +452,7 @@ pub fn aStarPath(
     start_dir: Dir4,
     goal_row: usize,
     goal_col: usize,
-) RouteError!?std.ArrayList(SearchKey) {
+) error{OutOfMemory}!?std.ArrayList(SearchKey) {
     if (start_row >= canvas_rows_ or start_col >= canvas_cols_) return null;
     if (goal_row >= canvas_rows_ or goal_col >= canvas_cols_) return null;
 
@@ -397,7 +526,7 @@ fn reconstructPath(
     allocator: std.mem.Allocator,
     came_from: std.AutoHashMap(SearchKey, SearchKey),
     end: SearchKey,
-) !std.ArrayList(SearchKey) {
+) error{OutOfMemory}!std.ArrayList(SearchKey) {
     var path: std.ArrayList(SearchKey) = .empty;
     errdefer path.deinit(allocator);
 
@@ -565,6 +694,7 @@ fn placeEdgeLabelOnPath(
         const col = if (mid.col > half) mid.col - half else 0;
         if (col + label_w <= canvas.cols) {
             try canvas.drawLabel(mid.row - 1, col, label, ambiguous);
+            return;
         }
         return;
     }
@@ -582,17 +712,19 @@ fn placeEdgeLabelOnPath(
 }
 
 fn routeFallback(
+    allocator: std.mem.Allocator,
     canvas: *canvas_mod.Canvas,
     layout: *const types.Layout,
     edge: types.Edge,
     direction: types.Direction,
     glyphs: *const canvas_mod.GlyphSet,
+    defer_label_placement: bool,
     ambiguous: width_mod.AmbiguousWidth,
     edge_style: types.EdgeStyle,
-) RouteError!void {
+) RouteError!?EdgeRoute {
     switch (direction) {
-        .top_down => try routeVertical(canvas, layout, edge, glyphs, ambiguous, .down, edge_style),
-        .left_right => try routeHorizontal(canvas, layout, edge, glyphs, ambiguous, .right, edge_style),
+        .top_down => return try routeVertical(allocator, canvas, layout, edge, glyphs, defer_label_placement, ambiguous, .down, edge_style),
+        .left_right => return try routeHorizontal(allocator, canvas, layout, edge, glyphs, defer_label_placement, ambiguous, .right, edge_style),
         else => unreachable,
     }
 }
@@ -601,14 +733,16 @@ const VerticalFlow = enum { down, up };
 const HorizontalFlow = enum { right, left };
 
 fn routeVertical(
+    allocator: std.mem.Allocator,
     canvas: *canvas_mod.Canvas,
     layout: *const types.Layout,
     edge: types.Edge,
     glyphs: *const canvas_mod.GlyphSet,
+    defer_label_placement: bool,
     ambiguous: width_mod.AmbiguousWidth,
     flow: VerticalFlow,
     edge_style: types.EdgeStyle,
-) RouteError!void {
+) RouteError!?EdgeRoute {
     const src_pos = layout.positions[edge.from];
     const tgt_pos = layout.positions[edge.to];
 
@@ -633,7 +767,7 @@ fn routeVertical(
         .down => tgt_edge_row > src_edge_row,
         .up => tgt_edge_row < src_edge_row,
     };
-    if (!forward) return;
+    if (!forward) return null;
 
     const exit_tee = switch (flow) {
         .down => glyphs.tee_t,
@@ -644,8 +778,12 @@ fn routeVertical(
         .up => .up,
     };
     const arrow = endGlyphFor(edge_style, end_dir, glyphs);
+    var path: std.ArrayList(SearchKey) = .empty;
+    errdefer path.deinit(allocator);
+    const path_ptr: ?*std.ArrayList(SearchKey) = if (defer_label_placement) &path else null;
 
     canvas.setGlyph(src_edge_row, src_center, exit_tee);
+    try appendPathPoint(path_ptr, allocator, src_edge_row, src_center, end_dir);
 
     const bend_row = switch (flow) {
         .down => tgt_edge_row - 1,
@@ -654,6 +792,7 @@ fn routeVertical(
 
     if (src_center == tgt_center) {
         drawVerticalShaft(canvas, src_center, src_edge_row, bend_row, glyphs, flow);
+        try appendVerticalPath(path_ptr, allocator, src_center, src_edge_row, bend_row, flow);
         canvas.setGlyph(bend_row, tgt_center, arrow);
     } else {
         const shaft_end: usize = switch (flow) {
@@ -661,31 +800,41 @@ fn routeVertical(
             .up => bend_row + 1,
         };
         drawVerticalShaft(canvas, src_center, src_edge_row, shaft_end, glyphs, flow);
+        try appendVerticalPath(path_ptr, allocator, src_center, src_edge_row, shaft_end, flow);
 
         const corner_at_src = switch (flow) {
             .down => if (tgt_center > src_center) glyphs.corner_bl else glyphs.corner_br,
             .up => if (tgt_center > src_center) glyphs.corner_tl else glyphs.corner_tr,
         };
         canvas.setGlyph(bend_row, src_center, corner_at_src);
+        try appendPathPoint(path_ptr, allocator, bend_row, src_center, end_dir);
 
         drawHorizontalRun(canvas, bend_row, src_center, tgt_center, glyphs);
+        try appendHorizontalRunPath(path_ptr, allocator, bend_row, src_center, tgt_center, if (tgt_center > src_center) .right else .left);
         canvas.setGlyph(bend_row, tgt_center, arrow);
+        try appendPathPoint(path_ptr, allocator, bend_row, tgt_center, end_dir);
     }
 
-    if (edge.label) |label| {
-        try placeEdgeLabel(canvas, label, bend_row, src_center, tgt_center, ambiguous);
+    if (!defer_label_placement) {
+        if (edge.label) |label| {
+            try placeEdgeLabel(canvas, label, bend_row, src_center, tgt_center, ambiguous);
+        }
     }
+
+    return try edgeRouteFromPath(allocator, &path, end_dir, defer_label_placement);
 }
 
 fn routeHorizontal(
+    allocator: std.mem.Allocator,
     canvas: *canvas_mod.Canvas,
     layout: *const types.Layout,
     edge: types.Edge,
     glyphs: *const canvas_mod.GlyphSet,
+    defer_label_placement: bool,
     ambiguous: width_mod.AmbiguousWidth,
     flow: HorizontalFlow,
     edge_style: types.EdgeStyle,
-) RouteError!void {
+) RouteError!?EdgeRoute {
     const src_pos = layout.positions[edge.from];
     const tgt_pos = layout.positions[edge.to];
 
@@ -710,7 +859,7 @@ fn routeHorizontal(
         .right => tgt_edge_col > src_edge_col,
         .left => tgt_edge_col < src_edge_col,
     };
-    if (!forward) return;
+    if (!forward) return null;
 
     const exit_tee = switch (flow) {
         .right => glyphs.tee_l,
@@ -721,8 +870,12 @@ fn routeHorizontal(
         .left => .left,
     };
     const arrow = endGlyphFor(edge_style, end_dir, glyphs);
+    var path: std.ArrayList(SearchKey) = .empty;
+    errdefer path.deinit(allocator);
+    const path_ptr: ?*std.ArrayList(SearchKey) = if (defer_label_placement) &path else null;
 
     canvas.setGlyph(src_center_row, src_edge_col, exit_tee);
+    try appendPathPoint(path_ptr, allocator, src_center_row, src_edge_col, end_dir);
 
     const bend_col = switch (flow) {
         .right => tgt_edge_col - 1,
@@ -731,6 +884,7 @@ fn routeHorizontal(
 
     if (src_center_row == tgt_center_row) {
         drawHorizontalShaft(canvas, src_center_row, src_edge_col, bend_col, glyphs, flow);
+        try appendHorizontalPath(path_ptr, allocator, src_center_row, src_edge_col, bend_col, flow);
         canvas.setGlyph(src_center_row, bend_col, arrow);
     } else {
         const shaft_end: usize = switch (flow) {
@@ -738,20 +892,28 @@ fn routeHorizontal(
             .left => bend_col + 1,
         };
         drawHorizontalShaft(canvas, src_center_row, src_edge_col, shaft_end, glyphs, flow);
+        try appendHorizontalPath(path_ptr, allocator, src_center_row, src_edge_col, shaft_end, flow);
 
         const corner_at_src = switch (flow) {
             .right => if (tgt_center_row > src_center_row) glyphs.corner_tr else glyphs.corner_br,
             .left => if (tgt_center_row > src_center_row) glyphs.corner_tl else glyphs.corner_bl,
         };
         canvas.setGlyph(src_center_row, bend_col, corner_at_src);
+        try appendPathPoint(path_ptr, allocator, src_center_row, bend_col, end_dir);
 
         drawVerticalRun(canvas, bend_col, src_center_row, tgt_center_row, glyphs);
+        try appendVerticalRunPath(path_ptr, allocator, bend_col, src_center_row, tgt_center_row, if (tgt_center_row > src_center_row) .down else .up);
         canvas.setGlyph(tgt_center_row, bend_col, arrow);
+        try appendPathPoint(path_ptr, allocator, tgt_center_row, bend_col, end_dir);
     }
 
-    if (edge.label) |label| {
-        try placeEdgeLabelHorizontal(canvas, label, src_center_row, tgt_center_row, bend_col, ambiguous);
+    if (!defer_label_placement) {
+        if (edge.label) |label| {
+            try placeEdgeLabelHorizontal(canvas, label, src_center_row, tgt_center_row, bend_col, ambiguous);
+        }
     }
+
+    return try edgeRouteFromPath(allocator, &path, end_dir, defer_label_placement);
 }
 
 fn drawVerticalShaft(
@@ -774,6 +936,33 @@ fn drawVerticalShaft(
             var r = start_exclusive - 1;
             while (r >= end_inclusive) {
                 canvas.setGlyph(r, col, glyphs.v_line);
+                if (r == 0) break;
+                r -= 1;
+            }
+        },
+    }
+}
+
+fn appendVerticalPath(
+    path: ?*std.ArrayList(SearchKey),
+    allocator: std.mem.Allocator,
+    col: usize,
+    start_exclusive: usize,
+    end_inclusive: usize,
+    flow: VerticalFlow,
+) RouteError!void {
+    switch (flow) {
+        .down => {
+            var r = start_exclusive + 1;
+            while (r <= end_inclusive) : (r += 1) {
+                try appendPathPoint(path, allocator, r, col, .down);
+            }
+        },
+        .up => {
+            if (start_exclusive == 0) return;
+            var r = start_exclusive - 1;
+            while (r >= end_inclusive) {
+                try appendPathPoint(path, allocator, r, col, .up);
                 if (r == 0) break;
                 r -= 1;
             }
@@ -808,6 +997,33 @@ fn drawHorizontalShaft(
     }
 }
 
+fn appendHorizontalPath(
+    path: ?*std.ArrayList(SearchKey),
+    allocator: std.mem.Allocator,
+    row: usize,
+    start_exclusive: usize,
+    end_inclusive: usize,
+    flow: HorizontalFlow,
+) RouteError!void {
+    switch (flow) {
+        .right => {
+            var c = start_exclusive + 1;
+            while (c <= end_inclusive) : (c += 1) {
+                try appendPathPoint(path, allocator, row, c, .right);
+            }
+        },
+        .left => {
+            if (start_exclusive == 0) return;
+            var c = start_exclusive - 1;
+            while (c >= end_inclusive) {
+                try appendPathPoint(path, allocator, row, c, .left);
+                if (c == 0) break;
+                c -= 1;
+            }
+        },
+    }
+}
+
 fn drawHorizontalRun(canvas: *canvas_mod.Canvas, row: usize, from_col: usize, to_col: usize, glyphs: *const canvas_mod.GlyphSet) void {
     const lo = @min(from_col, to_col);
     const hi = @max(from_col, to_col);
@@ -817,12 +1033,44 @@ fn drawHorizontalRun(canvas: *canvas_mod.Canvas, row: usize, from_col: usize, to
     }
 }
 
+fn appendHorizontalRunPath(
+    path: ?*std.ArrayList(SearchKey),
+    allocator: std.mem.Allocator,
+    row: usize,
+    from_col: usize,
+    to_col: usize,
+    dir: Dir4,
+) RouteError!void {
+    const lo = @min(from_col, to_col);
+    const hi = @max(from_col, to_col);
+    var c = lo + 1;
+    while (c < hi) : (c += 1) {
+        try appendPathPoint(path, allocator, row, c, dir);
+    }
+}
+
 fn drawVerticalRun(canvas: *canvas_mod.Canvas, col: usize, from_row: usize, to_row: usize, glyphs: *const canvas_mod.GlyphSet) void {
     const lo = @min(from_row, to_row);
     const hi = @max(from_row, to_row);
     var r = lo + 1;
     while (r < hi) : (r += 1) {
         canvas.setGlyph(r, col, glyphs.v_line);
+    }
+}
+
+fn appendVerticalRunPath(
+    path: ?*std.ArrayList(SearchKey),
+    allocator: std.mem.Allocator,
+    col: usize,
+    from_row: usize,
+    to_row: usize,
+    dir: Dir4,
+) RouteError!void {
+    const lo = @min(from_row, to_row);
+    const hi = @max(from_row, to_row);
+    var r = lo + 1;
+    while (r < hi) : (r += 1) {
+        try appendPathPoint(path, allocator, r, col, dir);
     }
 }
 
@@ -964,8 +1212,7 @@ test "canvas dimensions for single cell" {
     var layout: types.Layout = .{
         .allocator = std.testing.allocator,
         .positions = &.{},
-        .truncated_labels = &.{},
-        .truncation_buf = null,
+        .node_labels = &.{},
         .rows = 1,
         .cols = 1,
         .cell_w = 6,
@@ -979,8 +1226,7 @@ test "canvas dimensions include gutter between cells" {
     var layout: types.Layout = .{
         .allocator = std.testing.allocator,
         .positions = &.{},
-        .truncated_labels = &.{},
-        .truncation_buf = null,
+        .node_labels = &.{},
         .rows = 2,
         .cols = 3,
         .cell_w = 6,
@@ -1039,8 +1285,7 @@ test "aStarPath returns a straight path when unobstructed" {
     var layout: types.Layout = .{
         .allocator = alloc,
         .positions = &.{},
-        .truncated_labels = &.{},
-        .truncation_buf = null,
+        .node_labels = &.{},
         .rows = 1,
         .cols = 1,
         .cell_w = 1,
@@ -1062,8 +1307,7 @@ test "aStarPath prefers fewer turns on equal-length alternatives" {
     var layout: types.Layout = .{
         .allocator = alloc,
         .positions = &.{},
-        .truncated_labels = &.{},
-        .truncation_buf = null,
+        .node_labels = &.{},
         .rows = 1,
         .cols = 1,
         .cell_w = 1,
@@ -1091,8 +1335,7 @@ test "aStarPath routes around a blocking node" {
     var layout: types.Layout = .{
         .allocator = alloc,
         .positions = positions[0..],
-        .truncated_labels = &.{},
-        .truncation_buf = null,
+        .node_labels = &.{},
         .rows = 1,
         .cols = 3,
         .cell_w = 5,
@@ -1122,8 +1365,7 @@ test "routeEdgeWithPorts fallback draws a visible edge when A* is blocked" {
     var layout: types.Layout = .{
         .allocator = alloc,
         .positions = positions[0..],
-        .truncated_labels = &.{},
-        .truncation_buf = null,
+        .node_labels = &.{},
         .rows = 3,
         .cols = 1,
         .cell_w = 1,
@@ -1156,6 +1398,7 @@ test "routeEdgeWithPorts fallback draws a visible edge when A* is blocked" {
         null,
         .arrow,
         &canvas_mod.GlyphSet.unicode,
+        false,
         .narrow,
     );
 
@@ -1176,8 +1419,7 @@ test "routeEdgeWithPorts fallback bends horizontally when ports differ in column
     var layout: types.Layout = .{
         .allocator = alloc,
         .positions = positions[0..],
-        .truncated_labels = &.{},
-        .truncation_buf = null,
+        .node_labels = &.{},
         .rows = 3,
         .cols = 1,
         .cell_w = 5,
@@ -1206,6 +1448,7 @@ test "routeEdgeWithPorts fallback bends horizontally when ports differ in column
         null,
         .arrow,
         &canvas_mod.GlyphSet.unicode,
+        false,
         .narrow,
     );
 
