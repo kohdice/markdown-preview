@@ -1110,6 +1110,179 @@ test "constrained erDiagram preserves long relationship label between narrow box
     try mermaid_helpers.expectBodyRowsFit(fixture.body, 22, .narrow);
 }
 
+test "constrained classDiagram wraps a single long member inside the class box" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\classDiagram
+        \\    class Customer {
+        \\        +string veryVeryVeryLongMemberName
+        \\    }
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 18 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Customer");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "+");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "veryVeryVeryLo");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "ngMemberName:");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "string");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 18, .narrow);
+}
+
+test "constrained classDiagram reflows same-level classes into additional rows" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\classDiagram
+        \\    class Alpha
+        \\    class Beta
+        \\    class Gamma
+        \\    class Delta
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 18 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Alpha");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Beta");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Gamma");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Delta");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 18, .narrow);
+}
+
+test "constrained classDiagram preserves wrapped relationship label after layout" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\classDiagram
+        \\    Customer --> Order : places a very long relation label
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 22 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Customer");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Order");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "places a");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "very long");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "relation");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "label");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 22, .narrow);
+}
+
+test "constrained classDiagram preserves long relationship label between narrow boxes" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\classDiagram
+        \\    A --> B : very very very very long label
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 22 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "A");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "B");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "very very very very long label");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 22, .narrow);
+}
+
+test "constrained classDiagram preserves wrapped cardinality labels" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\classDiagram
+        \\    Customer "one very long side" --> "many very long orders" Order : has
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 26 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Customer");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Order");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "has");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "one very");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "long side");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "many very");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "long orders");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 26, .narrow);
+}
+
+test "constrained classDiagram namespace grows vertically around wrapped members" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\classDiagram
+        \\    namespace Shapes {
+        \\        class VeryLongCircleClass {
+        \\            +string centerCoordinateName
+        \\        }
+        \\        class VeryLongSquareClass {
+        \\            +string cornerCoordinateName
+        \\        }
+        \\    }
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 22 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Shapes");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "VeryLongCircle");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Class");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "centerCoordina");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "teName: string");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "VeryLongSquare");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "cornerCoordina");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 22, .narrow);
+}
+
+test "constrained classDiagram wraps long namespace title" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\classDiagram
+        \\    namespace VeryLongNamespaceNameForShapes {
+        \\        class Circle
+        \\    }
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 18 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "VeryLong");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "mespace");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Nam");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "eFor");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Shapes");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Circle");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 18, .narrow);
+}
+
+test "constrained classDiagram ANSI spans preserve display clusters in wrapped members" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\classDiagram
+        \\    class Cafe {
+        \\        +string éValue$
+        \\        +draw❤️‍🔥()*
+        \\        +string 顧客識別子
+        \\    }
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .enable_ansi = true, .wrap_width = 16 });
+    defer fixture.deinit();
+
+    try std.testing.expect(std.mem.find(u8, fixture.rendered, "\x1b[4m") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.rendered, "\x1b[3m") != null);
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "éValue:");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "draw❤️‍🔥(): *");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "顧客識別子:");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 16, .narrow);
+}
+
 test "mermaid self-loop does not hang" {
     const allocator = std.testing.allocator;
     const source =
