@@ -1,6 +1,7 @@
 const std = @import("std");
 const types = @import("types.zig");
 const canvas_mod = @import("canvas.zig");
+const text_layout = @import("text_layout.zig");
 const width_mod = @import("../term/width.zig");
 
 pub const RouteError = error{
@@ -53,6 +54,20 @@ pub const EdgeRoute = struct {
     }
 };
 
+pub const ProtectedRect = struct {
+    top: usize,
+    left: usize,
+    height: usize,
+    width: usize,
+};
+
+pub const WrappedLabelAnchor = enum { start, middle, end };
+
+const LabelPlacement = struct {
+    row: usize,
+    col: usize,
+};
+
 pub fn cellStepW(layout: *const types.Layout) usize {
     return layout.cell_w + gutter_w;
 }
@@ -67,8 +82,12 @@ pub fn canvasRows(layout: *const types.Layout) usize {
 }
 
 pub fn canvasCols(layout: *const types.Layout) usize {
-    if (layout.cols == 0) return 0;
-    return layout.cols * layout.cell_w + (layout.cols - 1) * gutter_w + 2 * layout.outer_pad;
+    return canvasColsForGrid(layout.cols, layout.cell_w, layout.outer_pad);
+}
+
+pub fn canvasColsForGrid(cols: usize, cell_w: usize, outer_pad: usize) usize {
+    if (cols == 0) return 0;
+    return cols * cell_w + (cols - 1) * gutter_w + 2 * outer_pad;
 }
 
 pub fn boxTop(layout: *const types.Layout, grid_row: usize) usize {
@@ -711,6 +730,167 @@ fn placeEdgeLabelOnPath(
     }
 }
 
+pub fn placeWrappedLabelOnRouteAnchored(
+    allocator: std.mem.Allocator,
+    canvas: *canvas_mod.Canvas,
+    protected_rects: []const ProtectedRect,
+    path: []const SearchKey,
+    label: []const u8,
+    max_width: usize,
+    ambiguous: width_mod.AmbiguousWidth,
+    glyphs: *const canvas_mod.GlyphSet,
+    anchor: WrappedLabelAnchor,
+) RouteError!bool {
+    if (label.len == 0 or path.len == 0 or max_width == 0) return false;
+
+    var layout = text_layout.layoutLabel(allocator, label, @min(max_width, canvas.cols), ambiguous) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    defer layout.deinit();
+
+    if (layout.lines.len == 0 or layout.max_line_width == 0) return false;
+    if (layout.lines.len > canvas.rows or layout.max_line_width > canvas.cols) return false;
+
+    const anchor_point = routeLabelAnchor(path, anchor);
+    const preferred_row = if (anchor_point.row > layout.lines.len / 2)
+        anchor_point.row - layout.lines.len / 2
+    else
+        0;
+    const preferred_col = if (anchor_point.col > layout.max_line_width / 2)
+        anchor_point.col - layout.max_line_width / 2
+    else
+        0;
+
+    const placement = findWrappedLabelPlacement(
+        canvas,
+        protected_rects,
+        path,
+        layout.lines,
+        layout.max_line_width,
+        preferred_row,
+        preferred_col,
+        glyphs,
+    ) orelse return false;
+
+    for (layout.lines, 0..) |line, idx| {
+        const col = placement.col + (layout.max_line_width - line.width) / 2;
+        try canvas.drawLabel(placement.row + idx, col, line.text, ambiguous);
+    }
+    return true;
+}
+
+fn routeLabelAnchor(path: []const SearchKey, anchor: WrappedLabelAnchor) LabelPlacement {
+    const idx = switch (anchor) {
+        .start => 0,
+        .middle => path.len / 2,
+        .end => path.len - 1,
+    };
+    const point = path[idx];
+    return .{
+        .row = @intCast(point.row),
+        .col = @intCast(point.col),
+    };
+}
+
+fn findWrappedLabelPlacement(
+    canvas: *const canvas_mod.Canvas,
+    protected_rects: []const ProtectedRect,
+    path: []const SearchKey,
+    lines: []const types.LabelLine,
+    max_line_width: usize,
+    preferred_row: usize,
+    preferred_col: usize,
+    glyphs: *const canvas_mod.GlyphSet,
+) ?LabelPlacement {
+    const max_row = canvas.rows - lines.len;
+    const max_col = canvas.cols - max_line_width;
+    const base_row = @min(preferred_row, max_row);
+    const base_col = @min(preferred_col, max_col);
+
+    var best: ?LabelPlacement = null;
+    var best_score: usize = std.math.maxInt(usize);
+
+    for (0..max_row + 1) |row| {
+        for (0..max_col + 1) |col| {
+            const placement: LabelPlacement = .{ .row = row, .col = col };
+            if (!labelPlacementTouchesRoutePath(path, placement, lines.len, max_line_width)) continue;
+            if (!canPlaceWrappedLabel(canvas, protected_rects, lines, max_line_width, placement, glyphs)) continue;
+
+            const row_distance = if (row > base_row) row - base_row else base_row - row;
+            const col_distance = if (col > base_col) col - base_col else base_col - col;
+            const score = row_distance * canvas.cols + col_distance;
+            if (score < best_score) {
+                best = placement;
+                best_score = score;
+            }
+        }
+    }
+
+    return best;
+}
+
+fn canPlaceWrappedLabel(
+    canvas: *const canvas_mod.Canvas,
+    protected_rects: []const ProtectedRect,
+    lines: []const types.LabelLine,
+    max_line_width: usize,
+    placement: LabelPlacement,
+    glyphs: *const canvas_mod.GlyphSet,
+) bool {
+    for (lines, 0..) |line, idx| {
+        const row = placement.row + idx;
+        const col = placement.col + (max_line_width - line.width) / 2;
+        var c = col;
+        while (c < col + line.width) : (c += 1) {
+            if (isProtectedRectCell(protected_rects, row, c)) return false;
+            const cell = canvas.cells[row * canvas.cols + c];
+            if (!isRouteLabelDrawableCell(cell, glyphs)) return false;
+        }
+    }
+    return true;
+}
+
+fn labelPlacementTouchesRoutePath(
+    path: []const SearchKey,
+    placement: LabelPlacement,
+    line_count: usize,
+    max_line_width: usize,
+) bool {
+    if (line_count == 0 or max_line_width == 0) return false;
+
+    const row_min = if (placement.row == 0) 0 else placement.row - 1;
+    const row_max = placement.row + line_count;
+    const col_min = if (placement.col == 0) 0 else placement.col - 1;
+    const col_max = placement.col + max_line_width;
+
+    for (path) |point| {
+        const row: usize = @intCast(point.row);
+        const col: usize = @intCast(point.col);
+        if (row >= row_min and row <= row_max and col >= col_min and col <= col_max) return true;
+    }
+    return false;
+}
+
+fn isProtectedRectCell(rects: []const ProtectedRect, row: usize, col: usize) bool {
+    for (rects) |rect| {
+        if (row >= rect.top and row < rect.top + rect.height and
+            col >= rect.left and col < rect.left + rect.width)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn isRouteLabelDrawableCell(cell: canvas_mod.Cell, glyphs: *const canvas_mod.GlyphSet) bool {
+    if (cell.kind != .glyph) return false;
+    if (cell.cp == ' ') return true;
+    if (cell.cp == glyphs.h_line_dashed or cell.cp == glyphs.v_line_dashed) return true;
+    if (isArrowHead(cell.cp, glyphs)) return false;
+    const own = connectivity(cell.cp, glyphs);
+    return own.u or own.d or own.l or own.r;
+}
+
 fn routeFallback(
     allocator: std.mem.Allocator,
     canvas: *canvas_mod.Canvas,
@@ -1278,6 +1458,44 @@ test "mergeJunctions does not touch non-line glyphs like arrows" {
     try mergeJunctions(alloc, &canvas, &canvas_mod.GlyphSet.unicode);
 
     try std.testing.expectEqual(@as(u21, '▼'), canvas.at(1, 1).cp);
+}
+
+test "placeWrappedLabelOnRouteAnchored prefers requested route end" {
+    const alloc = std.testing.allocator;
+    var canvas = try canvas_mod.Canvas.init(alloc, 3, 12);
+    defer canvas.deinit();
+
+    const path = [_]SearchKey{
+        .{ .row = 1, .col = 1, .dir = .right },
+        .{ .row = 1, .col = 8, .dir = .right },
+    };
+    const glyphs = canvas_mod.GlyphSet.unicode;
+
+    try std.testing.expect(try placeWrappedLabelOnRouteAnchored(
+        alloc,
+        &canvas,
+        &.{},
+        &path,
+        "SRC",
+        3,
+        .narrow,
+        &glyphs,
+        .start,
+    ));
+    try std.testing.expect(try placeWrappedLabelOnRouteAnchored(
+        alloc,
+        &canvas,
+        &.{},
+        &path,
+        "DST",
+        3,
+        .narrow,
+        &glyphs,
+        .end,
+    ));
+
+    try std.testing.expectEqual(@as(u21, 'S'), canvas.at(1, 0).cp);
+    try std.testing.expectEqual(@as(u21, 'D'), canvas.at(1, 7).cp);
 }
 
 test "aStarPath returns a straight path when unobstructed" {
