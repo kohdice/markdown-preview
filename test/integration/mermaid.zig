@@ -1027,6 +1027,89 @@ test "constrained flowchart subgraph title grows vertically without widening the
     try mermaid_helpers.expectBodyRowsFit(fixture.body, 14, .narrow);
 }
 
+test "constrained erDiagram wraps single oversized attribute row without clipping" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\erDiagram
+        \\    CUSTOMER {
+        \\        string very_very_very_long_attribute_name PK
+        \\    }
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 18 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "CUSTOMER");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "PK string");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "very_very_very");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "_long_attribut");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "e_name");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 18, .narrow);
+}
+
+test "constrained erDiagram wraps oversized entity name without dropping characters" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\erDiagram
+        \\    VERY_LONG_CUSTOMER_ENTITY_NAME {
+        \\        string id
+        \\    }
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 18 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "VERY_LONG_CUST");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "OMER_ENTITY_NA");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "ME");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "string id");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 18, .narrow);
+}
+
+test "constrained erDiagram keeps wrapped relationship labels and crow markers" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\erDiagram
+        \\    CUSTOMER ||--o{ ORDER : places a very long relationship label
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 22 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "CUSTOMER");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "ORDER");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "places a");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "very long");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "relationshi");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "p label");
+    try std.testing.expect(std.mem.find(u8, fixture.body, "○") != null or
+        std.mem.find(u8, fixture.body, "╤") != null or
+        std.mem.find(u8, fixture.body, "╪") != null or
+        std.mem.find(u8, fixture.body, "╫") != null or
+        std.mem.find(u8, fixture.body, "╬") != null);
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 22, .narrow);
+}
+
+test "constrained erDiagram preserves long relationship label between narrow boxes" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\erDiagram
+        \\    A ||--|| B : very very very very long label
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 22 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "A");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "B");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "very very very very long label");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 22, .narrow);
+}
+
 test "mermaid self-loop does not hang" {
     const allocator = std.testing.allocator;
     const source =

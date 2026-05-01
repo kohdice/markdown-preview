@@ -3,6 +3,7 @@ const types = @import("types.zig");
 const canvas_mod = @import("canvas.zig");
 const compile_mod = @import("compile.zig");
 const route_mod = @import("route.zig");
+const text_layout = @import("text_layout.zig");
 const width_mod = @import("../term/width.zig");
 
 pub const RenderError = error{
@@ -16,6 +17,35 @@ pub const RenderError = error{
 pub const Options = struct {
     wrap_width: ?usize,
     ambiguous_width: width_mod.AmbiguousWidth,
+};
+
+const er_box_min_width: usize = 6;
+const er_box_side_spacing: usize = 4;
+const er_box_content_offset: usize = 2;
+const er_box_border_columns: usize = 2;
+
+const EntityBoxLayout = struct {
+    name: text_layout.LabelLayout,
+    attributes: []text_layout.LabelLayout,
+    height: usize,
+    max_content_width: usize,
+
+    pub fn deinit(self: *EntityBoxLayout, allocator: std.mem.Allocator) void {
+        self.name.deinit();
+        for (self.attributes) |*attr| attr.deinit();
+        allocator.free(self.attributes);
+    }
+};
+
+const ErLayout = struct {
+    base: types.Layout,
+    entities: []EntityBoxLayout,
+
+    pub fn deinit(self: *ErLayout) void {
+        for (self.entities) |*entity| entity.deinit(self.base.allocator);
+        self.base.allocator.free(self.entities);
+        self.base.deinit();
+    }
 };
 
 pub fn paintEr(
@@ -34,27 +64,33 @@ pub fn paintEr(
     };
     defer layout.deinit();
 
-    if (layout.rows == 0 or layout.cols == 0) return;
+    if (layout.base.rows == 0 or layout.base.cols == 0) return;
 
     const glyphs = canvas_mod.GlyphSet.unicode;
 
-    const canvas_rows = route_mod.canvasRows(&layout);
-    const canvas_cols = route_mod.canvasCols(&layout);
+    const canvas_rows = route_mod.canvasRows(&layout.base);
+    const canvas_cols = route_mod.canvasCols(&layout.base);
     var canvas = canvas_mod.Canvas.init(allocator, canvas_rows, canvas_cols) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
     };
     defer canvas.deinit();
 
-    for (diagram.entities, 0..) |entity, i| {
-        const pos = layout.positions[i];
-        const top = route_mod.boxTop(&layout, pos.row);
-        const left = route_mod.boxLeft(&layout, pos.col);
-        try drawEntityBox(&canvas, top, left, actualBoxHeight(&entity), layout.cell_w, &entity, &glyphs, opts.ambiguous_width);
+    const protected_rects = try erProtectedRects(allocator, &layout);
+    defer allocator.free(protected_rects);
+    const defer_relation_labels = opts.wrap_width != null;
+    const relation_label_wrap_width = @min(text_layout.edgeLabelWrapWidth(opts.wrap_width orelse canvas.cols), canvas.cols);
+
+    for (diagram.entities, 0..) |_, i| {
+        const pos = layout.base.positions[i];
+        const top = route_mod.boxTop(&layout.base, pos.row);
+        const left = route_mod.boxLeft(&layout.base, pos.col);
+        try drawEntityBox(&canvas, top, left, layout.base.cell_w, &layout.entities[i], &glyphs, opts.ambiguous_width);
     }
 
     for (diagram.relations) |rel| {
-        drawRelation(allocator, &canvas, &layout, &diagram, rel, &glyphs, opts.ambiguous_width) catch |err| switch (err) {
+        drawRelation(allocator, &canvas, &layout, protected_rects, rel, &glyphs, defer_relation_labels, relation_label_wrap_width, opts.ambiguous_width) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
+            error.WidthTooSmall => return error.WidthTooSmall,
         };
     }
 
@@ -72,13 +108,15 @@ fn computeErLayout(
     diagram: *const types.ErDiagram,
     wrap_width: ?usize,
     ambiguous: width_mod.AmbiguousWidth,
-) ErLayoutError!types.Layout {
+) ErLayoutError!ErLayout {
     const n = diagram.entities.len;
     if (n == 0) {
         const positions = try allocator.alloc(types.GridPos, 0);
         errdefer allocator.free(positions);
         const labels = try allocator.alloc(types.NodeLabelLayout, 0);
-        return .{
+        errdefer allocator.free(labels);
+        const entity_layouts = try allocator.alloc(EntityBoxLayout, 0);
+        const base: types.Layout = .{
             .allocator = allocator,
             .positions = positions,
             .node_labels = labels,
@@ -86,6 +124,10 @@ fn computeErLayout(
             .cols = 0,
             .cell_w = 0,
             .cell_h = 0,
+        };
+        return .{
+            .base = base,
+            .entities = entity_layouts,
         };
     }
 
@@ -110,15 +152,22 @@ fn computeErLayout(
         level_counts[level] += 1;
     }
 
+    const content_budget = try erContentBudget(wrap_width);
+    const entity_layouts = try computeEntityLayouts(allocator, diagram, content_budget, ambiguous);
+    errdefer deinitEntityLayouts(allocator, entity_layouts);
+
     var cols: usize = 0;
-    const cell_w = computeRequiredBoxWidth(diagram, ambiguous);
-    const cell_h = computeRequiredBoxHeight(diagram);
-    if (wrap_width) |w| {
-        if (w > 1 and w < cell_w) return error.WidthTooSmall;
-    }
+    const cell_w = computeRequiredBoxWidth(entity_layouts);
     const max_cols_per_row = maxColumnsForWrap(wrap_width, cell_w, n);
     for (level_counts) |c| cols = @max(cols, @min(c, max_cols_per_row));
     if (cols == 0) cols = 1;
+
+    const label_wrap_width = if (wrap_width) |w|
+        @min(text_layout.edgeLabelWrapWidth(w), route_mod.canvasColsForGrid(cols, cell_w, 0))
+    else
+        null;
+    var cell_h = computeRequiredBoxHeight(entity_layouts);
+    cell_h += try extraCellHeightForRelationLabels(allocator, diagram, label_wrap_width, ambiguous);
 
     const level_row_starts = try allocator.alloc(usize, max_level + 1);
     defer allocator.free(level_row_starts);
@@ -149,7 +198,7 @@ fn computeErLayout(
     const node_labels = try allocator.alloc(types.NodeLabelLayout, 0);
     errdefer allocator.free(node_labels);
 
-    return .{
+    const base: types.Layout = .{
         .allocator = allocator,
         .positions = positions,
         .node_labels = node_labels,
@@ -158,12 +207,98 @@ fn computeErLayout(
         .cell_w = cell_w,
         .cell_h = cell_h,
     };
+    return .{
+        .base = base,
+        .entities = entity_layouts,
+    };
 }
 
 fn maxColumnsForWrap(wrap_width: ?usize, cell_w: usize, entity_count: usize) usize {
     const w = wrap_width orelse return @max(entity_count, 1);
     if (w <= cell_w) return 1;
     return 1 + (w - cell_w) / (cell_w + route_mod.gutter_w);
+}
+
+fn erContentBudget(wrap_width: ?usize) ErLayoutError!?usize {
+    const w = wrap_width orelse return null;
+    if (w < er_box_min_width) return error.WidthTooSmall;
+    if (w <= er_box_side_spacing) return error.WidthTooSmall;
+    return w - er_box_side_spacing;
+}
+
+fn computeEntityLayouts(
+    allocator: std.mem.Allocator,
+    diagram: *const types.ErDiagram,
+    max_width: ?usize,
+    ambiguous: width_mod.AmbiguousWidth,
+) ErLayoutError![]EntityBoxLayout {
+    const layouts = try allocator.alloc(EntityBoxLayout, diagram.entities.len);
+    var initialized: usize = 0;
+    errdefer {
+        deinitEntityLayoutItems(allocator, layouts[0..initialized]);
+        allocator.free(layouts);
+    }
+
+    for (diagram.entities, 0..) |entity, i| {
+        layouts[i] = try computeEntityLayout(allocator, &entity, max_width, ambiguous);
+        initialized += 1;
+    }
+
+    return layouts;
+}
+
+fn deinitEntityLayoutItems(allocator: std.mem.Allocator, layouts: []EntityBoxLayout) void {
+    for (layouts) |*layout| layout.deinit(allocator);
+}
+
+fn deinitEntityLayouts(allocator: std.mem.Allocator, layouts: []EntityBoxLayout) void {
+    deinitEntityLayoutItems(allocator, layouts);
+    allocator.free(layouts);
+}
+
+fn computeEntityLayout(
+    allocator: std.mem.Allocator,
+    entity: *const types.ErEntity,
+    max_width: ?usize,
+    ambiguous: width_mod.AmbiguousWidth,
+) ErLayoutError!EntityBoxLayout {
+    var name = text_layout.layoutLabel(allocator, entity.id_text, max_width, ambiguous) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    errdefer name.deinit();
+
+    const attributes = try allocator.alloc(text_layout.LabelLayout, entity.attributes.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (attributes[0..initialized]) |*attr| attr.deinit();
+        allocator.free(attributes);
+    }
+
+    var max_content_width = name.max_line_width;
+    var attr_lines: usize = 0;
+    for (entity.attributes, 0..) |attr, i| {
+        const row_text = try formatAttributeRow(allocator, &attr);
+        defer allocator.free(row_text);
+
+        attributes[i] = text_layout.layoutLabel(allocator, row_text, max_width, ambiguous) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        initialized += 1;
+        max_content_width = @max(max_content_width, attributes[i].max_line_width);
+        attr_lines += attributes[i].lines.len;
+    }
+
+    const height = if (attributes.len == 0)
+        @max(@as(usize, 3), 2 + name.lines.len)
+    else
+        2 + name.lines.len + 1 + attr_lines;
+
+    return .{
+        .name = name,
+        .attributes = attributes,
+        .height = height,
+        .max_content_width = max_content_width,
+    };
 }
 
 fn assignErLevels(
@@ -207,39 +342,38 @@ fn assignErLevels(
     }
 }
 
-fn computeRequiredBoxHeight(diagram: *const types.ErDiagram) usize {
+fn computeRequiredBoxHeight(layouts: []const EntityBoxLayout) usize {
     var max_h: usize = 3;
-    for (diagram.entities) |e| max_h = @max(max_h, actualBoxHeight(&e));
+    for (layouts) |layout| max_h = @max(max_h, layout.height);
     return max_h;
 }
 
-fn computeRequiredBoxWidth(diagram: *const types.ErDiagram, ambiguous: width_mod.AmbiguousWidth) usize {
+fn computeRequiredBoxWidth(layouts: []const EntityBoxLayout) usize {
     var max_w: usize = 0;
-    for (diagram.entities) |e| {
-        max_w = @max(max_w, width_mod.displayWidth(e.id_text, ambiguous));
-        for (e.attributes) |attr| {
-            max_w = @max(max_w, attributeRowDisplayWidth(&attr, ambiguous));
-        }
+    for (layouts) |layout| max_w = @max(max_w, layout.max_content_width);
+    return @max(max_w + er_box_side_spacing, er_box_min_width);
+}
+
+fn extraCellHeightForRelationLabels(
+    allocator: std.mem.Allocator,
+    diagram: *const types.ErDiagram,
+    label_wrap_width: ?usize,
+    ambiguous: width_mod.AmbiguousWidth,
+) ErLayoutError!usize {
+    const w = label_wrap_width orelse return 0;
+    var max_lines: usize = 0;
+    for (diagram.relations) |rel| {
+        if (rel.label.len == 0) continue;
+        var label = text_layout.layoutLabel(allocator, rel.label, w, ambiguous) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        const lines = label.lines.len;
+        label.deinit();
+        max_lines = @max(max_lines, lines);
     }
-    return @max(max_w + 4, 6);
-}
-
-fn attributeRowDisplayWidth(attr: *const types.ErAttribute, ambiguous: width_mod.AmbiguousWidth) usize {
-    var w = width_mod.displayWidth(attr.type_text, ambiguous);
-    w += 1;
-    w += width_mod.displayWidth(attr.name, ambiguous);
-    const mw = markTextWidth(attr.mark);
-    if (mw > 0) w += 1 + mw;
-    return w;
-}
-
-fn markTextWidth(mark: types.ErAttributeMark) usize {
-    var count: usize = 0;
-    if (mark.pk) count += 1;
-    if (mark.fk) count += 1;
-    if (mark.uk) count += 1;
-    if (count == 0) return 0;
-    return count * 2 + (count - 1);
+    const drawable_gutter = if (route_mod.gutter_h > 0) route_mod.gutter_h - 1 else 0;
+    if (max_lines <= drawable_gutter) return 0;
+    return max_lines - drawable_gutter;
 }
 
 fn writeMarkText(buf: []u8, mark: types.ErAttributeMark) []const u8 {
@@ -274,32 +408,46 @@ fn writeMarkText(buf: []u8, mark: types.ErAttributeMark) []const u8 {
     return buf[0..len];
 }
 
+fn formatAttributeRow(allocator: std.mem.Allocator, attr: *const types.ErAttribute) ErLayoutError![]u8 {
+    if (!attr.mark.isEmpty()) {
+        var mark_buf: [16]u8 = undefined;
+        const mark = writeMarkText(&mark_buf, attr.mark);
+        return std.fmt.allocPrint(allocator, "{s} {s} {s}", .{ mark, attr.type_text, attr.name });
+    }
+    return std.fmt.allocPrint(allocator, "{s} {s}", .{ attr.type_text, attr.name });
+}
+
 fn drawEntityBox(
     canvas: *canvas_mod.Canvas,
     top: usize,
     left: usize,
-    height: usize,
     width: usize,
-    entity: *const types.ErEntity,
+    layout: *const EntityBoxLayout,
     glyphs: *const canvas_mod.GlyphSet,
     ambiguous: width_mod.AmbiguousWidth,
 ) error{OutOfMemory}!void {
+    const height = layout.height;
     canvas.drawRect(top, left, height, width, glyphs);
 
-    const inner_w = width - 2;
-    const name_w = width_mod.displayWidth(entity.id_text, ambiguous);
-    const name_col_off = if (inner_w > name_w) (inner_w - name_w) / 2 else 0;
-    try canvas.drawLabel(top + 1, left + 1 + name_col_off, entity.id_text, ambiguous);
-
-    if (entity.attributes.len == 0) return;
-
-    drawDivider(canvas, top + 2, left, width, glyphs);
-
-    var row = top + 3;
-    for (entity.attributes) |attr| {
-        if (row + 1 >= top + height) break;
-        try drawAttribute(canvas, row, left, &attr, ambiguous);
+    const inner_w = width - er_box_border_columns;
+    var row = top + 1;
+    for (layout.name.lines) |line| {
+        const name_col_off = if (inner_w > line.width) (inner_w - line.width) / 2 else 0;
+        try canvas.drawLabel(row, left + 1 + name_col_off, line.text, ambiguous);
         row += 1;
+    }
+
+    if (layout.attributes.len == 0) return;
+
+    drawDivider(canvas, row, left, width, glyphs);
+    row += 1;
+
+    for (layout.attributes) |attr_layout| {
+        for (attr_layout.lines) |line| {
+            if (row + 1 >= top + height) break;
+            try canvas.drawLabel(row, left + er_box_content_offset, line.text, ambiguous);
+            row += 1;
+        }
     }
 }
 
@@ -312,56 +460,51 @@ fn drawDivider(canvas: *canvas_mod.Canvas, row: usize, left: usize, width: usize
     canvas.setGlyph(row, left + width - 1, glyphs.tee_r);
 }
 
-fn drawAttribute(canvas: *canvas_mod.Canvas, row: usize, left: usize, attr: *const types.ErAttribute, ambiguous: width_mod.AmbiguousWidth) error{OutOfMemory}!void {
-    var col = left + 2;
-    if (!attr.mark.isEmpty()) {
-        var buf: [16]u8 = undefined;
-        const text = writeMarkText(&buf, attr.mark);
-        try canvas.drawLabel(row, col, text, ambiguous);
-        col += text.len;
-        canvas.setGlyph(row, col, ' ');
-        col += 1;
+fn erProtectedRects(allocator: std.mem.Allocator, layout: *const ErLayout) error{OutOfMemory}![]route_mod.ProtectedRect {
+    const rects = try allocator.alloc(route_mod.ProtectedRect, layout.entities.len);
+    for (layout.entities, 0..) |entity, i| {
+        const pos = layout.base.positions[i];
+        rects[i] = .{
+            .top = route_mod.boxTop(&layout.base, pos.row),
+            .left = route_mod.boxLeft(&layout.base, pos.col),
+            .height = entity.height,
+            .width = layout.base.cell_w,
+        };
     }
-    try canvas.drawLabel(row, col, attr.type_text, ambiguous);
-    col += width_mod.displayWidth(attr.type_text, ambiguous);
-    canvas.setGlyph(row, col, ' ');
-    col += 1;
-    try canvas.drawLabel(row, col, attr.name, ambiguous);
-}
-
-fn actualBoxHeight(entity: *const types.ErEntity) usize {
-    if (entity.attributes.len == 0) return 3;
-    return 4 + entity.attributes.len;
+    return rects;
 }
 
 fn drawRelation(
     allocator: std.mem.Allocator,
     canvas: *canvas_mod.Canvas,
-    layout: *const types.Layout,
-    diagram: *const types.ErDiagram,
+    layout: *const ErLayout,
+    protected_rects: []const route_mod.ProtectedRect,
     rel: types.ErRelation,
     glyphs: *const canvas_mod.GlyphSet,
+    defer_label_placement: bool,
+    label_wrap_width: usize,
     ambiguous: width_mod.AmbiguousWidth,
-) !void {
-    const src_pos = layout.positions[rel.from];
-    const tgt_pos = layout.positions[rel.to];
+) error{ OutOfMemory, WidthTooSmall }!void {
+    const base = &layout.base;
+    const src_pos = base.positions[rel.from];
+    const tgt_pos = base.positions[rel.to];
 
-    const src_top = route_mod.boxTop(layout, src_pos.row);
-    const src_left = route_mod.boxLeft(layout, src_pos.col);
-    const tgt_top = route_mod.boxTop(layout, tgt_pos.row);
-    const tgt_left = route_mod.boxLeft(layout, tgt_pos.col);
+    const src_top = route_mod.boxTop(base, src_pos.row);
+    const src_left = route_mod.boxLeft(base, src_pos.col);
+    const tgt_top = route_mod.boxTop(base, tgt_pos.row);
+    const tgt_left = route_mod.boxLeft(base, tgt_pos.col);
 
-    const tgt_box_h = actualBoxHeight(&diagram.entities[rel.to]);
+    const tgt_box_h = layout.entities[rel.to].height;
 
     const start_row = src_top;
-    const start_col = src_left + layout.cell_w / 2;
+    const start_col = src_left + base.cell_w / 2;
     const goal_row = tgt_top + tgt_box_h;
-    const goal_col = tgt_left + layout.cell_w / 2;
+    const goal_col = tgt_left + base.cell_w / 2;
 
     var route = try route_mod.routeEdgeWithPorts(
         allocator,
         canvas,
-        layout,
+        base,
         rel.from,
         rel.to,
         start_row,
@@ -372,11 +515,26 @@ fn drawRelation(
         rel.label,
         if (rel.identifying) types.EdgeStyle.arrow else types.EdgeStyle.dotted,
         glyphs,
-        false,
+        defer_label_placement,
         ambiguous,
     );
     defer route.deinit(allocator);
     const endpoints = route.endpoints;
+
+    if (defer_label_placement and rel.label.len > 0) {
+        const placed = try route_mod.placeWrappedLabelOnRouteAnchored(
+            allocator,
+            canvas,
+            protected_rects,
+            route.label_path.points,
+            rel.label,
+            label_wrap_width,
+            ambiguous,
+            glyphs,
+            .middle,
+        );
+        if (!placed) return error.WidthTooSmall;
+    }
 
     drawCardinality(canvas, start_row, start_col, endpoints.start_dir, rel.left);
     drawCardinality(canvas, goal_row, goal_col, endpoints.end_dir, rel.right);
@@ -541,6 +699,35 @@ test "paintEr wraps same-level entities to fit wrap_width" {
     }
 }
 
+fn expectComputeEntityLayoutsHandlesAllocationFailures(allocator: std.mem.Allocator) !void {
+    var attrs = [_]types.ErAttribute{
+        .{ .type_text = "string", .name = "very_long_customer_identifier", .mark = .{ .pk = true } },
+        .{ .type_text = "string", .name = "display_name" },
+    };
+    var empty_attrs = [_]types.ErAttribute{};
+    var entities = [_]types.ErEntity{
+        .{ .id = 0, .id_text = "CUSTOMER", .attributes = attrs[0..] },
+        .{ .id = 1, .id_text = "ORDER", .attributes = empty_attrs[0..] },
+    };
+    var relations = [_]types.ErRelation{};
+    var diagram: types.ErDiagram = .{
+        .allocator = allocator,
+        .entities = entities[0..],
+        .relations = relations[0..],
+    };
+
+    const layouts = try computeEntityLayouts(allocator, &diagram, 12, .narrow);
+    defer deinitEntityLayouts(allocator, layouts);
+}
+
+test "computeEntityLayouts cleans up partial layouts on allocation failure" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        expectComputeEntityLayoutsHandlesAllocationFailures,
+        .{},
+    );
+}
+
 test "computeErLayout places single entity at origin with rows=cols=1" {
     const alloc = std.testing.allocator;
     var compiled = try compile_mod.compile(alloc,
@@ -555,11 +742,11 @@ test "computeErLayout places single entity at origin with rows=cols=1" {
     var layout = try computeErLayout(alloc, diagram, null, .narrow);
     defer layout.deinit();
 
-    try std.testing.expectEqual(@as(usize, 1), layout.positions.len);
-    try std.testing.expectEqual(@as(usize, 0), layout.positions[0].row);
-    try std.testing.expectEqual(@as(usize, 0), layout.positions[0].col);
-    try std.testing.expectEqual(@as(usize, 1), layout.rows);
-    try std.testing.expectEqual(@as(usize, 1), layout.cols);
+    try std.testing.expectEqual(@as(usize, 1), layout.base.positions.len);
+    try std.testing.expectEqual(@as(usize, 0), layout.base.positions[0].row);
+    try std.testing.expectEqual(@as(usize, 0), layout.base.positions[0].col);
+    try std.testing.expectEqual(@as(usize, 1), layout.base.rows);
+    try std.testing.expectEqual(@as(usize, 1), layout.base.cols);
 }
 
 test "computeErLayout has outer_pad 0 (ER has no namespaces)" {
@@ -574,7 +761,7 @@ test "computeErLayout has outer_pad 0 (ER has no namespaces)" {
     var layout = try computeErLayout(alloc, diagram, null, .narrow);
     defer layout.deinit();
 
-    try std.testing.expectEqual(@as(usize, 0), layout.outer_pad);
+    try std.testing.expectEqual(@as(usize, 0), layout.base.outer_pad);
 }
 
 test "computeErLayout stacks two-entity relation as bottom_up rows" {
@@ -589,12 +776,12 @@ test "computeErLayout stacks two-entity relation as bottom_up rows" {
     var layout = try computeErLayout(alloc, diagram, null, .narrow);
     defer layout.deinit();
 
-    try std.testing.expectEqual(@as(usize, 2), layout.positions.len);
-    try std.testing.expectEqual(@as(usize, 2), layout.rows);
-    try std.testing.expectEqual(@as(usize, 1), layout.cols);
+    try std.testing.expectEqual(@as(usize, 2), layout.base.positions.len);
+    try std.testing.expectEqual(@as(usize, 2), layout.base.rows);
+    try std.testing.expectEqual(@as(usize, 1), layout.base.cols);
 
     var row_set = [_]bool{ false, false };
-    for (layout.positions) |pos| {
+    for (layout.base.positions) |pos| {
         try std.testing.expectEqual(@as(usize, 0), pos.col);
         try std.testing.expect(pos.row < 2);
         row_set[pos.row] = true;
@@ -615,9 +802,9 @@ test "computeErLayout 1-parent 2-children branch separates siblings across colum
     var layout = try computeErLayout(alloc, diagram, null, .narrow);
     defer layout.deinit();
 
-    try std.testing.expectEqual(@as(usize, 3), layout.positions.len);
-    try std.testing.expectEqual(@as(usize, 2), layout.rows);
-    try std.testing.expectEqual(@as(usize, 2), layout.cols);
+    try std.testing.expectEqual(@as(usize, 3), layout.base.positions.len);
+    try std.testing.expectEqual(@as(usize, 2), layout.base.rows);
+    try std.testing.expectEqual(@as(usize, 2), layout.base.cols);
 
     var id_customer: ?usize = null;
     var id_order: ?usize = null;
@@ -629,12 +816,12 @@ test "computeErLayout 1-parent 2-children branch separates siblings across colum
     }
     try std.testing.expect(id_customer != null and id_order != null and id_invoice != null);
 
-    try std.testing.expectEqual(@as(usize, 1), layout.positions[id_customer.?].row);
-    try std.testing.expectEqual(@as(usize, 0), layout.positions[id_order.?].row);
-    try std.testing.expectEqual(@as(usize, 0), layout.positions[id_invoice.?].row);
+    try std.testing.expectEqual(@as(usize, 1), layout.base.positions[id_customer.?].row);
+    try std.testing.expectEqual(@as(usize, 0), layout.base.positions[id_order.?].row);
+    try std.testing.expectEqual(@as(usize, 0), layout.base.positions[id_invoice.?].row);
 
-    const o_col = layout.positions[id_order.?].col;
-    const i_col = layout.positions[id_invoice.?].col;
+    const o_col = layout.base.positions[id_order.?].col;
+    const i_col = layout.base.positions[id_invoice.?].col;
     try std.testing.expect(o_col != i_col);
     try std.testing.expect(o_col < 2 and i_col < 2);
 }
@@ -652,9 +839,9 @@ test "computeErLayout 2-parents 1-child merge stacks parents in bottom row" {
     var layout = try computeErLayout(alloc, diagram, null, .narrow);
     defer layout.deinit();
 
-    try std.testing.expectEqual(@as(usize, 3), layout.positions.len);
-    try std.testing.expectEqual(@as(usize, 2), layout.rows);
-    try std.testing.expectEqual(@as(usize, 2), layout.cols);
+    try std.testing.expectEqual(@as(usize, 3), layout.base.positions.len);
+    try std.testing.expectEqual(@as(usize, 2), layout.base.rows);
+    try std.testing.expectEqual(@as(usize, 2), layout.base.cols);
 
     var id_customer: ?usize = null;
     var id_shipper: ?usize = null;
@@ -666,12 +853,12 @@ test "computeErLayout 2-parents 1-child merge stacks parents in bottom row" {
     }
     try std.testing.expect(id_customer != null and id_shipper != null and id_order != null);
 
-    try std.testing.expectEqual(@as(usize, 1), layout.positions[id_customer.?].row);
-    try std.testing.expectEqual(@as(usize, 1), layout.positions[id_shipper.?].row);
-    try std.testing.expectEqual(@as(usize, 0), layout.positions[id_order.?].row);
+    try std.testing.expectEqual(@as(usize, 1), layout.base.positions[id_customer.?].row);
+    try std.testing.expectEqual(@as(usize, 1), layout.base.positions[id_shipper.?].row);
+    try std.testing.expectEqual(@as(usize, 0), layout.base.positions[id_order.?].row);
 
-    const c_col = layout.positions[id_customer.?].col;
-    const s_col = layout.positions[id_shipper.?].col;
+    const c_col = layout.base.positions[id_customer.?].col;
+    const s_col = layout.base.positions[id_shipper.?].col;
     try std.testing.expect(c_col != s_col);
     try std.testing.expect(c_col < 2 and s_col < 2);
 }
