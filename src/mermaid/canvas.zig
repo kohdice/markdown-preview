@@ -79,6 +79,40 @@ pub const GlyphSet = struct {
         .corner_bl_double = '╚',
         .corner_br_double = '╝',
     };
+
+    pub const ascii: GlyphSet = .{
+        .h_line = '-',
+        .v_line = '|',
+        .h_line_dashed = '-',
+        .v_line_dashed = '|',
+        .corner_tl = '+',
+        .corner_tr = '+',
+        .corner_bl = '+',
+        .corner_br = '+',
+        .tee_l = '+',
+        .tee_r = '+',
+        .tee_t = '+',
+        .tee_b = '+',
+        .cross = '+',
+        .arrow_up = '^',
+        .arrow_down = 'v',
+        .arrow_left = '<',
+        .arrow_right = '>',
+        .diamond_tl = '/',
+        .diamond_tr = '\\',
+        .diamond_bl = '\\',
+        .diamond_br = '/',
+        .round_tl = '+',
+        .round_tr = '+',
+        .round_bl = '+',
+        .round_br = '+',
+        .h_line_double = '=',
+        .v_line_double = '|',
+        .corner_tl_double = '+',
+        .corner_tr_double = '+',
+        .corner_bl_double = '+',
+        .corner_br_double = '+',
+    };
 };
 
 fn flipGlyph(cp: u21) u21 {

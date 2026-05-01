@@ -399,6 +399,677 @@ test "sequenceDiagram is rendered as ASCII art" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid:") == null);
 }
 
+test "sequenceDiagram null wrap width keeps simple ASCII snapshot byte-identical" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\```mermaid
+        \\sequenceDiagram
+        \\    Alice->>Bob: Hello
+        \\    Bob-->>Alice: Hi
+        \\```
+        \\
+    ;
+    const rendered = try helpers.renderToOwnedSlice(allocator, source, .{ .wrap_width = null });
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        \\```mermaid
+        \\┌───────┐         ┌───────┐
+        \\│ Alice │         │  Bob  │
+        \\└───┬───┘         └───┬───┘
+        \\    │                 │
+        \\    │      Hello      │
+        \\    ├─────────────────►
+        \\    │       Hi        │
+        \\    ◄╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌│
+        \\    │                 │
+        \\┌───┴───┐         ┌───┴───┐
+        \\│ Alice │         │  Bob  │
+        \\└───────┘         └───────┘
+        \\```
+        \\
+    , rendered);
+}
+
+test "sequenceDiagram null wrap width keeps block and note snapshot byte-identical" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\```mermaid
+        \\sequenceDiagram
+        \\    participant A
+        \\    participant B
+        \\    alt success
+        \\        A->>B: ok
+        \\    else failure
+        \\        B-->>A: no
+        \\    end
+        \\    par one
+        \\        A->>B: p1
+        \\    and two
+        \\        B->>A: p2
+        \\    end
+        \\    Note over A,B: shared
+        \\```
+        \\
+    ;
+    const rendered = try helpers.renderToOwnedSlice(allocator, source, .{ .wrap_width = null });
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        \\```mermaid
+        \\┌────┐                  ┌────┐
+        \\│ A  │                  │ B  │
+        \\└──┬─┘                  └──┬─┘
+        \\   │                       │
+        \\┌ alt [success]────────────┼─┐
+        \\│  │          ok           │ │
+        \\│  ├───────────────────────► │
+        \\├ failure╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+        \\│  │          no           │ │
+        \\│  ◄╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌│ │
+        \\└──────────────────────────┴─┘
+        \\┌ par [one]────────────────┬─┐
+        \\│  │          p1           │ │
+        \\│  ├───────────────────────► │
+        \\├ two╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+        \\│  │          p2           │ │
+        \\│  ◄───────────────────────┤ │
+        \\│┌─┬───────────────────────┼┐│
+        \\││ │        shared         │││
+        \\│└─┴───────────────────────┴┘│
+        \\└──┬───────────────────────┬─┘
+        \\   │                       │
+        \\┌──┴─┐                  ┌──┴─┐
+        \\│ A  │                  │ B  │
+        \\└────┘                  └────┘
+        \\```
+        \\
+    , rendered);
+}
+
+test "sequenceDiagram positive wrap width too small uses terminal-width diagnostic" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\sequenceDiagram
+        \\    Alice->>Bob: Hello
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 4 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(
+        allocator,
+        fixture.body,
+        "[mermaid: terminal width too small to render diagram]",
+    );
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid: parse error]");
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 4, .narrow);
+}
+
+test "sequenceDiagram wraps single participant label under wrap width" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\sequenceDiagram
+        \\    participant Solo as This Participant Name Wraps Across Lines
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 10 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "This");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Particip");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "antName");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Name");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Wraps");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Across");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Lines");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 10, .narrow);
+}
+
+test "sequenceDiagram centers CJK participant label by display width under wrap width" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\sequenceDiagram
+        \\    participant User as 利用者
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 10 });
+    defer fixture.deinit();
+
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "│ 利用者 │") != null);
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 10, .narrow);
+}
+
+test "sequenceDiagram wraps long participant and message labels without generated clipping" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\sequenceDiagram
+        \\    participant Client as Very Long Client Participant
+        \\    participant API as Very Long API Participant
+        \\    Client->>API: request payload with many fields and validation details
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 24 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Very");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Long");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Client");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Partici");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "request");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "payload");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "validation");
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "►") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "->>") == null);
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 24, .narrow);
+}
+
+test "sequenceDiagram at width eighty preserves three participants messages arrows and lifelines" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\sequenceDiagram
+        \\    participant Client
+        \\    participant Gateway
+        \\    participant Database
+        \\    Client->>Gateway: submit order request
+        \\    Gateway-->>Database: read inventory snapshot
+        \\    Database-->>Client: return accepted response
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 80 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Client");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Gateway");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Database");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "submitorderrequest");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "readinventorysnapshot");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "returnacceptedresponse");
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "►") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "◄") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "╌") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "->>") == null);
+    try std.testing.expect(hasSequenceLifelineRow(fixture.body, 3, &.{ "Client", "Gateway", "Database" }));
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 80, .narrow);
+}
+
+test "sequenceDiagram preserves hard-break message labels under wrap width" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\sequenceDiagram
+        \\    A->>B: first<br/>second<br>third<BR>fourth
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 18 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "first");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "second");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "third");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "fourth");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 18, .narrow);
+}
+
+test "sequenceDiagram wraps self messages while preserving display clusters and literal ellipsis" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\sequenceDiagram
+        \\    participant User as 利用者
+        \\    User->>User: é ❤️ 👨‍👩 already … keep clusters together
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 16 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "利用者");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "é");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "\u{2764}\u{FE0F}");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "\u{1F468}\u{200D}\u{1F469}");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "alread");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "y…");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "keep");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "cluste");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "togeth");
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "◄") != null);
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 16, .narrow);
+}
+
+test "sequenceDiagram wraps later-column self messages without dropping label text" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\sequenceDiagram
+        \\    participant A
+        \\    participant B
+        \\    B->>B: aa bb cc dd ee ff gg hh ii jj
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 20 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "aa");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "bb");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "cc");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "dd");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "ee");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "ff");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "gg");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "hh");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "ii");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "jj");
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "◄") != null);
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 20, .narrow);
+}
+
+test "sequenceDiagram wraps right left and over notes under wrap width" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\sequenceDiagram
+        \\    participant A
+        \\    participant B
+        \\    A->>B: go
+        \\    Note right of A: right side note with several words
+        \\    Note left of B: left side note with several words
+        \\    Note over A: one participant note with several words
+        \\    Note over A,B: two participant note with several words
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 22 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "rightside");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "leftsidenote");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "oneparticipantnote");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "twoparticipant");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "severalwords");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 22, .narrow);
+}
+
+test "sequenceDiagram same-band edge note does not use cross-band continuation" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\sequenceDiagram
+        \\    participant A
+        \\    participant B
+        \\    A->>B: go
+        \\    Note right of B: right edge note with several words
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 22 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "rightedgenote");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "several");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "words");
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "[cross-band]") == null);
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 22, .narrow);
+}
+
+test "sequenceDiagram wrapped edge notes inside blocks preserve block side borders" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\sequenceDiagram
+        \\    participant A
+        \\    participant B
+        \\    loop guarded block
+        \\        A->>B: go
+        \\        Note left of A: left edge note with several words
+        \\        Note right of B: right edge note with several words
+        \\    end
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 22 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "leftedgenote");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "rightedgenote");
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "│┌") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "┐│") != null);
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 22, .narrow);
+}
+
+test "sequenceDiagram wraps notes and block labels under wrap width" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\sequenceDiagram
+        \\    participant Client
+        \\    participant API
+        \\    alt success branch with a long condition label
+        \\        Client->>API: send request
+        \\    else failed because timeout exceeded
+        \\        API-->>Client: retry later
+        \\    end
+        \\    Note over Client,API: response metadata contains cache validators and rate limit hints
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 28 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "alt[successbranchwith");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "alongconditionlabel]");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "failedbecausetimeout");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "exceeded");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "responsemetadata");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "cache");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "validators");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "rate");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "limithints");
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "◄") != null);
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 28, .narrow);
+}
+
+test "sequenceDiagram preserves supported block kinds and divider labels under wrap width" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\sequenceDiagram
+        \\    participant A
+        \\    participant B
+        \\    loop every minute
+        \\        A->>B: ping
+        \\    end
+        \\    opt optional branch
+        \\        A->>B: maybe
+        \\    end
+        \\    par alpha branch
+        \\        A->>B: p1
+        \\    and beta branch
+        \\        B->>A: p2
+        \\    end
+        \\    critical connect
+        \\        A->>B: hello
+        \\    option failure path
+        \\        B-->>A: retry
+        \\    end
+        \\    rect highlighted area
+        \\        A->>B: inside
+        \\    end
+        \\    break stop now
+        \\        A->>B: stopped
+        \\    end
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 26 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "loop[everyminute]");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "opt[optionalbranch]");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "par[alphabranch]");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "betabranch");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "critical[connect]");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "failurepath");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "rect[highlighted");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "area]");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "break[stopnow]");
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "◄") != null);
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 26, .narrow);
+}
+
+test "sequenceDiagram nested wrapped blocks keep continuous side-border prefixes" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\sequenceDiagram
+        \\    participant Client
+        \\    participant API
+        \\    loop outer condition label that wraps
+        \\        alt inner branch label that wraps
+        \\            Client->>API: wrapped message inside nested frame
+        \\        else fallback branch label that wraps
+        \\            API-->>Client: fallback message inside nested frame
+        \\            Note over Client,API: wrapped note inside nested frame
+        \\        end
+        \\    end
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 28 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "loop[outercondition");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "labelthatwraps]");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "alt[innerbranch");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "thatwraps");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "fallbackbranchlabel");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "thatwraps");
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "┌") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "├") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "►") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "◄") != null);
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 28, .narrow);
+}
+
+test "sequenceDiagram emits participant bands and cross-band continuation rows" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\sequenceDiagram
+        \\    participant A
+        \\    participant B
+        \\    participant C
+        \\    participant D
+        \\    A->>B: same band
+        \\    A-->>D: cross band response with a long label
+        \\    Note over A,D: note spans bands too
+        \\    A->>+D: activation parsed but not drawn
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 20 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "sameband");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "cross-band");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "crossband");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "responsewithalong");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "label");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "notespansbandstoo");
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "-->>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "║") == null);
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 20, .narrow);
+}
+
+test "sequenceDiagram banded width sixty preserves labels without mermaid diagnostics" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\sequenceDiagram
+        \\    participant A
+        \\    participant B
+        \\    participant C
+        \\    participant D
+        \\    participant E
+        \\    participant F
+        \\    A->>B: same band request
+        \\    C-->>E: same band response
+        \\    A->>F: cross band request with enough text to wrap
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 60 });
+    defer fixture.deinit();
+
+    inline for (&.{ "A", "B", "C", "D", "E", "F" }) |label| {
+        try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, label);
+    }
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "sameband");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "request");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "samebandresponse");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "cross-band");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "crossbandrequest");
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 60, .narrow);
+}
+
+test "sequenceDiagram cross-band continuations render in endpoint bands only" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\sequenceDiagram
+        \\    participant A
+        \\    participant B
+        \\    participant C
+        \\    participant D
+        \\    participant E
+        \\    participant F
+        \\    A->F: solid open endpoint message
+        \\    F-->A: dashed open endpoint response
+        \\    Note over A,F: endpoint note
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 20 });
+    defer fixture.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, fixture.body, "[cross-band] A"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, fixture.body, "[cross-band] F"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, fixture.body, "[cross-band] Note"));
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "A->F:solidopen");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "F-->A:dashedopen");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "endpointnote");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 20, .narrow);
+}
+
+test "sequenceDiagram blocks spanning participant bands preserve labels dividers and message order" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\sequenceDiagram
+        \\    participant A
+        \\    participant B
+        \\    participant C
+        \\    participant D
+        \\    participant E
+        \\    loop cross band transaction
+        \\        A->>E: first cross band request
+        \\    else cross band fallback
+        \\        B-->>D: second cross band response
+        \\    end
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 20 });
+    defer fixture.deinit();
+
+    const loop_pos = std.mem.indexOf(u8, fixture.body, "loop") orelse return error.TestUnexpectedResult;
+    const first_pos = std.mem.indexOf(u8, fixture.body, "first") orelse return error.TestUnexpectedResult;
+    const else_pos = std.mem.indexOf(u8, fixture.body, "fallback") orelse return error.TestUnexpectedResult;
+    const second_pos = std.mem.indexOf(u8, fixture.body, "second") orelse return error.TestUnexpectedResult;
+
+    try std.testing.expect(loop_pos < first_pos);
+    try std.testing.expect(first_pos < else_pos);
+    try std.testing.expect(else_pos < second_pos);
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "loop[crossband");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "transaction]");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "crossband");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "fallback");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "[cross-band]A");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "->>E:first");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "request");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "[cross-band]B");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "-->>D:second");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "cross");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "response");
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "[cross-band] A") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "->> E: first") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "[cross-band] B") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "-->> D: second") != null);
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 20, .narrow);
+}
+
+test "sequenceDiagram cross-band continuation rows preserve source message order in affected bands" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\sequenceDiagram
+        \\    participant A
+        \\    participant B
+        \\    participant C
+        \\    participant D
+        \\    C->>A: first from later band
+        \\    A->>D: second from earlier band
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 20 });
+    defer fixture.deinit();
+
+    const first_pos = std.mem.indexOf(u8, fixture.body, "first") orelse return error.TestUnexpectedResult;
+    const second_pos = std.mem.indexOf(u8, fixture.body, "second") orelse return error.TestUnexpectedResult;
+
+    try std.testing.expect(first_pos < second_pos);
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "[cross-band]C");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "->>A:first");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "[cross-band]A");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "->>D:second");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 20, .narrow);
+}
+
+test "sequenceDiagram note over body rows clear lifelines from note interior" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\sequenceDiagram
+        \\    participant A
+        \\    participant B
+        \\    A->>B: go
+        \\    Note over A,B: two participant note with several words
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 22 });
+    defer fixture.deinit();
+
+    var saw_note_body = false;
+    var rows = std.mem.splitScalar(u8, fixture.body, '\n');
+    while (rows.next()) |row| {
+        if (std.mem.indexOf(u8, row, "words") == null) continue;
+        saw_note_body = true;
+        try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, row, "│"));
+    }
+
+    try std.testing.expect(saw_note_body);
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 22, .narrow);
+}
+
+test "sequenceDiagram wrapped sequential blocks at same index are not nested" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\sequenceDiagram
+        \\    loop a
+        \\    end
+        \\    loop b
+        \\        A->>B: x
+        \\    end
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 30 });
+    defer fixture.deinit();
+
+    const a_pos = std.mem.indexOf(u8, fixture.body, "loop [a]") orelse return error.TestUnexpectedResult;
+    const b_pos = std.mem.indexOf(u8, fixture.body, "loop [b]") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(a_pos < b_pos);
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "│┌") == null);
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 30, .narrow);
+}
+
+test "sequenceDiagram wrapped empty block after last message is preserved" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\sequenceDiagram
+        \\    A->>B: x
+        \\    loop cleanup
+        \\    end
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 30 });
+    defer fixture.deinit();
+
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "loop[cleanup]");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 30, .narrow);
+}
+
+test "sequenceDiagram wrapped renderer fits ambiguous-wide rows" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\sequenceDiagram
+        \\    A->>B: hello wide mode
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 20, .ambiguous_width = .wide });
+    defer fixture.deinit();
+
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "+") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, ">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "─") == null);
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "│") == null);
+    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "►") == null);
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 20, .wide);
+}
+
 test "invalid mermaid emits parse-error diagnostic with raw source" {
     const allocator = std.testing.allocator;
     const source =
@@ -624,6 +1295,28 @@ fn maxLineWidth(text: []const u8) usize {
         if (line.len > max) max = line.len;
     }
     return max;
+}
+
+fn hasSequenceLifelineRow(body: []const u8, min_lifelines: usize, participant_labels: []const []const u8) bool {
+    var rows = std.mem.splitScalar(u8, body, '\n');
+    while (rows.next()) |row| {
+        if (std.mem.indexOf(u8, row, "┌") != null) continue;
+        if (std.mem.indexOf(u8, row, "┐") != null) continue;
+        if (std.mem.indexOf(u8, row, "└") != null) continue;
+        if (std.mem.indexOf(u8, row, "┘") != null) continue;
+
+        var has_label = false;
+        for (participant_labels) |label| {
+            if (std.mem.indexOf(u8, row, label) != null) {
+                has_label = true;
+                break;
+            }
+        }
+        if (has_label) continue;
+
+        if (std.mem.count(u8, row, "│") >= min_lifelines) return true;
+    }
+    return false;
 }
 
 test "mermaid LR direction renders horizontally with right arrow" {
