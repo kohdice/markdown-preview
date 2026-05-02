@@ -1976,6 +1976,40 @@ test "constrained classDiagram ANSI spans preserve display clusters in wrapped m
     try mermaid_helpers.expectBodyRowsFit(fixture.body, 16, .narrow);
 }
 
+test "constrained gitGraph bands commits and preserves merge text at width 40" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\gitGraph
+        \\    commit id: "root … é"
+        \\    branch 開発ブランチ長い
+        \\    commit tag: "dev❤️‍🔥tag"
+        \\    commit type: HIGHLIGHT tag: "highlight-long-tag"
+        \\    checkout main
+        \\    commit type: REVERSE tag: "reverse-very-long"
+        \\    commit
+        \\    commit
+        \\    commit
+        \\    commit
+        \\    merge 開発ブランチ長い tag: "merge label"
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .enable_ansi = true, .wrap_width = 40 });
+    defer fixture.deinit();
+
+    try std.testing.expect(std.mem.find(u8, fixture.rendered, "\x1b[38;2;") != null);
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "root … é");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "dev❤️‍🔥tag");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "開発ブランチ長い");
+    try mermaid_helpers.expectBodyContainsSubsequenceIgnoringWhitespace(allocator, fixture.body, "highlight-long-tag");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "reverse-very-long");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "merge 開発ブランチ長い -> main: merge label");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "■");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "⊗");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "◎");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 40, .narrow);
+}
+
 test "mermaid self-loop does not hang" {
     const allocator = std.testing.allocator;
     const source =
