@@ -23,6 +23,194 @@ fn renderDocumentWithRenderer(
     return list.toOwnedSlice(allocator);
 }
 
+fn expectMermaidSectionsRespectWidth(
+    allocator: std.mem.Allocator,
+    sections: []const mermaid_helpers.MarkdownMermaidSection,
+    wrap_width: usize,
+    allowlist: []const mermaid_helpers.MermaidDiagnosticAllowlistEntry,
+) !void {
+    for (sections) |section| {
+        try mermaid_helpers.expectNoUnexpectedDiagnostic(allocator, section, wrap_width, allowlist);
+        try mermaid_helpers.expectNoGeneratedClipping(section.source, section.body);
+        try mermaid_helpers.expectBodyRowsFit(section.body, wrap_width, .narrow);
+    }
+}
+
+test "mixed Markdown Mermaid renderers fit width 40 without diagnostics or clipping" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\# Mixed Mermaid fixture
+        \\
+        \\```mermaid
+        \\flowchart TD
+        \\    Start --> Work
+        \\    Work --> Done
+        \\```
+        \\
+        \\Between diagrams.
+        \\
+        \\```mermaid
+        \\sequenceDiagram
+        \\    participant User
+        \\    participant API
+        \\    User->>API: Login request
+        \\    API-->>User: OK
+        \\```
+        \\
+        \\```mermaid
+        \\classDiagram
+        \\    class User {
+        \\        +int id
+        \\        +email str
+        \\    }
+        \\```
+        \\
+        \\```mermaid
+        \\stateDiagram-v2
+        \\    [*] --> Idle
+        \\    Idle --> Active : start
+        \\    Active --> [*]
+        \\```
+        \\
+        \\```mermaid
+        \\erDiagram
+        \\    CUSTOMER ||--o{ ORDER : places
+        \\```
+        \\
+        \\```mermaid
+        \\gitGraph
+        \\    commit id: "init"
+        \\    branch dev
+        \\    commit tag: "work"
+        \\    checkout main
+        \\    merge dev tag: "done"
+        \\```
+        \\
+        \\```mermaid
+        \\xychart
+        \\title "Sales"
+        \\x-axis [Q1, Q2, Q3]
+        \\y-axis 0 --> 100
+        \\bar [30, 60, 40]
+        \\line [20, 50, 70]
+        \\```
+        \\
+        \\```mermaid
+        \\xychart horizontal
+        \\title "Revenue"
+        \\x-axis [Jan, Feb, Mar]
+        \\y-axis 0 --> 300
+        \\bar [120, 200, 260]
+        \\```
+        \\
+    ;
+    const section_names = [_][]const u8{
+        "mixed flowchart",
+        "mixed sequence",
+        "mixed class",
+        "mixed state",
+        "mixed ER",
+        "mixed gitGraph",
+        "mixed vertical xychart",
+        "mixed horizontal xychart",
+    };
+
+    const rendered = try helpers.renderToOwnedSlice(allocator, source, .{ .wrap_width = 40 });
+    defer allocator.free(rendered);
+
+    var sections = try mermaid_helpers.extractMarkdownMermaidSections(allocator, source, rendered, &section_names);
+    defer sections.deinit();
+
+    const allowlist = [_]mermaid_helpers.MermaidDiagnosticAllowlistEntry{};
+    try expectMermaidSectionsRespectWidth(allocator, sections.sections, 40, &allowlist);
+}
+
+fn expectExampleMermaidSectionsRespectWidth(
+    allocator: std.mem.Allocator,
+    wrap_width: usize,
+    allowlist: []const mermaid_helpers.MermaidDiagnosticAllowlistEntry,
+) !void {
+    const source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "examples/EXAMPLE.md", allocator, .limited(1 << 20));
+    defer allocator.free(source);
+
+    const section_names = [_][]const u8{
+        "example flowchart basic TD",
+        "example flowchart basic LR",
+        "example flowchart nested subgraph",
+        "example sequence basic",
+        "example sequence blocks and note",
+        "example class basic",
+        "example class namespace",
+        "example state basic",
+        "example state composite",
+        "example ER",
+        "example gitGraph",
+        "example vertical xychart",
+        "example horizontal xychart",
+    };
+
+    const rendered = try helpers.renderToOwnedSlice(allocator, source, .{ .wrap_width = wrap_width });
+    defer allocator.free(rendered);
+
+    var sections = try mermaid_helpers.extractMarkdownMermaidSections(allocator, source, rendered, &section_names);
+    defer sections.deinit();
+
+    try expectMermaidSectionsRespectWidth(allocator, sections.sections, wrap_width, allowlist);
+}
+
+test "examples EXAMPLE.md Mermaid sections fit width 40 without unexpected diagnostics or clipping" {
+    const allocator = std.testing.allocator;
+    const allowlist = [_]mermaid_helpers.MermaidDiagnosticAllowlistEntry{};
+
+    try expectExampleMermaidSectionsRespectWidth(allocator, 40, &allowlist);
+}
+
+test "examples EXAMPLE.md Mermaid sections fit width 80 without clipping" {
+    const allocator = std.testing.allocator;
+    const allowlist = [_]mermaid_helpers.MermaidDiagnosticAllowlistEntry{};
+
+    try expectExampleMermaidSectionsRespectWidth(allocator, 80, &allowlist);
+}
+
+test "Mermaid placeholder paths wrap fallback body at constrained width" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct {
+        source: []const u8,
+        expected_diagnostic: []const u8,
+        expected_source_fragment: []const u8,
+    }{
+        .{
+            .source =
+            \\gantt
+            \\    title demo
+            \\    section setup
+            \\    first task :a, 2026-05-02, 1d
+            ,
+            .expected_diagnostic = "[mermaid: diagram type not yet supported by mp]",
+            .expected_source_fragment = "first task :a, 2026-05-02, 1d",
+        },
+        .{
+            .source =
+            \\notARealMermaidDiagram
+            \\    Alpha --> Beta
+            \\    Beta --> Gamma
+            ,
+            .expected_diagnostic = "[mermaid: parse error]",
+            .expected_source_fragment = "notARealMermaidDiagram",
+        },
+    };
+
+    for (cases) |case| {
+        var fixture = try mermaid_helpers.renderFencedDiagram(allocator, case.source, .{ .wrap_width = 18 });
+        defer fixture.deinit();
+
+        try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, case.expected_diagnostic);
+        try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, case.expected_source_fragment);
+        try mermaid_helpers.expectNoGeneratedClipping(case.source, fixture.body);
+        try mermaid_helpers.expectBodyRowsFit(fixture.body, 18, .narrow);
+    }
+}
+
 test "mermaid fence renders diagram inside original backticks" {
     const allocator = std.testing.allocator;
     const source =
