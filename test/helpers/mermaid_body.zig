@@ -74,6 +74,25 @@ pub fn expectBodyContainsIgnoringWhitespace(
     try std.testing.expect(std.mem.indexOf(u8, compact_body, compact_expected) != null);
 }
 
+pub fn expectBodyContainsSubsequenceIgnoringWhitespace(
+    allocator: std.mem.Allocator,
+    body: []const u8,
+    expected: []const u8,
+) !void {
+    const compact_body = try compactWhitespaceAlloc(allocator, body);
+    defer allocator.free(compact_body);
+    const compact_expected = try compactWhitespaceAlloc(allocator, expected);
+    defer allocator.free(compact_expected);
+
+    var expected_pos: usize = 0;
+    for (compact_body) |byte| {
+        if (expected_pos == compact_expected.len) break;
+        if (byte == compact_expected[expected_pos]) expected_pos += 1;
+    }
+
+    try std.testing.expectEqual(compact_expected.len, expected_pos);
+}
+
 pub fn expectBodyLacksIgnoringWhitespace(
     allocator: std.mem.Allocator,
     body: []const u8,
