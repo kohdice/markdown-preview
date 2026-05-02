@@ -2010,6 +2010,83 @@ test "constrained gitGraph bands commits and preserves merge text at width 40" {
     try mermaid_helpers.expectBodyRowsFit(fixture.body, 40, .narrow);
 }
 
+test "constrained vertical xychart scales plot and wraps labels at width 40" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\xychart
+        \\title "Revenue trend é❤️‍🔥 long title"
+        \\x-axis "Quarter labels with long words" [AlphaBetaGammaDelta, 顧客識別子, "literal … marker"]
+        \\y-axis "Sales amount"
+        \\bar [10, 35, 20]
+        \\line [12, 20, 30]
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .enable_ansi = true, .wrap_width = 40 });
+    defer fixture.deinit();
+
+    try std.testing.expect(std.mem.find(u8, fixture.rendered, "\x1b[38;2;") != null);
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Revenue trend é❤️‍🔥 long title");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Quarter labels with long words");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Sales amount");
+    try mermaid_helpers.expectBodyContainsSubsequenceIgnoringWhitespace(allocator, fixture.body, "AlphaBetaGammaDelta");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "顧客識別子");
+    try mermaid_helpers.expectBodyContainsSubsequenceIgnoringWhitespace(allocator, fixture.body, "literal … marker");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Bar 1");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Line 1");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "█");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 40, .narrow);
+}
+
+test "constrained horizontal xychart wraps category column and scales plot at width 40" {
+    const allocator = std.testing.allocator;
+    const mermaid_source =
+        \\xychart horizontal
+        \\title "Horizontal é❤️‍🔥 chart"
+        \\x-axis "Category axis title" [AlphaBetaGammaDelta, 顧客識別子, "literal … marker"]
+        \\y-axis "Value axis title" 0 --> 100
+        \\bar [20, 70, 40]
+        \\line [10, 55, 90]
+    ;
+    var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .enable_ansi = true, .wrap_width = 40 });
+    defer fixture.deinit();
+
+    try std.testing.expect(std.mem.find(u8, fixture.rendered, "\x1b[38;2;") != null);
+    try mermaid_helpers.expectBodyLacksIgnoringWhitespace(allocator, fixture.body, "[mermaid:");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Horizontal é❤️‍🔥 chart");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Category axis title");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Value axis title");
+    try mermaid_helpers.expectBodyContainsSubsequenceIgnoringWhitespace(allocator, fixture.body, "AlphaBetaGammaDelta");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "顧客識別子");
+    try mermaid_helpers.expectBodyContainsSubsequenceIgnoringWhitespace(allocator, fixture.body, "literal … marker");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Bar 1");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "Line 1");
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "█");
+    try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
+    try mermaid_helpers.expectBodyRowsFit(fixture.body, 40, .narrow);
+}
+
+test "constrained gitGraph and xychart use width-too-small diagnostics when unreadable" {
+    const allocator = std.testing.allocator;
+    const git_source =
+        \\gitGraph
+        \\    commit
+    ;
+    var git_fixture = try mermaid_helpers.renderFencedDiagram(allocator, git_source, .{ .wrap_width = 7 });
+    defer git_fixture.deinit();
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, git_fixture.body, "[mermaid: terminal width too small to render diagram]");
+    try mermaid_helpers.expectBodyRowsFit(git_fixture.body, 7, .narrow);
+
+    const xy_source =
+        \\xychart
+        \\bar [1]
+    ;
+    var xy_fixture = try mermaid_helpers.renderFencedDiagram(allocator, xy_source, .{ .wrap_width = 7 });
+    defer xy_fixture.deinit();
+    try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, xy_fixture.body, "[mermaid: terminal width too small to render diagram]");
+    try mermaid_helpers.expectBodyRowsFit(xy_fixture.body, 7, .narrow);
+}
+
 test "mermaid self-loop does not hang" {
     const allocator = std.testing.allocator;
     const source =

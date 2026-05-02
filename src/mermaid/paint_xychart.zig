@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("types.zig");
 const canvas_mod = @import("canvas.zig");
 const compile_mod = @import("compile.zig");
+const text_layout = @import("text_layout.zig");
 const ansi_mod = @import("../term/ansi.zig");
 const theme = @import("../term/theme.zig");
 const width_mod = @import("../term/width.zig");
@@ -30,6 +31,7 @@ const PLOT_ROWS: usize = 20;
 const MAX_SERIES_POINTS: usize = 1024;
 
 const PLOT_WIDTH_MIN: usize = 60;
+const PLOT_WIDTH_READABLE_MIN: usize = 6;
 const BAND_MIN_WIDTH: usize = 6;
 const BAR_WIDTH_MAX: usize = 8;
 const YPAD_FRACTION: f64 = 0.10;
@@ -91,10 +93,716 @@ pub fn paintXyChart(
         if (s.data.len > MAX_SERIES_POINTS) return error.UnsupportedFeature;
     }
 
+    if (opts.wrap_width) |wrap_width| {
+        if (chart.orientation == .horizontal) {
+            return writeHorizontalWrapped(writer, allocator, &chart, wrap_width, opts);
+        }
+        return writeVerticalWrapped(writer, allocator, &chart, wrap_width, opts);
+    }
+
     if (chart.orientation == .horizontal) {
         return writeHorizontal(writer, allocator, &chart, opts);
     }
     return writeVertical(writer, allocator, &chart, opts);
+}
+
+const OptionalLabelLayout = struct {
+    layout: ?text_layout.LabelLayout = null,
+
+    fn deinit(self: *OptionalLabelLayout) void {
+        if (self.layout) |*layout| layout.deinit();
+    }
+
+    fn lineCount(self: *const OptionalLabelLayout) usize {
+        if (self.layout) |layout| return layout.lines.len;
+        return 0;
+    }
+};
+
+const VerticalCategorySlot = struct {
+    start: usize,
+    width: usize,
+    center: usize,
+};
+
+const HorizontalTickLabel = struct {
+    start: usize,
+    row_offset: usize,
+};
+
+const WrappedLegendLayout = struct {
+    allocator: std.mem.Allocator,
+    items: []text_layout.LabelLayout = &.{},
+
+    fn deinit(self: *WrappedLegendLayout) void {
+        for (self.items) |*item| item.deinit();
+        if (self.items.len > 0) self.allocator.free(self.items);
+    }
+
+    fn rowCount(self: *const WrappedLegendLayout) usize {
+        var rows: usize = 0;
+        for (self.items) |item| rows += @max(@as(usize, 1), item.lines.len);
+        return rows;
+    }
+};
+
+fn writeVerticalWrapped(
+    writer: *std.Io.Writer,
+    allocator: std.mem.Allocator,
+    chart: *const types.XyChart,
+    wrap_width: usize,
+    opts: Options,
+) RenderError!void {
+    const xy: XyGlyphs = if (opts.use_ascii) ASCII_GLYPHS else UNICODE_GLYPHS;
+    const yr = computeYRange(chart);
+    const has_x_labels = chart.x_axis.kind == .category and chart.x_axis.categories.len > 0;
+    const has_legend = chart.series.len >= 2;
+
+    var legend_layout = layoutWrappedLegend(allocator, chart, wrap_width, opts.ambiguous_width) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.WidthTooSmall => return error.WidthTooSmall,
+    };
+    defer legend_layout.deinit();
+
+    const tick_values = niceTickValues(allocator, yr.min, yr.max) catch return error.OutOfMemory;
+    defer allocator.free(tick_values);
+    const tick_bufs = allocator.alloc([24]u8, tick_values.len) catch return error.OutOfMemory;
+    defer allocator.free(tick_bufs);
+    const tick_strs = allocator.alloc([]const u8, tick_values.len) catch return error.OutOfMemory;
+    defer allocator.free(tick_strs);
+
+    var max_tick_w: usize = 0;
+    for (tick_values, 0..) |t, i| {
+        tick_strs[i] = formatTickValue(&tick_bufs[i], t);
+        max_tick_w = @max(max_tick_w, width_mod.displayWidth(tick_strs[i], opts.ambiguous_width));
+    }
+
+    const y_label_cols = max_tick_w + 1;
+    const y_axis_col = y_label_cols;
+    const plot_left = y_axis_col + 1;
+    if (wrap_width < plot_left + PLOT_WIDTH_READABLE_MIN) return error.WidthTooSmall;
+    const plot_w = wrap_width - plot_left;
+    const data_count = dataCountFor(chart);
+    const categories_per_band = if (has_x_labels)
+        @max(@as(usize, 1), @min(chart.x_axis.categories.len, plot_w / BAND_MIN_WIDTH))
+    else
+        data_count;
+    const band_count = if (has_x_labels)
+        std.math.divCeil(usize, chart.x_axis.categories.len, categories_per_band) catch unreachable
+    else
+        1;
+
+    var empty_category_slots: [0]VerticalCategorySlot = .{};
+    const category_slots: []VerticalCategorySlot = if (has_x_labels)
+        allocator.alloc(VerticalCategorySlot, chart.x_axis.categories.len) catch return error.OutOfMemory
+    else
+        empty_category_slots[0..];
+    defer if (has_x_labels) allocator.free(category_slots);
+    if (has_x_labels) {
+        for (category_slots, 0..) |*slot, i| {
+            const band_start = (i / categories_per_band) * categories_per_band;
+            const band_end = @min(category_slots.len, band_start + categories_per_band);
+            slot.* = verticalCategorySlot(i - band_start, band_end - band_start, plot_left, plot_w);
+        }
+    }
+
+    var title_layout: OptionalLabelLayout = .{};
+    defer title_layout.deinit();
+    if (chart.title) |title| {
+        title_layout.layout = text_layout.layoutLabel(allocator, title, wrap_width, opts.ambiguous_width) catch return error.OutOfMemory;
+    }
+    var x_title_layout: OptionalLabelLayout = .{};
+    defer x_title_layout.deinit();
+    if (chart.x_axis.title) |title| {
+        x_title_layout.layout = text_layout.layoutLabel(allocator, title, wrap_width, opts.ambiguous_width) catch return error.OutOfMemory;
+    }
+    var y_title_layout: OptionalLabelLayout = .{};
+    defer y_title_layout.deinit();
+    if (chart.y_axis.title) |title| {
+        y_title_layout.layout = text_layout.layoutLabel(allocator, title, wrap_width, opts.ambiguous_width) catch return error.OutOfMemory;
+    }
+
+    var empty_category_layouts: [0]text_layout.LabelLayout = .{};
+    const category_layouts: []text_layout.LabelLayout = if (has_x_labels)
+        allocator.alloc(text_layout.LabelLayout, chart.x_axis.categories.len) catch return error.OutOfMemory
+    else
+        empty_category_layouts[0..];
+    var category_layouts_init: usize = 0;
+    defer {
+        var i: usize = 0;
+        while (i < category_layouts_init) : (i += 1) category_layouts[i].deinit();
+        if (has_x_labels) allocator.free(category_layouts);
+    }
+    if (has_x_labels) {
+        for (chart.x_axis.categories, 0..) |cat, i| {
+            category_layouts[i] = text_layout.layoutLabel(allocator, cat, category_slots[i].width, opts.ambiguous_width) catch return error.OutOfMemory;
+            category_layouts_init += 1;
+        }
+    }
+
+    const legend_rows = legend_layout.rowCount();
+    var category_rows: usize = 0;
+    if (has_x_labels) {
+        for (category_layouts) |layout| category_rows = @max(category_rows, layout.lines.len);
+    }
+
+    const title_rows = title_layout.lineCount();
+    const y_title_rows = y_title_layout.lineCount();
+    const x_title_rows = x_title_layout.lineCount();
+    const plot_top = title_rows + y_title_rows + legend_rows;
+    const band_rows = PLOT_ROWS + 1 + category_rows;
+    const band_gap_rows: usize = if (band_count > 1) 1 else 0;
+    const x_title_top = plot_top + band_count * band_rows + (band_count - 1) * band_gap_rows;
+    const canvas_rows = x_title_top + x_title_rows;
+
+    var canvas = canvas_mod.Canvas.init(allocator, canvas_rows, wrap_width) catch return error.OutOfMemory;
+    defer canvas.deinit();
+
+    try drawCenteredLayout(&canvas, 0, &title_layout, wrap_width, opts.ambiguous_width);
+    try drawCenteredLayout(&canvas, title_rows, &y_title_layout, wrap_width, opts.ambiguous_width);
+    if (has_legend) try drawWrappedLegend(&canvas, title_rows + y_title_rows, chart, &legend_layout, opts.ambiguous_width, &xy);
+
+    var band: usize = 0;
+    var band_plot_top = plot_top;
+    while (band < band_count) : (band += 1) {
+        const band_start = if (has_x_labels) band * categories_per_band else 0;
+        const band_end = if (has_x_labels) @min(chart.x_axis.categories.len, band_start + categories_per_band) else data_count;
+        const band_slots = if (has_x_labels) category_slots[band_start..band_end] else empty_category_slots[0..];
+        const plot_bottom = band_plot_top + PLOT_ROWS - 1;
+        const axis_row = band_plot_top + PLOT_ROWS;
+        const category_top = axis_row + 1;
+
+        drawVerticalAxes(&canvas, band_plot_top, plot_bottom, axis_row, y_axis_col, plot_left, plot_w, &xy);
+        drawVerticalTicks(&canvas, tick_values, tick_strs, yr, plot_bottom, max_tick_w, y_axis_col, opts.ambiguous_width, &xy) catch return error.OutOfMemory;
+        if (has_x_labels) drawVerticalCategoryTicks(&canvas, band_slots, axis_row, &xy);
+        drawVerticalSeries(&canvas, chart, band_slots, band_start, band_end, yr, plot_left, plot_bottom, plot_w, &xy);
+        drawVerticalGrid(&canvas, tick_values, yr, plot_bottom, plot_left, plot_w, &xy);
+
+        if (has_x_labels) {
+            for (category_layouts[band_start..band_end], band_slots) |layout, slot| {
+                try text_layout.drawCenteredLabel(&canvas, category_top, slot.start, category_rows, slot.width, layout.lines, opts.ambiguous_width);
+            }
+        }
+
+        band_plot_top = category_top + category_rows;
+        if (band + 1 < band_count) band_plot_top += band_gap_rows;
+    }
+    try drawCenteredLayout(&canvas, x_title_top, &x_title_layout, wrap_width, opts.ambiguous_width);
+
+    try writeXyCanvas(writer, &canvas, chart, opts);
+}
+
+fn writeHorizontalWrapped(
+    writer: *std.Io.Writer,
+    allocator: std.mem.Allocator,
+    chart: *const types.XyChart,
+    wrap_width: usize,
+    opts: Options,
+) RenderError!void {
+    const xy: XyGlyphs = if (opts.use_ascii) ASCII_GLYPHS else UNICODE_GLYPHS;
+    const yr = computeYRange(chart);
+    const has_x_labels = chart.x_axis.kind == .category and chart.x_axis.categories.len > 0;
+    const has_legend = chart.series.len >= 2;
+    const data_count = dataCountFor(chart);
+
+    var legend_layout = layoutWrappedLegend(allocator, chart, wrap_width, opts.ambiguous_width) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.WidthTooSmall => return error.WidthTooSmall,
+    };
+    defer legend_layout.deinit();
+
+    const tick_values = niceTickValues(allocator, yr.min, yr.max) catch return error.OutOfMemory;
+    defer allocator.free(tick_values);
+    const tick_bufs = allocator.alloc([24]u8, tick_values.len) catch return error.OutOfMemory;
+    defer allocator.free(tick_bufs);
+    const tick_strs = allocator.alloc([]const u8, tick_values.len) catch return error.OutOfMemory;
+    defer allocator.free(tick_strs);
+    for (tick_values, 0..) |t, i| tick_strs[i] = formatTickValue(&tick_bufs[i], t);
+
+    var max_cat_w: usize = 0;
+    if (has_x_labels) {
+        for (chart.x_axis.categories) |cat| max_cat_w = @max(max_cat_w, width_mod.displayWidth(cat, opts.ambiguous_width));
+    }
+    const cat_label_cols: usize = if (has_x_labels)
+        @max(@as(usize, 3), @min(max_cat_w, @max(@as(usize, 3), wrap_width / 3))) + 1
+    else
+        0;
+    const y_axis_col = cat_label_cols;
+    const plot_left = y_axis_col + 1;
+    if (wrap_width < plot_left + PLOT_WIDTH_READABLE_MIN) return error.WidthTooSmall;
+    const plot_w = wrap_width - plot_left;
+
+    var title_layout: OptionalLabelLayout = .{};
+    defer title_layout.deinit();
+    if (chart.title) |title| {
+        title_layout.layout = text_layout.layoutLabel(allocator, title, wrap_width, opts.ambiguous_width) catch return error.OutOfMemory;
+    }
+    var x_title_layout: OptionalLabelLayout = .{};
+    defer x_title_layout.deinit();
+    if (chart.x_axis.title) |title| {
+        x_title_layout.layout = text_layout.layoutLabel(allocator, title, wrap_width, opts.ambiguous_width) catch return error.OutOfMemory;
+    }
+    var y_title_layout: OptionalLabelLayout = .{};
+    defer y_title_layout.deinit();
+    if (chart.y_axis.title) |title| {
+        y_title_layout.layout = text_layout.layoutLabel(allocator, title, wrap_width, opts.ambiguous_width) catch return error.OutOfMemory;
+    }
+
+    var empty_category_layouts: [0]text_layout.LabelLayout = .{};
+    const category_layouts: []text_layout.LabelLayout = if (has_x_labels)
+        allocator.alloc(text_layout.LabelLayout, chart.x_axis.categories.len) catch return error.OutOfMemory
+    else
+        empty_category_layouts[0..];
+    var category_layouts_init: usize = 0;
+    defer {
+        var i: usize = 0;
+        while (i < category_layouts_init) : (i += 1) category_layouts[i].deinit();
+        if (has_x_labels) allocator.free(category_layouts);
+    }
+    if (has_x_labels) {
+        const label_budget = @max(@as(usize, 1), cat_label_cols - 1);
+        for (chart.x_axis.categories, 0..) |cat, i| {
+            category_layouts[i] = text_layout.layoutLabel(allocator, cat, label_budget, opts.ambiguous_width) catch return error.OutOfMemory;
+            category_layouts_init += 1;
+        }
+    }
+
+    const row_positions = allocator.alloc(usize, data_count) catch return error.OutOfMemory;
+    defer allocator.free(row_positions);
+    const plot_rows = planHorizontalCategoryRows(category_layouts, has_x_labels, row_positions);
+    const tick_labels = allocator.alloc(HorizontalTickLabel, tick_values.len) catch return error.OutOfMemory;
+    defer allocator.free(tick_labels);
+    const tick_label_rows = planHorizontalTickLabels(
+        allocator,
+        tick_labels,
+        tick_values,
+        tick_strs,
+        yr,
+        plot_left,
+        plot_w,
+        wrap_width,
+        opts.ambiguous_width,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.WidthTooSmall => return error.WidthTooSmall,
+    };
+
+    const title_rows = title_layout.lineCount();
+    const legend_rows = legend_layout.rowCount();
+    const plot_top = title_rows + legend_rows;
+    for (row_positions) |*row| row.* += plot_top;
+    const plot_bottom = plot_top + plot_rows - 1;
+    const axis_row = plot_bottom + 1;
+    const tick_label_top = axis_row + 1;
+    const x_title_top = tick_label_top + tick_label_rows;
+    const y_title_top = x_title_top + x_title_layout.lineCount();
+    const canvas_rows = y_title_top + y_title_layout.lineCount();
+
+    var canvas = canvas_mod.Canvas.init(allocator, canvas_rows, wrap_width) catch return error.OutOfMemory;
+    defer canvas.deinit();
+
+    try drawCenteredLayout(&canvas, 0, &title_layout, wrap_width, opts.ambiguous_width);
+    if (has_legend) try drawWrappedLegend(&canvas, title_rows, chart, &legend_layout, opts.ambiguous_width, &xy);
+    drawHorizontalAxes(&canvas, plot_top, plot_bottom, axis_row, y_axis_col, plot_left, plot_w, &xy);
+    drawHorizontalCategoryLabels(&canvas, category_layouts, has_x_labels, row_positions, y_axis_col, opts.ambiguous_width, &xy) catch return error.OutOfMemory;
+    drawHorizontalTicks(&canvas, tick_values, tick_strs, tick_labels, yr, axis_row, tick_label_top, plot_left, plot_w, opts.ambiguous_width, &xy) catch return error.OutOfMemory;
+    drawHorizontalSeries(&canvas, chart, yr, row_positions, plot_left, plot_w, &xy);
+    drawHorizontalGrid(&canvas, tick_values, yr, plot_top, plot_bottom, plot_left, plot_w, &xy);
+    try drawCenteredLayout(&canvas, x_title_top, &x_title_layout, wrap_width, opts.ambiguous_width);
+    try drawCenteredLayout(&canvas, y_title_top, &y_title_layout, wrap_width, opts.ambiguous_width);
+
+    try writeXyCanvas(writer, &canvas, chart, opts);
+}
+
+fn drawCenteredLayout(
+    canvas: *canvas_mod.Canvas,
+    top: usize,
+    layout: *const OptionalLabelLayout,
+    width: usize,
+    ambiguous: width_mod.AmbiguousWidth,
+) error{OutOfMemory}!void {
+    if (layout.layout) |actual| {
+        try text_layout.drawCenteredLabel(canvas, top, 0, actual.lines.len, width, actual.lines, ambiguous);
+    }
+}
+
+fn layoutWrappedLegend(
+    allocator: std.mem.Allocator,
+    chart: *const types.XyChart,
+    wrap_width: usize,
+    ambiguous: width_mod.AmbiguousWidth,
+) error{ OutOfMemory, WidthTooSmall }!WrappedLegendLayout {
+    if (chart.series.len < 2) return .{ .allocator = allocator };
+    if (wrap_width <= 2) return error.WidthTooSmall;
+
+    const items = allocator.alloc(text_layout.LabelLayout, chart.series.len) catch return error.OutOfMemory;
+    var initialized: usize = 0;
+    errdefer {
+        for (items[0..initialized]) |*item| item.deinit();
+        allocator.free(items);
+    }
+
+    var bar_n: usize = 0;
+    var line_n: usize = 0;
+    for (chart.series, 0..) |series, series_idx| {
+        var buf: [32]u8 = undefined;
+        const name = legendItemName(&buf, series.kind, &bar_n, &line_n);
+        items[series_idx] = text_layout.layoutLabel(allocator, name, wrap_width - 2, ambiguous) catch return error.OutOfMemory;
+        initialized += 1;
+    }
+
+    return .{
+        .allocator = allocator,
+        .items = items,
+    };
+}
+
+fn legendGlyph(kind: types.XySeriesKind, xy: *const XyGlyphs) u21 {
+    return switch (kind) {
+        .bar => xy.bar,
+        .line => xy.h_line,
+    };
+}
+
+fn legendItemName(buf: []u8, kind: types.XySeriesKind, bar_n: *usize, line_n: *usize) []const u8 {
+    return switch (kind) {
+        .bar => blk: {
+            bar_n.* += 1;
+            break :blk std.fmt.bufPrint(buf, "Bar {d}", .{bar_n.*}) catch unreachable;
+        },
+        .line => blk: {
+            line_n.* += 1;
+            break :blk std.fmt.bufPrint(buf, "Line {d}", .{line_n.*}) catch unreachable;
+        },
+    };
+}
+
+fn drawWrappedLegend(
+    canvas: *canvas_mod.Canvas,
+    top: usize,
+    chart: *const types.XyChart,
+    layout: *const WrappedLegendLayout,
+    ambiguous: width_mod.AmbiguousWidth,
+    xy: *const XyGlyphs,
+) error{OutOfMemory}!void {
+    var row = top;
+    for (chart.series, layout.items, 0..) |series, item, series_idx| {
+        const role = seriesRole(series_idx);
+        canvas.setGlyphRole(row, 0, legendGlyph(series.kind, xy), role);
+        for (item.lines, 0..) |line, line_idx| {
+            try canvas.drawLabelRole(row + line_idx, 2, line.text, role, ambiguous);
+        }
+        row += @max(@as(usize, 1), item.lines.len);
+    }
+}
+
+fn drawVerticalAxes(canvas: *canvas_mod.Canvas, plot_top: usize, plot_bottom: usize, axis_row: usize, y_axis_col: usize, plot_left: usize, plot_w: usize, xy: *const XyGlyphs) void {
+    var r: usize = plot_top;
+    while (r <= plot_bottom) : (r += 1) canvas.setGlyph(r, y_axis_col, xy.v_line);
+    canvas.setGlyph(axis_row, y_axis_col, xy.origin);
+    var c: usize = plot_left;
+    while (c < plot_left + plot_w) : (c += 1) canvas.setGlyph(axis_row, c, xy.h_line);
+}
+
+fn drawVerticalTicks(canvas: *canvas_mod.Canvas, tick_values: []const f64, tick_strs: []const []const u8, yr: YRange, plot_bottom: usize, max_tick_w: usize, y_axis_col: usize, ambiguous: width_mod.AmbiguousWidth, xy: *const XyGlyphs) error{OutOfMemory}!void {
+    for (tick_values, 0..) |t, i| {
+        const tick_row = yPosForValue(t, yr, plot_bottom);
+        const tick_w = width_mod.displayWidth(tick_strs[i], ambiguous);
+        try canvas.drawLabel(tick_row, max_tick_w - tick_w, tick_strs[i], ambiguous);
+        canvas.setGlyph(tick_row, y_axis_col, xy.y_tick);
+    }
+}
+
+fn drawVerticalCategoryTicks(canvas: *canvas_mod.Canvas, category_slots: []const VerticalCategorySlot, axis_row: usize, xy: *const XyGlyphs) void {
+    for (category_slots) |slot| canvas.setGlyph(axis_row, slot.center, xy.x_tick);
+}
+
+fn drawVerticalSeries(
+    canvas: *canvas_mod.Canvas,
+    chart: *const types.XyChart,
+    category_slots: []const VerticalCategorySlot,
+    data_start: usize,
+    data_end: usize,
+    yr: YRange,
+    plot_left: usize,
+    plot_bottom: usize,
+    plot_w: usize,
+    xy: *const XyGlyphs,
+) void {
+    var bar_idx: usize = 0;
+    const n_bar_series = countBarSeries(chart);
+    const local_data_count = @max(@as(usize, 1), data_end - data_start);
+    for (chart.series, 0..) |series, series_idx| {
+        const role = seriesRole(series_idx);
+        switch (series.kind) {
+            .bar => {
+                const series_end = @min(series.data.len, data_end);
+                if (series_end > data_start) {
+                    for (series.data[data_start..series_end], data_start..) |v, i| {
+                        const span = wrappedVerticalBarSpan(category_slots, i - data_start, local_data_count, n_bar_series, bar_idx, plot_left, plot_w);
+                        const row = yPosForValue(v, yr, plot_bottom);
+                        var c = span.start;
+                        while (c < span.end) : (c += 1) {
+                            var r = row;
+                            while (r <= plot_bottom) : (r += 1) canvas.setGlyphRole(r, c, xy.bar, role);
+                        }
+                    }
+                }
+                bar_idx += 1;
+            },
+            .line => {
+                const series_end = @min(series.data.len, data_end);
+                if (series_end > data_start) {
+                    drawWrappedVerticalLine(canvas, series.data[data_start..series_end], category_slots, local_data_count, yr, plot_left, plot_bottom, plot_w, xy, role);
+                }
+            },
+        }
+    }
+}
+
+fn drawVerticalGrid(canvas: *canvas_mod.Canvas, tick_values: []const f64, yr: YRange, plot_bottom: usize, plot_left: usize, plot_w: usize, xy: *const XyGlyphs) void {
+    for (tick_values) |t| {
+        const row = yPosForValue(t, yr, plot_bottom);
+        var c: usize = plot_left;
+        while (c < plot_left + plot_w) : (c += 1) {
+            const cell = canvas.cells[row * canvas.cols + c];
+            if (cell.kind == .glyph and cell.cp == ' ') canvas.setGlyph(row, c, xy.grid);
+        }
+    }
+}
+
+fn drawWrappedVerticalLine(
+    canvas: *canvas_mod.Canvas,
+    data: []const f64,
+    category_slots: []const VerticalCategorySlot,
+    data_count: usize,
+    yr: YRange,
+    plot_left: usize,
+    plot_bottom: usize,
+    plot_w: usize,
+    xy: *const XyGlyphs,
+    role: u8,
+) void {
+    if (data.len == 0) return;
+    var prev_row = yPosForValue(data[0], yr, plot_bottom);
+    var prev_col = verticalPointCol(category_slots, 0, data_count, plot_left, plot_w);
+    canvas.setGlyphRole(prev_row, prev_col, xy.h_line, role);
+    var i: usize = 1;
+    while (i < data.len) : (i += 1) {
+        const row = yPosForValue(data[i], yr, plot_bottom);
+        const col = verticalPointCol(category_slots, i, data_count, plot_left, plot_w);
+        drawScaledSegment(canvas, prev_row, prev_col, row, col, xy, role);
+        prev_row = row;
+        prev_col = col;
+    }
+}
+
+fn drawScaledSegment(canvas: *canvas_mod.Canvas, r1: usize, c1: usize, r2: usize, c2: usize, xy: *const XyGlyphs, role: u8) void {
+    const left = @min(c1, c2);
+    const right = @max(c1, c2);
+    var c = left;
+    while (c <= right) : (c += 1) canvas.setGlyphRole(r1, c, xy.h_line, role);
+    const top = @min(r1, r2);
+    const bottom = @max(r1, r2);
+    var r = top;
+    while (r <= bottom) : (r += 1) canvas.setGlyphRole(r, c2, xy.v_line, role);
+    canvas.setGlyphRole(r2, c2, xy.h_line, role);
+}
+
+fn scaledPointCol(i: usize, count: usize, plot_left: usize, plot_w: usize) usize {
+    if (count <= 1) return plot_left;
+    return plot_left + i * (plot_w - 1) / (count - 1);
+}
+
+fn verticalCategorySlot(i: usize, count: usize, plot_left: usize, plot_w: usize) VerticalCategorySlot {
+    if (count == 0) return .{ .start = plot_left, .width = plot_w, .center = plot_left };
+    if (count > plot_w) {
+        const center = scaledPointCol(i, count, plot_left, plot_w);
+        return .{ .start = center, .width = 1, .center = center };
+    }
+
+    const start = plot_left + i * plot_w / count;
+    const end = if (i + 1 == count)
+        plot_left + plot_w
+    else
+        plot_left + (i + 1) * plot_w / count;
+    const width = @max(@as(usize, 1), end - start);
+    return .{
+        .start = start,
+        .width = width,
+        .center = start + width / 2,
+    };
+}
+
+fn verticalPointCol(category_slots: []const VerticalCategorySlot, i: usize, data_count: usize, plot_left: usize, plot_w: usize) usize {
+    if (i < category_slots.len) return category_slots[i].center;
+    return scaledPointCol(i, data_count, plot_left, plot_w);
+}
+
+fn wrappedVerticalBarSpan(
+    category_slots: []const VerticalCategorySlot,
+    i: usize,
+    data_count: usize,
+    n_bar_series: usize,
+    bar_idx: usize,
+    plot_left: usize,
+    plot_w: usize,
+) BarSpan {
+    const bar_count = @max(@as(usize, 1), n_bar_series);
+    if (i < category_slots.len) {
+        const slot = category_slots[i];
+        if (slot.width < bar_count) return .{ .start = slot.center, .end = slot.center + 1 };
+        const gap_count: usize = if (bar_count > 1 and slot.width >= bar_count * 2 - 1) bar_count - 1 else 0;
+        const available_for_bars = slot.width - gap_count;
+        const single_bar_w = @max(@as(usize, 1), @min(available_for_bars / bar_count, BAR_WIDTH_MAX));
+        const group_w = single_bar_w * bar_count + gap_count;
+        const group_left = slot.start + if (slot.width > group_w) (slot.width - group_w) / 2 else 0;
+        const gap_w: usize = if (gap_count > 0) 1 else 0;
+        const start = group_left + @min(bar_idx, bar_count - 1) * (single_bar_w + gap_w);
+        return .{
+            .start = start,
+            .end = @min(slot.start + slot.width, start + single_bar_w),
+        };
+    }
+
+    const center = scaledPointCol(i, data_count, plot_left, plot_w);
+    const group_left = if (center + bar_count <= plot_left + plot_w)
+        center
+    else
+        plot_left + plot_w - @min(bar_count, plot_w);
+    const start = @min(plot_left + plot_w - 1, group_left + @min(bar_idx, bar_count - 1));
+    return .{ .start = start, .end = start + 1 };
+}
+
+fn planHorizontalCategoryRows(category_layouts: []const text_layout.LabelLayout, has_labels: bool, row_positions: []usize) usize {
+    if (!has_labels) {
+        var i: usize = 0;
+        while (i < row_positions.len) : (i += 1) row_positions[i] = (i * PLOT_ROWS + PLOT_ROWS / 2) / row_positions.len;
+        return PLOT_ROWS;
+    }
+    var row: usize = 0;
+    for (category_layouts, 0..) |layout, i| {
+        const height = @max(@as(usize, 1), layout.lines.len);
+        row_positions[i] = row + height / 2;
+        row += height + 1;
+    }
+    return @max(@as(usize, 1), row);
+}
+
+fn drawHorizontalAxes(canvas: *canvas_mod.Canvas, plot_top: usize, plot_bottom: usize, axis_row: usize, y_axis_col: usize, plot_left: usize, plot_w: usize, xy: *const XyGlyphs) void {
+    var r: usize = plot_top;
+    while (r <= plot_bottom) : (r += 1) canvas.setGlyph(r, y_axis_col, xy.v_line);
+    canvas.setGlyph(axis_row, y_axis_col, xy.origin);
+    var c: usize = plot_left;
+    while (c < plot_left + plot_w) : (c += 1) canvas.setGlyph(axis_row, c, xy.h_line);
+}
+
+fn drawHorizontalCategoryLabels(canvas: *canvas_mod.Canvas, category_layouts: []const text_layout.LabelLayout, has_labels: bool, row_positions: []const usize, y_axis_col: usize, ambiguous: width_mod.AmbiguousWidth, xy: *const XyGlyphs) error{OutOfMemory}!void {
+    if (!has_labels) return;
+    for (category_layouts, 0..) |layout, i| {
+        const start_row = if (row_positions[i] >= layout.lines.len / 2) row_positions[i] - layout.lines.len / 2 else row_positions[i];
+        for (layout.lines, 0..) |line, line_idx| {
+            const col = if (y_axis_col > line.width) y_axis_col - line.width else 0;
+            try canvas.drawLabel(start_row + line_idx, col, line.text, ambiguous);
+        }
+        canvas.setGlyph(row_positions[i], y_axis_col, xy.y_tick);
+    }
+}
+
+fn drawHorizontalTicks(canvas: *canvas_mod.Canvas, tick_values: []const f64, tick_strs: []const []const u8, tick_labels: []const HorizontalTickLabel, yr: YRange, axis_row: usize, tick_label_top: usize, plot_left: usize, plot_w: usize, ambiguous: width_mod.AmbiguousWidth, xy: *const XyGlyphs) error{OutOfMemory}!void {
+    for (tick_values, tick_strs, tick_labels) |t, tick_str, label| {
+        const col = tickColHorizontal(t, yr, plot_left, plot_w);
+        canvas.setGlyph(axis_row, col, xy.x_tick);
+        try canvas.drawLabel(tick_label_top + label.row_offset, label.start, tick_str, ambiguous);
+    }
+}
+
+fn planHorizontalTickLabels(
+    allocator: std.mem.Allocator,
+    tick_labels: []HorizontalTickLabel,
+    tick_values: []const f64,
+    tick_strs: []const []const u8,
+    yr: YRange,
+    plot_left: usize,
+    plot_w: usize,
+    canvas_cols: usize,
+    ambiguous: width_mod.AmbiguousWidth,
+) error{ OutOfMemory, WidthTooSmall }!usize {
+    const row_ends = allocator.alloc(usize, tick_values.len) catch return error.OutOfMemory;
+    defer allocator.free(row_ends);
+
+    var row_count: usize = 0;
+    for (tick_values, tick_strs, 0..) |t, tick_str, i| {
+        const tick_w = width_mod.displayWidth(tick_str, ambiguous);
+        if (tick_w > canvas_cols) return error.WidthTooSmall;
+
+        const col = tickColHorizontal(t, yr, plot_left, plot_w);
+        const centered_start = if (col >= tick_w / 2) col - tick_w / 2 else 0;
+        const start = @min(centered_start, canvas_cols - tick_w);
+        const end = start + tick_w;
+
+        var row: usize = 0;
+        while (row < row_count) : (row += 1) {
+            if (start > row_ends[row]) {
+                row_ends[row] = end;
+                tick_labels[i] = .{ .start = start, .row_offset = row };
+                break;
+            }
+        } else {
+            row_ends[row_count] = end;
+            tick_labels[i] = .{ .start = start, .row_offset = row_count };
+            row_count += 1;
+        }
+    }
+
+    return @max(@as(usize, 1), row_count);
+}
+
+fn drawHorizontalSeries(canvas: *canvas_mod.Canvas, chart: *const types.XyChart, yr: YRange, row_positions: []const usize, plot_left: usize, plot_w: usize, xy: *const XyGlyphs) void {
+    for (chart.series, 0..) |series, series_idx| {
+        const role = seriesRole(series_idx);
+        switch (series.kind) {
+            .bar => for (series.data, 0..) |v, i| {
+                if (i >= row_positions.len) break;
+                const end = tickColHorizontal(v, yr, plot_left, plot_w);
+                var c = plot_left;
+                while (c <= end) : (c += 1) canvas.setGlyphRole(row_positions[i], c, xy.bar, role);
+            },
+            .line => {
+                if (series.data.len == 0) continue;
+                var prev_row = row_positions[0];
+                var prev_col = tickColHorizontal(series.data[0], yr, plot_left, plot_w);
+                canvas.setGlyphRole(prev_row, prev_col, xy.v_line, role);
+                var i: usize = 1;
+                while (i < series.data.len and i < row_positions.len) : (i += 1) {
+                    const row = row_positions[i];
+                    const col = tickColHorizontal(series.data[i], yr, plot_left, plot_w);
+                    drawScaledSegment(canvas, prev_row, prev_col, row, col, xy, role);
+                    prev_row = row;
+                    prev_col = col;
+                }
+            },
+        }
+    }
+}
+
+fn drawHorizontalGrid(canvas: *canvas_mod.Canvas, tick_values: []const f64, yr: YRange, plot_top: usize, plot_bottom: usize, plot_left: usize, plot_w: usize, xy: *const XyGlyphs) void {
+    for (tick_values) |t| {
+        const col = tickColHorizontal(t, yr, plot_left, plot_w);
+        var r: usize = plot_top;
+        while (r <= plot_bottom) : (r += 1) {
+            const cell = canvas.cells[r * canvas.cols + col];
+            if (cell.kind == .glyph and cell.cp == ' ') canvas.setGlyph(r, col, xy.grid);
+        }
+    }
+}
+
+fn writeXyCanvas(writer: *std.Io.Writer, canvas: *const canvas_mod.Canvas, chart: *const types.XyChart, opts: Options) RenderError!void {
+    if (opts.enable_ansi and chart.series.len > 0) {
+        canvas_mod.writeCanvasAnsi(writer, canvas, opts.wrap_width, opts.ambiguous_width, &theme.default_series_palette, opts.color_mode) catch return error.WriteFailed;
+    } else {
+        canvas_mod.writeCanvas(writer, canvas, opts.wrap_width, opts.ambiguous_width) catch return error.WriteFailed;
+    }
 }
 
 fn writeVertical(
@@ -129,11 +837,7 @@ fn writeVertical(
         if (w > max_tick_w) max_tick_w = w;
     }
 
-    var n_bar_series: usize = 0;
-    for (chart.series) |s| {
-        if (s.kind == .bar) n_bar_series += 1;
-    }
-
+    const n_bar_series = countBarSeries(chart);
     const title_rows: usize = if (chart.title != null) 2 else 0;
     const x_label_rows: usize = if (has_x_labels) 1 else 0;
     const legend_rows: usize = if (has_legend) 1 else 0;
@@ -245,11 +949,7 @@ fn writeVertical(
         try drawLegend(&canvas, legend_row, legend_start, chart, opts.ambiguous_width, &xy);
     }
 
-    if (opts.enable_ansi and chart.series.len > 0) {
-        canvas_mod.writeCanvasAnsi(writer, &canvas, opts.wrap_width, opts.ambiguous_width, &theme.default_series_palette, opts.color_mode) catch return error.WriteFailed;
-    } else {
-        canvas_mod.writeCanvas(writer, &canvas, opts.wrap_width, opts.ambiguous_width) catch return error.WriteFailed;
-    }
+    try writeXyCanvas(writer, &canvas, chart, opts);
 }
 
 fn writeHorizontal(
@@ -405,11 +1105,7 @@ fn writeHorizontal(
         try canvas.drawLabel(y_title_row, y_title_start, y_title, opts.ambiguous_width);
     }
 
-    if (opts.enable_ansi and chart.series.len > 0) {
-        canvas_mod.writeCanvasAnsi(writer, &canvas, opts.wrap_width, opts.ambiguous_width, &theme.default_series_palette, opts.color_mode) catch return error.WriteFailed;
-    } else {
-        canvas_mod.writeCanvas(writer, &canvas, opts.wrap_width, opts.ambiguous_width) catch return error.WriteFailed;
-    }
+    try writeXyCanvas(writer, &canvas, chart, opts);
 }
 
 fn tickColHorizontal(v: f64, yr: YRange, plot_left: usize, plot_w: usize) usize {
@@ -506,16 +1202,7 @@ fn computeLegendWidth(chart: *const types.XyChart, ambiguous: width_mod.Ambiguou
     var count: usize = 0;
     for (chart.series) |series| {
         var buf: [32]u8 = undefined;
-        const name = switch (series.kind) {
-            .bar => blk: {
-                bar_n += 1;
-                break :blk std.fmt.bufPrint(&buf, "Bar {d}", .{bar_n}) catch "";
-            },
-            .line => blk: {
-                line_n += 1;
-                break :blk std.fmt.bufPrint(&buf, "Line {d}", .{line_n}) catch "";
-            },
-        };
+        const name = legendItemName(&buf, series.kind, &bar_n, &line_n);
         total += 2 + width_mod.displayWidth(name, ambiguous);
         count += 1;
     }
@@ -536,23 +1223,10 @@ fn drawLegend(
     var line_n: usize = 0;
     for (chart.series, 0..) |series, series_idx| {
         if (col >= canvas.cols) return;
-        const g: u21 = switch (series.kind) {
-            .bar => xy.bar,
-            .line => xy.h_line,
-        };
-        canvas.setGlyphRole(row, col, g, seriesRole(series_idx));
+        canvas.setGlyphRole(row, col, legendGlyph(series.kind, xy), seriesRole(series_idx));
         col += 2;
         var buf: [32]u8 = undefined;
-        const name = switch (series.kind) {
-            .bar => blk: {
-                bar_n += 1;
-                break :blk std.fmt.bufPrint(&buf, "Bar {d}", .{bar_n}) catch "";
-            },
-            .line => blk: {
-                line_n += 1;
-                break :blk std.fmt.bufPrint(&buf, "Line {d}", .{line_n}) catch "";
-            },
-        };
+        const name = legendItemName(&buf, series.kind, &bar_n, &line_n);
         try canvas.drawLabel(row, col, name, ambiguous);
         col += width_mod.displayWidth(name, ambiguous) + 2;
     }
@@ -653,6 +1327,14 @@ fn dataCountFor(chart: *const types.XyChart) usize {
         if (s.data.len > max_n) max_n = s.data.len;
     }
     return @max(@as(usize, 1), max_n);
+}
+
+fn countBarSeries(chart: *const types.XyChart) usize {
+    var count: usize = 0;
+    for (chart.series) |series| {
+        if (series.kind == .bar) count += 1;
+    }
+    return count;
 }
 
 fn drawStaircaseLine(
@@ -787,6 +1469,163 @@ fn renderToString(allocator: std.mem.Allocator, chart: *const types.XyChart) ![]
         .enable_ansi = false,
     });
     return sink.toOwnedSlice();
+}
+
+test "paintXyChart null wrap keeps vertical title axis tick and bar snapshot" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
+        \\xychart
+        \\title "Demo"
+        \\x-axis [a, b]
+        \\y-axis 0 --> 2
+        \\bar [1, 2]
+    );
+    defer diagram.deinit();
+
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
+    defer std.testing.allocator.free(out);
+
+    const expected =
+        \\Demo
+        \\
+        \\  2 ┤·········································████████···········
+        \\    │                                         ████████
+        \\    │                                         ████████
+        \\    │                                         ████████
+        \\    │                                         ████████
+        \\1.5 ┤·········································████████···········
+        \\    │                                         ████████
+        \\    │                                         ████████
+        \\    │                                         ████████
+        \\  1 ┤···········████████······················████████···········
+        \\    │           ████████                      ████████
+        \\    │           ████████                      ████████
+        \\    │           ████████                      ████████
+        \\    │           ████████                      ████████
+        \\0.5 ┤···········████████······················████████···········
+        \\    │           ████████                      ████████
+        \\    │           ████████                      ████████
+        \\    │           ████████                      ████████
+        \\    │           ████████                      ████████
+        \\  0 ┤···········████████······················████████···········
+        \\    ┼───────────────┬─────────────────────────────┬──────────────
+        \\     a                             b
+    ;
+    try std.testing.expectEqualStrings(expected, out);
+}
+
+test "paintXyChart null wrap keeps vertical line-series snapshot" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
+        \\xychart
+        \\line [1, 2, 3]
+    );
+    defer diagram.deinit();
+
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
+    defer std.testing.allocator.free(out);
+
+    const expected =
+        \\    │
+        \\  3 ┤············································╭─────────────────
+        \\    │                                            │
+        \\    │                                            │
+        \\2.5 ┤············································│···············
+        \\    │                                            │
+        \\    │                                            │
+        \\  2 ┤···············╭────────────────────────────╯···············
+        \\    │               │
+        \\    │               │
+        \\1.5 ┤···············│············································
+        \\    │               │
+        \\    │               │
+        \\  1 ┤───────────────╯············································
+        \\    │
+        \\    │
+        \\0.5 ┤····························································
+        \\    │
+        \\    │
+        \\  0 ┤····························································
+        \\    ┼────────────────────────────────────────────────────────────
+    ;
+    try std.testing.expectEqualStrings(expected, out);
+}
+
+test "paintXyChart null wrap keeps horizontal category-axis bar snapshot" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
+        \\xychart horizontal
+        \\x-axis [a, b]
+        \\y-axis 0 --> 2
+        \\bar [1, 2]
+    );
+    defer diagram.deinit();
+
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
+    defer std.testing.allocator.free(out);
+
+    const expected =
+        \\  │·              ·              ·             ·              ·
+        \\  │·              ·              ·             ·              ·
+        \\  │·              ·              ·             ·              ·
+        \\  │·              ·              ·             ·              ·
+        \\  │·              ·              ·             ·              ·
+        \\ a┤███████████████████████████████             ·              ·
+        \\  │·              ·              ·             ·              ·
+        \\  │·              ·              ·             ·              ·
+        \\  │·              ·              ·             ·              ·
+        \\  │·              ·              ·             ·              ·
+        \\  │·              ·              ·             ·              ·
+        \\  │·              ·              ·             ·              ·
+        \\  │·              ·              ·             ·              ·
+        \\  │·              ·              ·             ·              ·
+        \\  │·              ·              ·             ·              ·
+        \\ b┤████████████████████████████████████████████████████████████
+        \\  │·              ·              ·             ·              ·
+        \\  │·              ·              ·             ·              ·
+        \\  │·              ·              ·             ·              ·
+        \\  │·              ·              ·             ·              ·
+        \\  ┼┬──────────────┬──────────────┬─────────────┬──────────────┬
+        \\   0             0.5             1            1.5             2
+    ;
+    try std.testing.expectEqualStrings(expected, out);
+}
+
+test "paintXyChart null wrap keeps horizontal legend snapshot" {
+    var diagram = try compile_mod.compile(std.testing.allocator,
+        \\xychart horizontal
+        \\x-axis [a, b]
+        \\bar [1, 2]
+        \\line [2, 1]
+    );
+    defer diagram.deinit();
+
+    const out = try renderToString(std.testing.allocator, &diagram.xychart);
+    defer std.testing.allocator.free(out);
+
+    const expected =
+        \\                        █ Bar 1  ─ Line 1
+        \\  │     ·         ·         ·        ·         ·         ·
+        \\  │     ·         ·         ·        ·         ·         ·
+        \\  │     ·         ·         ·        ·         ·         ·
+        \\  │     ·         ·         ·        ·         ·         │
+        \\  │     ·         ·         ·        ·         ·         │
+        \\ a┤██████         ·         ·        ·         ·         │
+        \\  │     ·         ·         ·        ·         ·         │
+        \\  │     ·         ·         ·        ·         ·         │
+        \\  │     ·         ·         ·        ·         ·         │
+        \\  │     ·         ·         ·        ·         ·         │
+        \\  │     ╭────────────────────────────────────────────────╯
+        \\  │     │         ·         ·        ·         ·         ·
+        \\  │     │         ·         ·        ·         ·         ·
+        \\  │     │         ·         ·        ·         ·         ·
+        \\  │     │         ·         ·        ·         ·         ·
+        \\ b┤█████│█████████████████████████████████████████████████
+        \\  │     │         ·         ·        ·         ·         ·
+        \\  │     │         ·         ·        ·         ·         ·
+        \\  │     ·         ·         ·        ·         ·         ·
+        \\  │     ·         ·         ·        ·         ·         ·
+        \\  ┼─────┬─────────┬─────────┬────────┬─────────┬─────────┬─────
+        \\        1        1.2       1.4      1.6       1.8        2
+    ;
+    try std.testing.expectEqualStrings(expected, out);
 }
 
 test "niceTickValues(0, 10) yields [0, 2, 4, 6, 8, 10]" {
@@ -1102,8 +1941,8 @@ test "paintXyChart horizontal places category labels on the left of y-axis" {
     try std.testing.expect(std.mem.indexOf(u8, out, "gamma") != null);
     var it = std.mem.splitScalar(u8, out, '\n');
     while (it.next()) |line| {
-        const alpha_byte = std.mem.indexOf(u8, line, "alpha") orelse continue;
-        const axis_byte = std.mem.indexOf(u8, line, "┼") orelse std.mem.indexOf(u8, line, "│");
+        const alpha_byte = std.mem.find(u8, line, "alpha") orelse continue;
+        const axis_byte = std.mem.find(u8, line, "┼") orelse std.mem.find(u8, line, "│");
         if (axis_byte) |ab| try std.testing.expect(alpha_byte < ab);
     }
 }
@@ -1778,7 +2617,156 @@ test "paintXyChart with enable_ansi=false (default) emits no SGR escape" {
     try std.testing.expect(std.mem.indexOf(u8, sink.writer.buffered(), "\x1b[") == null);
 }
 
-test "vertical xychart clips each line when wrap_width=30 with enable_ansi=true" {
+test "vertical wrapped xychart places category labels in their plot slots" {
+    const src = "xychart\nx-axis [Alpha, Beta, Gamma]\ny-axis 0 --> 3\nbar [1, 2, 3]\n";
+    var diagram = try compile_mod.compile(std.testing.allocator, src);
+    defer diagram.deinit();
+
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    try paintXyChart(&sink.writer, std.testing.allocator, &diagram.xychart, .{
+        .wrap_width = 40,
+        .ambiguous_width = .narrow,
+        .enable_ansi = false,
+    });
+    const out = sink.writer.buffered();
+    var saw_label_row = false;
+    var lines = std.mem.splitScalar(u8, out, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.find(u8, line, "Alpha") != null and
+            std.mem.find(u8, line, "Beta") != null and
+            std.mem.find(u8, line, "Gamma") != null)
+        {
+            saw_label_row = true;
+            break;
+        }
+    }
+    try std.testing.expect(saw_label_row);
+    try std.testing.expect(std.mem.find(u8, out, "\u{2026}") == null);
+    try expectAllLinesFitAnsi(std.testing.allocator, out, 40);
+}
+
+test "vertical wrapped xychart keeps clustered bar series in separate columns" {
+    const src = "xychart\nx-axis [Only]\ny-axis 0 --> 10\nbar [5]\nbar [5]\nbar [5]\n";
+    var diagram = try compile_mod.compile(std.testing.allocator, src);
+    defer diagram.deinit();
+
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    try paintXyChart(&sink.writer, std.testing.allocator, &diagram.xychart, .{
+        .wrap_width = 40,
+        .ambiguous_width = .narrow,
+        .enable_ansi = false,
+    });
+    const out = sink.writer.buffered();
+    try std.testing.expect(std.mem.find(u8, out, "███") != null);
+    try std.testing.expect(std.mem.find(u8, out, "\u{2026}") == null);
+    try expectAllLinesFitAnsi(std.testing.allocator, out, 40);
+}
+
+test "vertical wrapped xychart bands overfull category labels instead of overwriting them" {
+    const alloc = std.testing.allocator;
+    var source: std.Io.Writer.Allocating = .init(alloc);
+    defer source.deinit();
+
+    try source.writer.writeAll("xychart\nx-axis [");
+    for (0..50) |i| {
+        if (i > 0) try source.writer.writeAll(", ");
+        try source.writer.print("c{d:0>2}", .{i});
+    }
+    try source.writer.writeAll("]\ny-axis 0 --> 50\nbar [");
+    for (0..50) |i| {
+        if (i > 0) try source.writer.writeAll(", ");
+        try source.writer.print("{d}", .{i + 1});
+    }
+    try source.writer.writeAll("]\n");
+
+    var diagram = try compile_mod.compile(alloc, source.writer.buffered());
+    defer diagram.deinit();
+
+    var sink: std.Io.Writer.Allocating = .init(alloc);
+    defer sink.deinit();
+    try paintXyChart(&sink.writer, alloc, &diagram.xychart, .{
+        .wrap_width = 30,
+        .ambiguous_width = .narrow,
+        .enable_ansi = false,
+    });
+    const out = sink.writer.buffered();
+
+    for (0..50) |i| {
+        var label_buf: [8]u8 = undefined;
+        const label = try std.fmt.bufPrint(&label_buf, "c{d:0>2}", .{i});
+        try std.testing.expect(std.mem.find(u8, out, label) != null);
+    }
+    try std.testing.expect(std.mem.find(u8, out, "\u{2026}") == null);
+    try expectAllLinesFitAnsi(alloc, out, 30);
+}
+
+test "paintXyChart returns WidthTooSmall when wrapped vertical chart cannot fit readable axes" {
+    const src = "xychart\nbar [1]\n";
+    var diagram = try compile_mod.compile(std.testing.allocator, src);
+    defer diagram.deinit();
+
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    try std.testing.expectError(error.WidthTooSmall, paintXyChart(&sink.writer, std.testing.allocator, &diagram.xychart, .{
+        .wrap_width = 7,
+        .ambiguous_width = .narrow,
+        .enable_ansi = false,
+    }));
+}
+
+test "horizontal wrapped xychart accepts the minimum readable plot width" {
+    const src = "xychart horizontal\nbar [1]\n";
+    var diagram = try compile_mod.compile(std.testing.allocator, src);
+    defer diagram.deinit();
+
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    try paintXyChart(&sink.writer, std.testing.allocator, &diagram.xychart, .{
+        .wrap_width = 1 + PLOT_WIDTH_READABLE_MIN,
+        .ambiguous_width = .narrow,
+        .enable_ansi = false,
+    });
+
+    const out = sink.writer.buffered();
+    try std.testing.expect(std.mem.find(u8, out, "█") != null);
+    try expectAllLinesFitAnsi(std.testing.allocator, out, 1 + PLOT_WIDTH_READABLE_MIN);
+}
+
+test "horizontal wrapped xychart preserves wrapped two-digit legend names" {
+    const src =
+        \\xychart horizontal
+        \\bar [1]
+        \\bar [1]
+        \\bar [1]
+        \\bar [1]
+        \\bar [1]
+        \\bar [1]
+        \\bar [1]
+        \\bar [1]
+        \\bar [1]
+        \\bar [1]
+    ;
+    var diagram = try compile_mod.compile(std.testing.allocator, src);
+    defer diagram.deinit();
+
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    try paintXyChart(&sink.writer, std.testing.allocator, &diagram.xychart, .{
+        .wrap_width = 7,
+        .ambiguous_width = .narrow,
+        .enable_ansi = false,
+    });
+
+    const out = sink.writer.buffered();
+    try std.testing.expect(std.mem.find(u8, out, "Bar") != null);
+    try std.testing.expect(std.mem.find(u8, out, "10") != null);
+    try std.testing.expect(std.mem.find(u8, out, "\u{2026}") == null);
+    try expectAllLinesFitAnsi(std.testing.allocator, out, 7);
+}
+
+test "vertical xychart scales each line when wrap_width=30 with enable_ansi=true" {
     const src = "xychart\nx-axis [a, b, c, d, e, f, g, h, i, j, k, l, m, n, o]\nbar [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]\n";
     var diagram = try compile_mod.compile(std.testing.allocator, src);
     defer diagram.deinit();
@@ -1791,11 +2779,14 @@ test "vertical xychart clips each line when wrap_width=30 with enable_ansi=true"
         .enable_ansi = true,
     });
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "\u{2026}") != null);
+    try std.testing.expect(std.mem.find(u8, out, "\u{2026}") == null);
+    try std.testing.expect(std.mem.find(u8, out, "a") != null);
+    try std.testing.expect(std.mem.find(u8, out, "o") != null);
+    try std.testing.expect(std.mem.count(u8, out, "█") >= 15);
     try expectAllLinesFitAnsi(std.testing.allocator, out, 30);
 }
 
-test "horizontal xychart clips each line when wrap_width=30 with enable_ansi=true" {
+test "horizontal xychart scales each line when wrap_width=30 with enable_ansi=true" {
     const src = "xychart horizontal\nx-axis [a, b, c]\nbar [1, 2, 3]\n";
     var diagram = try compile_mod.compile(std.testing.allocator, src);
     defer diagram.deinit();
@@ -1808,8 +2799,31 @@ test "horizontal xychart clips each line when wrap_width=30 with enable_ansi=tru
         .enable_ansi = true,
     });
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "\u{2026}") != null);
+    try std.testing.expect(std.mem.find(u8, out, "\u{2026}") == null);
+    try std.testing.expect(std.mem.find(u8, out, "a") != null);
+    try std.testing.expect(std.mem.find(u8, out, "c") != null);
+    try std.testing.expect(std.mem.count(u8, out, "█") > 0);
     try expectAllLinesFitAnsi(std.testing.allocator, out, 30);
+}
+
+test "horizontal wrapped xychart keeps dense tick labels separated" {
+    const src = "xychart horizontal\nx-axis [a, b, c]\ny-axis 0 --> 100\nbar [20, 70, 40]\n";
+    var diagram = try compile_mod.compile(std.testing.allocator, src);
+    defer diagram.deinit();
+
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    try paintXyChart(&sink.writer, std.testing.allocator, &diagram.xychart, .{
+        .wrap_width = 20,
+        .ambiguous_width = .narrow,
+        .enable_ansi = false,
+    });
+
+    const out = sink.writer.buffered();
+    try std.testing.expect(std.mem.find(u8, out, "4060") == null);
+    try std.testing.expect(std.mem.find(u8, out, "80100") == null);
+    try std.testing.expect(std.mem.find(u8, out, "\u{2026}") == null);
+    try expectAllLinesFitAnsi(std.testing.allocator, out, 20);
 }
 
 test "vertical xychart with wrap_width=null and enable_ansi=true emits no ellipsis" {
@@ -1823,7 +2837,7 @@ test "vertical xychart with wrap_width=null and enable_ansi=true emits no ellips
         .ambiguous_width = .narrow,
         .enable_ansi = true,
     });
-    try std.testing.expect(std.mem.indexOf(u8, sink.writer.buffered(), "\u{2026}") == null);
+    try std.testing.expect(std.mem.find(u8, sink.writer.buffered(), "\u{2026}") == null);
 }
 
 fn expectAllLinesFitAnsi(allocator: std.mem.Allocator, out: []const u8, limit: usize) !void {
