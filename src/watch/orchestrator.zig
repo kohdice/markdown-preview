@@ -35,19 +35,8 @@ pub fn run(opts: WatchOptions) !u8 {
         return exit_failure;
     }
 
-    const dir_path = std.fs.path.dirnamePosix(opts.path) orelse ".";
-    const file_name = std.fs.path.basenamePosix(opts.path);
-
-    var dir_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const dir_z = toCString(&dir_buf, dir_path) orelse {
-        try opts.stderr.print("mp: path too long: '{s}'\n", .{opts.path});
-        return exit_failure;
-    };
-    var name_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const name_z = toCString(&name_buf, file_name) orelse {
-        try opts.stderr.print("mp: path too long: '{s}'\n", .{opts.path});
-        return exit_failure;
-    };
+    const dir_path = std.fs.path.dirname(opts.path) orelse ".";
+    const file_name = std.fs.path.basename(opts.path);
 
     var session: session_mod.WatchSession = undefined;
     session.init(opts.app_allocator, .{
@@ -71,7 +60,7 @@ pub fn run(opts: WatchOptions) !u8 {
     _ = session.refreshFrom(opts.io, opts.cwd, opts.path, wrap_width, &hash);
     session.pgr.displayPage(opts.stdout, &session.buffer, scroll_offset, term_size.rows, opts.enable_ansi);
 
-    var watcher = file_watcher.FileWatcher.init(dir_z, name_z) catch |err| {
+    var watcher = file_watcher.FileWatcher.init(opts.cwd, dir_path, file_name) catch |err| {
         try opts.stderr.print("mp: unable to watch '{s}': {s}\n", .{ opts.path, @errorName(err) });
         return exit_failure;
     };
@@ -84,11 +73,4 @@ pub fn run(opts: WatchOptions) !u8 {
         .signal_exit => exit_failure,
         .poll_error => exit_failure,
     };
-}
-
-fn toCString(buf: *[std.Io.Dir.max_path_bytes]u8, slice: []const u8) ?[*:0]const u8 {
-    if (slice.len >= buf.len) return null;
-    @memcpy(buf[0..slice.len], slice);
-    buf[slice.len] = 0;
-    return @ptrCast(buf[0..slice.len :0]);
 }
