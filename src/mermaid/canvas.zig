@@ -208,11 +208,11 @@ pub const Canvas = struct {
         var buf: [4]u8 = undefined;
         const len = std.unicode.utf8Encode(cp, &buf) catch return;
         const w = width_mod.displayWidth(buf[0..len], ambiguous);
-        std.debug.assert(w != 0);
+        if (w == 0) return;
+        if (w == 2 and c + 1 >= self.cols) return;
         const idx = r * self.cols + c;
         self.cells[idx] = .{ .cp = cp, .kind = .glyph };
         if (w == 2) {
-            std.debug.assert(c + 1 < self.cols);
             self.cells[idx + 1] = .{ .cp = 0, .kind = .continuation };
         }
     }
@@ -222,11 +222,11 @@ pub const Canvas = struct {
         var buf: [4]u8 = undefined;
         const len = std.unicode.utf8Encode(cp, &buf) catch return;
         const w = width_mod.displayWidth(buf[0..len], ambiguous);
-        std.debug.assert(w != 0);
+        if (w == 0) return;
+        if (w == 2 and c + 1 >= self.cols) return;
         const idx = r * self.cols + c;
         self.cells[idx] = .{ .cp = cp, .kind = .glyph, .role = role };
         if (w == 2) {
-            std.debug.assert(c + 1 < self.cols);
             self.cells[idx + 1] = .{ .cp = 0, .kind = .continuation, .role = role };
         }
     }
@@ -875,6 +875,22 @@ test "drawCodepoint places wide char and continuation sentinel" {
     try std.testing.expectEqual(@as(u21, '日'), canvas.at(0, 0).cp);
     try std.testing.expectEqual(Cell.Kind.glyph, canvas.at(0, 0).kind);
     try std.testing.expectEqual(Cell.Kind.continuation, canvas.at(0, 1).kind);
+}
+
+test "drawCodepoint clips wide char at right edge" {
+    var canvas = try Canvas.init(std.testing.allocator, 1, 1);
+    defer canvas.deinit();
+    canvas.drawCodepoint(0, 0, '日', .narrow);
+    try std.testing.expectEqual(@as(u21, ' '), canvas.at(0, 0).cp);
+    try std.testing.expectEqual(Cell.Kind.glyph, canvas.at(0, 0).kind);
+}
+
+test "drawCodepointRole clips wide char at right edge" {
+    var canvas = try Canvas.init(std.testing.allocator, 1, 1);
+    defer canvas.deinit();
+    canvas.drawCodepointRole(0, 0, '日', 3, .narrow);
+    try std.testing.expectEqual(@as(u21, ' '), canvas.at(0, 0).cp);
+    try std.testing.expectEqual(@as(?u8, null), canvas.at(0, 0).role);
 }
 
 test "drawLabel advances by display width" {
