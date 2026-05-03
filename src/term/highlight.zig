@@ -38,27 +38,7 @@ pub const Language = enum {
     json,
 
     pub fn fromString(lang: []const u8) ?Language {
-        if (lang.len == 0) return null;
-        if (std.ascii.eqlIgnoreCase(lang, "zig")) return .zig;
-        if (std.ascii.eqlIgnoreCase(lang, "c")) return .c;
-        if (std.ascii.eqlIgnoreCase(lang, "rust") or std.ascii.eqlIgnoreCase(lang, "rs")) return .rust;
-        if (std.ascii.eqlIgnoreCase(lang, "go")) return .go;
-        if (std.ascii.eqlIgnoreCase(lang, "python") or std.ascii.eqlIgnoreCase(lang, "py")) return .python;
-        // jsx → .javascript (tree-sitter-javascript parses JSX natively).
-        // Do not redirect to .tsx, which also carries TypeScript annotations.
-        if (std.ascii.eqlIgnoreCase(lang, "javascript") or std.ascii.eqlIgnoreCase(lang, "js") or std.ascii.eqlIgnoreCase(lang, "jsx")) return .javascript;
-        if (std.ascii.eqlIgnoreCase(lang, "bash") or std.ascii.eqlIgnoreCase(lang, "sh") or std.ascii.eqlIgnoreCase(lang, "shell")) return .bash;
-        if (std.ascii.eqlIgnoreCase(lang, "cpp") or std.ascii.eqlIgnoreCase(lang, "c++") or
-            std.ascii.eqlIgnoreCase(lang, "cxx") or std.ascii.eqlIgnoreCase(lang, "cc") or
-            std.ascii.eqlIgnoreCase(lang, "hpp") or std.ascii.eqlIgnoreCase(lang, "hxx") or
-            std.ascii.eqlIgnoreCase(lang, "h++")) return .cpp;
-        if (std.ascii.eqlIgnoreCase(lang, "typescript") or std.ascii.eqlIgnoreCase(lang, "ts") or
-            std.ascii.eqlIgnoreCase(lang, "mts") or std.ascii.eqlIgnoreCase(lang, "cts")) return .typescript;
-        if (std.ascii.eqlIgnoreCase(lang, "tsx")) return .tsx;
-        if (std.ascii.eqlIgnoreCase(lang, "html") or std.ascii.eqlIgnoreCase(lang, "htm")) return .html;
-        if (std.ascii.eqlIgnoreCase(lang, "css")) return .css;
-        if (std.ascii.eqlIgnoreCase(lang, "json")) return .json;
-        return null;
+        return language_aliases.get(lang);
     }
 
     fn index(self: Language) usize {
@@ -67,6 +47,39 @@ pub const Language = enum {
 };
 
 const language_count = @typeInfo(Language).@"enum".fields.len;
+const LanguageAliasMap = std.StaticStringMapWithEql(Language, std.static_string_map.eqlAsciiIgnoreCase);
+const language_aliases = LanguageAliasMap.initComptime(.{
+    .{ "zig", .zig },
+    .{ "c", .c },
+    .{ "rust", .rust },
+    .{ "rs", .rust },
+    .{ "go", .go },
+    .{ "python", .python },
+    .{ "py", .python },
+    .{ "javascript", .javascript },
+    .{ "js", .javascript },
+    // tree-sitter-javascript parses JSX without TypeScript syntax.
+    .{ "jsx", .javascript },
+    .{ "bash", .bash },
+    .{ "sh", .bash },
+    .{ "shell", .bash },
+    .{ "cpp", .cpp },
+    .{ "c++", .cpp },
+    .{ "cxx", .cpp },
+    .{ "cc", .cpp },
+    .{ "hpp", .cpp },
+    .{ "hxx", .cpp },
+    .{ "h++", .cpp },
+    .{ "typescript", .typescript },
+    .{ "ts", .typescript },
+    .{ "mts", .typescript },
+    .{ "cts", .typescript },
+    .{ "tsx", .tsx },
+    .{ "html", .html },
+    .{ "htm", .html },
+    .{ "css", .css },
+    .{ "json", .json },
+});
 
 const LanguageState = union(enum) {
     uninitialized,
@@ -215,13 +228,13 @@ fn compareActiveCapture(captures: []const CaptureSpan, a: usize, b: usize) std.m
 const ActiveCaptureQueue = std.PriorityQueue(usize, []const CaptureSpan, compareActiveCapture);
 
 const TreeSitterHighlighter = struct {
-    parser: *ts.Parser,
+    parser: ?*ts.Parser,
     languages: [language_count]LanguageState,
     locals_queries: [language_count]QueryState,
 
     pub fn init() TreeSitterHighlighter {
         return .{
-            .parser = ts.Parser.create(),
+            .parser = null,
             .languages = [_]LanguageState{.uninitialized} ** language_count,
             .locals_queries = [_]QueryState{.uninitialized} ** language_count,
         };
@@ -240,7 +253,7 @@ const TreeSitterHighlighter = struct {
                 else => {},
             }
         }
-        self.parser.destroy();
+        if (self.parser) |parser| parser.destroy();
     }
 
     /// Overlap semantics: "later pattern wins". More specific patterns that
@@ -269,9 +282,10 @@ const TreeSitterHighlighter = struct {
         }
 
         const config = self.getOrInitConfig(lang) orelse return error.QueryUnavailable;
+        const parser = self.getOrInitParser();
 
-        try self.parser.setLanguage(config.ts_language);
-        const tree = self.parser.parseString(source, null) orelse return error.QueryUnavailable;
+        try parser.setLanguage(config.ts_language);
+        const tree = parser.parseString(source, null) orelse return error.QueryUnavailable;
         defer tree.destroy();
 
         var locals: ?Locals = null;
@@ -332,6 +346,13 @@ const TreeSitterHighlighter = struct {
         }
 
         try writeCapturedRuns(allocator, writer, source, caps.items, config.query, syn_palette);
+    }
+
+    fn getOrInitParser(self: *TreeSitterHighlighter) *ts.Parser {
+        if (self.parser) |parser| return parser;
+        const parser = ts.Parser.create();
+        self.parser = parser;
+        return parser;
     }
 
     pub fn forceLanguageFailedForTesting(self: *TreeSitterHighlighter, lang: Language) void {
@@ -958,6 +979,20 @@ test "Language.fromString recognizes all supported names and aliases" {
     try std.testing.expectEqual(Language.json, Language.fromString("json").?);
     try std.testing.expectEqual(@as(?Language, null), Language.fromString(""));
     try std.testing.expectEqual(@as(?Language, null), Language.fromString("klingon"));
+}
+
+test "Highlighter: parser is created lazily" {
+    var hl = Highlighter.init();
+    defer hl.deinit();
+
+    try std.testing.expectEqual(@as(?*ts.Parser, null), hl.parser);
+
+    const allocator = std.testing.allocator;
+    var buf: std.Io.Writer.Allocating = .init(allocator);
+    defer buf.deinit();
+
+    try hl.writeHighlightedBlock(allocator, &buf.writer, "const x = 1;", .zig, theme.default_syntax_palette);
+    try std.testing.expect(hl.parser != null);
 }
 
 test "captureToStyle: keyword prefix matches dotted captures" {
