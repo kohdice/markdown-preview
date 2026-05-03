@@ -425,10 +425,8 @@ pub const RenderSession = struct {
                 return;
             }
 
-            if (!self.ctx.enable_ansi) {
-                try ansi.writeStyled(self.writer, false, .{}, content);
-                return;
-            }
+            try ansi.writeStyled(self.writer, false, .{}, content);
+            return;
         }
 
         try ansi.writeStyled(self.writer, self.ctx.enable_ansi, .{
