@@ -116,11 +116,9 @@ fn computeErLayout(
 ) ErLayoutError!ErLayout {
     const n = diagram.entities.len;
     if (n == 0) {
-        const positions = try allocator.alloc(types.GridPos, 0);
-        errdefer allocator.free(positions);
-        const labels = try allocator.alloc(types.NodeLabelLayout, 0);
-        errdefer allocator.free(labels);
-        const entity_layouts = try allocator.alloc(EntityBoxLayout, 0);
+        const positions: []types.GridPos = &.{};
+        const labels: []types.NodeLabelLayout = &.{};
+        const entity_layouts: []EntityBoxLayout = &.{};
         const base: types.Layout = .{
             .allocator = allocator,
             .positions = positions,
@@ -201,8 +199,7 @@ fn computeErLayout(
         };
     }
 
-    const node_labels = try allocator.alloc(types.NodeLabelLayout, 0);
-    errdefer allocator.free(node_labels);
+    const node_labels: []types.NodeLabelLayout = &.{};
 
     const base: types.Layout = .{
         .allocator = allocator,

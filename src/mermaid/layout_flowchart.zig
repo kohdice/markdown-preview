@@ -36,9 +36,8 @@ pub fn computeLayout(
     const n = graph.nodes.len;
 
     if (n == 0) {
-        const positions = try allocator.alloc(types.GridPos, 0);
-        errdefer allocator.free(positions);
-        const labels = try allocator.alloc(types.NodeLabelLayout, 0);
+        const positions: []types.GridPos = &.{};
+        const labels: []types.NodeLabelLayout = &.{};
         return .{
             .allocator = allocator,
             .positions = positions,
@@ -1024,7 +1023,7 @@ fn computeSubgraphDirs(
 ) LayoutError![]?types.Direction {
     var total: u32 = 0;
     countSubgraphs(graph.subgraphs, &total);
-    if (total == 0) return try allocator.alloc(?types.Direction, 0);
+    if (total == 0) return &.{};
     const dirs = try allocator.alloc(?types.Direction, total + 1);
     @memset(dirs, null);
     var counter: u32 = 0;

@@ -251,11 +251,9 @@ fn computeClassLayout(
 ) ClassLayoutError!ClassLayout {
     const n = diagram.classes.len;
     if (n == 0) {
-        const positions = try allocator.alloc(types.GridPos, 0);
-        errdefer allocator.free(positions);
-        const labels = try allocator.alloc(types.NodeLabelLayout, 0);
-        errdefer allocator.free(labels);
-        const class_layouts = try allocator.alloc(ClassBoxLayout, 0);
+        const positions: []types.GridPos = &.{};
+        const labels: []types.NodeLabelLayout = &.{};
+        const class_layouts: []ClassBoxLayout = &.{};
         const base: types.Layout = .{
             .allocator = allocator,
             .positions = positions,
@@ -335,8 +333,7 @@ fn computeClassLayout(
         };
     }
 
-    const node_labels = try allocator.alloc(types.NodeLabelLayout, 0);
-    errdefer allocator.free(node_labels);
+    const node_labels: []types.NodeLabelLayout = &.{};
 
     const outer_pad_y = try computeNamespaceOuterPadY(allocator, diagram, positions, class_layouts, cell_w, outer_pad, ambiguous);
 
