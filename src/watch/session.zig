@@ -9,7 +9,6 @@ const source_loader = @import("../source_loader.zig");
 
 pub const WatchSession = struct {
     app_allocator: std.mem.Allocator,
-    state_arena: std.heap.ArenaAllocator,
     renderer: render.Renderer,
     buffer: render_buffer_mod.RenderBuffer,
     pgr: pager_mod.Pager,
@@ -22,16 +21,14 @@ pub const WatchSession = struct {
     ) void {
         self.* = .{
             .app_allocator = app_allocator,
-            .state_arena = std.heap.ArenaAllocator.init(app_allocator),
             .renderer = undefined,
             .buffer = undefined,
             .pgr = undefined,
             .cached_document = null,
         };
-        const state_alloc = self.state_arena.allocator();
         self.renderer = render.Renderer.init(app_allocator, render_options);
-        self.buffer.init(state_alloc);
-        self.pgr = pager_mod.Pager.init(state_alloc);
+        self.buffer.init(app_allocator);
+        self.pgr = pager_mod.Pager.init(app_allocator);
     }
 
     pub fn deinit(self: *WatchSession) void {
@@ -39,7 +36,6 @@ pub const WatchSession = struct {
         self.pgr.deinit();
         self.buffer.deinit();
         self.renderer.deinit();
-        self.state_arena.deinit();
     }
 
     pub fn refreshFrom(
@@ -140,7 +136,7 @@ test "WatchSession init + deinit returns memory to the caller allocator" {
     session.deinit();
 }
 
-test "WatchSession buffer writes use the session-owned arena" {
+test "WatchSession buffer writes use the session allocator" {
     var session: WatchSession = undefined;
     session.init(std.testing.allocator, .{});
     defer session.deinit();
@@ -208,7 +204,7 @@ test "WatchSession rerenders the stored document with a different wrap_width wit
     try std.testing.expect(session.cachedDocument() != null);
 }
 
-test "WatchSession pgr.displayPage allocates against the session-owned arena" {
+test "WatchSession pgr.displayPage allocates against the session allocator" {
     var session: WatchSession = undefined;
     session.init(std.testing.allocator, .{});
     defer session.deinit();
