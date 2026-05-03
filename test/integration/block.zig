@@ -241,15 +241,14 @@ test "nested task list items" {
     try std.testing.expectEqualStrings("• ☑ Parent\n  ◦ ☐ Child\n", rendered);
 }
 
-test "tab-indented headings and blockquotes are recognized" {
+test "tab-indented headings and blockquotes render as indented code" {
     const allocator = std.testing.allocator;
     const source = "\t# Tab Heading\n\t> Tab Quote\n";
 
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "Tab Heading"));
-    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "Tab Quote"));
+    try std.testing.expectEqualStrings("# Tab Heading\n> Tab Quote\n", rendered);
 }
 
 test "consecutive blank lines are collapsed to one" {

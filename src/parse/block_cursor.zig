@@ -118,15 +118,15 @@ pub const BlockCursor = struct {
                     var lookahead = parent;
                     while (lookahead.peekLine()) |candidate| {
                         if (!isBlankLine(candidate)) {
-                            break :blk if (parse_block.countLeadingWhitespace(candidate) >= list_item.content_col) "" else null;
+                            break :blk if (parse_block.leadingIndentColumns(candidate) >= list_item.content_col) "" else null;
                         }
                         lookahead.advanceLine();
                     }
                     break :blk null;
                 }
 
-                if (parse_block.countLeadingWhitespace(line) < list_item.content_col) break :blk null;
-                break :blk line[list_item.content_col..];
+                const content_start = parse_block.indentBytesAtLeast(line, list_item.content_col) orelse break :blk null;
+                break :blk line[content_start..];
             },
         };
     }

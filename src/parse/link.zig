@@ -56,7 +56,7 @@ const ascii_space: u8 = 0x20;
 const ascii_delete: u8 = 0x7F;
 
 pub fn definition(text: []const u8) ?Definition {
-    const indent = parse_block.countIndentUpTo(text, parse_block.max_block_indent);
+    const indent = parse_block.indentAtMost(text, parse_block.max_block_indent) orelse return null;
     if (indent >= text.len or text[indent] != '[') return null;
 
     const close = findReferenceLabelEnd(text, indent + 1) orelse return null;
@@ -74,7 +74,7 @@ pub fn definition(text: []const u8) ?Definition {
 }
 
 pub fn definitionNeedsDestinationContinuation(line: []const u8) bool {
-    const indent = parse_block.countIndentUpTo(line, parse_block.max_block_indent);
+    const indent = parse_block.indentAtMost(line, parse_block.max_block_indent) orelse return false;
     if (indent >= line.len or line[indent] != '[') return false;
 
     const close = findReferenceLabelEnd(line, indent + 1) orelse return false;
