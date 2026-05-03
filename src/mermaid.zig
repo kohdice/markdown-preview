@@ -2,10 +2,12 @@ const compile_mod = @import("mermaid/compile.zig");
 const paint_mod = @import("mermaid/paint.zig");
 
 pub const compile = compile_mod.compile;
+pub const compileForCache = compile_mod.compileForCache;
 pub const paint = paint_mod.paint;
 
 pub const Diagram = compile_mod.Diagram;
 pub const CompileError = compile_mod.CompileError;
+pub const CachedCompileResult = compile_mod.CachedCompileResult;
 pub const PaintError = paint_mod.PaintError;
 pub const PaintOptions = paint_mod.PaintOptions;
 

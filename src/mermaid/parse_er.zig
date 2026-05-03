@@ -2,8 +2,6 @@ const std = @import("std");
 const source_mod = @import("source.zig");
 const types = @import("types.zig");
 
-pub const Source = source_mod.Source;
-
 pub const ParseError = error{
     InvalidMermaid,
     UnsupportedFeature,
@@ -53,7 +51,7 @@ fn validateIdent(text: []const u8) ParseError!void {
     }
 }
 
-pub fn parseSource(allocator: std.mem.Allocator, source: anytype) ParseError!types.ErDiagram {
+pub fn parse(allocator: std.mem.Allocator, source: anytype) ParseError!types.ErDiagram {
     const owned_source = try source_mod.normalizeOwned(allocator, source);
     return parseFromOwned(allocator, owned_source);
 }
@@ -127,7 +125,11 @@ fn parseFromOwned(allocator: std.mem.Allocator, owned_source: []u8) ParseError!t
     if (in_block) return error.InvalidMermaid;
 
     const entities = try allocator.alloc(types.ErEntity, parser.entities.items.len);
-    errdefer allocator.free(entities);
+    var entity_count: usize = 0;
+    errdefer {
+        freeErEntities(allocator, entities[0..entity_count]);
+        allocator.free(entities);
+    }
     for (parser.entities.items, 0..) |*b, i| {
         const attrs = try b.attributes.toOwnedSlice(allocator);
         entities[i] = .{
@@ -135,11 +137,15 @@ fn parseFromOwned(allocator: std.mem.Allocator, owned_source: []u8) ParseError!t
             .id_text = b.id_text,
             .attributes = attrs,
         };
+        entity_count += 1;
     }
-    parser.entities.deinit(allocator);
 
     const relations = try parser.relations.toOwnedSlice(allocator);
+    errdefer allocator.free(relations);
     const owned_strings = try parser.owned_strings.toOwnedSlice(allocator);
+
+    parser.entities.deinit(allocator);
+    parser.entities = .empty;
 
     return .{
         .allocator = allocator,
@@ -147,6 +153,10 @@ fn parseFromOwned(allocator: std.mem.Allocator, owned_source: []u8) ParseError!t
         .relations = relations,
         .owned_strings = owned_strings,
     };
+}
+
+fn freeErEntities(allocator: std.mem.Allocator, entities: []types.ErEntity) void {
+    for (entities) |e| allocator.free(e.attributes);
 }
 
 fn normalizeLabel(parser: *Parser, text: []const u8) ParseError![]const u8 {
@@ -183,7 +193,7 @@ const BlockOpenResult = struct { id: types.NodeId, closed_inline: bool };
 const BlockHeaderError = ParseError || error{NotBlockHeader};
 
 fn tryParseBlockHeader(parser: *Parser, line: []const u8) BlockHeaderError!BlockOpenResult {
-    const brace_idx = std.mem.indexOfScalar(u8, line, '{') orelse return error.NotBlockHeader;
+    const brace_idx = std.mem.findScalar(u8, line, '{') orelse return error.NotBlockHeader;
     const name = std.mem.trim(u8, line[0..brace_idx], " \t");
     const rest = std.mem.trim(u8, line[brace_idx + 1 ..], " \t");
 
@@ -271,7 +281,7 @@ fn tryParseRelation(parser: *Parser, line: []const u8) RelationError!void {
     const lhs_text = std.mem.trimEnd(u8, line[0..match.op_start], " \t");
     const after = line[match.op_start + match.op_len ..];
 
-    const colon_idx = std.mem.indexOfScalar(u8, after, ':') orelse return error.InvalidMermaid;
+    const colon_idx = std.mem.findScalar(u8, after, ':') orelse return error.InvalidMermaid;
     const rhs_text = std.mem.trim(u8, after[0..colon_idx], " \t");
     const label_raw = std.mem.trim(u8, after[colon_idx + 1 ..], " \t");
     const stripped = stripQuotes(label_raw);
@@ -310,7 +320,7 @@ fn stripQuotes(text: []const u8) []const u8 {
 fn hasAliasOrQuote(text: []const u8) bool {
     if (text.len == 0) return false;
     if (text[0] == '"') return true;
-    return std.mem.indexOfScalar(u8, text, '[') != null;
+    return std.mem.findScalar(u8, text, '[') != null;
 }
 
 fn findRelation(line: []const u8) ?RelationMatch {
@@ -376,14 +386,14 @@ fn matchRightCardinality(line: []const u8, after_start: usize) ?RightCardMatch {
 }
 
 test "parses erDiagram header only" {
-    var d = try parseSource(std.testing.allocator, "erDiagram\n");
+    var d = try parse(std.testing.allocator, "erDiagram\n");
     defer d.deinit();
     try std.testing.expectEqual(@as(usize, 0), d.entities.len);
     try std.testing.expectEqual(@as(usize, 0), d.relations.len);
 }
 
 test "parses simple relation ||--o{" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\erDiagram
         \\    CUSTOMER ||--o{ ORDER : places
     );
@@ -397,7 +407,7 @@ test "parses simple relation ||--o{" {
 }
 
 test "parses right-side zero-or-one marker o|" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\erDiagram
         \\    BRAND_MST ||--o| BRAND_DETAIL_MST : extends
     );
@@ -407,7 +417,7 @@ test "parses right-side zero-or-one marker o|" {
 }
 
 test "parses left-side zero-or-one marker |o" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\erDiagram
         \\    BRAND_MST |o--|| BRAND_DETAIL_MST : extends
     );
@@ -417,21 +427,21 @@ test "parses left-side zero-or-one marker |o" {
 }
 
 test "rejects non-standard right-side zero-or-one marker |o" {
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator,
         \\erDiagram
         \\    BRAND_MST ||--|o BRAND_DETAIL_MST : extends
     ));
 }
 
 test "rejects non-standard left-side zero-or-one marker o|" {
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator,
         \\erDiagram
         \\    BRAND_MST o|--|| BRAND_DETAIL_MST : extends
     ));
 }
 
 test "keeps official right-side markers parsing" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\erDiagram
         \\    A ||--|| B : exactly
         \\    C ||--o{ D : optional_many
@@ -445,7 +455,7 @@ test "keeps official right-side markers parsing" {
 }
 
 test "parses entity with attributes PK/FK" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\erDiagram
         \\    CUSTOMER {
         \\        string id PK
@@ -465,7 +475,7 @@ test "parses entity with attributes PK/FK" {
 }
 
 test "parses attribute with multiple key constraints (PK + FK)" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\erDiagram
         \\    ORDER_ITEM {
         \\        int order_id PK FK
@@ -481,7 +491,7 @@ test "parses attribute with multiple key constraints (PK + FK)" {
 }
 
 test "preserves <br> in relation label as hard-break markers" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\erDiagram
         \\    A ||--|| B : "one<br>per<BR>kind"
     );
@@ -490,7 +500,7 @@ test "preserves <br> in relation label as hard-break markers" {
 }
 
 test "preserves <br/> in attribute comment as hard-break markers" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\erDiagram
         \\    USER {
         \\        string note "first<br/>second"
@@ -501,7 +511,7 @@ test "preserves <br/> in attribute comment as hard-break markers" {
 }
 
 test "parses attribute with PK UK combined" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\erDiagram
         \\    USER {
         \\        string email PK UK "unique email"
@@ -515,7 +525,7 @@ test "parses attribute with PK UK combined" {
 }
 
 test "parses standalone entity declaration" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\erDiagram
         \\    ORDER
     );
@@ -526,7 +536,7 @@ test "parses standalone entity declaration" {
 }
 
 test "parses standalone entity with empty block" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\erDiagram
         \\    ORDER { }
     );
@@ -536,7 +546,7 @@ test "parses standalone entity with empty block" {
 }
 
 test "parses hyphenated identifier LINE-ITEM" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\erDiagram
         \\    ORDER ||--|{ LINE-ITEM : contains
     );
@@ -546,7 +556,7 @@ test "parses hyphenated identifier LINE-ITEM" {
 }
 
 test "rejects direction LR line" {
-    try std.testing.expectError(error.UnsupportedFeature, parseSource(std.testing.allocator,
+    try std.testing.expectError(error.UnsupportedFeature, parse(std.testing.allocator,
         \\erDiagram
         \\    direction LR
         \\    CUSTOMER ||--o{ ORDER : places
@@ -554,7 +564,7 @@ test "rejects direction LR line" {
 }
 
 test "silently skips init directive" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\%%{init: {"theme": "dark"}}%%
         \\erDiagram
         \\    CUSTOMER ||--o{ ORDER : places
@@ -565,26 +575,51 @@ test "silently skips init directive" {
 }
 
 test "rejects missing header" {
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator, "CUSTOMER ||--o{ ORDER : places\n"));
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator, "CUSTOMER ||--o{ ORDER : places\n"));
 }
 
 test "rejects alias syntax" {
-    try std.testing.expectError(error.UnsupportedFeature, parseSource(std.testing.allocator,
+    try std.testing.expectError(error.UnsupportedFeature, parse(std.testing.allocator,
         \\erDiagram
         \\    CUSTOMER["Customer entity"]
     ));
 }
 
 test "rejects alias on the right-hand side of a relation" {
-    try std.testing.expectError(error.UnsupportedFeature, parseSource(std.testing.allocator,
+    try std.testing.expectError(error.UnsupportedFeature, parse(std.testing.allocator,
         \\erDiagram
         \\    A ||--|| B["Bee"] : r
     ));
 }
 
 test "rejects quoted entity name on the left-hand side of a relation" {
-    try std.testing.expectError(error.UnsupportedFeature, parseSource(std.testing.allocator,
+    try std.testing.expectError(error.UnsupportedFeature, parse(std.testing.allocator,
         \\erDiagram
         \\    "Customer Order" ||--o{ ORDER : places
     ));
+}
+
+fn expectParseErHandlesAllocationFailures(allocator: std.mem.Allocator) !void {
+    var d = try parse(allocator,
+        \\erDiagram
+        \\    CUSTOMER {
+        \\        string id PK
+        \\        string name
+        \\    }
+        \\    ORDER {
+        \\        string id PK
+        \\    }
+        \\    CUSTOMER ||--o{ ORDER : places
+    );
+    defer d.deinit();
+    try std.testing.expectEqual(@as(usize, 2), d.entities.len);
+    try std.testing.expectEqual(@as(usize, 1), d.relations.len);
+}
+
+test "parse cleans up ER allocation failures" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        expectParseErHandlesAllocationFailures,
+        .{},
+    );
 }

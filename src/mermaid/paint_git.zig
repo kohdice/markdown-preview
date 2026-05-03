@@ -12,6 +12,7 @@ pub const RenderError = error{
     UnsupportedFeature,
     WidthTooSmall,
     OutOfMemory,
+    Overflow,
     WriteFailed,
 };
 
@@ -19,7 +20,6 @@ pub const Options = struct {
     wrap_width: ?usize,
     ambiguous_width: width_mod.AmbiguousWidth,
     enable_ansi: bool = false,
-    color_mode: ansi_mod.ColorMode = .truecolor,
 };
 
 const lane_h: usize = 2;
@@ -28,10 +28,7 @@ const label_left_pad: usize = 1;
 const label_right_pad: usize = 1;
 const wrapped_min_label_col_w: usize = 4;
 const wrapped_min_timeline_cols: usize = 4;
-
-fn laneRole(lane: u16) u8 {
-    return @as(u8, @intCast(lane & 0x07));
-}
+const lane_role_count = theme.default_lane_palette.len;
 
 pub fn paintGit(
     writer: *std.Io.Writer,
@@ -60,8 +57,8 @@ fn paintGitUnwrapped(
 
     const commit_base_row: usize = 1;
 
-    const canvas_rows = commit_base_row + graph.branches.len * lane_h;
-    const canvas_cols = label_col_w + graph.commits.len * step_w + 1;
+    const canvas_rows = try std.math.add(usize, commit_base_row, try std.math.mul(usize, graph.branches.len, lane_h));
+    const canvas_cols = label_col_w +| (graph.commits.len *| step_w) +| 1;
 
     var canvas = canvas_mod.Canvas.init(allocator, canvas_rows, canvas_cols) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -71,8 +68,8 @@ fn paintGitUnwrapped(
     const glyphs = canvas_mod.GlyphSet.unicode;
 
     for (graph.branches) |br| {
-        const row = commit_base_row + @as(usize, br.lane) * lane_h;
-        const role = laneRole(br.lane);
+        const row = commit_base_row +| (@as(usize, br.lane) *| lane_h);
+        const role: u8 = @intCast(@as(usize, br.lane) % lane_role_count);
         canvas.setGlyphRole(row, 0, '[', role);
         try canvas.drawLabelRole(row, 1, br.name, role, opts.ambiguous_width);
         const name_w = width_mod.displayWidth(br.name, opts.ambiguous_width);
@@ -94,8 +91,8 @@ fn paintGitUnwrapped(
     for (graph.branches) |br| {
         const lr = lane_ranges[br.lane];
         if (lr.first == null) continue;
-        const row = commit_base_row + @as(usize, br.lane) * lane_h;
-        const role = laneRole(br.lane);
+        const row = commit_base_row +| (@as(usize, br.lane) *| lane_h);
+        const role: u8 = @intCast(@as(usize, br.lane) % lane_role_count);
         const first_col = commitCenterCol(label_col_w, step_w, lr.first.?);
         const last_col = commitCenterCol(label_col_w, step_w, lr.last.?);
         var c = first_col;
@@ -108,30 +105,30 @@ fn paintGitUnwrapped(
         const parent_lane = br.parent_lane orelse continue;
         const lr = lane_ranges[br.lane];
         if (lr.first == null) continue;
-        const child_row = commit_base_row + @as(usize, br.lane) * lane_h;
-        const parent_row = commit_base_row + @as(usize, parent_lane) * lane_h;
+        const child_row = commit_base_row +| (@as(usize, br.lane) *| lane_h);
+        const parent_row = commit_base_row +| (@as(usize, parent_lane) *| lane_h);
         const fork_col = commitCenterCol(label_col_w, step_w, lr.first.?);
         if (fork_col == 0) continue;
         const stem_col = fork_col - 1;
-        drawLaneConnector(&canvas, parent_row, child_row, stem_col, laneRole(br.lane), &glyphs);
+        drawLaneConnector(&canvas, parent_row, child_row, stem_col, @intCast(@as(usize, br.lane) % lane_role_count), &glyphs);
     }
 
     for (graph.commits) |commit| {
         const from_lane = commit.merge_from_lane orelse continue;
         const from_index = commit.merge_from_index orelse continue;
-        const src_row = commit_base_row + @as(usize, from_lane) * lane_h;
-        const tgt_row = commit_base_row + @as(usize, commit.lane) * lane_h;
+        const src_row = commit_base_row +| (@as(usize, from_lane) *| lane_h);
+        const tgt_row = commit_base_row +| (@as(usize, commit.lane) *| lane_h);
         const src_col = commitCenterCol(label_col_w, step_w, from_index);
         const tgt_col = commitCenterCol(label_col_w, step_w, commit.index);
         if (tgt_col == 0 or src_col > tgt_col) continue;
-        drawMergeConnector(&canvas, src_row, src_col, tgt_row, tgt_col, laneRole(commit.lane), &glyphs);
+        drawMergeConnector(&canvas, src_row, src_col, tgt_row, tgt_col, @intCast(@as(usize, commit.lane) % lane_role_count), &glyphs);
     }
 
     for (graph.commits) |commit| {
-        const row = commit_base_row + @as(usize, commit.lane) * lane_h;
+        const row = commit_base_row +| (@as(usize, commit.lane) *| lane_h);
         const col = commitCenterCol(label_col_w, step_w, commit.index);
         const glyph = commitGlyph(commit);
-        const role = laneRole(commit.lane);
+        const role: u8 = @intCast(@as(usize, commit.lane) % lane_role_count);
         canvas.setGlyphRole(row, col, glyph, role);
 
         const tag_text = commit.tag orelse commit.id_text;
@@ -167,7 +164,7 @@ fn paintGitWrapped(
     if (wrap_width < wrapped_min_label_col_w + wrapped_min_timeline_cols) return error.WidthTooSmall;
 
     const label_col_w = computeWrappedLabelColumnWidth(graph, wrap_width, opts.ambiguous_width);
-    if (label_col_w < wrapped_min_label_col_w or label_col_w + wrapped_min_timeline_cols > wrap_width) return error.WidthTooSmall;
+    if (label_col_w < wrapped_min_label_col_w or label_col_w +| wrapped_min_timeline_cols > wrap_width) return error.WidthTooSmall;
 
     const timeline_budget = wrap_width - label_col_w;
     if (timeline_budget < min_step_w) return error.WidthTooSmall;
@@ -198,16 +195,17 @@ fn paintGitWrapped(
     }
 
     const branch_count = graph.branches.len;
-    const lane_rows = allocator.alloc(usize, band_count * branch_count) catch return error.OutOfMemory;
+    const band_lane_count = try std.math.mul(usize, band_count, branch_count);
+    const lane_rows = allocator.alloc(usize, band_lane_count) catch return error.OutOfMemory;
     defer allocator.free(lane_rows);
-    const branch_tops = allocator.alloc(usize, band_count * branch_count) catch return error.OutOfMemory;
+    const branch_tops = allocator.alloc(usize, band_lane_count) catch return error.OutOfMemory;
     defer allocator.free(branch_tops);
-    const tag_rows = allocator.alloc(usize, band_count * branch_count) catch return error.OutOfMemory;
+    const tag_rows = allocator.alloc(usize, band_lane_count) catch return error.OutOfMemory;
     defer allocator.free(tag_rows);
     const merge_tops = allocator.alloc(usize, band_count) catch return error.OutOfMemory;
     defer allocator.free(merge_tops);
 
-    const total_rows = planGitWrappedRows(
+    const total_rows = try planGitWrappedRows(
         allocator,
         graph,
         band_count,
@@ -220,9 +218,7 @@ fn paintGitWrapped(
         branch_tops,
         tag_rows,
         merge_tops,
-    ) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-    };
+    );
 
     var canvas = canvas_mod.Canvas.init(allocator, total_rows, wrap_width) catch return error.OutOfMemory;
     defer canvas.deinit();
@@ -279,12 +275,12 @@ fn planGitWrappedRows(
     branch_tops: []usize,
     tag_rows: []usize,
     merge_tops: []usize,
-) error{OutOfMemory}!usize {
+) error{ OutOfMemory, Overflow }!usize {
     const branch_count = graph.branches.len;
     var row: usize = 0;
     var band: usize = 0;
     while (band < band_count) : (band += 1) {
-        if (band > 0) row += 1;
+        if (band > 0) row = try std.math.add(usize, row, 1);
 
         var active_count: usize = 0;
         var lane: usize = 0;
@@ -297,18 +293,18 @@ fn planGitWrappedRows(
                 continue;
             }
 
-            if (active_count > 0) row += 1;
+            if (active_count > 0) row = try std.math.add(usize, row, 1);
             const tags = sumCommitLabelRowsForLaneInBand(graph, commit_labels, lane, band, commits_per_band);
             const branch_h = @max(@as(usize, 1), branch_layouts[lane].lines.len);
             branch_tops[slot] = row;
             tag_rows[slot] = tags;
-            lane_rows[slot] = row + tags + branch_h / 2;
-            row += tags + branch_h;
+            lane_rows[slot] = try std.math.add(usize, try std.math.add(usize, row, tags), branch_h / 2);
+            row = try std.math.add(usize, try std.math.add(usize, row, tags), branch_h);
             active_count += 1;
         }
 
         merge_tops[band] = row;
-        row += try crossBandMergeRows(allocator, graph, band, commits_per_band, wrap_width, ambiguous);
+        row = try std.math.add(usize, row, try crossBandMergeRows(allocator, graph, band, commits_per_band, wrap_width, ambiguous));
     }
     return row;
 }
@@ -320,12 +316,12 @@ fn sumCommitLabelRowsForLaneInBand(
     band: usize,
     commits_per_band: usize,
 ) usize {
-    const start = band * commits_per_band;
-    const end = @min(graph.commits.len, start + commits_per_band);
+    const start = band *| commits_per_band;
+    const end = @min(graph.commits.len, start +| commits_per_band);
     var rows: usize = 0;
     for (graph.commits[start..end], start..) |commit, idx| {
         if (commit.lane != lane) continue;
-        if (commit_labels[idx].layout) |layout| rows += layout.lines.len;
+        if (commit_labels[idx].layout) |layout| rows = rows +| layout.lines.len;
     }
     return rows;
 }
@@ -337,9 +333,9 @@ fn crossBandMergeRows(
     commits_per_band: usize,
     wrap_width: usize,
     ambiguous: width_mod.AmbiguousWidth,
-) error{OutOfMemory}!usize {
-    const start = band * commits_per_band;
-    const end = @min(graph.commits.len, start + commits_per_band);
+) error{ OutOfMemory, Overflow }!usize {
+    const start = try std.math.mul(usize, band, commits_per_band);
+    const end = @min(graph.commits.len, try std.math.add(usize, start, commits_per_band));
     var rows: usize = 0;
     for (graph.commits[start..end]) |commit| {
         const from_index = commit.merge_from_index orelse continue;
@@ -348,7 +344,7 @@ fn crossBandMergeRows(
         defer allocator.free(text);
         var layout = try text_layout.layoutLabel(allocator, text, wrap_width, ambiguous);
         defer layout.deinit();
-        rows += layout.lines.len;
+        rows = try std.math.add(usize, rows, layout.lines.len);
     }
     return rows;
 }
@@ -378,7 +374,7 @@ fn drawGitWrappedLayout(
         for (graph.branches, 0..) |branch, lane| {
             if (!branchActiveInBand(graph, lane, band, band_count, commits_per_band)) continue;
             const slot = band * branch_count + lane;
-            try drawWrappedBranchLabel(canvas, branch_tops[slot] + tag_rows[slot], label_col_w, &branch_layouts[lane], laneRole(branch.lane), ambiguous);
+            try drawWrappedBranchLabel(canvas, branch_tops[slot] + tag_rows[slot], label_col_w, &branch_layouts[lane], @intCast(@as(usize, branch.lane) % lane_role_count), ambiguous);
         }
 
         drawGitBandLaneRanges(canvas, graph, band, band_count, commits_per_band, label_col_w, lane_rows, glyphs);
@@ -425,7 +421,7 @@ fn drawGitBandLaneRanges(
         if (!branchActiveInBand(graph, @intCast(branch.lane), band, band_count, commits_per_band)) continue;
         const range = laneCommitRangeInBand(graph, branch.lane, band, commits_per_band) orelse continue;
         const row = lane_rows[band * branch_count + branch.lane];
-        const role = laneRole(branch.lane);
+        const role: u8 = @intCast(@as(usize, branch.lane) % lane_role_count);
         const first_col = wrappedCommitCenterCol(label_col_w, range.first - band * commits_per_band);
         const last_col = wrappedCommitCenterCol(label_col_w, range.last - band * commits_per_band);
         var c = first_col;
@@ -454,7 +450,7 @@ fn drawGitBandForks(
         const parent_row = lane_rows[band * branch_count + parent_lane];
         const fork_col = wrappedCommitCenterCol(label_col_w, first_idx - band * commits_per_band);
         if (fork_col == 0) continue;
-        drawLaneConnector(canvas, parent_row, child_row, fork_col - 1, laneRole(branch.lane), glyphs);
+        drawLaneConnector(canvas, parent_row, child_row, fork_col - 1, @intCast(@as(usize, branch.lane) % lane_role_count), glyphs);
     }
 }
 
@@ -482,7 +478,7 @@ fn drawGitBandMerges(
         const src_col = wrappedCommitCenterCol(label_col_w, @as(usize, from_index) - start);
         const tgt_col = wrappedCommitCenterCol(label_col_w, idx - start);
         if (tgt_col == 0 or src_col > tgt_col) continue;
-        drawMergeConnector(canvas, src_row, src_col, tgt_row, tgt_col, laneRole(commit.lane), glyphs);
+        drawMergeConnector(canvas, src_row, src_col, tgt_row, tgt_col, @intCast(@as(usize, commit.lane) % lane_role_count), glyphs);
     }
 }
 
@@ -504,7 +500,7 @@ fn drawGitBandCommits(
         const slot = band * branch_count + commit.lane;
         const col = wrappedCommitCenterCol(label_col_w, idx - start);
         const row = lane_rows[slot];
-        const role = laneRole(commit.lane);
+        const role: u8 = @intCast(@as(usize, commit.lane) % lane_role_count);
         canvas.setGlyphRole(row, col, commitGlyph(commit), role);
 
         if (commit_labels[idx].layout) |layout| {
@@ -549,7 +545,7 @@ fn drawGitCrossBandMerges(
         var layout = try text_layout.layoutLabel(allocator, text, canvas.cols, ambiguous);
         defer layout.deinit();
         for (layout.lines) |line| {
-            try canvas.drawLabelRole(row, 0, line.text, laneRole(commit.lane), ambiguous);
+            try canvas.drawLabelRole(row, 0, line.text, @intCast(@as(usize, commit.lane) % lane_role_count), ambiguous);
             row += 1;
         }
     }
@@ -638,19 +634,19 @@ fn firstCommitOnLane(graph: *const types.GitGraph, lane: u16) ?usize {
 }
 
 fn wrappedCommitCenterCol(label_col_w: usize, local_index: usize) usize {
-    return label_col_w + local_index * min_step_w + min_step_w / 2;
+    return label_col_w +| (local_index *| min_step_w) +| (min_step_w / 2);
 }
 
 fn writeGitCanvas(writer: *std.Io.Writer, canvas: *const canvas_mod.Canvas, opts: Options) RenderError!void {
     if (opts.enable_ansi) {
-        canvas_mod.writeCanvasAnsi(writer, canvas, opts.wrap_width, opts.ambiguous_width, &theme.default_lane_palette, opts.color_mode) catch return error.WriteFailed;
+        canvas_mod.writeCanvasAnsi(writer, canvas, opts.wrap_width, opts.ambiguous_width, &theme.default_lane_palette) catch return error.WriteFailed;
     } else {
         canvas_mod.writeCanvas(writer, canvas, opts.wrap_width, opts.ambiguous_width) catch return error.WriteFailed;
     }
 }
 
 fn commitCenterCol(label_col_w: usize, step_w: usize, index: u16) usize {
-    return label_col_w + @as(usize, index) * step_w + step_w / 2;
+    return label_col_w +| (@as(usize, index) *| step_w) +| (step_w / 2);
 }
 
 fn computeLabelColumnWidth(graph: *const types.GitGraph, ambiguous: width_mod.AmbiguousWidth) usize {
@@ -659,7 +655,7 @@ fn computeLabelColumnWidth(graph: *const types.GitGraph, ambiguous: width_mod.Am
         const w = width_mod.displayWidth(br.name, ambiguous);
         if (w > max_w) max_w = w;
     }
-    return label_left_pad + 1 + max_w + 1 + label_right_pad;
+    return label_left_pad +| 1 +| max_w +| 1 +| label_right_pad;
 }
 
 fn computeStepWidth(graph: *const types.GitGraph, ambiguous: width_mod.AmbiguousWidth) usize {
@@ -668,7 +664,7 @@ fn computeStepWidth(graph: *const types.GitGraph, ambiguous: width_mod.Ambiguous
         const tag_w: usize = if (c.tag) |t| width_mod.displayWidth(t, ambiguous) else 0;
         const id_w: usize = if (c.id_text) |i| width_mod.displayWidth(i, ambiguous) else 0;
         const label_w = @max(tag_w, id_w);
-        max_w = @max(max_w, 2 * label_w + 1);
+        max_w = @max(max_w, (2 *| label_w) +| 1);
     }
     return max_w;
 }
@@ -761,7 +757,7 @@ test "paintGit renders ● for NORMAL commits" {
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = false });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "●") != null);
+    try std.testing.expect(std.mem.find(u8, out, "●") != null);
 }
 
 test "paintGit renders ⊗ for REVERSE and ■ for HIGHLIGHT" {
@@ -778,8 +774,8 @@ test "paintGit renders ⊗ for REVERSE and ■ for HIGHLIGHT" {
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = false });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "⊗") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "■") != null);
+    try std.testing.expect(std.mem.find(u8, out, "⊗") != null);
+    try std.testing.expect(std.mem.find(u8, out, "■") != null);
 }
 
 test "paintGit renders ◎ for merge commits" {
@@ -799,7 +795,7 @@ test "paintGit renders ◎ for merge commits" {
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = false });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "◎") != null);
+    try std.testing.expect(std.mem.find(u8, out, "◎") != null);
 }
 
 test "paintGit renders branch lane labels and branch fork glyphs" {
@@ -817,8 +813,8 @@ test "paintGit renders branch lane labels and branch fork glyphs" {
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = false });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "[main]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "[develop]") != null);
+    try std.testing.expect(std.mem.find(u8, out, "[main]") != null);
+    try std.testing.expect(std.mem.find(u8, out, "[develop]") != null);
 }
 
 test "paintGit renders tag text" {
@@ -834,7 +830,7 @@ test "paintGit renders tag text" {
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = false });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "v1.0") != null);
+    try std.testing.expect(std.mem.find(u8, out, "v1.0") != null);
 }
 
 test "paintGit places each tag on the row just above its own lane" {
@@ -857,8 +853,8 @@ test "paintGit places each tag on the row just above its own lane" {
     var dev_tag_row: ?usize = null;
     var row: usize = 0;
     while (lines.next()) |line| : (row += 1) {
-        if (main_tag_row == null and std.mem.indexOf(u8, line, "main-tag") != null) main_tag_row = row;
-        if (dev_tag_row == null and std.mem.indexOf(u8, line, "dev-tag") != null) dev_tag_row = row;
+        if (main_tag_row == null and std.mem.find(u8, line, "main-tag") != null) main_tag_row = row;
+        if (dev_tag_row == null and std.mem.find(u8, line, "dev-tag") != null) dev_tag_row = row;
     }
     try std.testing.expect(main_tag_row != null);
     try std.testing.expect(dev_tag_row != null);
@@ -883,8 +879,8 @@ test "paintGit renders merge tag above the merge commit glyph" {
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = false });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "◎") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "v1.0") != null);
+    try std.testing.expect(std.mem.find(u8, out, "◎") != null);
+    try std.testing.expect(std.mem.find(u8, out, "v1.0") != null);
 }
 
 test "paintGit null wrap keeps simple branch and merge snapshot" {
@@ -1009,10 +1005,10 @@ test "paintGit renders merge from an empty branch via fork point" {
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = false });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "◎") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "│") != null or
-        std.mem.indexOf(u8, out, "└") != null or
-        std.mem.indexOf(u8, out, "┘") != null);
+    try std.testing.expect(std.mem.find(u8, out, "◎") != null);
+    try std.testing.expect(std.mem.find(u8, out, "│") != null or
+        std.mem.find(u8, out, "└") != null or
+        std.mem.find(u8, out, "┘") != null);
 }
 
 test "paintGit without ANSI contains no escape sequences" {
@@ -1032,7 +1028,7 @@ test "paintGit without ANSI contains no escape sequences" {
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = false });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[") == null);
+    try std.testing.expect(std.mem.find(u8, out, "\x1b[") == null);
 }
 
 test "paintGit with enable_ansi=true emits truecolor SGR" {
@@ -1048,7 +1044,7 @@ test "paintGit with enable_ansi=true emits truecolor SGR" {
     try paintGit(&sink.writer, alloc, &diagram.git_graph, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = true });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[38;2;") != null);
+    try std.testing.expect(std.mem.find(u8, out, "\x1b[38;2;") != null);
 }
 
 test "paintGit enable_ansi=false matches bare-default call byte-for-byte" {
@@ -1278,8 +1274,8 @@ test "paintGit with enable_ansi=true uses different SGR for lane 0 and lane 1" {
     const sgr0 = sgrForLane(&buf0, 0);
     const sgr1 = sgrForLane(&buf1, 1);
     try std.testing.expect(!std.mem.eql(u8, sgr0, sgr1));
-    try std.testing.expect(std.mem.indexOf(u8, out, sgr0) != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, sgr1) != null);
+    try std.testing.expect(std.mem.find(u8, out, sgr0) != null);
+    try std.testing.expect(std.mem.find(u8, out, sgr1) != null);
 }
 
 test "paintGit wraps lane colors modulo 8 (lane 0 and lane 8 share role)" {
@@ -1351,7 +1347,7 @@ test "paintGit lane 7 and lane 8 use distinct roles" {
     const sgr0 = sgrForLane(&buf0, 0);
     const sgr7 = sgrForLane(&buf7, 7);
     try std.testing.expect(!std.mem.eql(u8, sgr0, sgr7));
-    try std.testing.expect(std.mem.indexOf(u8, out, sgr7) != null);
+    try std.testing.expect(std.mem.find(u8, out, sgr7) != null);
 }
 
 test "paintGit HIGHLIGHT commit glyph uses lane role color" {
@@ -1370,7 +1366,7 @@ test "paintGit HIGHLIGHT commit glyph uses lane role color" {
     var buf: [64]u8 = undefined;
     const sgr0 = sgrForLane(buf[0..32], 0);
     const pattern = std.fmt.bufPrint(buf[32..], "{s}■", .{sgr0}) catch unreachable;
-    try std.testing.expect(std.mem.indexOf(u8, out, pattern) != null);
+    try std.testing.expect(std.mem.find(u8, out, pattern) != null);
 }
 
 test "paintGit merge commit ◎ is preceded by destination lane SGR" {
@@ -1396,10 +1392,10 @@ test "paintGit merge commit ◎ is preceded by destination lane SGR" {
     var lines = std.mem.splitScalar(u8, out, '\n');
     var checked = false;
     while (lines.next()) |line| {
-        const bullseye_pos = std.mem.indexOf(u8, line, "◎") orelse continue;
+        const bullseye_pos = std.mem.find(u8, line, "◎") orelse continue;
         checked = true;
         const prefix = line[0..bullseye_pos];
-        const last_sgr_start = std.mem.lastIndexOf(u8, prefix, "\x1b[38;2;") orelse return error.NoSgrBeforeMerge;
+        const last_sgr_start = std.mem.findLast(u8, prefix, "\x1b[38;2;") orelse return error.NoSgrBeforeMerge;
         const last_sgr = prefix[last_sgr_start..];
         try std.testing.expect(std.mem.startsWith(u8, last_sgr, sgr0));
     }
@@ -1430,16 +1426,16 @@ test "paintGit merge connector uses destination lane role" {
     var lines = std.mem.splitScalar(u8, out, '\n');
     var checked = false;
     while (lines.next()) |line| {
-        const v_pos = std.mem.indexOf(u8, line, "│") orelse continue;
-        if (std.mem.indexOf(u8, line, "●") != null) continue;
-        if (std.mem.indexOf(u8, line, "◎") != null) continue;
-        if (std.mem.indexOf(u8, line, "]") != null) continue;
+        const v_pos = std.mem.find(u8, line, "│") orelse continue;
+        if (std.mem.find(u8, line, "●") != null) continue;
+        if (std.mem.find(u8, line, "◎") != null) continue;
+        if (std.mem.find(u8, line, "]") != null) continue;
         checked = true;
         const prefix = line[0..v_pos];
-        const last_sgr_start = std.mem.lastIndexOf(u8, prefix, "\x1b[38;2;") orelse return error.NoSgrBeforeConnector;
+        const last_sgr_start = std.mem.findLast(u8, prefix, "\x1b[38;2;") orelse return error.NoSgrBeforeConnector;
         const last_sgr = prefix[last_sgr_start..];
         try std.testing.expect(std.mem.startsWith(u8, last_sgr, sgr0));
-        try std.testing.expect(std.mem.indexOf(u8, line, sgr1) == null);
+        try std.testing.expect(std.mem.find(u8, line, sgr1) == null);
     }
     try std.testing.expect(checked);
 }

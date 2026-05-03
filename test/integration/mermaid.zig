@@ -15,10 +15,7 @@ fn renderDocumentWithRenderer(
     var output: std.Io.Writer.Allocating = .init(allocator);
     defer output.deinit();
 
-    var cycle_arena = std.heap.ArenaAllocator.init(allocator);
-    defer cycle_arena.deinit();
-
-    try renderer.render(&output.writer, doc, wrap_width, cycle_arena.allocator());
+    try renderer.render(&output.writer, doc, wrap_width);
     var list = output.toArrayList();
     return list.toOwnedSlice(allocator);
 }
@@ -224,10 +221,10 @@ test "mermaid fence renders diagram inside original backticks" {
     defer allocator.free(rendered);
 
     try std.testing.expect(std.mem.startsWith(u8, rendered, "```mermaid"));
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "\n```\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "A") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "B") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "▼") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "\n```\n") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "A") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "B") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "▼") != null);
 }
 
 test "mermaid no-space edge A-->B produces the same output as spaced form" {
@@ -311,9 +308,9 @@ test "width-too-small Mermaid paint keeps compiled diagram cached for later wide
 
     const wide = try renderDocumentWithRenderer(allocator, &renderer, &doc, 40);
     defer allocator.free(wide);
-    try std.testing.expect(std.mem.indexOf(u8, wide, "[mermaid:") == null);
-    try std.testing.expect(std.mem.indexOf(u8, wide, "A") != null);
-    try std.testing.expect(std.mem.indexOf(u8, wide, "B") != null);
+    try std.testing.expect(std.mem.find(u8, wide, "[mermaid:") == null);
+    try std.testing.expect(std.mem.find(u8, wide, "A") != null);
+    try std.testing.expect(std.mem.find(u8, wide, "B") != null);
     try std.testing.expectEqual(@as(usize, 1), renderer.mermaid_cache.count());
     try std.testing.expectEqual(@as(usize, 1), renderer.mermaid_compile_count);
 }
@@ -331,7 +328,7 @@ test "mermaid labeled edge renders the label text on the routed path" {
     const rendered = try helpers.renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "yes") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "yes") != null);
 }
 
 test "mermaid labeled edge with space before pipe matches the no-space form" {
@@ -372,9 +369,9 @@ test "unsupported diagram type emits diagnostic inside the fence followed by raw
     defer allocator.free(rendered);
 
     try std.testing.expect(std.mem.startsWith(u8, rendered, "```mermaid"));
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid: diagram type not yet supported by mp]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "gantt") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "task :a, 0, 3d") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "[mermaid: diagram type not yet supported by mp]") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "gantt") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "task :a, 0, 3d") != null);
 }
 
 test "erDiagram is rendered as ASCII art" {
@@ -390,10 +387,10 @@ test "erDiagram is rendered as ASCII art" {
     defer allocator.free(rendered);
 
     try std.testing.expect(std.mem.startsWith(u8, rendered, "```mermaid"));
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "CUSTOMER") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "ORDER") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "places") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid:") == null);
+    try std.testing.expect(std.mem.find(u8, rendered, "CUSTOMER") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "ORDER") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "places") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "[mermaid:") == null);
 }
 
 test "erDiagram renders right-side zero-or-one marker o|" {
@@ -408,9 +405,9 @@ test "erDiagram renders right-side zero-or-one marker o|" {
     const rendered = try helpers.renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "BRAND_MST") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "BRAND_DETAIL_MST") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid:") == null);
+    try std.testing.expect(std.mem.find(u8, rendered, "BRAND_MST") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "BRAND_DETAIL_MST") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "[mermaid:") == null);
 }
 
 test "erDiagram wraps wide same-level entities to the render width" {
@@ -453,9 +450,9 @@ test "erDiagram standalone entity renders the box" {
     const rendered = try helpers.renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "CUSTOMER") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "ORDER") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid:") == null);
+    try std.testing.expect(std.mem.find(u8, rendered, "CUSTOMER") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "ORDER") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "[mermaid:") == null);
 }
 
 test "gitGraph is rendered as ASCII art" {
@@ -476,10 +473,10 @@ test "gitGraph is rendered as ASCII art" {
     defer allocator.free(rendered);
 
     try std.testing.expect(std.mem.startsWith(u8, rendered, "```mermaid"));
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "●") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "[main]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "[develop]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid:") == null);
+    try std.testing.expect(std.mem.find(u8, rendered, "●") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "[main]") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "[develop]") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "[mermaid:") == null);
 }
 
 test "gitGraph cherry-pick falls back to feature-not-supported diagnostic" {
@@ -495,8 +492,8 @@ test "gitGraph cherry-pick falls back to feature-not-supported diagnostic" {
     const rendered = try helpers.renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid: feature not yet supported by mp]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "cherry-pick") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "[mermaid: feature not yet supported by mp]") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "cherry-pick") != null);
 }
 
 test "erDiagram direction falls back to feature-not-supported diagnostic" {
@@ -512,8 +509,8 @@ test "erDiagram direction falls back to feature-not-supported diagnostic" {
     const rendered = try helpers.renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid: feature not yet supported by mp]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "direction LR") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "[mermaid: feature not yet supported by mp]") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "direction LR") != null);
 }
 
 test "gitGraph TB orientation falls back to feature-not-supported diagnostic" {
@@ -528,8 +525,8 @@ test "gitGraph TB orientation falls back to feature-not-supported diagnostic" {
     const rendered = try helpers.renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid: feature not yet supported by mp]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "gitGraph TB:") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "[mermaid: feature not yet supported by mp]") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "gitGraph TB:") != null);
 }
 
 test "init directive with gitGraph config falls back to feature-not-supported diagnostic" {
@@ -545,7 +542,7 @@ test "init directive with gitGraph config falls back to feature-not-supported di
     const rendered = try helpers.renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid: feature not yet supported by mp]") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "[mermaid: feature not yet supported by mp]") != null);
 }
 
 test "theme-only init directive renders gitGraph successfully" {
@@ -561,9 +558,9 @@ test "theme-only init directive renders gitGraph successfully" {
     const rendered = try helpers.renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid:") == null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "●") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "[main]") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "[mermaid:") == null);
+    try std.testing.expect(std.mem.find(u8, rendered, "●") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "[main]") != null);
 }
 
 test "sequenceDiagram is rendered as ASCII art" {
@@ -580,11 +577,11 @@ test "sequenceDiagram is rendered as ASCII art" {
     defer allocator.free(rendered);
 
     try std.testing.expect(std.mem.startsWith(u8, rendered, "```mermaid"));
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "Alice") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "Bob") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "Hello") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "Hi") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid:") == null);
+    try std.testing.expect(std.mem.find(u8, rendered, "Alice") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "Bob") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "Hello") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "Hi") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "[mermaid:") == null);
 }
 
 test "sequenceDiagram null wrap width keeps simple ASCII snapshot byte-identical" {
@@ -722,7 +719,7 @@ test "sequenceDiagram centers CJK participant label by display width under wrap 
     var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 10 });
     defer fixture.deinit();
 
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "│ 利用者 │") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "│ 利用者 │") != null);
     try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
     try mermaid_helpers.expectBodyRowsFit(fixture.body, 10, .narrow);
 }
@@ -745,8 +742,8 @@ test "sequenceDiagram wraps long participant and message labels without generate
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "request");
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "payload");
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "validation");
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "►") != null);
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "->>") == null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "►") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "->>") == null);
     try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
     try mermaid_helpers.expectBodyRowsFit(fixture.body, 24, .narrow);
 }
@@ -771,10 +768,10 @@ test "sequenceDiagram at width eighty preserves three participants messages arro
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "submitorderrequest");
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "readinventorysnapshot");
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "returnacceptedresponse");
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "►") != null);
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "◄") != null);
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "╌") != null);
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "->>") == null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "►") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "◄") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "╌") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "->>") == null);
     try std.testing.expect(hasSequenceLifelineRow(fixture.body, 3, &.{ "Client", "Gateway", "Database" }));
     try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
     try mermaid_helpers.expectBodyRowsFit(fixture.body, 80, .narrow);
@@ -816,7 +813,7 @@ test "sequenceDiagram wraps self messages while preserving display clusters and 
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "keep");
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "cluste");
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "togeth");
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "◄") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "◄") != null);
     try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
     try mermaid_helpers.expectBodyRowsFit(fixture.body, 16, .narrow);
 }
@@ -842,7 +839,7 @@ test "sequenceDiagram wraps later-column self messages without dropping label te
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "hh");
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "ii");
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "jj");
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "◄") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "◄") != null);
     try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
     try mermaid_helpers.expectBodyRowsFit(fixture.body, 20, .narrow);
 }
@@ -886,7 +883,7 @@ test "sequenceDiagram same-band edge note does not use cross-band continuation" 
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "rightedgenote");
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "several");
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "words");
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "[cross-band]") == null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "[cross-band]") == null);
     try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
     try mermaid_helpers.expectBodyRowsFit(fixture.body, 22, .narrow);
 }
@@ -908,8 +905,8 @@ test "sequenceDiagram wrapped edge notes inside blocks preserve block side borde
 
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "leftedgenote");
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "rightedgenote");
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "│┌") != null);
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "┐│") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "│┌") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "┐│") != null);
     try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
     try mermaid_helpers.expectBodyRowsFit(fixture.body, 22, .narrow);
 }
@@ -939,7 +936,7 @@ test "sequenceDiagram wraps notes and block labels under wrap width" {
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "validators");
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "rate");
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "limithints");
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "◄") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "◄") != null);
     try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
     try mermaid_helpers.expectBodyRowsFit(fixture.body, 28, .narrow);
 }
@@ -985,7 +982,7 @@ test "sequenceDiagram preserves supported block kinds and divider labels under w
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "rect[highlighted");
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "area]");
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "break[stopnow]");
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "◄") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "◄") != null);
     try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
     try mermaid_helpers.expectBodyRowsFit(fixture.body, 26, .narrow);
 }
@@ -1014,10 +1011,10 @@ test "sequenceDiagram nested wrapped blocks keep continuous side-border prefixes
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "thatwraps");
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "fallbackbranchlabel");
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "thatwraps");
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "┌") != null);
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "├") != null);
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "►") != null);
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "◄") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "┌") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "├") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "►") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "◄") != null);
     try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
     try mermaid_helpers.expectBodyRowsFit(fixture.body, 28, .narrow);
 }
@@ -1044,8 +1041,8 @@ test "sequenceDiagram emits participant bands and cross-band continuation rows" 
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "responsewithalong");
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "label");
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "notespansbandstoo");
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "-->>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "║") == null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "-->>") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "║") == null);
     try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
     try mermaid_helpers.expectBodyRowsFit(fixture.body, 20, .narrow);
 }
@@ -1125,10 +1122,10 @@ test "sequenceDiagram blocks spanning participant bands preserve labels dividers
     var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 20 });
     defer fixture.deinit();
 
-    const loop_pos = std.mem.indexOf(u8, fixture.body, "loop") orelse return error.TestUnexpectedResult;
-    const first_pos = std.mem.indexOf(u8, fixture.body, "first") orelse return error.TestUnexpectedResult;
-    const else_pos = std.mem.indexOf(u8, fixture.body, "fallback") orelse return error.TestUnexpectedResult;
-    const second_pos = std.mem.indexOf(u8, fixture.body, "second") orelse return error.TestUnexpectedResult;
+    const loop_pos = std.mem.find(u8, fixture.body, "loop") orelse return error.TestUnexpectedResult;
+    const first_pos = std.mem.find(u8, fixture.body, "first") orelse return error.TestUnexpectedResult;
+    const else_pos = std.mem.find(u8, fixture.body, "fallback") orelse return error.TestUnexpectedResult;
+    const second_pos = std.mem.find(u8, fixture.body, "second") orelse return error.TestUnexpectedResult;
 
     try std.testing.expect(loop_pos < first_pos);
     try std.testing.expect(first_pos < else_pos);
@@ -1144,10 +1141,10 @@ test "sequenceDiagram blocks spanning participant bands preserve labels dividers
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "-->>D:second");
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "cross");
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "response");
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "[cross-band] A") != null);
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "->> E: first") != null);
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "[cross-band] B") != null);
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "-->> D: second") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "[cross-band] A") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "->> E: first") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "[cross-band] B") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "-->> D: second") != null);
     try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
     try mermaid_helpers.expectBodyRowsFit(fixture.body, 20, .narrow);
 }
@@ -1166,8 +1163,8 @@ test "sequenceDiagram cross-band continuation rows preserve source message order
     var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 20 });
     defer fixture.deinit();
 
-    const first_pos = std.mem.indexOf(u8, fixture.body, "first") orelse return error.TestUnexpectedResult;
-    const second_pos = std.mem.indexOf(u8, fixture.body, "second") orelse return error.TestUnexpectedResult;
+    const first_pos = std.mem.find(u8, fixture.body, "first") orelse return error.TestUnexpectedResult;
+    const second_pos = std.mem.find(u8, fixture.body, "second") orelse return error.TestUnexpectedResult;
 
     try std.testing.expect(first_pos < second_pos);
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "[cross-band]C");
@@ -1193,7 +1190,7 @@ test "sequenceDiagram note over body rows clear lifelines from note interior" {
     var saw_note_body = false;
     var rows = std.mem.splitScalar(u8, fixture.body, '\n');
     while (rows.next()) |row| {
-        if (std.mem.indexOf(u8, row, "words") == null) continue;
+        if (std.mem.find(u8, row, "words") == null) continue;
         saw_note_body = true;
         try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, row, "│"));
     }
@@ -1216,10 +1213,10 @@ test "sequenceDiagram wrapped sequential blocks at same index are not nested" {
     var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 30 });
     defer fixture.deinit();
 
-    const a_pos = std.mem.indexOf(u8, fixture.body, "loop [a]") orelse return error.TestUnexpectedResult;
-    const b_pos = std.mem.indexOf(u8, fixture.body, "loop [b]") orelse return error.TestUnexpectedResult;
+    const a_pos = std.mem.find(u8, fixture.body, "loop [a]") orelse return error.TestUnexpectedResult;
+    const b_pos = std.mem.find(u8, fixture.body, "loop [b]") orelse return error.TestUnexpectedResult;
     try std.testing.expect(a_pos < b_pos);
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "│┌") == null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "│┌") == null);
     try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
     try mermaid_helpers.expectBodyRowsFit(fixture.body, 30, .narrow);
 }
@@ -1249,11 +1246,11 @@ test "sequenceDiagram wrapped renderer fits ambiguous-wide rows" {
     var fixture = try mermaid_helpers.renderFencedDiagram(allocator, mermaid_source, .{ .wrap_width = 20, .ambiguous_width = .wide });
     defer fixture.deinit();
 
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "+") != null);
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, ">") != null);
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "─") == null);
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "│") == null);
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "►") == null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "+") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, ">") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "─") == null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "│") == null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "►") == null);
     try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
     try mermaid_helpers.expectBodyRowsFit(fixture.body, 20, .wide);
 }
@@ -1269,8 +1266,8 @@ test "invalid mermaid emits parse-error diagnostic with raw source" {
     const rendered = try helpers.renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "[mermaid: parse error]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "not a real diagram") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "[mermaid: parse error]") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "not a real diagram") != null);
 }
 
 test "mermaid body width helper ignores unchanged fence opener width" {
@@ -1365,8 +1362,8 @@ test "unsupported mermaid fallback wraps diagnostic and source body rows" {
         fixture.body,
         "[mermaid: diagram type not yet supported by mp]",
     );
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "gantt") != null);
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "epsilon") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "gantt") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "epsilon") != null);
     try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
     try mermaid_helpers.expectBodyRowsFit(fixture.body, 12, .narrow);
 }
@@ -1382,7 +1379,7 @@ test "unknown mermaid fallback wraps parse diagnostic and source body rows" {
 
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "[mermaid: parse error]");
     try mermaid_helpers.expectBodyContainsIgnoringWhitespace(allocator, fixture.body, "unknownDiagram");
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "several") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "several") != null);
     try mermaid_helpers.expectNoGeneratedClipping(mermaid_source, fixture.body);
     try mermaid_helpers.expectBodyRowsFit(fixture.body, 10, .narrow);
 }
@@ -1395,7 +1392,7 @@ test "implemented mermaid width zero uses width-too-small route without zero-wid
     , .{ .wrap_width = 0 });
     defer fixture.deinit();
 
-    try std.testing.expect(std.mem.indexOf(u8, fixture.body, "[mermaid: terminal width too small to render diagram]") != null);
+    try std.testing.expect(std.mem.find(u8, fixture.body, "[mermaid: terminal width too small to render diagram]") != null);
     try std.testing.expect(internals.term.width.displayWidth(fixture.body, .narrow) > 0);
 }
 
@@ -1451,9 +1448,9 @@ test "ambiguous_width wide keeps Unicode glyphs matching tables" {
     const rendered = try helpers.renderToOwnedSlice(allocator, source, .{ .ambiguous_width = .wide });
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "─") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "│") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "+") == null);
+    try std.testing.expect(std.mem.find(u8, rendered, "─") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "│") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "+") == null);
 }
 
 test "ambiguous_width shifts box width for EAW=A labels (Greek)" {
@@ -1470,8 +1467,8 @@ test "ambiguous_width shifts box width for EAW=A labels (Greek)" {
     const wide = try helpers.renderToOwnedSlice(allocator, source, .{ .ambiguous_width = .wide });
     defer allocator.free(wide);
 
-    try std.testing.expect(std.mem.indexOf(u8, narrow, "αβγ") != null);
-    try std.testing.expect(std.mem.indexOf(u8, wide, "αβγ") != null);
+    try std.testing.expect(std.mem.find(u8, narrow, "αβγ") != null);
+    try std.testing.expect(std.mem.find(u8, wide, "αβγ") != null);
 
     try std.testing.expect(maxLineWidth(wide) > maxLineWidth(narrow));
 }
@@ -1488,14 +1485,14 @@ fn maxLineWidth(text: []const u8) usize {
 fn hasSequenceLifelineRow(body: []const u8, min_lifelines: usize, participant_labels: []const []const u8) bool {
     var rows = std.mem.splitScalar(u8, body, '\n');
     while (rows.next()) |row| {
-        if (std.mem.indexOf(u8, row, "┌") != null) continue;
-        if (std.mem.indexOf(u8, row, "┐") != null) continue;
-        if (std.mem.indexOf(u8, row, "└") != null) continue;
-        if (std.mem.indexOf(u8, row, "┘") != null) continue;
+        if (std.mem.find(u8, row, "┌") != null) continue;
+        if (std.mem.find(u8, row, "┐") != null) continue;
+        if (std.mem.find(u8, row, "└") != null) continue;
+        if (std.mem.find(u8, row, "┘") != null) continue;
 
         var has_label = false;
         for (participant_labels) |label| {
-            if (std.mem.indexOf(u8, row, label) != null) {
+            if (std.mem.find(u8, row, label) != null) {
                 has_label = true;
                 break;
             }
@@ -1519,7 +1516,7 @@ test "mermaid LR direction renders horizontally with right arrow" {
     const rendered = try helpers.renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "►") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "►") != null);
 }
 
 test "mermaid diamond decision node renders with diamond glyphs" {
@@ -1534,9 +1531,9 @@ test "mermaid diamond decision node renders with diamond glyphs" {
     const rendered = try helpers.renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "╱") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "╲") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "Check") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "╱") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "╲") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "Check") != null);
 }
 
 test "mermaid CJK label preserves integrity and invariant" {
@@ -1551,8 +1548,8 @@ test "mermaid CJK label preserves integrity and invariant" {
     const rendered = try helpers.renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "日本語") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "►") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "日本語") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "►") != null);
 }
 
 test "flowchart hard-break node labels render as centered multiline text" {
@@ -2287,7 +2284,7 @@ test "mermaid self-loop does not hang" {
     const rendered = try helpers.renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "A") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "A") != null);
 }
 
 test "mermaid empty content renders empty fence" {
@@ -2313,9 +2310,9 @@ test "gitGraph with enable_ansi=true emits ANSI SGR through renderer pipeline" {
     const rendered = try helpers.renderToOwnedSlice(allocator, source, .{ .enable_ansi = true });
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "\x1b[38;2;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "●") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "[main]") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "\x1b[38;2;") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "●") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "[main]") != null);
 }
 
 test "gitGraph enable_ansi=false matches bare-default call byte-for-byte" {
@@ -2353,9 +2350,9 @@ test "xychart with enable_ansi=true emits ANSI SGR through renderer pipeline" {
     const rendered = try helpers.renderToOwnedSlice(allocator, source, .{ .enable_ansi = true });
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "\x1b[38;2;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "Demo") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "█") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "\x1b[38;2;") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "Demo") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "█") != null);
 }
 
 test "xychart enable_ansi=false matches bare-default call byte-for-byte" {

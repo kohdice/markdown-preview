@@ -1,5 +1,4 @@
 const ast = @import("../ast.zig");
-const ansi = @import("../term/ansi.zig");
 const theme = @import("../term/theme.zig");
 const width = @import("../term/width.zig");
 
@@ -9,5 +8,4 @@ pub const RenderContext = struct {
     ambiguous_width: width.AmbiguousWidth,
     palette: theme.Palette,
     syn_palette: theme.SyntaxPalette,
-    color_mode: ansi.ColorMode = .truecolor,
 };

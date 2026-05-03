@@ -1,5 +1,4 @@
 const std = @import("std");
-const ansi = @import("ansi.zig");
 const env_like = @import("env_like.zig");
 
 const ESC = 0x1b;
@@ -196,192 +195,6 @@ pub fn displayWidth(text: []const u8, ambiguous: AmbiguousWidth) usize {
     return w;
 }
 
-fn sliceToWidth(text: []const u8, max_width: usize, ambiguous: AmbiguousWidth) []const u8 {
-    var width: usize = 0;
-    var i: usize = 0;
-    while (i < text.len) {
-        if (skipAnsiCsi(text, i)) |after| {
-            i = after;
-            continue;
-        }
-
-        const decoded = switch (nextCodepoint(text, i)) {
-            .ok => |d| d,
-            .invalid => {
-                i += 1;
-                continue;
-            },
-            .incomplete => break,
-        };
-
-        const cw = codepointWidth(decoded.cp, ambiguous);
-        if (width + cw > max_width) break;
-        width += cw;
-        i += decoded.len;
-    }
-    return text[0..i];
-}
-
-fn sliceToWidthAlloc(
-    allocator: std.mem.Allocator,
-    text: []const u8,
-    max_width: usize,
-    ambiguous: AmbiguousWidth,
-) ![]u8 {
-    var w: usize = 0;
-    var i: usize = 0;
-    var ansi_active = false;
-    var suppress_next_emoji = false;
-
-    while (i < text.len) {
-        if (skipAnsiCsi(text, i)) |after| {
-            const seq = text[i..after];
-            ansi_active = !std.mem.eql(u8, seq, ansi.reset_sequence);
-            i = after;
-            continue;
-        }
-
-        const decoded = switch (nextCodepoint(text, i)) {
-            .ok => |d| d,
-            .invalid => {
-                i += 1;
-                w += 1;
-                continue;
-            },
-            .incomplete => break,
-        };
-
-        if (suppress_next_emoji) {
-            suppress_next_emoji = false;
-            if (isEmoji(decoded.cp)) {
-                i += decoded.len;
-                continue;
-            }
-        }
-
-        if (decoded.cp == ZWJ) {
-            suppress_next_emoji = true;
-            i += decoded.len;
-            continue;
-        }
-
-        const cw = codepointWidth(decoded.cp, ambiguous);
-        if (w + cw > max_width) break;
-        w += cw;
-        i += decoded.len;
-    }
-
-    const truncated = i < text.len;
-    if (truncated and ansi_active) {
-        var result = try allocator.alloc(u8, i + ansi.reset_sequence.len);
-        @memcpy(result[0..i], text[0..i]);
-        @memcpy(result[i..][0..ansi.reset_sequence.len], ansi.reset_sequence);
-        return result;
-    }
-    return try allocator.dupe(u8, text[0..i]);
-}
-
-fn wrapText(
-    allocator: std.mem.Allocator,
-    text: []const u8,
-    max_width: usize,
-    ambiguous: AmbiguousWidth,
-) ![]u8 {
-    if (max_width == 0) return try allocator.dupe(u8, text);
-
-    var result: std.ArrayList(u8) = .empty;
-    errdefer result.deinit(allocator);
-
-    var col: usize = 0;
-    var last_space_result: ?usize = null;
-    var col_after_last_space: usize = 0;
-    var i: usize = 0;
-    var suppress_next_emoji = false;
-
-    while (i < text.len) {
-        if (skipAnsiCsi(text, i)) |after| {
-            try result.appendSlice(allocator, text[i..after]);
-            i = after;
-            continue;
-        }
-
-        if (text[i] == '\n') {
-            try result.append(allocator, '\n');
-            col = 0;
-            last_space_result = null;
-            suppress_next_emoji = false;
-            i += 1;
-            continue;
-        }
-
-        const len = std.unicode.utf8ByteSequenceLength(text[i]) catch {
-            try result.append(allocator, text[i]);
-            i += 1;
-            col += 1;
-            continue;
-        };
-        if (i + len > text.len) break;
-
-        const cp = decodeCodepointExact(text[i..][0..len]) catch {
-            try result.append(allocator, text[i]);
-            i += 1;
-            col += 1;
-            continue;
-        };
-
-        if (suppress_next_emoji) {
-            suppress_next_emoji = false;
-            if (isEmoji(cp)) {
-                try result.appendSlice(allocator, text[i..][0..len]);
-                i += len;
-                continue;
-            }
-        }
-
-        if (cp == ZWJ) {
-            suppress_next_emoji = true;
-            try result.appendSlice(allocator, text[i..][0..len]);
-            i += len;
-            continue;
-        }
-
-        const cw = codepointWidth(cp, ambiguous);
-
-        if (col + cw > max_width) {
-            if (text[i] == ' ') {
-                try result.append(allocator, '\n');
-                col = 0;
-                last_space_result = null;
-                i += len;
-                continue;
-            }
-            if (last_space_result) |space_pos| {
-                result.items[space_pos] = '\n';
-                col -= col_after_last_space;
-                last_space_result = null;
-            } else {
-                try result.append(allocator, '\n');
-                col = 0;
-            }
-        }
-
-        if (text[i] == ' ') {
-            last_space_result = result.items.len;
-            try result.appendSlice(allocator, text[i..][0..len]);
-            col += cw;
-            col_after_last_space = col;
-            i += len;
-            continue;
-        }
-
-        try result.appendSlice(allocator, text[i..][0..len]);
-        col += cw;
-        i += len;
-    }
-
-    return try result.toOwnedSlice(allocator);
-}
-
 pub const WrapWriter = struct {
     parent: *std.Io.Writer,
     line_buf: *std.ArrayList(u8),
@@ -398,6 +211,7 @@ pub const WrapWriter = struct {
     writer: std.Io.Writer,
 
     const writer_buffer_size = 512;
+    const retained_line_buffer_limit: usize = 1024 * 1024;
 
     pub fn init(
         self: *WrapWriter,
@@ -407,7 +221,7 @@ pub const WrapWriter = struct {
         allocator: std.mem.Allocator,
         line_buf: *std.ArrayList(u8),
     ) void {
-        line_buf.clearRetainingCapacity();
+        clearLineBuffer(line_buf, allocator);
         self.* = .{
             .parent = parent,
             .line_buf = line_buf,
@@ -426,6 +240,14 @@ pub const WrapWriter = struct {
                 .vtable = &wrap_vtable,
             },
         };
+    }
+
+    fn clearLineBuffer(line_buf: *std.ArrayList(u8), allocator: std.mem.Allocator) void {
+        if (line_buf.capacity > retained_line_buffer_limit) {
+            line_buf.clearAndFree(allocator);
+        } else {
+            line_buf.clearRetainingCapacity();
+        }
     }
 
     pub fn reset(
@@ -451,10 +273,8 @@ pub const WrapWriter = struct {
     pub fn finish(self: *WrapWriter) std.Io.Writer.Error!void {
         try self.writer.flush();
         if (self.pending_len > 0) {
-            if (self.pending[0] == ESC) {
-                self.line_buf.appendSlice(self.allocator, self.pending[0..self.pending_len]) catch
-                    return error.WriteFailed;
-            }
+            self.line_buf.appendSlice(self.allocator, self.pending[0..self.pending_len]) catch
+                return error.WriteFailed;
             self.pending_len = 0;
         }
         if (self.line_buf.items.len > 0) {
@@ -1350,20 +1170,6 @@ test "BMP emoji presentation symbol is width 2" {
     try std.testing.expectEqual(@as(usize, 2), displayWidth("✅", .narrow));
 }
 
-test "sliceToWidth basic" {
-    try std.testing.expectEqualStrings("hel", sliceToWidth("hello", 3, .narrow));
-    try std.testing.expectEqualStrings("hello", sliceToWidth("hello", 10, .narrow));
-}
-
-test "sliceToWidth respects CJK width" {
-    try std.testing.expectEqualStrings("日", sliceToWidth("日本", 3, .narrow));
-}
-
-test "sliceToWidth preserves ANSI" {
-    const text = "\x1b[1mbold\x1b[0m";
-    try std.testing.expectEqualStrings("\x1b[1mbol", sliceToWidth(text, 3, .narrow));
-}
-
 test "mixed content width" {
     try std.testing.expectEqual(@as(usize, 9), displayWidth("Hello日本", .narrow));
 }
@@ -1394,91 +1200,36 @@ test "ZWSP and BOM are width 0" {
     try std.testing.expectEqual(@as(usize, 2), displayWidth("\u{FEFF}ab", .narrow));
 }
 
-test "wrapText basic word wrap" {
-    const allocator = std.testing.allocator;
-    const result = try wrapText(allocator, "Hello World", 8, .narrow);
-    defer allocator.free(result);
-    try std.testing.expectEqualStrings("Hello\nWorld", result);
+test "WrapWriter basic word wrap" {
+    try expectWrapWriter("Hello World", 8, .narrow, "Hello\nWorld");
 }
 
-test "wrapText exact fit no wrap" {
-    const allocator = std.testing.allocator;
-    const result = try wrapText(allocator, "Hello", 5, .narrow);
-    defer allocator.free(result);
-    try std.testing.expectEqualStrings("Hello", result);
+test "WrapWriter exact fit no wrap" {
+    try expectWrapWriter("Hello", 5, .narrow, "Hello");
 }
 
-test "wrapText multiple words" {
-    const allocator = std.testing.allocator;
-    const result = try wrapText(allocator, "A B C D E F", 5, .narrow);
-    defer allocator.free(result);
-    try std.testing.expectEqualStrings("A B C\nD E F", result);
+test "WrapWriter multiple short words" {
+    try expectWrapWriter("A B C D E F", 5, .narrow, "A B C\nD E F");
 }
 
-test "wrapText hard break on long word" {
-    const allocator = std.testing.allocator;
-    const result = try wrapText(allocator, "ABCDEFGHIJ", 5, .narrow);
-    defer allocator.free(result);
-    try std.testing.expectEqualStrings("ABCDE\nFGHIJ", result);
+test "WrapWriter hard break on long word" {
+    try expectWrapWriter("ABCDEFGHIJ", 5, .narrow, "ABCDE\nFGHIJ");
 }
 
-test "wrapText preserves ANSI codes" {
-    const allocator = std.testing.allocator;
-    const result = try wrapText(allocator, "\x1b[1mHello World\x1b[0m", 8, .narrow);
-    defer allocator.free(result);
-    try std.testing.expectEqualStrings("\x1b[1mHello\nWorld\x1b[0m", result);
+test "WrapWriter preserves ANSI codes" {
+    try expectWrapWriter("\x1b[1mHello World\x1b[0m", 8, .narrow, "\x1b[1mHello\nWorld\x1b[0m");
 }
 
-test "wrapText preserves existing newlines" {
-    const allocator = std.testing.allocator;
-    const result = try wrapText(allocator, "Line one\nLine two", 20, .narrow);
-    defer allocator.free(result);
-    try std.testing.expectEqualStrings("Line one\nLine two", result);
+test "WrapWriter preserves multiple existing newlines" {
+    try expectWrapWriter("Line one\nLine two", 20, .narrow, "Line one\nLine two");
 }
 
-test "wrapText CJK characters" {
-    const allocator = std.testing.allocator;
-    const result = try wrapText(allocator, "日本語", 5, .narrow);
-    defer allocator.free(result);
-    try std.testing.expectEqualStrings("日本\n語", result);
+test "WrapWriter CJK characters" {
+    try expectWrapWriter("日本語", 5, .narrow, "日本\n語");
 }
 
-test "wrapText zero width returns copy" {
-    const allocator = std.testing.allocator;
-    const result = try wrapText(allocator, "Hello", 0, .narrow);
-    defer allocator.free(result);
-    try std.testing.expectEqualStrings("Hello", result);
-}
-
-test "sliceToWidthAlloc appends reset when truncating styled text" {
-    const allocator = std.testing.allocator;
-    const text = "\x1b[1mbold text\x1b[0m";
-    const result = try sliceToWidthAlloc(allocator, text, 4, .narrow);
-    defer allocator.free(result);
-    try std.testing.expectEqualStrings("\x1b[1mbold\x1b[0m", result);
-}
-
-test "sliceToWidthAlloc no reset when not truncated" {
-    const allocator = std.testing.allocator;
-    const text = "\x1b[1mhi\x1b[0m";
-    const result = try sliceToWidthAlloc(allocator, text, 10, .narrow);
-    defer allocator.free(result);
-    try std.testing.expectEqualStrings("\x1b[1mhi\x1b[0m", result);
-}
-
-test "sliceToWidthAlloc no reset for plain text" {
-    const allocator = std.testing.allocator;
-    const result = try sliceToWidthAlloc(allocator, "hello world", 5, .narrow);
-    defer allocator.free(result);
-    try std.testing.expectEqualStrings("hello", result);
-}
-
-test "sliceToWidthAlloc with multiple styles" {
-    const allocator = std.testing.allocator;
-    const text = "\x1b[1mbold\x1b[0m \x1b[3mitalic\x1b[0m";
-    const result = try sliceToWidthAlloc(allocator, text, 7, .narrow);
-    defer allocator.free(result);
-    try std.testing.expectEqualStrings("\x1b[1mbold\x1b[0m \x1b[3mit\x1b[0m", result);
+test "WrapWriter zero width passes through" {
+    try expectWrapWriter("Hello", 0, .narrow, "Hello");
 }
 
 test "Ambiguous bullet is narrow 1 or wide 2" {
@@ -1520,15 +1271,8 @@ test "🚀 (U+1F680) stays width 2 in both Ambiguous modes" {
     try std.testing.expectEqual(@as(usize, 2), displayWidth("🚀", .wide));
 }
 
-test "sliceToWidth truncates at wide Ambiguous width" {
-    try std.testing.expectEqualStrings("••", sliceToWidth("•••", 4, .wide));
-}
-
-test "wrapText respects wide Ambiguous width" {
-    const allocator = std.testing.allocator;
-    const result = try wrapText(allocator, "• a • b", 4, .wide);
-    defer allocator.free(result);
-    try std.testing.expectEqualStrings("• a\n• b", result);
+test "WrapWriter respects wide Ambiguous width" {
+    try expectWrapWriter("• a • b", 4, .wide, "• a\n• b");
 }
 
 test "Greek capital letters follow Ambiguous rule" {
@@ -1562,15 +1306,9 @@ test "Private Use Area is Ambiguous" {
     try std.testing.expectEqual(@as(usize, 2), displayWidth("\u{E000}", .wide));
 }
 
-test "wrapText with Greek text wraps at wide-mode width" {
-    const allocator = std.testing.allocator;
-    const narrow_result = try wrapText(allocator, "ΑΒΓ", 4, .narrow);
-    defer allocator.free(narrow_result);
-    try std.testing.expectEqualStrings("ΑΒΓ", narrow_result);
-
-    const wide_result = try wrapText(allocator, "ΑΒΓ", 4, .wide);
-    defer allocator.free(wide_result);
-    try std.testing.expectEqualStrings("ΑΒ\nΓ", wide_result);
+test "WrapWriter with Greek text wraps at wide-mode width" {
+    try expectWrapWriter("ΑΒΓ", 4, .narrow, "ΑΒΓ");
+    try expectWrapWriter("ΑΒΓ", 4, .wide, "ΑΒ\nΓ");
 }
 
 test "classifyLocale wide for ja/ko/zh UTF-8 locales" {
@@ -1804,11 +1542,8 @@ fn wrapWriterCollect(input: []const u8, max_w: usize, ambiguous: AmbiguousWidth)
     return list.toOwnedSlice(allocator);
 }
 
-fn expectWrapParity(input: []const u8, max_w: usize, ambiguous: AmbiguousWidth) !void {
+fn expectWrapWriter(input: []const u8, max_w: usize, ambiguous: AmbiguousWidth, expected: []const u8) !void {
     const allocator = std.testing.allocator;
-
-    const expected = try wrapText(allocator, input, max_w, ambiguous);
-    defer allocator.free(expected);
 
     const actual = try wrapWriterCollect(input, max_w, ambiguous);
     defer allocator.free(actual);
@@ -1816,43 +1551,48 @@ fn expectWrapParity(input: []const u8, max_w: usize, ambiguous: AmbiguousWidth) 
     try std.testing.expectEqualStrings(expected, actual);
 }
 
-test "WrapWriter basic word wrap matches wrapText" {
-    try expectWrapParity("Hello World", 5, .narrow);
+test "WrapWriter basic word wrap width five" {
+    try expectWrapWriter("Hello World", 5, .narrow, "Hello\nWorld");
 }
 
 test "WrapWriter multiple words" {
-    try expectWrapParity("one two three four five", 10, .narrow);
+    try expectWrapWriter("one two three four five", 10, .narrow, "one two\nthree four\nfive");
 }
 
 test "WrapWriter long word hard break" {
-    try expectWrapParity("abcdefghij", 5, .narrow);
+    try expectWrapWriter("abcdefghij", 5, .narrow, "abcde\nfghij");
 }
 
 test "WrapWriter preserves existing newlines" {
-    try expectWrapParity("abc\ndef\nghi", 10, .narrow);
+    try expectWrapWriter("abc\ndef\nghi", 10, .narrow, "abc\ndef\nghi");
 }
 
 test "WrapWriter consecutive spaces" {
-    try expectWrapParity("a  b", 5, .narrow);
+    try expectWrapWriter("a  b", 5, .narrow, "a  b");
 }
 
 test "WrapWriter leading and trailing spaces" {
-    try expectWrapParity(" hello ", 10, .narrow);
+    try expectWrapWriter(" hello ", 10, .narrow, " hello ");
 }
 
 test "WrapWriter ANSI sequences preserved" {
-    try expectWrapParity("\x1b[1mHello\x1b[0m \x1b[3mWorld\x1b[0m", 5, .narrow);
+    try expectWrapWriter(
+        "\x1b[1mHello\x1b[0m \x1b[3mWorld\x1b[0m",
+        5,
+        .narrow,
+        "\x1b[1mHello\x1b[0m\n\x1b[3mWorld\x1b[0m",
+    );
 }
 
 test "WrapWriter CJK characters width 2" {
-    try expectWrapParity("漢字テスト", 6, .narrow);
+    try expectWrapWriter("漢字テスト", 6, .narrow, "漢字テ\nスト");
 }
 
 test "WrapWriter styled fragment boundaries" {
     const allocator = std.testing.allocator;
     const input = "\x1b[1mbold\x1b[0m \x1b[3mitalic\x1b[0m word";
 
-    const expected = try wrapText(allocator, input, 10, .narrow);
+    const expected = try wrapWriterCollect(input, 10, .narrow);
     defer allocator.free(expected);
 
     var buf: std.Io.Writer.Allocating = .init(allocator);
@@ -1883,34 +1623,38 @@ test "WrapWriter styled fragment boundaries" {
 }
 
 test "WrapWriter max_width 0 passes through" {
-    try expectWrapParity("hello world", 0, .narrow);
+    try expectWrapWriter("hello world", 0, .narrow, "hello world");
 }
 
 test "WrapWriter single char per line" {
-    try expectWrapParity("ab cd", 1, .narrow);
+    try expectWrapWriter("ab cd", 1, .narrow, "a\nb\nc\nd");
 }
 
-test "WrapWriter non-CSI ESC matches wrapText" {
-    try expectWrapParity("\x1bXhello", 10, .narrow);
+test "WrapWriter preserves non-CSI ESC" {
+    try expectWrapWriter("\x1bXhello", 10, .narrow, "\x1bXhello");
 }
 
 test "WrapWriter trailing ESC preserved" {
-    try expectWrapParity("abc\x1b", 10, .narrow);
+    try expectWrapWriter("abc\x1b", 10, .narrow, "abc\x1b");
 }
 
 test "WrapWriter trailing incomplete CSI preserved" {
-    try expectWrapParity("abc\x1b[", 10, .narrow);
+    try expectWrapWriter("abc\x1b[", 10, .narrow, "abc\x1b[");
 }
 
 test "WrapWriter trailing incomplete CSI with params preserved" {
-    try expectWrapParity("abc\x1b[31", 10, .narrow);
+    try expectWrapWriter("abc\x1b[31", 10, .narrow, "abc\x1b[31");
+}
+
+test "WrapWriter trailing incomplete UTF-8 preserved" {
+    try expectWrapWriter("abc\xE6\xBC", 10, .narrow, "abc\xE6\xBC");
 }
 
 test "WrapWriter split ANSI CSI across writes" {
     const allocator = std.testing.allocator;
     const input = "\x1b[31mred\x1b[0m text";
 
-    const expected = try wrapText(allocator, input, 10, .narrow);
+    const expected = try wrapWriterCollect(input, 10, .narrow);
     defer allocator.free(expected);
 
     var buf: std.Io.Writer.Allocating = .init(allocator);
@@ -1965,7 +1709,7 @@ test "WrapWriter split ANSI ESC+[ across writes" {
 test "WrapWriter split UTF-8 across writes" {
     const allocator = std.testing.allocator;
     const full = "漢字";
-    const expected = try wrapText(allocator, full, 10, .narrow);
+    const expected = try wrapWriterCollect(full, 10, .narrow);
     defer allocator.free(expected);
 
     var buf: std.Io.Writer.Allocating = .init(allocator);

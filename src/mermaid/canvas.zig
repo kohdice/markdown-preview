@@ -151,7 +151,8 @@ pub const Canvas = struct {
     cols: usize,
 
     pub fn init(allocator: std.mem.Allocator, rows: usize, cols: usize) !Canvas {
-        const cells = try allocator.alloc(Cell, rows * cols);
+        const cell_count = std.math.mul(usize, rows, cols) catch return error.OutOfMemory;
+        const cells = try allocator.alloc(Cell, cell_count);
         @memset(cells, .{});
         return .{
             .allocator = allocator,
@@ -450,9 +451,8 @@ pub fn writeCanvasAnsi(
     wrap_width: ?usize,
     ambiguous: width_mod.AmbiguousWidth,
     role_colors: []const theme.Rgb,
-    mode: ansi_mod.ColorMode,
 ) !void {
-    if (mode == .none or role_colors.len == 0) {
+    if (role_colors.len == 0) {
         return writeCanvas(writer, canvas, wrap_width, ambiguous);
     }
     if (canvas.rows == 0) return;
@@ -476,13 +476,13 @@ pub fn writeCanvasAnsi(
             if (cut < canvas.cols and canvas.cells[r * canvas.cols + cut].kind == .continuation) {
                 cut -= 1;
             }
-            try writeRowAnsi(writer, canvas, r, cut, role_colors, mode);
+            try writeRowAnsi(writer, canvas, r, cut, role_colors);
             const pad = budget - cut;
             var p: usize = 0;
             while (p < pad) : (p += 1) try writer.writeByte(' ');
             try writer.writeAll(ellipsis);
         } else {
-            try writeRowAnsi(writer, canvas, r, canvas.cols, role_colors, mode);
+            try writeRowAnsi(writer, canvas, r, canvas.cols, role_colors);
         }
     }
 }
@@ -493,7 +493,6 @@ fn writeRowAnsi(
     r: usize,
     cols: usize,
     role_colors: []const theme.Rgb,
-    mode: ansi_mod.ColorMode,
 ) !void {
     var last_nonspace: usize = 0;
     var c: usize = 0;
@@ -514,7 +513,7 @@ fn writeRowAnsi(
                     null;
                 if (!rolesEqual(current_role, effective)) {
                     if (current_role != null) try writer.writeAll(ansi_mod.reset_sequence);
-                    if (effective) |rl| try ansi_mod.writeSgrFg(writer, role_colors[rl], mode);
+                    if (effective) |rl| try ansi_mod.writeSgrFg(writer, role_colors[rl]);
                     current_role = effective;
                 }
                 try writeCellText(writer, canvas, cell);
@@ -588,7 +587,7 @@ test "writeCanvasAnsi wraps single role cell with SGR and reset" {
     var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     const colors = [_]theme.Rgb{.{ .r = 0, .g = 255, .b = 0 }};
-    try writeCanvasAnsi(&sink.writer, &canvas, null, .narrow, &colors, .truecolor);
+    try writeCanvasAnsi(&sink.writer, &canvas, null, .narrow, &colors);
     try std.testing.expectEqualStrings("\x1b[38;2;0;255;0mX\x1b[0m", sink.writer.buffered());
 }
 
@@ -600,19 +599,19 @@ test "writeCanvasAnsi groups consecutive same-role cells under single SGR prefix
     var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     const colors = [_]theme.Rgb{.{ .r = 255, .g = 0, .b = 0 }};
-    try writeCanvasAnsi(&sink.writer, &canvas, null, .narrow, &colors, .truecolor);
+    try writeCanvasAnsi(&sink.writer, &canvas, null, .narrow, &colors);
     try std.testing.expectEqualStrings("\x1b[38;2;255;0;0mAB\x1b[0m", sink.writer.buffered());
 }
 
-test "writeCanvasAnsi in none mode equals plain writeCanvas" {
+test "writeCanvasAnsi with empty palette equals plain writeCanvas" {
     var canvas = try Canvas.init(std.testing.allocator, 1, 4);
     defer canvas.deinit();
     canvas.drawCodepointRole(0, 0, 'A', 0, .narrow);
     canvas.drawCodepoint(0, 1, 'B', .narrow);
     var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
-    const colors = [_]theme.Rgb{.{ .r = 0, .g = 0, .b = 0 }};
-    try writeCanvasAnsi(&sink.writer, &canvas, null, .narrow, &colors, .none);
+    const colors = [_]theme.Rgb{};
+    try writeCanvasAnsi(&sink.writer, &canvas, null, .narrow, &colors);
     try std.testing.expectEqualStrings("AB", sink.writer.buffered());
 }
 
@@ -625,13 +624,13 @@ test "writeCanvasAnsi clips to wrap_width with trailing ellipsis" {
     var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     const colors = [_]theme.Rgb{.{ .r = 255, .g = 0, .b = 0 }};
-    try writeCanvasAnsi(&sink.writer, &canvas, 20, .narrow, &colors, .truecolor);
+    try writeCanvasAnsi(&sink.writer, &canvas, 20, .narrow, &colors);
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.endsWith(u8, out, "\u{2026}"));
-    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[38;2;255;0;0m") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[0m") != null);
-    const reset_pos = std.mem.indexOf(u8, out, "\x1b[0m").?;
-    const ellipsis_pos = std.mem.indexOf(u8, out, "\u{2026}").?;
+    try std.testing.expect(std.mem.find(u8, out, "\x1b[38;2;255;0;0m") != null);
+    try std.testing.expect(std.mem.find(u8, out, "\x1b[0m") != null);
+    const reset_pos = std.mem.find(u8, out, "\x1b[0m").?;
+    const ellipsis_pos = std.mem.find(u8, out, "\u{2026}").?;
     try std.testing.expect(reset_pos < ellipsis_pos);
 }
 
@@ -717,7 +716,7 @@ test "writeCanvasAnsi clipping preserves display clusters" {
     var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     const colors = [_]theme.Rgb{.{ .r = 255, .g = 0, .b = 0 }};
-    try writeCanvasAnsi(&sink.writer, &canvas, 4, .narrow, &colors, .truecolor);
+    try writeCanvasAnsi(&sink.writer, &canvas, 4, .narrow, &colors);
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.find(u8, out, "a\u{1F468}\u{200D}\u{1F469}") != null);
@@ -733,12 +732,12 @@ test "writeCanvasAnsi clips over-wide rows and resets before ellipsis" {
     var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     const colors = [_]theme.Rgb{.{ .r = 255, .g = 0, .b = 0 }};
-    try writeCanvasAnsi(&sink.writer, &canvas, 5, .narrow, &colors, .truecolor);
+    try writeCanvasAnsi(&sink.writer, &canvas, 5, .narrow, &colors);
 
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.endsWith(u8, out, "\u{2026}"));
-    const reset_pos = std.mem.lastIndexOf(u8, out, ansi_mod.reset_sequence).?;
-    const ellipsis_pos = std.mem.indexOf(u8, out, "\u{2026}").?;
+    const reset_pos = std.mem.findLast(u8, out, ansi_mod.reset_sequence).?;
+    const ellipsis_pos = std.mem.find(u8, out, "\u{2026}").?;
     try std.testing.expect(reset_pos < ellipsis_pos);
 }
 
@@ -751,11 +750,11 @@ test "writeCanvasAnsi with wrap_width null emits full-width output unchanged" {
     var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     const colors = [_]theme.Rgb{.{ .r = 255, .g = 0, .b = 0 }};
-    try writeCanvasAnsi(&sink.writer, &canvas, null, .narrow, &colors, .truecolor);
+    try writeCanvasAnsi(&sink.writer, &canvas, null, .narrow, &colors);
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "\u{2026}") == null);
+    try std.testing.expect(std.mem.find(u8, out, "\u{2026}") == null);
     try std.testing.expect(std.mem.count(u8, out, ".") == 39);
-    try std.testing.expect(std.mem.indexOf(u8, out, "X") != null);
+    try std.testing.expect(std.mem.find(u8, out, "X") != null);
 }
 
 test "writeCanvasAnsi clip path emits reset before ellipsis for colored last cell" {
@@ -766,11 +765,11 @@ test "writeCanvasAnsi clip path emits reset before ellipsis for colored last cel
     var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     const colors = [_]theme.Rgb{.{ .r = 255, .g = 0, .b = 0 }};
-    try writeCanvasAnsi(&sink.writer, &canvas, 20, .narrow, &colors, .truecolor);
+    try writeCanvasAnsi(&sink.writer, &canvas, 20, .narrow, &colors);
     const out = sink.writer.buffered();
     try std.testing.expect(std.mem.endsWith(u8, out, "\u{2026}"));
-    const last_reset = std.mem.lastIndexOf(u8, out, "\x1b[0m").?;
-    const ellipsis_pos = std.mem.indexOf(u8, out, "\u{2026}").?;
+    const last_reset = std.mem.findLast(u8, out, "\x1b[0m").?;
+    const ellipsis_pos = std.mem.find(u8, out, "\u{2026}").?;
     try std.testing.expect(last_reset < ellipsis_pos);
 }
 
@@ -782,9 +781,9 @@ test "writeCanvasAnsi with wrap_width larger than cols does not clip" {
     var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     const colors = [_]theme.Rgb{.{ .r = 0, .g = 128, .b = 0 }};
-    try writeCanvasAnsi(&sink.writer, &canvas, 100, .narrow, &colors, .truecolor);
+    try writeCanvasAnsi(&sink.writer, &canvas, 100, .narrow, &colors);
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "\u{2026}") == null);
+    try std.testing.expect(std.mem.find(u8, out, "\u{2026}") == null);
     try std.testing.expect(std.mem.count(u8, out, "A") == 10);
 }
 
@@ -796,15 +795,15 @@ test "writeCanvasAnsi with wrap_width leq ellipsis width does not clip" {
     var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink.deinit();
     const colors = [_]theme.Rgb{.{ .r = 0, .g = 0, .b = 128 }};
-    try writeCanvasAnsi(&sink.writer, &canvas, 1, .narrow, &colors, .truecolor);
+    try writeCanvasAnsi(&sink.writer, &canvas, 1, .narrow, &colors);
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "\u{2026}") == null);
+    try std.testing.expect(std.mem.find(u8, out, "\u{2026}") == null);
     try std.testing.expect(std.mem.count(u8, out, "B") == 10);
 
     var sink_zero: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer sink_zero.deinit();
-    try writeCanvasAnsi(&sink_zero.writer, &canvas, 0, .narrow, &colors, .truecolor);
-    try std.testing.expect(std.mem.indexOf(u8, sink_zero.writer.buffered(), "\u{2026}") == null);
+    try writeCanvasAnsi(&sink_zero.writer, &canvas, 0, .narrow, &colors);
+    try std.testing.expect(std.mem.find(u8, sink_zero.writer.buffered(), "\u{2026}") == null);
     try std.testing.expect(std.mem.count(u8, sink_zero.writer.buffered(), "B") == 10);
 }
 
@@ -852,6 +851,13 @@ test "Canvas initializes cells to blank glyphs" {
     try std.testing.expectEqual(@as(usize, 4), canvas.cols);
     try std.testing.expectEqual(@as(u21, ' '), canvas.at(0, 0).cp);
     try std.testing.expectEqual(Cell.Kind.glyph, canvas.at(2, 3).kind);
+}
+
+test "Canvas.init rejects overflowing dimensions" {
+    try std.testing.expectError(
+        error.OutOfMemory,
+        Canvas.init(std.testing.allocator, std.math.maxInt(usize), 2),
+    );
 }
 
 test "drawCodepoint places a narrow glyph" {

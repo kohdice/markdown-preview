@@ -89,7 +89,7 @@ pub const RenderBuffer = struct {
         try self.bytes.appendSlice(self.allocator, slice);
 
         var pos: usize = 0;
-        while (std.mem.indexOfScalarPos(u8, slice, pos, '\n')) |nl| {
+        while (std.mem.findScalarPos(u8, slice, pos, '\n')) |nl| {
             if (nl + 1 < slice.len) {
                 try self.line_offsets.append(self.allocator, base + nl + 1);
             } else {

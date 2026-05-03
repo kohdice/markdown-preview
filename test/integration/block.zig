@@ -723,5 +723,5 @@ test "thematic break uses muted palette color without dim attribute" {
         "\x1b[38;2;88;110;117m" ++ ("─" ** 32) ++ "\x1b[0m\n",
         rendered,
     );
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "\x1b[2m") == null);
+    try std.testing.expect(std.mem.find(u8, rendered, "\x1b[2m") == null);
 }

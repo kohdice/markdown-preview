@@ -2,25 +2,25 @@ const std = @import("std");
 const ts = @import("tree_sitter");
 const ansi = @import("ansi.zig");
 const theme = @import("theme.zig");
-const tree_sitter_zig = @import("tree-sitter-zig");
 const ts_queries = @import("ts_queries");
 
 // C grammar entry points: upstream tree-sitter grammars no longer ship Zig
 // bindings, so we declare the `tree_sitter_<lang>` extern symbols ourselves.
 // build.zig compiles each grammar's `src/parser.c` (+ optional `scanner.c`)
 // into a static library that exposes these functions.
-extern fn tree_sitter_c() callconv(.c) *const anyopaque;
-extern fn tree_sitter_rust() callconv(.c) *const anyopaque;
-extern fn tree_sitter_go() callconv(.c) *const anyopaque;
-extern fn tree_sitter_python() callconv(.c) *const anyopaque;
-extern fn tree_sitter_javascript() callconv(.c) *const anyopaque;
-extern fn tree_sitter_bash() callconv(.c) *const anyopaque;
-extern fn tree_sitter_cpp() callconv(.c) *const anyopaque;
-extern fn tree_sitter_typescript() callconv(.c) *const anyopaque;
-extern fn tree_sitter_tsx() callconv(.c) *const anyopaque;
-extern fn tree_sitter_html() callconv(.c) *const anyopaque;
-extern fn tree_sitter_css() callconv(.c) *const anyopaque;
-extern fn tree_sitter_json() callconv(.c) *const anyopaque;
+extern fn tree_sitter_zig() callconv(.c) *const ts.Language;
+extern fn tree_sitter_c() callconv(.c) *const ts.Language;
+extern fn tree_sitter_rust() callconv(.c) *const ts.Language;
+extern fn tree_sitter_go() callconv(.c) *const ts.Language;
+extern fn tree_sitter_python() callconv(.c) *const ts.Language;
+extern fn tree_sitter_javascript() callconv(.c) *const ts.Language;
+extern fn tree_sitter_bash() callconv(.c) *const ts.Language;
+extern fn tree_sitter_cpp() callconv(.c) *const ts.Language;
+extern fn tree_sitter_typescript() callconv(.c) *const ts.Language;
+extern fn tree_sitter_tsx() callconv(.c) *const ts.Language;
+extern fn tree_sitter_html() callconv(.c) *const ts.Language;
+extern fn tree_sitter_css() callconv(.c) *const ts.Language;
+extern fn tree_sitter_json() callconv(.c) *const ts.Language;
 
 pub const Language = enum {
     zig,
@@ -39,25 +39,25 @@ pub const Language = enum {
 
     pub fn fromString(lang: []const u8) ?Language {
         if (lang.len == 0) return null;
-        if (eqIgnoreAscii(lang, "zig")) return .zig;
-        if (eqIgnoreAscii(lang, "c")) return .c;
-        if (eqIgnoreAscii(lang, "rust") or eqIgnoreAscii(lang, "rs")) return .rust;
-        if (eqIgnoreAscii(lang, "go")) return .go;
-        if (eqIgnoreAscii(lang, "python") or eqIgnoreAscii(lang, "py")) return .python;
+        if (std.ascii.eqlIgnoreCase(lang, "zig")) return .zig;
+        if (std.ascii.eqlIgnoreCase(lang, "c")) return .c;
+        if (std.ascii.eqlIgnoreCase(lang, "rust") or std.ascii.eqlIgnoreCase(lang, "rs")) return .rust;
+        if (std.ascii.eqlIgnoreCase(lang, "go")) return .go;
+        if (std.ascii.eqlIgnoreCase(lang, "python") or std.ascii.eqlIgnoreCase(lang, "py")) return .python;
         // jsx → .javascript (tree-sitter-javascript parses JSX natively).
         // Do not redirect to .tsx, which also carries TypeScript annotations.
-        if (eqIgnoreAscii(lang, "javascript") or eqIgnoreAscii(lang, "js") or eqIgnoreAscii(lang, "jsx")) return .javascript;
-        if (eqIgnoreAscii(lang, "bash") or eqIgnoreAscii(lang, "sh") or eqIgnoreAscii(lang, "shell")) return .bash;
-        if (eqIgnoreAscii(lang, "cpp") or eqIgnoreAscii(lang, "c++") or
-            eqIgnoreAscii(lang, "cxx") or eqIgnoreAscii(lang, "cc") or
-            eqIgnoreAscii(lang, "hpp") or eqIgnoreAscii(lang, "hxx") or
-            eqIgnoreAscii(lang, "h++")) return .cpp;
-        if (eqIgnoreAscii(lang, "typescript") or eqIgnoreAscii(lang, "ts") or
-            eqIgnoreAscii(lang, "mts") or eqIgnoreAscii(lang, "cts")) return .typescript;
-        if (eqIgnoreAscii(lang, "tsx")) return .tsx;
-        if (eqIgnoreAscii(lang, "html") or eqIgnoreAscii(lang, "htm")) return .html;
-        if (eqIgnoreAscii(lang, "css")) return .css;
-        if (eqIgnoreAscii(lang, "json")) return .json;
+        if (std.ascii.eqlIgnoreCase(lang, "javascript") or std.ascii.eqlIgnoreCase(lang, "js") or std.ascii.eqlIgnoreCase(lang, "jsx")) return .javascript;
+        if (std.ascii.eqlIgnoreCase(lang, "bash") or std.ascii.eqlIgnoreCase(lang, "sh") or std.ascii.eqlIgnoreCase(lang, "shell")) return .bash;
+        if (std.ascii.eqlIgnoreCase(lang, "cpp") or std.ascii.eqlIgnoreCase(lang, "c++") or
+            std.ascii.eqlIgnoreCase(lang, "cxx") or std.ascii.eqlIgnoreCase(lang, "cc") or
+            std.ascii.eqlIgnoreCase(lang, "hpp") or std.ascii.eqlIgnoreCase(lang, "hxx") or
+            std.ascii.eqlIgnoreCase(lang, "h++")) return .cpp;
+        if (std.ascii.eqlIgnoreCase(lang, "typescript") or std.ascii.eqlIgnoreCase(lang, "ts") or
+            std.ascii.eqlIgnoreCase(lang, "mts") or std.ascii.eqlIgnoreCase(lang, "cts")) return .typescript;
+        if (std.ascii.eqlIgnoreCase(lang, "tsx")) return .tsx;
+        if (std.ascii.eqlIgnoreCase(lang, "html") or std.ascii.eqlIgnoreCase(lang, "htm")) return .html;
+        if (std.ascii.eqlIgnoreCase(lang, "css")) return .css;
+        if (std.ascii.eqlIgnoreCase(lang, "json")) return .json;
         return null;
     }
 
@@ -185,20 +185,41 @@ const highlight_max_bytes: usize = 64 * 1024;
 const CaptureSpan = struct {
     start: usize,
     end: usize,
-    capture_index: u32,
+    capture_index: StyleIdx,
     pattern_index: u16,
 
-    fn lessThanByPattern(_: void, a: CaptureSpan, b: CaptureSpan) bool {
-        return a.pattern_index < b.pattern_index;
+    fn winsOver(self: CaptureSpan, other: CaptureSpan, self_id: usize, other_id: usize) bool {
+        if (self.pattern_index != other.pattern_index) return self.pattern_index > other.pattern_index;
+        return self_id > other_id;
     }
 };
 
-pub const Highlighter = struct {
+const StyleEvent = struct {
+    offset: usize,
+    capture_id: usize,
+    kind: Kind,
+
+    const Kind = enum { start, end };
+
+    fn lessThanByOffset(_: void, a: StyleEvent, b: StyleEvent) bool {
+        return a.offset < b.offset;
+    }
+};
+
+fn compareActiveCapture(captures: []const CaptureSpan, a: usize, b: usize) std.math.Order {
+    if (captures[a].winsOver(captures[b], a, b)) return .lt;
+    if (captures[b].winsOver(captures[a], b, a)) return .gt;
+    return .eq;
+}
+
+const ActiveCaptureQueue = std.PriorityQueue(usize, []const CaptureSpan, compareActiveCapture);
+
+const TreeSitterHighlighter = struct {
     parser: *ts.Parser,
     languages: [language_count]LanguageState,
     locals_queries: [language_count]QueryState,
 
-    pub fn init() Highlighter {
+    pub fn init() TreeSitterHighlighter {
         return .{
             .parser = ts.Parser.create(),
             .languages = [_]LanguageState{.uninitialized} ** language_count,
@@ -206,7 +227,7 @@ pub const Highlighter = struct {
         };
     }
 
-    pub fn deinit(self: *Highlighter) void {
+    pub fn deinit(self: *TreeSitterHighlighter) void {
         for (&self.languages) |*state| {
             switch (state.*) {
                 .ready => |cfg| cfg.query.destroy(),
@@ -222,12 +243,10 @@ pub const Highlighter = struct {
         self.parser.destroy();
     }
 
-    /// Overlap semantics: "later pattern wins". Captures are collected, sorted
-    /// by `pattern_index` ascending, then applied to a per-byte style-index
-    /// array via `@memset`. Since a later `@memset` overwrites an earlier one,
-    /// more specific patterns that appear later in `highlights.scm` override
-    /// earlier generic patterns. This matches Tree-sitter's standard highlight
-    /// library behavior and the project plan.
+    /// Overlap semantics: "later pattern wins". More specific patterns that
+    /// appear later in `highlights.scm` override earlier generic patterns. Runs
+    /// are emitted with a sweep over capture start/end offsets, avoiding a
+    /// per-source-byte style table.
     ///
     /// Returns `error.QueryUnavailable` if the language's query cannot be
     /// initialized. Callers must catch this error and fall back to
@@ -236,17 +255,16 @@ pub const Highlighter = struct {
     /// All writes go through `ansi.writeStyled`, which internally calls
     /// `writeSanitized`, preserving the project's sanitization invariant.
     pub fn writeHighlightedBlock(
-        self: *Highlighter,
+        self: *TreeSitterHighlighter,
         allocator: std.mem.Allocator,
         writer: *std.Io.Writer,
         source: []const u8,
         lang: Language,
         syn_palette: theme.SyntaxPalette,
-        mode: ansi.ColorMode,
-    ) !void {
+    ) anyerror!void {
         if (source.len == 0) return;
         if (source.len > highlight_max_bytes) {
-            try ansi.writeStyled(writer, true, mode, .{ .fg = syn_palette.plain }, source);
+            try ansi.writeStyled(writer, true, .{ .fg = syn_palette.plain }, source);
             return;
         }
 
@@ -304,45 +322,19 @@ pub const Highlighter = struct {
             const end = capture.node.endByte();
             if (start >= end) continue;
             if (end > source.len) continue;
+            if (capture.index >= no_style) continue;
             try caps.append(allocator, .{
                 .start = start,
                 .end = end,
-                .capture_index = capture.index,
+                .capture_index = @intCast(capture.index),
                 .pattern_index = match.pattern_index,
             });
         }
 
-        std.mem.sort(CaptureSpan, caps.items, {}, CaptureSpan.lessThanByPattern);
-
-        const styles = try allocator.alloc(StyleIdx, source.len);
-        defer allocator.free(styles);
-        @memset(styles, no_style);
-        for (caps.items) |c| {
-            if (c.capture_index >= no_style) continue;
-            @memset(styles[c.start..c.end], @intCast(c.capture_index));
-        }
-
-        var run_start: usize = 0;
-        var state: ansi.StyledState = .{};
-        while (run_start < source.len) {
-            const cur = styles[run_start];
-            var run_end = run_start + 1;
-            while (run_end < source.len and styles[run_end] == cur) : (run_end += 1) {}
-
-            const slice = source[run_start..run_end];
-            const style: ansi.TextStyle = if (cur == no_style)
-                .{ .fg = syn_palette.plain }
-            else blk: {
-                const name = config.query.captureNameForId(cur) orelse "";
-                break :blk captureToStyle(name, syn_palette);
-            };
-            try ansi.writeStyledRun(writer, true, mode, &state, style, slice);
-            run_start = run_end;
-        }
-        try ansi.flushStyle(writer, &state);
+        try writeCapturedRuns(allocator, writer, source, caps.items, config.query, syn_palette);
     }
 
-    pub fn forceLanguageFailedForTesting(self: *Highlighter, lang: Language) void {
+    pub fn forceLanguageFailedForTesting(self: *TreeSitterHighlighter, lang: Language) void {
         const slot = &self.languages[lang.index()];
         switch (slot.*) {
             .ready => |cfg| cfg.query.destroy(),
@@ -351,7 +343,7 @@ pub const Highlighter = struct {
         slot.* = .failed;
     }
 
-    fn getOrInitConfig(self: *Highlighter, lang: Language) ?LanguageConfig {
+    fn getOrInitConfig(self: *TreeSitterHighlighter, lang: Language) ?LanguageConfig {
         const slot = &self.languages[lang.index()];
         switch (slot.*) {
             .ready => |cfg| return cfg,
@@ -360,7 +352,7 @@ pub const Highlighter = struct {
         }
 
         const spec = languageSpec(lang);
-        const ts_language: *const ts.Language = @ptrCast(spec.language_fn());
+        const ts_language = spec.language_fn();
 
         var error_offset: u32 = 0;
         const query = ts.Query.create(ts_language, spec.highlights, &error_offset) catch {
@@ -376,7 +368,7 @@ pub const Highlighter = struct {
         return cfg;
     }
 
-    fn getOrInitLocalsQuery(self: *Highlighter, lang: Language) ?*ts.Query {
+    fn getOrInitLocalsQuery(self: *TreeSitterHighlighter, lang: Language) ?*ts.Query {
         const slot = &self.locals_queries[lang.index()];
         switch (slot.*) {
             .ready => |query| return query,
@@ -389,7 +381,7 @@ pub const Highlighter = struct {
             return null;
         };
 
-        const ts_language: *const ts.Language = @ptrCast(spec.language_fn());
+        const ts_language = spec.language_fn();
         var error_offset: u32 = 0;
         const query = ts.Query.create(ts_language, spec.source, &error_offset) catch {
             slot.* = .failed;
@@ -401,85 +393,174 @@ pub const Highlighter = struct {
     }
 };
 
+fn writeCapturedRuns(
+    allocator: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    source: []const u8,
+    captures: []const CaptureSpan,
+    query: *const ts.Query,
+    syn_palette: theme.SyntaxPalette,
+) !void {
+    var state: ansi.StyledState = .{};
+    if (captures.len == 0) {
+        try ansi.writeStyledRun(writer, true, &state, .{ .fg = syn_palette.plain }, source);
+        try ansi.flushStyle(writer, &state);
+        return;
+    }
+
+    var events: std.ArrayList(StyleEvent) = .empty;
+    defer events.deinit(allocator);
+    try events.ensureTotalCapacity(allocator, captures.len * 2);
+    for (captures, 0..) |capture, id| {
+        events.appendAssumeCapacity(.{ .offset = capture.start, .capture_id = id, .kind = .start });
+        events.appendAssumeCapacity(.{ .offset = capture.end, .capture_id = id, .kind = .end });
+    }
+    std.mem.sort(StyleEvent, events.items, {}, StyleEvent.lessThanByOffset);
+
+    const active = try allocator.alloc(bool, captures.len);
+    defer allocator.free(active);
+    @memset(active, false);
+
+    var active_queue: ActiveCaptureQueue = .initContext(captures);
+    defer active_queue.deinit(allocator);
+    try active_queue.ensureTotalCapacity(allocator, captures.len);
+
+    var cursor: usize = 0;
+    var event_index: usize = 0;
+    while (event_index < events.items.len) {
+        const offset = events.items[event_index].offset;
+        if (cursor < offset) {
+            try writeCaptureRun(writer, source[cursor..offset], captures, bestActiveCapture(&active_queue, active), query, syn_palette, &state);
+            cursor = offset;
+        }
+
+        const group_start = event_index;
+        while (event_index < events.items.len and events.items[event_index].offset == offset) : (event_index += 1) {}
+        const group = events.items[group_start..event_index];
+
+        for (group) |event| {
+            if (event.kind == .end) active[event.capture_id] = false;
+        }
+
+        for (group) |event| {
+            if (event.kind == .start) {
+                active[event.capture_id] = true;
+                try active_queue.push(allocator, event.capture_id);
+            }
+        }
+    }
+
+    if (cursor < source.len) {
+        try writeCaptureRun(writer, source[cursor..], captures, bestActiveCapture(&active_queue, active), query, syn_palette, &state);
+    }
+    try ansi.flushStyle(writer, &state);
+}
+
+fn bestActiveCapture(active_queue: *ActiveCaptureQueue, active: []const bool) ?usize {
+    while (active_queue.peek()) |id| {
+        if (active[id]) return id;
+        _ = active_queue.pop();
+    }
+    return null;
+}
+
+fn writeCaptureRun(
+    writer: *std.Io.Writer,
+    bytes: []const u8,
+    captures: []const CaptureSpan,
+    current_best: ?usize,
+    query: *const ts.Query,
+    syn_palette: theme.SyntaxPalette,
+    state: *ansi.StyledState,
+) !void {
+    const style: ansi.TextStyle = if (current_best) |id| blk: {
+        const name = query.captureNameForId(captures[id].capture_index) orelse "";
+        break :blk captureToStyle(name, syn_palette);
+    } else .{ .fg = syn_palette.plain };
+    try ansi.writeStyledRun(writer, true, state, style, bytes);
+}
+
+pub const Highlighter = TreeSitterHighlighter;
+
 const LanguageSpec = struct {
-    language_fn: *const fn () *const anyopaque,
+    language_fn: *const fn () callconv(.c) *const ts.Language,
     highlights: []const u8,
 };
 
 fn languageSpec(lang: Language) LanguageSpec {
     return switch (lang) {
         .zig => .{
-            .language_fn = tree_sitter_zig.language,
+            .language_fn = tree_sitter_zig,
             .highlights = ts_queries.zig_highlights,
         },
         .c => .{
-            .language_fn = @ptrCast(&tree_sitter_c),
+            .language_fn = tree_sitter_c,
             .highlights = ts_queries.c_highlights,
         },
         .rust => .{
-            .language_fn = @ptrCast(&tree_sitter_rust),
+            .language_fn = tree_sitter_rust,
             .highlights = ts_queries.rust_highlights,
         },
         .go => .{
-            .language_fn = @ptrCast(&tree_sitter_go),
+            .language_fn = tree_sitter_go,
             .highlights = ts_queries.go_highlights,
         },
         .python => .{
-            .language_fn = @ptrCast(&tree_sitter_python),
+            .language_fn = tree_sitter_python,
             .highlights = ts_queries.python_highlights,
         },
         .javascript => .{
-            .language_fn = @ptrCast(&tree_sitter_javascript),
+            .language_fn = tree_sitter_javascript,
             .highlights = ts_queries.javascript_highlights,
         },
         .bash => .{
-            .language_fn = @ptrCast(&tree_sitter_bash),
+            .language_fn = tree_sitter_bash,
             .highlights = ts_queries.bash_highlights,
         },
         .cpp => .{
-            .language_fn = @ptrCast(&tree_sitter_cpp),
+            .language_fn = tree_sitter_cpp,
             .highlights = ts_queries.cpp_highlights,
         },
         .typescript => .{
-            .language_fn = @ptrCast(&tree_sitter_typescript),
+            .language_fn = tree_sitter_typescript,
             .highlights = ts_queries.typescript_highlights,
         },
         .tsx => .{
-            .language_fn = @ptrCast(&tree_sitter_tsx),
+            .language_fn = tree_sitter_tsx,
             .highlights = ts_queries.tsx_highlights,
         },
         .html => .{
-            .language_fn = @ptrCast(&tree_sitter_html),
+            .language_fn = tree_sitter_html,
             .highlights = ts_queries.html_highlights,
         },
         .css => .{
-            .language_fn = @ptrCast(&tree_sitter_css),
+            .language_fn = tree_sitter_css,
             .highlights = ts_queries.css_highlights,
         },
         .json => .{
-            .language_fn = @ptrCast(&tree_sitter_json),
+            .language_fn = tree_sitter_json,
             .highlights = ts_queries.json_highlights,
         },
     };
 }
 
 const LocalsSpec = struct {
-    language_fn: *const fn () *const anyopaque,
+    language_fn: *const fn () callconv(.c) *const ts.Language,
     source: []const u8,
 };
 
 fn localsSpec(lang: Language) ?LocalsSpec {
     return switch (lang) {
         .javascript => .{
-            .language_fn = @ptrCast(&tree_sitter_javascript),
+            .language_fn = tree_sitter_javascript,
             .source = ts_queries.javascript_locals,
         },
         .typescript => .{
-            .language_fn = @ptrCast(&tree_sitter_typescript),
+            .language_fn = tree_sitter_typescript,
             .source = ts_queries.typescript_locals,
         },
         .tsx => .{
-            .language_fn = @ptrCast(&tree_sitter_tsx),
+            .language_fn = tree_sitter_tsx,
             .source = ts_queries.tsx_locals,
         },
         else => null,
@@ -530,11 +611,11 @@ fn matchLiteralAlternatives(text: []const u8, pattern: []const u8) ?bool {
     if (pattern[pattern.len - 2] != ')' or pattern[pattern.len - 1] != '$') return null;
 
     const body = pattern[2 .. pattern.len - 2];
-    if (std.mem.indexOfAny(u8, body, "[]*+\\") != null) return null;
+    if (std.mem.findAny(u8, body, "[]*+\\") != null) return null;
 
     var start: usize = 0;
     while (true) {
-        const next = std.mem.indexOfScalarPos(u8, body, start, '|') orelse {
+        const next = std.mem.findScalarPos(u8, body, start, '|') orelse {
             return std.mem.eql(u8, text, body[start..]);
         };
         if (std.mem.eql(u8, text, body[start..next])) return true;
@@ -583,7 +664,7 @@ fn matchSequentialPattern(text: []const u8, pattern: []const u8) bool {
 fn parsePatternAtom(pattern: []const u8, start: usize) ?struct { atom: PatternAtom, next: usize } {
     if (start >= pattern.len) return null;
     if (pattern[start] == '[') {
-        const end = std.mem.indexOfScalarPos(u8, pattern, start + 1, ']') orelse return null;
+        const end = std.mem.findScalarPos(u8, pattern, start + 1, ']') orelse return null;
         return .{
             .atom = .{ .class = pattern[start + 1 .. end] },
             .next = end + 1,
@@ -807,24 +888,20 @@ fn resolvePredicateText(
 }
 
 fn captureToStyle(name: []const u8, sp: theme.SyntaxPalette) ansi.TextStyle {
-    if (startsWith(name, "keyword")) return .{ .fg = sp.keyword, .bold = true };
-    if (startsWith(name, "type")) return .{ .fg = sp.type_name };
-    if (startsWith(name, "string") or startsWith(name, "character")) return .{ .fg = sp.string };
-    if (startsWith(name, "comment")) return .{ .fg = sp.comment, .italic = true };
-    if (startsWith(name, "number") or startsWith(name, "constant.numeric")) return .{ .fg = sp.number };
-    if (startsWith(name, "function") or startsWith(name, "constant.builtin")) return .{ .fg = sp.func };
-    if (startsWith(name, "operator") or startsWith(name, "punctuation")) return .{ .fg = sp.operator };
+    if (std.mem.startsWith(u8, name, "keyword")) return .{ .fg = sp.keyword, .bold = true };
+    if (std.mem.startsWith(u8, name, "type")) return .{ .fg = sp.type_name };
+    if (std.mem.startsWith(u8, name, "string") or std.mem.startsWith(u8, name, "character")) return .{ .fg = sp.string };
+    if (std.mem.startsWith(u8, name, "comment")) return .{ .fg = sp.comment, .italic = true };
+    if (std.mem.startsWith(u8, name, "number") or std.mem.startsWith(u8, name, "constant.numeric")) return .{ .fg = sp.number };
+    if (std.mem.startsWith(u8, name, "function") or std.mem.startsWith(u8, name, "constant.builtin")) return .{ .fg = sp.func };
+    if (std.mem.startsWith(u8, name, "operator") or std.mem.startsWith(u8, name, "punctuation")) return .{ .fg = sp.operator };
     // HTML/CSS prefixes; placed last so existing languages keep their
     // colors. `variable` and generic `constant` catch-alls are omitted
     // because Rust and Python use those capture names too.
-    if (startsWith(name, "tag")) return .{ .fg = sp.keyword };
-    if (startsWith(name, "attribute")) return .{ .fg = sp.func };
-    if (startsWith(name, "property")) return .{ .fg = sp.type_name };
+    if (std.mem.startsWith(u8, name, "tag")) return .{ .fg = sp.keyword };
+    if (std.mem.startsWith(u8, name, "attribute")) return .{ .fg = sp.func };
+    if (std.mem.startsWith(u8, name, "property")) return .{ .fg = sp.type_name };
     return .{ .fg = sp.plain };
-}
-
-fn startsWith(name: []const u8, prefix: []const u8) bool {
-    return std.mem.startsWith(u8, name, prefix);
 }
 
 /// Capture names that editors (Neovim, Helix) use for non-visual purposes
@@ -845,14 +922,6 @@ fn isMetaCapture(name: []const u8) bool {
         if (std.mem.eql(u8, name, meta)) return true;
     }
     return false;
-}
-
-fn eqIgnoreAscii(a: []const u8, b: []const u8) bool {
-    if (a.len != b.len) return false;
-    for (a, b) |x, y| {
-        if (std.ascii.toLower(x) != std.ascii.toLower(y)) return false;
-    }
-    return true;
 }
 
 test "Language.fromString recognizes all supported names and aliases" {
@@ -975,7 +1044,7 @@ test "Highlighter: writes styled zig source" {
     defer buf.deinit();
 
     const source = "const x: u32 = 42;";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette, .truecolor);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1011,7 +1080,7 @@ test "Highlighter: highlights every supported language end-to-end" {
         var buf: std.Io.Writer.Allocating = .init(allocator);
         defer buf.deinit();
 
-        try hl.writeHighlightedBlock(allocator, &buf.writer, case.source, case.lang, theme.default_syntax_palette, .truecolor);
+        try hl.writeHighlightedBlock(allocator, &buf.writer, case.source, case.lang, theme.default_syntax_palette);
 
         var list = buf.toArrayList();
         defer list.deinit(allocator);
@@ -1036,7 +1105,7 @@ test "Highlighter: later @function pattern overrides generic @variable on fn dec
     defer buf.deinit();
 
     const source = "fn greet() void {}";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette, .truecolor);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1056,7 +1125,7 @@ test "Highlighter: uncaptured whitespace renders with plain color" {
     defer buf.deinit();
 
     const source = "const x = 1;";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette, .truecolor);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1076,7 +1145,7 @@ test "Highlighter: @string captures survive a #set! directive on the pattern" {
     defer buf.deinit();
 
     const source = "const msg = \"hi\";";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette, .truecolor);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1097,7 +1166,7 @@ test "Highlighter: lua-match highlights Zig type identifiers" {
     defer buf.deinit();
 
     const source = "const value: MyType = undefined;";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette, .truecolor);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1117,7 +1186,7 @@ test "Highlighter: javascript require is builtin when not shadowed" {
     defer buf.deinit();
 
     const source = "require('fs');";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .javascript, theme.default_syntax_palette, .truecolor);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .javascript, theme.default_syntax_palette);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1136,7 +1205,7 @@ test "Highlighter: javascript local require does not use builtin styling" {
     defer buf.deinit();
 
     const source = "function demo(require) { return require; }";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .javascript, theme.default_syntax_palette, .truecolor);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .javascript, theme.default_syntax_palette);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1155,7 +1224,7 @@ test "Highlighter: @spell meta capture does not override @comment italic" {
     defer buf.deinit();
 
     const source = "// hello world";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette, .truecolor);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .zig, theme.default_syntax_palette);
 
     var list = buf.toArrayList();
     defer list.deinit(allocator);
@@ -1179,7 +1248,7 @@ test "Highlighter: forced .failed returns QueryUnavailable" {
 
     try std.testing.expectError(
         error.QueryUnavailable,
-        hl.writeHighlightedBlock(allocator, &buf.writer, "const x = 1;", .zig, theme.default_syntax_palette, .truecolor),
+        hl.writeHighlightedBlock(allocator, &buf.writer, "const x = 1;", .zig, theme.default_syntax_palette),
     );
 }
 
@@ -1195,7 +1264,7 @@ test "Highlighter: .failed is sticky across repeated calls" {
     for (0..3) |_| {
         try std.testing.expectError(
             error.QueryUnavailable,
-            hl.writeHighlightedBlock(allocator, &buf.writer, "x", .zig, theme.default_syntax_palette, .truecolor),
+            hl.writeHighlightedBlock(allocator, &buf.writer, "x", .zig, theme.default_syntax_palette),
         );
     }
     switch (hl.languages[Language.zig.index()]) {
@@ -1233,7 +1302,7 @@ fn renderHighlightedForTest(
 ) ![]u8 {
     var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, lang, theme.default_syntax_palette, .truecolor);
+    try hl.writeHighlightedBlock(allocator, &buf.writer, source, lang, theme.default_syntax_palette);
     var list = buf.toArrayList();
     defer list.deinit(allocator);
     return try list.toOwnedSlice(allocator);

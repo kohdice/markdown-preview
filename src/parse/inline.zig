@@ -106,6 +106,30 @@ const Delimiter = struct {
     active: bool = true,
 };
 
+const OpenerBottoms = struct {
+    star: [max_emphasis_delim_run]usize = [_]usize{0} ** max_emphasis_delim_run,
+    underscore: [max_emphasis_delim_run]usize = [_]usize{0} ** max_emphasis_delim_run,
+    tilde: usize = 0,
+
+    fn ptr(self: *OpenerBottoms, ch: u8, remaining: u8) *usize {
+        return switch (ch) {
+            '*' => &self.star[@as(usize, remaining) % max_emphasis_delim_run],
+            '_' => &self.underscore[@as(usize, remaining) % max_emphasis_delim_run],
+            '~' => &self.tilde,
+            else => unreachable,
+        };
+    }
+
+    fn reset(self: *OpenerBottoms, ch: u8) void {
+        switch (ch) {
+            '*' => self.star = [_]usize{0} ** max_emphasis_delim_run,
+            '_' => self.underscore = [_]usize{0} ** max_emphasis_delim_run,
+            '~' => self.tilde = 0,
+            else => unreachable,
+        }
+    }
+};
+
 const Bracket = struct {
     node: TokenRef,
     line_index: usize,
@@ -147,6 +171,7 @@ const TempParser = struct {
     brackets: std.ArrayList(Bracket),
     reference_label_scratch: std.ArrayList(u8),
     inline_link_scratch: std.ArrayList(u8),
+    opener_bottoms: OpenerBottoms = .{},
     chain: InlineChain = .{},
 
     fn init(
@@ -464,10 +489,22 @@ const TempParser = struct {
         const line = self.lines[start_line];
         if (close_col + 1 >= line.len or line[close_col + 1] != '(') return null;
 
+        const tail_start = close_col + link_tail_open_len;
+        switch (try parse_link.parseInlineTargetBorrowing(self.builder.allocator, line[tail_start..])) {
+            .match => |target| return .{
+                .url = target.url,
+                .title = target.title,
+                .end_line = start_line,
+                .end_col = tail_start + target.end,
+            },
+            .invalid => return null,
+            .incomplete => {},
+        }
+
         self.inline_link_scratch.clearRetainingCapacity();
 
         var line_index = start_line;
-        var line_start_col = close_col + link_tail_open_len;
+        var line_start_col = tail_start;
         while (line_index < self.lines.len) {
             const current_line = self.lines[line_index];
             if (self.inline_link_scratch.items.len > 0) {
@@ -611,8 +648,9 @@ const TempParser = struct {
 
     fn findMatchingOpener(self: *TempParser, closer_index: usize) ?usize {
         const closer = self.delimiters.items[closer_index];
+        const bottom = self.opener_bottoms.ptr(closer.ch, closer.remaining);
         var index = closer_index;
-        while (index > 0) {
+        while (index > bottom.*) {
             index -= 1;
             const opener = self.delimiters.items[index];
             if (!opener.active or !opener.can_open) continue;
@@ -623,6 +661,7 @@ const TempParser = struct {
 
             return index;
         }
+        bottom.* = closer_index;
         return null;
     }
 
@@ -682,6 +721,7 @@ const TempParser = struct {
             self.chain.tail = closer_node;
         }
 
+        self.opener_bottoms.reset(opener.ch);
         return true;
     }
 
@@ -1030,9 +1070,9 @@ fn tryParseBareUrl(text: []const u8, start: usize) ?BareUrlResult {
     if (pos <= start + prefix_len) return null;
 
     const domain_start = start + prefix_len;
-    const path_start = std.mem.indexOfScalarPos(u8, text[0..pos], domain_start, '/') orelse pos;
+    const path_start = std.mem.findScalarPos(u8, text[0..pos], domain_start, '/') orelse pos;
     const domain = text[domain_start..path_start];
-    if (std.mem.indexOfScalar(u8, domain, '.') == null) return null;
+    if (std.mem.findScalar(u8, domain, '.') == null) return null;
 
     return .{ .end = pos };
 }

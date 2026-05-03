@@ -76,11 +76,11 @@ test "renderDocument wraps a Japanese changelog table against wrap_width" {
     });
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "日付") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "変更") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "2026-04-22") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "日本語の長文を含むセル") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "の例です") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "日付") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "変更") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "2026-04-22") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "日本語の長文を含むセル") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "の例です") != null);
 
     var nl: usize = 0;
     for (rendered) |b| if (b == '\n') {

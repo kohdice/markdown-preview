@@ -11,16 +11,13 @@ test {
 
 pub fn renderFrom(
     renderer: *render.Renderer,
-    cycle_arena: *std.heap.ArenaAllocator,
     buffer: *render_buffer_mod.RenderBuffer,
     doc: *const parse.Document,
     wrap_width: ?usize,
 ) RenderOutcome {
-    _ = cycle_arena.reset(.retain_capacity);
-
     buffer.reset();
 
-    renderer.render(&buffer.writer, doc, wrap_width, cycle_arena.allocator()) catch {
+    renderer.render(&buffer.writer, doc, wrap_width) catch {
         buffer.writer.flush() catch {};
         return .error_inline;
     };

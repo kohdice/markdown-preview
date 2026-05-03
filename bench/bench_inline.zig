@@ -36,7 +36,6 @@ const ParseTimeRunner = struct {
 };
 
 const RenderTimeRunner = struct {
-    allocator: std.mem.Allocator,
     renderer: *Renderer,
     doc: *const Document,
     wrap_width: ?usize,
@@ -47,7 +46,6 @@ const RenderTimeRunner = struct {
             self.renderer,
             self.doc,
             self.wrap_width,
-            self.allocator,
         );
     }
 };
@@ -134,7 +132,6 @@ fn measureRender(
     defer renderer.deinit();
 
     var runner = RenderTimeRunner{
-        .allocator = timing_allocator,
         .renderer = &renderer,
         .doc = &doc,
         .wrap_width = wrap_width,
@@ -174,10 +171,10 @@ fn profileRender(scenario: Scenario, wrap_width: ?usize) !RenderProfile {
     });
     defer renderer.deinit();
 
-    _ = try renderWithDiscarding(&renderer, &doc, wrap_width, counting.allocator());
+    _ = try renderWithDiscarding(&renderer, &doc, wrap_width);
 
     const before = counting.snapshot();
-    const output_bytes = try renderWithDiscarding(&renderer, &doc, wrap_width, counting.allocator());
+    const output_bytes = try renderWithDiscarding(&renderer, &doc, wrap_width);
     const after = counting.snapshot();
 
     return .{
@@ -190,11 +187,10 @@ fn renderWithDiscarding(
     renderer: *Renderer,
     doc: *const Document,
     wrap_width: ?usize,
-    cycle_allocator: std.mem.Allocator,
 ) !usize {
     var sink: [512]u8 = undefined;
     var discarding: std.Io.Writer.Discarding = .init(&sink);
-    try renderer.render(&discarding.writer, doc, wrap_width, cycle_allocator);
+    try renderer.render(&discarding.writer, doc, wrap_width);
     try discarding.writer.flush();
     const output_bytes = discarding.fullCount();
     std.mem.doNotOptimizeAway(output_bytes);

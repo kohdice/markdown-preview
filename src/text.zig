@@ -35,7 +35,7 @@ pub fn decode(text: []const u8, start: usize) ?DecodeResult {
     if (start >= text.len or text[start] != '&') return null;
 
     const max_end = @min(start + max_entity_len, text.len);
-    const semi_pos = std.mem.indexOfScalarPos(u8, text[0..max_end], start + 1, ';') orelse return null;
+    const semi_pos = std.mem.findScalarPos(u8, text[0..max_end], start + 1, ';') orelse return null;
 
     const entity_body = text[start + 1 .. semi_pos];
     if (entity_body.len == 0) return null;

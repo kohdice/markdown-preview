@@ -4,8 +4,6 @@ const types = @import("types.zig");
 const unicode_letter = @import("unicode_letter.zig");
 const label_mod = @import("label.zig");
 
-pub const Source = source_mod.Source;
-
 pub const ParseError = error{
     InvalidMermaid,
     UnsupportedFeature,
@@ -94,7 +92,7 @@ fn containsNodeId(slice: []const types.NodeId, id: types.NodeId) bool {
     return false;
 }
 
-pub fn parseSource(allocator: std.mem.Allocator, source: anytype) ParseError!types.MermaidGraph {
+pub fn parse(allocator: std.mem.Allocator, source: anytype) ParseError!types.MermaidGraph {
     const owned_source = try source_mod.normalizeOwned(allocator, source);
     return parseFromOwned(allocator, owned_source);
 }
@@ -182,6 +180,7 @@ fn finalizeComposites(
 ) ParseError![]types.Subgraph {
     if (list.items.len == 0) {
         list.deinit(allocator);
+        list.* = .empty;
         return &.{};
     }
     const out = try allocator.alloc(types.Subgraph, list.items.len);
@@ -189,22 +188,30 @@ fn finalizeComposites(
     errdefer types.freeSubgraphsPublic(allocator, out);
 
     for (list.items, 0..) |*bc, i| {
-        const node_ids = try bc.node_ids.toOwnedSlice(allocator);
-        errdefer allocator.free(node_ids);
-        const edge_indices = try bc.edge_indices.toOwnedSlice(allocator);
-        errdefer allocator.free(edge_indices);
-        const children = try finalizeComposites(allocator, &bc.children);
+        var node_ids: ?[]types.NodeId = try bc.node_ids.toOwnedSlice(allocator);
+        errdefer if (node_ids) |ids| allocator.free(ids);
+
+        var edge_indices: ?[]u32 = try bc.edge_indices.toOwnedSlice(allocator);
+        errdefer if (edge_indices) |indices| allocator.free(indices);
+
+        var children: ?[]types.Subgraph = try finalizeComposites(allocator, &bc.children);
+        errdefer if (children) |items| types.freeSubgraphsPublic(allocator, items);
+
         out[i] = .{
             .id_text = bc.id_text,
             .title = bc.title,
             .direction = bc.direction,
-            .node_ids = node_ids,
-            .edge_indices = edge_indices,
-            .children = children,
+            .node_ids = node_ids.?,
+            .edge_indices = edge_indices.?,
+            .children = children.?,
             .representative_node = bc.representative_node,
         };
+        node_ids = null;
+        edge_indices = null;
+        children = null;
     }
     list.deinit(allocator);
+    list.* = .empty;
     return out;
 }
 
@@ -261,7 +268,7 @@ fn parseDirectionLine(
 }
 
 fn parseLinkStyleLine(parser: *Parser, rest: []const u8) ParseError!void {
-    const sp = std.mem.indexOfAny(u8, rest, " \t") orelse return;
+    const sp = std.mem.findAny(u8, rest, " \t") orelse return;
     const target = std.mem.trim(u8, rest[0..sp], " \t");
     const style_text = std.mem.trim(u8, rest[sp..], " \t");
     if (target.len == 0 or style_text.len == 0) return;
@@ -288,13 +295,17 @@ fn parseLinkStyleLine(parser: *Parser, rest: []const u8) ParseError!void {
 
 fn popComposite(parser: *Parser) ParseError!void {
     if (parser.ctx_stack.items.len == 0) return;
-    const completed = parser.ctx_stack.pop().?;
+    var completed = parser.ctx_stack.pop().?;
+    var completed_owned = true;
+    errdefer if (completed_owned) freeBuildingComposite(parser.allocator, &completed);
+
     if (parser.ctx_stack.items.len > 0) {
         const top = &parser.ctx_stack.items[parser.ctx_stack.items.len - 1];
         try top.children.append(parser.allocator, completed);
     } else {
         try parser.root_subgraphs.append(parser.allocator, completed);
     }
+    completed_owned = false;
 }
 
 fn normalizeLabel(parser: *Parser, text: []const u8) ParseError![]const u8 {
@@ -312,11 +323,11 @@ fn parseLine(parser: *Parser, line: []const u8) ParseError!void {
         return parseStateDeclaration(parser, std.mem.trimStart(u8, line[5..], " \t"));
     }
 
-    if (std.mem.indexOf(u8, line, "-->")) |arrow_idx| {
+    if (std.mem.find(u8, line, "-->")) |arrow_idx| {
         return parseTransition(parser, line, arrow_idx);
     }
 
-    if (std.mem.indexOfScalar(u8, line, ':')) |colon| {
+    if (std.mem.findScalar(u8, line, ':')) |colon| {
         return parseStateDescription(parser, line, colon);
     }
 
@@ -407,7 +418,7 @@ fn parseTransition(parser: *Parser, line: []const u8, arrow_idx: usize) ParseErr
     if (lhs_text.len == 0 or rhs_with_label.len == 0) return error.InvalidMermaid;
 
     var label: ?[]const u8 = null;
-    if (std.mem.indexOfScalar(u8, rhs_with_label, ':')) |colon| {
+    if (std.mem.findScalar(u8, rhs_with_label, ':')) |colon| {
         const label_slice = std.mem.trim(u8, rhs_with_label[colon + 1 ..], " \t");
         if (label_slice.len > 0) {
             try label_mod.validate(label_slice);
@@ -478,7 +489,7 @@ fn validateIdentImpl(text: []const u8, allow_hyphen: bool) ParseError!void {
 }
 
 test "parses stateDiagram-v2 header" {
-    var g = try parseSource(std.testing.allocator, "stateDiagram-v2\n");
+    var g = try parse(std.testing.allocator, "stateDiagram-v2\n");
     defer g.deinit();
     try std.testing.expectEqual(@as(usize, 0), g.nodes.len);
 }
@@ -490,7 +501,7 @@ test "parses transitions with distinct start and end markers" {
         \\    Idle --> Running
         \\    Running --> [*]
     ;
-    var g = try parseSource(std.testing.allocator, source);
+    var g = try parse(std.testing.allocator, source);
     defer g.deinit();
     try std.testing.expectEqual(@as(usize, 4), g.nodes.len);
     try std.testing.expectEqual(@as(usize, 3), g.edges.len);
@@ -507,7 +518,7 @@ test "creates distinct [*] nodes per occurrence" {
         \\    A --> [*]
         \\    B --> [*]
     ;
-    var g = try parseSource(std.testing.allocator, source);
+    var g = try parse(std.testing.allocator, source);
     defer g.deinit();
     try std.testing.expectEqual(@as(usize, 6), g.nodes.len);
     try std.testing.expect(g.edges[0].from != g.edges[1].from);
@@ -515,7 +526,7 @@ test "creates distinct [*] nodes per occurrence" {
 }
 
 test "parses transition labels" {
-    var g = try parseSource(std.testing.allocator,
+    var g = try parse(std.testing.allocator,
         \\stateDiagram-v2
         \\    Idle --> Running : start
     );
@@ -525,11 +536,11 @@ test "parses transition labels" {
 }
 
 test "rejects missing stateDiagram header" {
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator, "[*] --> Idle\n"));
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator, "[*] --> Idle\n"));
 }
 
 test "parses aliased state declaration" {
-    var g = try parseSource(std.testing.allocator,
+    var g = try parse(std.testing.allocator,
         \\stateDiagram-v2
         \\    state "Processing request" as Busy
         \\    Busy --> [*]
@@ -541,7 +552,7 @@ test "parses aliased state declaration" {
 }
 
 test "parses inline state description (S : text)" {
-    var g = try parseSource(std.testing.allocator,
+    var g = try parse(std.testing.allocator,
         \\stateDiagram-v2
         \\    Idle : Waiting for input
         \\    Idle --> Running
@@ -552,14 +563,14 @@ test "parses inline state description (S : text)" {
 }
 
 test "accepts labels containing display clusters with zero-width dependents" {
-    var g = try parseSource(std.testing.allocator, "stateDiagram-v2\n    Idle : e\u{0301} \u{2764}\u{FE0F} \u{1F468}\u{200D}\u{1F469}\n    Idle --> Running : \u{1F44D}\u{1F3FB}\n");
+    var g = try parse(std.testing.allocator, "stateDiagram-v2\n    Idle : e\u{0301} \u{2764}\u{FE0F} \u{1F468}\u{200D}\u{1F469}\n    Idle --> Running : \u{1F44D}\u{1F3FB}\n");
     defer g.deinit();
     try std.testing.expectEqualStrings("e\u{0301} \u{2764}\u{FE0F} \u{1F468}\u{200D}\u{1F469}", g.nodes[0].label);
     try std.testing.expectEqualStrings("\u{1F44D}\u{1F3FB}", g.edges[0].label.?);
 }
 
 test "preserves composite state block as subgraph with inner transitions" {
-    var g = try parseSource(std.testing.allocator,
+    var g = try parse(std.testing.allocator,
         \\stateDiagram-v2
         \\    [*] --> Outer
         \\    state Outer {
@@ -578,7 +589,7 @@ test "preserves composite state block as subgraph with inner transitions" {
 }
 
 test "preserves <br> in transition label as hard-break markers" {
-    var g = try parseSource(std.testing.allocator,
+    var g = try parse(std.testing.allocator,
         \\stateDiagram-v2
         \\    A --> B : step<br>one<br/>two
     );
@@ -587,7 +598,7 @@ test "preserves <br> in transition label as hard-break markers" {
 }
 
 test "accepts top-level direction line and updates graph.direction" {
-    var g = try parseSource(std.testing.allocator,
+    var g = try parse(std.testing.allocator,
         \\stateDiagram-v2
         \\    direction LR
         \\    [*] --> Idle
@@ -598,7 +609,7 @@ test "accepts top-level direction line and updates graph.direction" {
 }
 
 test "accepts direction inside composite state" {
-    var g = try parseSource(std.testing.allocator,
+    var g = try parse(std.testing.allocator,
         \\stateDiagram-v2
         \\    state S {
         \\        direction LR
@@ -611,7 +622,7 @@ test "accepts direction inside composite state" {
 }
 
 test "accepts Unicode letter identifiers in transitions" {
-    var g = try parseSource(std.testing.allocator,
+    var g = try parse(std.testing.allocator,
         \\stateDiagram-v2
         \\    État --> Δelta
         \\    Состояние --> 状態A
@@ -625,7 +636,7 @@ test "accepts Unicode letter identifiers in transitions" {
 }
 
 test "silently skips aliased composite with hyphenated id" {
-    var g = try parseSource(std.testing.allocator,
+    var g = try parse(std.testing.allocator,
         \\stateDiagram-v2
         \\    state "Label" as A-B {
         \\        [*] --> X
@@ -639,76 +650,76 @@ test "silently skips aliased composite with hyphenated id" {
 }
 
 test "rejects non-Letter codepoints inside Letter-dominated blocks" {
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator,
         \\stateDiagram-v2
         \\    \u{30A0} --> B
     ));
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator,
         \\stateDiagram-v2
         \\    \u{0660} --> B
     ));
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator,
         \\stateDiagram-v2
         \\    \u{0E47} --> B
     ));
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator,
         \\stateDiagram-v2
         \\    \u{0984} --> B
     ));
 }
 
 test "accepts Ethiopic letter identifiers" {
-    var g = try parseSource(std.testing.allocator, "stateDiagram-v2\n    \u{1200} --> \u{1210}\n");
+    var g = try parse(std.testing.allocator, "stateDiagram-v2\n    \u{1200} --> \u{1210}\n");
     defer g.deinit();
     try std.testing.expectEqual(@as(usize, 2), g.nodes.len);
 }
 
 test "accepts Thaana letter identifiers" {
-    var g = try parseSource(std.testing.allocator, "stateDiagram-v2\n    \u{0780} --> \u{0790}\n");
+    var g = try parse(std.testing.allocator, "stateDiagram-v2\n    \u{0780} --> \u{0790}\n");
     defer g.deinit();
     try std.testing.expectEqual(@as(usize, 2), g.nodes.len);
 }
 
 test "accepts Tifinagh letter identifiers" {
-    var g = try parseSource(std.testing.allocator, "stateDiagram-v2\n    \u{2D30} --> \u{2D40}\n");
+    var g = try parse(std.testing.allocator, "stateDiagram-v2\n    \u{2D30} --> \u{2D40}\n");
     defer g.deinit();
     try std.testing.expectEqual(@as(usize, 2), g.nodes.len);
 }
 
 test "accepts SMP Letter identifiers (Deseret, Old Italic)" {
-    var g1 = try parseSource(std.testing.allocator, "stateDiagram-v2\n    \u{10400} --> \u{10428}\n");
+    var g1 = try parse(std.testing.allocator, "stateDiagram-v2\n    \u{10400} --> \u{10428}\n");
     defer g1.deinit();
     try std.testing.expectEqual(@as(usize, 2), g1.nodes.len);
-    var g2 = try parseSource(std.testing.allocator, "stateDiagram-v2\n    \u{10300} --> \u{10310}\n");
+    var g2 = try parse(std.testing.allocator, "stateDiagram-v2\n    \u{10300} --> \u{10310}\n");
     defer g2.deinit();
     try std.testing.expectEqual(@as(usize, 2), g2.nodes.len);
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator,
         \\stateDiagram-v2
         \\    \u{30FB} --> B
     ));
 }
 
 test "accepts Adlam letter identifiers" {
-    var g = try parseSource(std.testing.allocator, "stateDiagram-v2\n    \u{1E900} --> \u{1E922}\n");
+    var g = try parse(std.testing.allocator, "stateDiagram-v2\n    \u{1E900} --> \u{1E922}\n");
     defer g.deinit();
     try std.testing.expectEqual(@as(usize, 2), g.nodes.len);
 }
 
 test "accepts Mende Kikakui letter identifiers" {
-    var g = try parseSource(std.testing.allocator, "stateDiagram-v2\n    \u{1E800} --> \u{1E810}\n");
+    var g = try parse(std.testing.allocator, "stateDiagram-v2\n    \u{1E800} --> \u{1E810}\n");
     defer g.deinit();
     try std.testing.expectEqual(@as(usize, 2), g.nodes.len);
 }
 
 test "rejects emoji codepoints in state identifiers" {
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator,
         \\stateDiagram-v2
         \\    \u{1F680} --> B
     ));
 }
 
 test "state ID starting with direction prefix is not misread as directive" {
-    var g = try parseSource(std.testing.allocator,
+    var g = try parse(std.testing.allocator,
         \\stateDiagram-v2
         \\    directional --> Done
     );
@@ -719,7 +730,7 @@ test "state ID starting with direction prefix is not misread as directive" {
 }
 
 test "composite representative node is excluded from its own node_ids" {
-    var g = try parseSource(std.testing.allocator,
+    var g = try parse(std.testing.allocator,
         \\stateDiagram-v2
         \\    [*] --> Outer
         \\    state Outer {
@@ -735,7 +746,7 @@ test "composite representative node is excluded from its own node_ids" {
 }
 
 test "silently skips note lines" {
-    var g = try parseSource(std.testing.allocator,
+    var g = try parse(std.testing.allocator,
         \\stateDiagram-v2
         \\    [*] --> Idle
         \\    note left of Idle : a note
@@ -746,11 +757,35 @@ test "silently skips note lines" {
 }
 
 test "silently skips init directive" {
-    var g = try parseSource(std.testing.allocator,
+    var g = try parse(std.testing.allocator,
         \\stateDiagram-v2
         \\    %%{init: {"theme": "dark"}}%%
         \\    [*] --> Idle
     );
     defer g.deinit();
     try std.testing.expectEqual(@as(usize, 1), g.edges.len);
+}
+
+fn expectParseStateHandlesAllocationFailures(allocator: std.mem.Allocator) !void {
+    var g = try parse(allocator,
+        \\stateDiagram-v2
+        \\    [*] --> Outer
+        \\    state Outer {
+        \\        state Inner {
+        \\            [*] --> Done
+        \\        }
+        \\    }
+        \\    Outer --> [*]
+    );
+    defer g.deinit();
+    try std.testing.expectEqual(@as(usize, 1), g.subgraphs.len);
+    try std.testing.expectEqual(@as(usize, 1), g.subgraphs[0].children.len);
+}
+
+test "parse cleans up nested state allocation failures" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        expectParseStateHandlesAllocationFailures,
+        .{},
+    );
 }

@@ -135,13 +135,13 @@ pub const BlockCursor = struct {
 pub fn lineStartsTable(cursor: BlockCursor) bool {
     const line = cursor.peekLine() orelse return false;
     if (parse_block.indentedCodeContent(line) != null) return false;
-    if (std.mem.indexOfScalar(u8, line, '|') == null) return false;
+    if (std.mem.findScalar(u8, line, '|') == null) return false;
 
     const next_line = cursor.peekNextLine() orelse return false;
     if (parse_block.indentedCodeContent(next_line) != null) return false;
     if (!parse_table.isDelimiterRow(next_line)) return false;
 
-    return parse_table.cellCount(line) == parse_table.cellCount(next_line);
+    return parse_table.countCells(line) == parse_table.countCells(next_line);
 }
 
 pub fn skipInterItemBlankLines(
@@ -196,13 +196,13 @@ pub fn itemBlocksMakeListLoose(comptime T: type, blocks: []const T) bool {
 
 fn rawLineAt(source: []const u8, raw_pos: usize) ?[]const u8 {
     if (raw_pos >= source.len) return null;
-    const newline_index = std.mem.indexOfScalarPos(u8, source, raw_pos, '\n') orelse source.len;
+    const newline_index = std.mem.findScalarPos(u8, source, raw_pos, '\n') orelse source.len;
     return std.mem.trimEnd(u8, source[raw_pos..newline_index], parse_block.carriage_return);
 }
 
 fn nextRawLinePos(source: []const u8, raw_pos: usize) usize {
     if (raw_pos >= source.len) return source.len;
-    const newline_index = std.mem.indexOfScalarPos(u8, source, raw_pos, '\n') orelse return source.len;
+    const newline_index = std.mem.findScalarPos(u8, source, raw_pos, '\n') orelse return source.len;
     return newline_index + 1;
 }
 

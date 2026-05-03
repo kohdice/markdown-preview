@@ -4,14 +4,13 @@ const render = @import("render.zig");
 const term = @import("term.zig");
 const watch = @import("watch/orchestrator.zig");
 const source_loader = @import("source_loader.zig");
-const ansi = term.ansi;
 const width = term.width;
 
 const exit_success: u8 = 0;
 const exit_failure: u8 = 1;
 
 pub const RunOptions = struct {
-    allocator: std.mem.Allocator,
+    app_allocator: std.mem.Allocator,
     io: std.Io,
     cwd: std.Io.Dir,
     args: []const [:0]const u8,
@@ -23,8 +22,9 @@ pub const RunOptions = struct {
     enable_ansi: bool,
     wrap_width: ?usize,
     ambiguous_width: width.AmbiguousWidth,
-    color_mode: ansi.ColorMode = .truecolor,
 };
+
+pub const ColorPolicy = enum { auto, always, never };
 
 const usage_message =
     \\Usage: mp [options] [--] <FILE>
@@ -33,6 +33,7 @@ const usage_message =
     \\
     \\Options:
     \\  --width <COLUMNS>  Override wrapping width for one-shot file rendering
+    \\  --color <WHEN>     Color output: auto, always, or never
     \\  --watch            Live-reload in an interactive terminal
     \\  --version          Show version number and quit
     \\  -h, --help         Show this help and quit
@@ -49,8 +50,12 @@ pub const Command = union(enum) {
     pub const RenderCommand = struct {
         path: []const u8,
         width_override: ?usize,
+        color_policy: ColorPolicy = .auto,
     };
-    pub const WatchCommand = struct { path: []const u8 };
+    pub const WatchCommand = struct {
+        path: []const u8,
+        color_policy: ColorPolicy = .auto,
+    };
 };
 
 const ParseError = error{
@@ -61,11 +66,16 @@ const ParseError = error{
     WidthWithWatch,
     TooManyPositional,
     UnknownFlag,
+    MissingColor,
+    InvalidColor,
+    DuplicateColor,
 };
 
 pub fn parseArgs(args: []const [:0]const u8) ParseError!Command {
     var path: ?[]const u8 = null;
     var width_override: ?usize = null;
+    var color_policy: ColorPolicy = .auto;
+    var color_policy_set = false;
     var positional_only = false;
     var watch_flag = false;
 
@@ -88,6 +98,16 @@ pub fn parseArgs(args: []const [:0]const u8) ParseError!Command {
                 width_override = try parseWidth(args[i]);
                 continue;
             }
+            if (std.mem.eql(u8, arg, "--color")) {
+                i += 1;
+                if (i >= args.len) return error.MissingColor;
+                try setColorPolicy(args[i], &color_policy, &color_policy_set);
+                continue;
+            }
+            if (std.mem.startsWith(u8, arg, "--color=")) {
+                try setColorPolicy(arg["--color=".len..], &color_policy, &color_policy_set);
+                continue;
+            }
             if (std.mem.eql(u8, arg, "--version")) {
                 return .version;
             }
@@ -104,14 +124,39 @@ pub fn parseArgs(args: []const [:0]const u8) ParseError!Command {
 
     const resolved_path = path orelse return error.MissingPath;
     if (watch_flag and width_override != null) return error.WidthWithWatch;
-    if (watch_flag) return .{ .watch = .{ .path = resolved_path } };
-    return .{ .render = .{ .path = resolved_path, .width_override = width_override } };
+    if (watch_flag) return .{ .watch = .{ .path = resolved_path, .color_policy = color_policy } };
+    return .{ .render = .{ .path = resolved_path, .width_override = width_override, .color_policy = color_policy } };
 }
 
 fn parseWidth(value: []const u8) ParseError!usize {
     const parsed = std.fmt.parseInt(usize, value, 10) catch return error.InvalidWidth;
     if (parsed == 0) return error.InvalidWidth;
     return parsed;
+}
+
+fn setColorPolicy(
+    value: []const u8,
+    color_policy: *ColorPolicy,
+    color_policy_set: *bool,
+) ParseError!void {
+    if (color_policy_set.*) return error.DuplicateColor;
+    color_policy.* = try parseColorPolicy(value);
+    color_policy_set.* = true;
+}
+
+fn parseColorPolicy(value: []const u8) ParseError!ColorPolicy {
+    if (std.mem.eql(u8, value, "auto")) return .auto;
+    if (std.mem.eql(u8, value, "always")) return .always;
+    if (std.mem.eql(u8, value, "never")) return .never;
+    return error.InvalidColor;
+}
+
+fn resolveColorPolicy(auto_enable_ansi: bool, policy: ColorPolicy) bool {
+    return switch (policy) {
+        .auto => auto_enable_ansi,
+        .always => true,
+        .never => false,
+    };
 }
 
 pub fn run(opts: RunOptions) !u8 {
@@ -126,7 +171,7 @@ pub fn run(opts: RunOptions) !u8 {
 pub fn executeCommand(opts: RunOptions, command: Command) !u8 {
     return switch (command) {
         .watch => |cmd| watch.run(.{
-            .allocator = opts.allocator,
+            .app_allocator = opts.app_allocator,
             .io = opts.io,
             .cwd = opts.cwd,
             .path = cmd.path,
@@ -134,11 +179,10 @@ pub fn executeCommand(opts: RunOptions, command: Command) !u8 {
             .stderr = opts.stderr,
             .stdout_file = opts.stdout_file,
             .stdin_file = opts.stdin_file,
-            .enable_ansi = opts.enable_ansi,
+            .enable_ansi = resolveColorPolicy(opts.enable_ansi, cmd.color_policy),
             .ambiguous_width = opts.ambiguous_width,
-            .color_mode = opts.color_mode,
         }),
-        .render => |cmd| renderOnce(opts, cmd.path, cmd.width_override),
+        .render => |cmd| renderOnce(opts, cmd.path, cmd.width_override, cmd.color_policy),
         .version => writeVersion(opts.stdout, opts.version),
         .help => writeHelp(opts.stdout),
     };
@@ -154,23 +198,27 @@ fn writeVersion(stdout: *std.Io.Writer, version: []const u8) !u8 {
     return exit_success;
 }
 
-fn renderOnce(opts: RunOptions, path: []const u8, width_override: ?usize) !u8 {
-    const source = source_loader.loadFile(opts.allocator, opts.io, opts.cwd, path) catch |err| {
+fn renderOnce(
+    opts: RunOptions,
+    path: []const u8,
+    width_override: ?usize,
+    color_policy: ColorPolicy,
+) !u8 {
+    const source = source_loader.loadFile(opts.app_allocator, opts.io, opts.cwd, path) catch |err| {
         try opts.stderr.print("mp: unable to read '{s}': {s}\n", .{ path, @errorName(err) });
         return exit_failure;
     };
 
-    var doc = try parse.parse(opts.allocator, source);
+    var doc = try parse.parse(opts.app_allocator, source);
     defer doc.deinit();
 
-    var renderer = render.Renderer.init(opts.allocator, .{
-        .enable_ansi = opts.enable_ansi,
+    var renderer = render.Renderer.init(opts.app_allocator, .{
+        .enable_ansi = resolveColorPolicy(opts.enable_ansi, color_policy),
         .ambiguous_width = opts.ambiguous_width,
-        .color_mode = opts.color_mode,
     });
     defer renderer.deinit();
 
-    try renderer.render(opts.stdout, &doc, width_override orelse opts.wrap_width, opts.allocator);
+    try renderer.render(opts.stdout, &doc, width_override orelse opts.wrap_width);
     return exit_success;
 }
 
@@ -203,6 +251,27 @@ test "parseArgs records width when --width follows path" {
     try std.testing.expectEqual(@as(?usize, 72), parsed.render.width_override);
 }
 
+test "parseArgs records color policy for one-shot rendering" {
+    const args = [_][:0]const u8{ "mp", "--color", "always", "foo.md" };
+    const parsed = try parseArgs(&args);
+    try std.testing.expect(parsed == .render);
+    try std.testing.expectEqual(ColorPolicy.always, parsed.render.color_policy);
+}
+
+test "parseArgs records color policy from --color=value" {
+    const args = [_][:0]const u8{ "mp", "--color=never", "foo.md" };
+    const parsed = try parseArgs(&args);
+    try std.testing.expect(parsed == .render);
+    try std.testing.expectEqual(ColorPolicy.never, parsed.render.color_policy);
+}
+
+test "parseArgs records color policy for watch mode" {
+    const args = [_][:0]const u8{ "mp", "--watch", "--color=never", "foo.md" };
+    const parsed = try parseArgs(&args);
+    try std.testing.expect(parsed == .watch);
+    try std.testing.expectEqual(ColorPolicy.never, parsed.watch.color_policy);
+}
+
 test "parseArgs treats --width after -- as a render path" {
     const args = [_][:0]const u8{ "mp", "--", "--width" };
     const parsed = try parseArgs(&args);
@@ -229,6 +298,21 @@ test "parseArgs rejects zero --width value" {
 test "parseArgs rejects duplicate --width values" {
     const args = [_][:0]const u8{ "mp", "--width", "72", "foo.md", "--width", "80" };
     try std.testing.expectError(error.DuplicateWidth, parseArgs(&args));
+}
+
+test "parseArgs rejects --color without a value" {
+    const args = [_][:0]const u8{ "mp", "--color" };
+    try std.testing.expectError(error.MissingColor, parseArgs(&args));
+}
+
+test "parseArgs rejects unsupported --color value" {
+    const args = [_][:0]const u8{ "mp", "--color", "sometimes", "foo.md" };
+    try std.testing.expectError(error.InvalidColor, parseArgs(&args));
+}
+
+test "parseArgs rejects duplicate --color values" {
+    const args = [_][:0]const u8{ "mp", "--color=auto", "--color=never", "foo.md" };
+    try std.testing.expectError(error.DuplicateColor, parseArgs(&args));
 }
 
 test "parseArgs rejects --width with --watch" {
@@ -372,7 +456,7 @@ test "run reports usage errors" {
     defer stderr.deinit();
 
     const exit_code = try run(.{
-        .allocator = std.testing.allocator,
+        .app_allocator = std.testing.allocator,
         .io = std.testing.io,
         .cwd = std.Io.Dir.cwd(),
         .args = &.{"mp"},
@@ -395,6 +479,7 @@ test "run reports usage errors" {
         \\
         \\Options:
         \\  --width <COLUMNS>  Override wrapping width for one-shot file rendering
+        \\  --color <WHEN>     Color output: auto, always, or never
         \\  --watch            Live-reload in an interactive terminal
         \\  --version          Show version number and quit
         \\  -h, --help         Show this help and quit
@@ -412,7 +497,7 @@ test "run writes help information for width and watch options" {
     defer stderr.deinit();
 
     const exit_code = try run(.{
-        .allocator = std.testing.allocator,
+        .app_allocator = std.testing.allocator,
         .io = std.testing.io,
         .cwd = std.Io.Dir.cwd(),
         .args = &.{ "mp", "--help" },
@@ -434,6 +519,7 @@ test "run writes help information for width and watch options" {
         \\
         \\Options:
         \\  --width <COLUMNS>  Override wrapping width for one-shot file rendering
+        \\  --color <WHEN>     Color output: auto, always, or never
         \\  --watch            Live-reload in an interactive terminal
         \\  --version          Show version number and quit
         \\  -h, --help         Show this help and quit
@@ -452,7 +538,7 @@ test "run writes compact version information for the version option" {
     defer stderr.deinit();
 
     const exit_code = try run(.{
-        .allocator = std.testing.allocator,
+        .app_allocator = std.testing.allocator,
         .io = std.testing.io,
         .cwd = std.Io.Dir.cwd(),
         .args = &.{ "mp", "--version" },
@@ -487,7 +573,7 @@ test "run renders a file literally named version" {
     defer stderr.deinit();
 
     const exit_code = try run(.{
-        .allocator = std.testing.allocator,
+        .app_allocator = std.testing.allocator,
         .io = io,
         .cwd = tmp.dir,
         .args = &.{ "mp", "version" },
@@ -517,7 +603,7 @@ test "run reports missing files" {
     defer stderr.deinit();
 
     const exit_code = try run(.{
-        .allocator = std.testing.allocator,
+        .app_allocator = std.testing.allocator,
         .io = io,
         .cwd = tmp.dir,
         .args = &.{ "mp", "missing.md" },
@@ -547,7 +633,7 @@ test "run reports missing files with --width like default file rendering" {
     defer default_stderr.deinit();
 
     const default_exit_code = try run(.{
-        .allocator = std.testing.allocator,
+        .app_allocator = std.testing.allocator,
         .io = io,
         .cwd = tmp.dir,
         .args = &.{ "mp", "missing.md" },
@@ -567,7 +653,7 @@ test "run reports missing files with --width like default file rendering" {
     defer width_stderr.deinit();
 
     const width_exit_code = try run(.{
-        .allocator = std.testing.allocator,
+        .app_allocator = std.testing.allocator,
         .io = io,
         .cwd = tmp.dir,
         .args = &.{ "mp", "--width", "8", "missing.md" },
@@ -607,7 +693,7 @@ test "run renders markdown files" {
     defer stderr.deinit();
 
     const exit_code = try run(.{
-        .allocator = std.testing.allocator,
+        .app_allocator = std.testing.allocator,
         .io = io,
         .cwd = tmp.dir,
         .args = &.{ "mp", "example.md" },
@@ -632,6 +718,76 @@ test "run renders markdown files" {
     try std.testing.expectEqualStrings("", stderr.writer.buffered());
 }
 
+test "run lets --color always override auto color detection" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "color.md",
+        .data = "# Color\n",
+    });
+
+    var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stderr.deinit();
+
+    const exit_code = try run(.{
+        .app_allocator = std.testing.allocator,
+        .io = io,
+        .cwd = tmp.dir,
+        .args = &.{ "mp", "--color=always", "color.md" },
+        .version = "",
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+        .stdout_file = invalid_file,
+        .stdin_file = invalid_file,
+        .enable_ansi = false,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    });
+
+    try std.testing.expectEqual(exit_success, exit_code);
+    try std.testing.expect(std.mem.containsAtLeast(u8, stdout.writer.buffered(), 1, "\x1b["));
+    try std.testing.expectEqualStrings("", stderr.writer.buffered());
+}
+
+test "run lets --color never override auto color detection" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "plain.md",
+        .data = "# Plain\n",
+    });
+
+    var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer stderr.deinit();
+
+    const exit_code = try run(.{
+        .app_allocator = std.testing.allocator,
+        .io = io,
+        .cwd = tmp.dir,
+        .args = &.{ "mp", "--color=never", "plain.md" },
+        .version = "",
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+        .stdout_file = invalid_file,
+        .stdin_file = invalid_file,
+        .enable_ansi = true,
+        .wrap_width = null,
+        .ambiguous_width = .narrow,
+    });
+
+    try std.testing.expectEqual(exit_success, exit_code);
+    try std.testing.expect(!std.mem.containsAtLeast(u8, stdout.writer.buffered(), 1, "\x1b["));
+    try std.testing.expectEqualStrings("", stderr.writer.buffered());
+}
+
 test "run uses detected wrap width when --width is not provided" {
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -648,7 +804,7 @@ test "run uses detected wrap width when --width is not provided" {
     defer stderr.deinit();
 
     const exit_code = try run(.{
-        .allocator = std.testing.allocator,
+        .app_allocator = std.testing.allocator,
         .io = io,
         .cwd = tmp.dir,
         .args = &.{ "mp", "plain.md" },
@@ -683,7 +839,7 @@ test "run applies --width when detected wrap width is absent" {
     defer stderr.deinit();
 
     const exit_code = try run(.{
-        .allocator = std.testing.allocator,
+        .app_allocator = std.testing.allocator,
         .io = io,
         .cwd = tmp.dir,
         .args = &.{ "mp", "--width", "8", "plain.md" },
@@ -718,7 +874,7 @@ test "run lets --width override detected wrap width" {
     defer stderr.deinit();
 
     const exit_code = try run(.{
-        .allocator = std.testing.allocator,
+        .app_allocator = std.testing.allocator,
         .io = io,
         .cwd = tmp.dir,
         .args = &.{ "mp", "plain.md", "--width", "8" },
@@ -753,7 +909,7 @@ test "run threads ambiguous_width through to the renderer" {
     defer stderr.deinit();
 
     const exit_code = try run(.{
-        .allocator = std.testing.allocator,
+        .app_allocator = std.testing.allocator,
         .io = io,
         .cwd = tmp.dir,
         .args = &.{ "mp", "cont.md" },
@@ -796,7 +952,7 @@ test "run frees the file buffer carried by the source loader" {
     defer stderr.deinit();
 
     const exit_code = try run(.{
-        .allocator = gpa.allocator(),
+        .app_allocator = gpa.allocator(),
         .io = io,
         .cwd = tmp.dir,
         .args = &.{ "mp", "owned.md" },

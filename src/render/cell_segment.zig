@@ -16,7 +16,6 @@ pub const CellSegmentBuilder = struct {
     parent_writer: ParentBufWriter,
 
     enable_ansi: bool,
-    color_mode: ansi.ColorMode,
     ambiguous: width.AmbiguousWidth,
     wrap_width: usize,
 
@@ -41,7 +40,6 @@ pub const CellSegmentBuilder = struct {
         self.segments = segments;
         self.parent_writer.init(parent_buf, allocator);
         self.enable_ansi = false;
-        self.color_mode = .none;
         self.ambiguous = .narrow;
         self.wrap_width = 0;
         self.sgr_state = .{};
@@ -58,12 +56,10 @@ pub const CellSegmentBuilder = struct {
     pub fn beginCell(
         self: *CellSegmentBuilder,
         enable_ansi: bool,
-        color_mode: ansi.ColorMode,
         ambiguous: width.AmbiguousWidth,
         wrap_width: usize,
     ) void {
         self.enable_ansi = enable_ansi;
-        self.color_mode = color_mode;
         self.ambiguous = ambiguous;
         self.wrap_width = wrap_width;
         self.sgr_state = .{};
@@ -98,7 +94,6 @@ pub const CellSegmentBuilder = struct {
         try ansi.writeStyledRun(
             &self.parent_writer.writer,
             self.enable_ansi,
-            self.color_mode,
             &self.sgr_state,
             style,
             "",
@@ -175,6 +170,22 @@ pub const CellSegmentBuilder = struct {
     }
 
     fn softBreakAt(self: *CellSegmentBuilder, space_parent_pos: u32) !void {
+        if (!self.enable_ansi) {
+            try self.segments.append(self.allocator, .{
+                .byte_start = self.seg_byte_start,
+                .byte_end = space_parent_pos,
+                .display_width = self.col_before_last_space,
+            });
+
+            self.seg_byte_start = @intCast(@as(usize, space_parent_pos) + 1);
+            self.col = self.col - self.col_after_last_space;
+            self.last_space_parent_pos = null;
+            self.col_before_last_space = 0;
+            self.col_after_last_space = 0;
+            self.style_at_last_space = .{};
+            return;
+        }
+
         const tail_start: usize = @as(usize, space_parent_pos) + 1;
         const tail_end = self.parent_buf.items.len;
         const tail_len = tail_end - tail_start;
@@ -212,7 +223,6 @@ pub const CellSegmentBuilder = struct {
         try ansi.writeStyledRun(
             &self.parent_writer.writer,
             self.enable_ansi,
-            self.color_mode,
             &self.sgr_state,
             self.style_at_last_space,
             "",
@@ -222,7 +232,7 @@ pub const CellSegmentBuilder = struct {
             try self.parent_buf.appendSlice(self.allocator, tail_slice);
         }
 
-        self.sgr_state.current = if (self.enable_ansi and self.color_mode != .none and !self.active_style.isPlain())
+        self.sgr_state.current = if (self.enable_ansi and !self.active_style.isPlain())
             self.active_style
         else
             null;
@@ -254,7 +264,6 @@ pub const CellSegmentBuilder = struct {
         try ansi.writeStyledRun(
             &self.parent_writer.writer,
             self.enable_ansi,
-            self.color_mode,
             &self.sgr_state,
             self.active_style,
             "",
@@ -318,7 +327,7 @@ test "CellSegmentBuilder emits one segment when text fits within wrap_width" {
 
     var builder: CellSegmentBuilder = undefined;
     builder.init(allocator, &parent, &segments);
-    builder.beginCell(false, .none, .narrow, 80);
+    builder.beginCell(false, .narrow, 80);
     try builder.writeStyled(.{}, "hello");
     try builder.finishCell();
 
@@ -338,7 +347,7 @@ test "CellSegmentBuilder soft-breaks on a space and drops the space character" {
 
     var builder: CellSegmentBuilder = undefined;
     builder.init(allocator, &parent, &segments);
-    builder.beginCell(false, .none, .narrow, 5);
+    builder.beginCell(false, .narrow, 5);
     try builder.writeStyled(.{}, "hello world");
     try builder.finishCell();
 
@@ -360,7 +369,7 @@ test "CellSegmentBuilder hard-breaks mid-Japanese when no space is available" {
 
     var builder: CellSegmentBuilder = undefined;
     builder.init(allocator, &parent, &segments);
-    builder.beginCell(false, .none, .narrow, 4);
+    builder.beginCell(false, .narrow, 4);
     try builder.writeStyled(.{}, "日本語テスト");
     try builder.finishCell();
 
@@ -385,7 +394,7 @@ test "CellSegmentBuilder strips C0 control bytes injected in cell text" {
 
     var builder: CellSegmentBuilder = undefined;
     builder.init(allocator, &parent, &segments);
-    builder.beginCell(false, .none, .narrow, 80);
+    builder.beginCell(false, .narrow, 80);
     try builder.writeStyled(.{}, "abc\x1b[31mxyz\x07end");
     try builder.finishCell();
 
@@ -409,7 +418,7 @@ test "CellSegmentBuilder soft-breaks at a space even when the tail exceeds the s
 
     var builder: CellSegmentBuilder = undefined;
     builder.init(allocator, &parent, &segments);
-    builder.beginCell(false, .none, .narrow, 1200);
+    builder.beginCell(false, .narrow, 1200);
     try builder.writeStyled(.{}, text);
     try builder.finishCell();
 
@@ -428,7 +437,7 @@ test "CellSegmentBuilder strips tab and newline that would break the grid" {
 
     var builder: CellSegmentBuilder = undefined;
     builder.init(allocator, &parent, &segments);
-    builder.beginCell(false, .none, .narrow, 80);
+    builder.beginCell(false, .narrow, 80);
     try builder.writeStyled(.{}, "a\tb\nc");
     try builder.finishCell();
 
@@ -449,7 +458,7 @@ test "CellSegmentBuilder reopens the style that was active at the soft-break spa
 
     var builder: CellSegmentBuilder = undefined;
     builder.init(allocator, &parent, &segments);
-    builder.beginCell(true, .truecolor, .narrow, 3);
+    builder.beginCell(true, .narrow, 3);
     try builder.writeStyled(style_bold, "a b");
     try builder.writeStyled(style_italic, "cd");
     try builder.finishCell();
@@ -457,13 +466,13 @@ test "CellSegmentBuilder reopens the style that was active at the soft-break spa
     try testing.expect(segments.items.len >= 2);
 
     const seg1 = parent.items[segments.items[1].byte_start..segments.items[1].byte_end];
-    const b_pos = std.mem.indexOfScalar(u8, seg1, 'b').?;
+    const b_pos = std.mem.findScalar(u8, seg1, 'b').?;
     const before_b = seg1[0..b_pos];
 
     const bold_seq = "\x1b[1m";
     const italic_seq = "\x1b[3m";
-    const last_bold = std.mem.lastIndexOf(u8, before_b, bold_seq);
-    const last_italic = std.mem.lastIndexOf(u8, before_b, italic_seq);
+    const last_bold = std.mem.findLast(u8, before_b, bold_seq);
+    const last_italic = std.mem.findLast(u8, before_b, italic_seq);
 
     try testing.expect(last_bold != null);
     try testing.expect(last_italic == null or last_italic.? < last_bold.?);
@@ -478,7 +487,7 @@ test "CellSegmentBuilder reopens the active style after a split" {
 
     var builder: CellSegmentBuilder = undefined;
     builder.init(allocator, &parent, &segments);
-    builder.beginCell(true, .truecolor, .narrow, 5);
+    builder.beginCell(true, .narrow, 5);
     const style: ansi.TextStyle = .{ .bold = true };
     try builder.writeStyled(style, "aaaa bbbb");
     try builder.finishCell();

@@ -252,7 +252,7 @@ test "layoutLabel reports line widths and maximum width for ambiguous-width mode
 test "layoutLabel converts raw flowchart br tags to multiline text" {
     const parse_flowchart = @import("parse_flowchart.zig");
     const allocator = std.testing.allocator;
-    var graph = try parse_flowchart.parseSource(allocator,
+    var graph = try parse_flowchart.parse(allocator,
         \\graph TD
         \\    A[first<br/>second<br>third<BR>fourth]
     );

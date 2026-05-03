@@ -46,7 +46,7 @@ test "render cycle produces line offsets matching naive newline scan" {
     buffer.init(allocator);
     defer buffer.deinit();
 
-    try renderer.render(&buffer.writer, &doc, null, allocator);
+    try renderer.render(&buffer.writer, &doc, null);
     try buffer.writer.flush();
 
     const expected = try naiveLineOffsets(allocator, buffer.buffered());
@@ -71,7 +71,7 @@ test "render cycle of empty document produces no line offsets" {
     buffer.init(allocator);
     defer buffer.deinit();
 
-    try renderer.render(&buffer.writer, &doc, null, allocator);
+    try renderer.render(&buffer.writer, &doc, null);
     try buffer.writer.flush();
 
     const expected = try naiveLineOffsets(allocator, buffer.buffered());
@@ -121,24 +121,18 @@ test "renderFrom renders an already parsed document into RenderBuffer" {
     });
     defer renderer.deinit();
 
-    var expected_cycle_arena = std.heap.ArenaAllocator.init(allocator);
-    defer expected_cycle_arena.deinit();
-
     var expected: render_buffer_mod.RenderBuffer = undefined;
     expected.init(allocator);
     defer expected.deinit();
 
-    try renderer.render(&expected.writer, &doc, 24, expected_cycle_arena.allocator());
+    try renderer.render(&expected.writer, &doc, 24);
     try expected.writer.flush();
-
-    var cycle_arena = std.heap.ArenaAllocator.init(allocator);
-    defer cycle_arena.deinit();
 
     var buffer: render_buffer_mod.RenderBuffer = undefined;
     buffer.init(allocator);
     defer buffer.deinit();
 
-    const outcome = pipeline.renderFrom(&renderer, &cycle_arena, &buffer, &doc, 24);
+    const outcome = pipeline.renderFrom(&renderer, &buffer, &doc, 24);
     try std.testing.expectEqual(pipeline.RenderOutcome.rendered, outcome);
     try std.testing.expectEqualSlices(u8, expected.buffered(), buffer.buffered());
     try std.testing.expectEqualSlices(usize, expected.lineOffsets(), buffer.lineOffsets());
@@ -162,9 +156,6 @@ test "renderFrom leaves ContentHash unchanged" {
     });
     defer renderer.deinit();
 
-    var cycle_arena = std.heap.ArenaAllocator.init(allocator);
-    defer cycle_arena.deinit();
-
     var buffer: render_buffer_mod.RenderBuffer = undefined;
     buffer.init(allocator);
     defer buffer.deinit();
@@ -173,7 +164,7 @@ test "renderFrom leaves ContentHash unchanged" {
     const initial = hash.compare(source);
     hash.commit(initial.hash);
 
-    const outcome = pipeline.renderFrom(&renderer, &cycle_arena, &buffer, &doc, 24);
+    const outcome = pipeline.renderFrom(&renderer, &buffer, &doc, 24);
     try std.testing.expectEqual(pipeline.RenderOutcome.rendered, outcome);
     try std.testing.expectEqual(
         content_hash.CheckResult.unchanged,
@@ -310,7 +301,7 @@ test "content refresh replaces cached parsed document and commits the new hash" 
     const second = session.refreshFrom(io, tmp.dir, "doc.md", null, &hash);
     try std.testing.expectEqual(pipeline.RenderOutcome.rendered, second);
     try std.testing.expectEqualStrings("# Second\n", session.cachedDocument().?.source);
-    try std.testing.expect(std.mem.indexOf(u8, session.buffer.buffered(), "Second") != null);
+    try std.testing.expect(std.mem.find(u8, session.buffer.buffered(), "Second") != null);
 
     const third = session.refreshFrom(io, tmp.dir, "doc.md", null, &hash);
     try std.testing.expectEqual(pipeline.RenderOutcome.skipped_unchanged, third);

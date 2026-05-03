@@ -95,7 +95,7 @@ pub fn eventLoop(
         }
 
         if (needs_redisplay) {
-            session.pgr.displayPage(opts.stdout, &session.buffer, scroll_offset.*, term_size.rows, opts.enable_ansi, opts.color_mode);
+            session.pgr.displayPage(opts.stdout, &session.buffer, scroll_offset.*, term_size.rows, opts.enable_ansi);
         }
     }
 }

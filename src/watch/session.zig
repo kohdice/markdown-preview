@@ -8,9 +8,8 @@ const render_buffer_mod = @import("render_buffer.zig");
 const source_loader = @import("../source_loader.zig");
 
 pub const WatchSession = struct {
-    parent_allocator: std.mem.Allocator,
+    app_allocator: std.mem.Allocator,
     state_arena: std.heap.ArenaAllocator,
-    cycle_arena: std.heap.ArenaAllocator,
     renderer: render.Renderer,
     buffer: render_buffer_mod.RenderBuffer,
     pgr: pager_mod.Pager,
@@ -18,20 +17,19 @@ pub const WatchSession = struct {
 
     pub fn init(
         self: *WatchSession,
-        allocator: std.mem.Allocator,
+        app_allocator: std.mem.Allocator,
         render_options: render.RenderOptions,
     ) void {
         self.* = .{
-            .parent_allocator = allocator,
-            .state_arena = std.heap.ArenaAllocator.init(allocator),
-            .cycle_arena = std.heap.ArenaAllocator.init(allocator),
+            .app_allocator = app_allocator,
+            .state_arena = std.heap.ArenaAllocator.init(app_allocator),
             .renderer = undefined,
             .buffer = undefined,
             .pgr = undefined,
             .cached_document = null,
         };
         const state_alloc = self.state_arena.allocator();
-        self.renderer = render.Renderer.init(allocator, render_options);
+        self.renderer = render.Renderer.init(app_allocator, render_options);
         self.buffer.init(state_alloc);
         self.pgr = pager_mod.Pager.init(state_alloc);
     }
@@ -41,16 +39,7 @@ pub const WatchSession = struct {
         self.pgr.deinit();
         self.buffer.deinit();
         self.renderer.deinit();
-        self.cycle_arena.deinit();
         self.state_arena.deinit();
-    }
-
-    pub fn cycleAllocator(self: *WatchSession) std.mem.Allocator {
-        return self.cycle_arena.allocator();
-    }
-
-    pub fn resetCycle(self: *WatchSession) void {
-        _ = self.cycle_arena.reset(.retain_capacity);
     }
 
     pub fn refreshFrom(
@@ -61,7 +50,7 @@ pub const WatchSession = struct {
         wrap_width: ?usize,
         hash: *content_hash_mod.ContentHash,
     ) pipeline.RenderOutcome {
-        const source = source_loader.loadFile(self.parent_allocator, io, cwd, path) catch |err| {
+        const source = source_loader.loadFile(self.app_allocator, io, cwd, path) catch |err| {
             self.clearCachedDocument();
             hash.reset();
             return self.writeReadError(path, err);
@@ -73,7 +62,7 @@ pub const WatchSession = struct {
             return .skipped_unchanged;
         }
 
-        const doc = parse.parse(self.parent_allocator, source) catch {
+        const doc = parse.parse(self.app_allocator, source) catch {
             self.clearCachedDocument();
             hash.reset();
             return self.writeParseError();
@@ -97,7 +86,6 @@ pub const WatchSession = struct {
         const doc = self.cachedDocument() orelse return .error_inline;
         return pipeline.renderFrom(
             &self.renderer,
-            &self.cycle_arena,
             &self.buffer,
             doc,
             wrap_width,
@@ -150,22 +138,6 @@ test "WatchSession init + deinit returns memory to the caller allocator" {
     var session: WatchSession = undefined;
     session.init(std.testing.allocator, .{});
     session.deinit();
-}
-
-test "WatchSession resetCycle keeps session state usable" {
-    var session: WatchSession = undefined;
-    session.init(std.testing.allocator, .{});
-    defer session.deinit();
-
-    const before = try session.cycleAllocator().alloc(u8, 1024);
-    @memset(before, 0xAA);
-
-    session.resetCycle();
-
-    const after = try session.cycleAllocator().alloc(u8, 256);
-    @memset(after, 0xBB);
-
-    try std.testing.expect(session.buffer.totalLines() == 0);
 }
 
 test "WatchSession buffer writes use the session-owned arena" {
@@ -250,6 +222,6 @@ test "WatchSession pgr.displayPage allocates against the session-owned arena" {
     var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer out.deinit();
 
-    session.pgr.displayPage(&out.writer, &rb, 0, 4, false, .truecolor);
+    session.pgr.displayPage(&out.writer, &rb, 0, 4, false);
     try std.testing.expect(out.writer.buffered().len > 0);
 }

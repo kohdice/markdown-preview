@@ -10,6 +10,7 @@ const parse_git = @import("parse_git.zig");
 const parse_sequence = @import("parse_sequence.zig");
 const parse_state = @import("parse_state.zig");
 const parse_xychart = @import("parse_xychart.zig");
+const source_mod = @import("source.zig");
 const types = @import("types.zig");
 
 pub const CompileError = error{
@@ -41,13 +42,13 @@ pub const DiagramKind = enum {
 fn firstMeaningfulLine(source: []const u8) ?[]const u8 {
     var cursor: usize = 0;
     while (cursor < source.len) {
-        const nl = std.mem.indexOfScalarPos(u8, source, cursor, '\n');
+        const nl = std.mem.findScalarPos(u8, source, cursor, '\n');
         const line_end = nl orelse source.len;
         const line = source[cursor..line_end];
         const trimmed = std.mem.trim(u8, line, " \t\r");
 
         if (trimmed.len != 0 and std.mem.startsWith(u8, trimmed, "%%{")) {
-            const after = std.mem.indexOf(u8, source[cursor..], "}%%") orelse return null;
+            const after = std.mem.find(u8, source[cursor..], "}%%") orelse return null;
             cursor += after + 3;
             if (cursor < source.len and source[cursor] == '\r') cursor += 1;
             if (cursor < source.len and source[cursor] == '\n') cursor += 1;
@@ -62,7 +63,7 @@ fn firstMeaningfulLine(source: []const u8) ?[]const u8 {
 }
 
 fn leadingToken(line: []const u8) []const u8 {
-    const end = std.mem.indexOfAny(u8, line, " \t") orelse line.len;
+    const end = std.mem.findAny(u8, line, " \t") orelse line.len;
     return line[0..end];
 }
 
@@ -83,6 +84,11 @@ pub const Diagram = union(enum) {
 };
 
 const DiagramTag = std.meta.Tag(Diagram);
+
+pub const CachedCompileResult = struct {
+    diagram: Diagram,
+    key_owned_by_diagram: bool,
+};
 
 pub const PaintTarget = enum {
     graph,
@@ -377,6 +383,18 @@ fn normalizeParseError(comptime Parser: type, err: Parser.ParseError) CompileErr
     @compileError("missing parse error normalization for parser '" ++ @typeName(Parser) ++ "'");
 }
 
+fn parseDiagram(
+    comptime spec: DiagramSpec,
+    allocator: std.mem.Allocator,
+    source: source_mod.Source,
+) CompileError!Diagram {
+    const compile_tag = spec.compile_tag orelse @compileError("parseDiagram requires a compile_tag");
+    const data = spec.parser.parse(allocator, source) catch |err| {
+        return normalizeParseError(spec.parser, err);
+    };
+    return @unionInit(Diagram, @tagName(compile_tag), data);
+}
+
 pub fn compile(allocator: std.mem.Allocator, source: []const u8) CompileError!Diagram {
     const kind = classifyHeader(source);
     var key_buf: [1][]const u8 = undefined;
@@ -398,12 +416,66 @@ pub fn compile(allocator: std.mem.Allocator, source: []const u8) CompileError!Di
 
     inline for (diagram_specs) |spec| {
         if (kind == spec.kind) {
-            if (spec.compile_tag) |compile_tag| {
-                pending_free = null;
-                const data = spec.parser.parseSource(allocator, stripped) catch |err| {
-                    return normalizeParseError(spec.parser, err);
+            if (spec.compile_tag != null) {
+                const parser_source: source_mod.Source = switch (stripped) {
+                    .borrowed => |bytes| .{ .borrowed = bytes },
+                    .owned => |bytes| blk: {
+                        pending_free = null;
+                        break :blk .{ .owned = bytes };
+                    },
                 };
-                return @unionInit(Diagram, @tagName(compile_tag), data);
+                return parseDiagram(spec, allocator, parser_source);
+            }
+
+            return error.UnsupportedDiagram;
+        }
+    }
+
+    return error.InvalidMermaid;
+}
+
+pub fn compileForCache(allocator: std.mem.Allocator, owned_key: []u8) CompileError!CachedCompileResult {
+    const kind = classifyHeader(owned_key);
+    var key_pending: ?[]u8 = owned_key;
+    errdefer if (key_pending) |bytes| allocator.free(bytes);
+
+    var key_buf: [1][]const u8 = undefined;
+    const unsafe_keys: []const []const u8 = if (diagramConfigKey(kind)) |k| blk: {
+        key_buf[0] = k;
+        break :blk key_buf[0..1];
+    } else &.{};
+
+    const stripped = directive.stripInitDirectives(allocator, owned_key, unsafe_keys) catch |err| switch (err) {
+        error.InvalidDirective => return error.InvalidMermaid,
+        error.UnsupportedFeature => return error.UnsupportedFeature,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    var stripped_pending: ?[]u8 = switch (stripped) {
+        .borrowed => null,
+        .owned => |bytes| bytes,
+    };
+    errdefer if (stripped_pending) |bytes| allocator.free(bytes);
+
+    inline for (diagram_specs) |spec| {
+        if (kind == spec.kind) {
+            if (spec.compile_tag != null) {
+                const key_owned_by_diagram = stripped == .borrowed;
+                const parser_source: source_mod.Source = switch (stripped) {
+                    .borrowed => blk: {
+                        key_pending = null;
+                        break :blk .{ .owned = owned_key };
+                    },
+                    .owned => |bytes| blk: {
+                        stripped_pending = null;
+                        break :blk .{ .owned = bytes };
+                    },
+                };
+                const diagram = try parseDiagram(spec, allocator, parser_source);
+                key_pending = null;
+                return .{
+                    .diagram = diagram,
+                    .key_owned_by_diagram = key_owned_by_diagram,
+                };
             }
 
             return error.UnsupportedDiagram;

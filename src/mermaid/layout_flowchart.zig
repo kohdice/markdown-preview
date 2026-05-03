@@ -6,6 +6,7 @@ const width_mod = @import("../term/width.zig");
 
 pub const LayoutError = error{
     OutOfMemory,
+    Overflow,
     WidthTooSmall,
 };
 
@@ -87,7 +88,8 @@ pub fn computeLayout(
     const group_of = try allocator.alloc(usize, n);
     defer allocator.free(group_of);
 
-    const level_counts = try allocator.alloc(usize, max_level + 1);
+    const level_slots = try std.math.add(usize, max_level, 1);
+    const level_counts = try allocator.alloc(usize, level_slots);
     defer allocator.free(level_counts);
 
     {
@@ -111,7 +113,7 @@ pub fn computeLayout(
             var width: usize = 0;
             if (eff_dir.isHorizontal() != layout_dir.isHorizontal()) {
                 for (level_counts) |c| {
-                    if (c > 0) width += 1;
+                    if (c > 0) width = try std.math.add(usize, width, 1);
                 }
             } else {
                 for (level_counts) |c| width = @max(width, c);
@@ -127,18 +129,19 @@ pub fn computeLayout(
         var acc: usize = 0;
         for (group_widths.items, 0..) |w, idx| {
             group_starts.items[idx] = acc;
-            acc += w;
+            acc = try std.math.add(usize, acc, w);
         }
     }
 
     const local_idx_of = try allocator.alloc(usize, n);
     defer allocator.free(local_idx_of);
-    const group_level_counts = try allocator.alloc(usize, (max_level + 1) * group_widths.items.len);
+    const group_level_cell_count = try std.math.mul(usize, level_slots, group_widths.items.len);
+    const group_level_counts = try allocator.alloc(usize, group_level_cell_count);
     defer allocator.free(group_level_counts);
     @memset(group_level_counts, 0);
     for (sorted_ids) |id| {
         const g = group_of[id];
-        const cell = g * (max_level + 1) + levels[id];
+        const cell = g * level_slots + levels[id];
         local_idx_of[id] = group_level_counts[cell];
         group_level_counts[cell] += 1;
     }
@@ -153,11 +156,11 @@ pub fn computeLayout(
             const local_level = levels[i] - group_min_levels.items[g];
             const local_idx = local_idx_of[i];
             positions[i] = .{
-                .row = group_min_levels.items[g] + local_idx,
-                .col = group_starts.items[g] + local_level,
+                .row = try std.math.add(usize, group_min_levels.items[g], local_idx),
+                .col = try std.math.add(usize, group_starts.items[g], local_level),
             };
         } else {
-            const col = group_starts.items[g] + local_idx_of[i];
+            const col = try std.math.add(usize, group_starts.items[g], local_idx_of[i]);
             positions[i] = gridPosFor(layout_dir, levels[i], col, max_level);
         }
     }
@@ -169,8 +172,8 @@ pub fn computeLayout(
         max_col = @max(max_col, pos.col);
     }
 
-    var grid_rows = max_row + 1;
-    var grid_cols = max_col + 1;
+    var grid_rows = try std.math.add(usize, max_row, 1);
+    var grid_cols = try std.math.add(usize, max_col, 1);
 
     const preliminary_frames = try computeSubgraphFrames(allocator, graph, positions, paths);
     defer allocator.free(preliminary_frames);
@@ -211,7 +214,7 @@ pub fn computeLayout(
             banding.canvas_cols,
             opts.ambiguous_width,
         );
-        applyHorizontalBanding(positions, &grid_rows, &grid_cols, banding.cols_per_band, label_gap_rows);
+        try applyHorizontalBanding(positions, &grid_rows, &grid_cols, banding.cols_per_band, label_gap_rows);
     } else {
         const label_gap_rows = try verticalRouteLabelGapRows(
             allocator,
@@ -223,7 +226,7 @@ pub fn computeLayout(
             opts.wrap_width,
             opts.ambiguous_width,
         );
-        applyVerticalSpacing(positions, &grid_rows, label_gap_rows);
+        try applyVerticalSpacing(positions, &grid_rows, label_gap_rows);
     }
 
     const subgraph_frames = try computeSubgraphFrames(allocator, graph, positions, paths);
@@ -304,7 +307,7 @@ fn layoutNeedsLabelWrapping(
         maxColumnsForWrap(wrap_width, cell_w, grid_cols, outer_pad)
     else
         grid_cols;
-    return canvasColsFor(cols, cell_w, outer_pad) > wrap_width;
+    return route_mod.canvasColsForGrid(cols, cell_w, outer_pad) > wrap_width;
 }
 
 fn constrainedNodeLabelBudget(
@@ -314,8 +317,8 @@ fn constrainedNodeLabelBudget(
     outer_pad: usize,
 ) LayoutError!?usize {
     const cols = if (layout_dir.isHorizontal()) 1 else grid_cols;
-    const gutters = if (cols > 1) (cols - 1) * route_mod.gutter_w else 0;
-    const frame_overhead = 2 * outer_pad + gutters;
+    const gutters = if (cols > 1) route_mod.canvasColsForGrid(cols, 0, 0) else 0;
+    const frame_overhead = try std.math.add(usize, route_mod.canvasColsForGrid(1, 0, outer_pad), gutters);
     if (wrap_width <= frame_overhead) return error.WidthTooSmall;
 
     const cell_budget = (wrap_width - frame_overhead) / cols;
@@ -371,20 +374,20 @@ fn computeHorizontalBanding(
 ) LayoutError!HorizontalBanding {
     const w = wrap_width orelse return .{
         .cols_per_band = current_cols,
-        .canvas_cols = canvasColsFor(current_cols, cell_w, base_outer_pad),
+        .canvas_cols = route_mod.canvasColsForGrid(current_cols, cell_w, base_outer_pad),
     };
     if (current_cols <= 1) {
         const outer_pad = try routeLabelAwareOuterPad(allocator, graph, .left_right, current_cols, cell_w, base_outer_pad, wrap_width, ambiguous);
         return .{
             .cols_per_band = @max(current_cols, 1),
-            .canvas_cols = canvasColsFor(@max(current_cols, 1), cell_w, outer_pad),
+            .canvas_cols = route_mod.canvasColsForGrid(@max(current_cols, 1), cell_w, outer_pad),
         };
     }
 
     var cols = current_cols;
     while (cols > 1) : (cols -= 1) {
         const outer_pad = try routeLabelAwareOuterPad(allocator, graph, .left_right, cols, cell_w, base_outer_pad, wrap_width, ambiguous);
-        const candidate_cols = canvasColsFor(cols, cell_w, outer_pad);
+        const candidate_cols = route_mod.canvasColsForGrid(cols, cell_w, outer_pad);
         if (candidate_cols > w) continue;
         if (!try horizontalRouteLabelsFitWithoutBanding(allocator, graph, cols, cell_w, base_outer_pad, w, ambiguous)) continue;
         return .{
@@ -396,7 +399,7 @@ fn computeHorizontalBanding(
     const outer_pad = try routeLabelAwareOuterPad(allocator, graph, .left_right, 1, cell_w, base_outer_pad, wrap_width, ambiguous);
     return .{
         .cols_per_band = 1,
-        .canvas_cols = canvasColsFor(1, cell_w, outer_pad),
+        .canvas_cols = route_mod.canvasColsForGrid(1, cell_w, outer_pad),
     };
 }
 
@@ -409,7 +412,7 @@ fn horizontalRouteLabelsFitWithoutBanding(
     wrap_width: usize,
     ambiguous: width_mod.AmbiguousWidth,
 ) LayoutError!bool {
-    const unpadded_cols = canvasColsFor(cols, cell_w, 0);
+    const unpadded_cols = route_mod.canvasColsForGrid(cols, cell_w, 0);
     if (wrap_width < unpadded_cols) return false;
     const max_pad_that_fits = (wrap_width - unpadded_cols) / 2;
     if (max_pad_that_fits < base_outer_pad) return false;
@@ -446,24 +449,24 @@ fn applyHorizontalBanding(
     grid_cols: *usize,
     cols_per_band: usize,
     extra_rows_between_bands: usize,
-) void {
+) LayoutError!void {
     if (positions.len == 0 or grid_cols.* == 0) return;
     if (cols_per_band >= grid_cols.*) return;
 
     const original_rows = grid_rows.*;
-    const band_row_span = original_rows + extra_rows_between_bands;
+    const band_row_span = try std.math.add(usize, original_rows, extra_rows_between_bands);
     var max_row: usize = 0;
     var max_col: usize = 0;
     for (positions) |*pos| {
         const band = pos.col / cols_per_band;
-        pos.row = band * band_row_span + pos.row;
+        pos.row = try std.math.add(usize, try std.math.mul(usize, band, band_row_span), pos.row);
         pos.col = pos.col % cols_per_band;
         max_row = @max(max_row, pos.row);
         max_col = @max(max_col, pos.col);
     }
 
-    grid_rows.* = max_row + 1;
-    grid_cols.* = max_col + 1;
+    grid_rows.* = try std.math.add(usize, max_row, 1);
+    grid_cols.* = try std.math.add(usize, max_col, 1);
 }
 
 fn horizontalBandLabelGapRows(
@@ -494,15 +497,15 @@ fn applyVerticalSpacing(
     positions: []types.GridPos,
     grid_rows: *usize,
     extra_rows_between_levels: usize,
-) void {
+) LayoutError!void {
     if (extra_rows_between_levels == 0 or positions.len == 0) return;
 
     var max_row: usize = 0;
     for (positions) |*pos| {
-        pos.row += pos.row * extra_rows_between_levels;
+        pos.row = try std.math.add(usize, pos.row, try std.math.mul(usize, pos.row, extra_rows_between_levels));
         max_row = @max(max_row, pos.row);
     }
-    grid_rows.* = max_row + 1;
+    grid_rows.* = try std.math.add(usize, max_row, 1);
 }
 
 fn verticalRouteLabelGapRows(
@@ -518,7 +521,7 @@ fn verticalRouteLabelGapRows(
     const w = wrap_width orelse return 0;
     if (grid_cols == 0) return 0;
 
-    const current_cols = canvasColsFor(grid_cols, cell_w, outer_pad);
+    const current_cols = route_mod.canvasColsForGrid(grid_cols, cell_w, outer_pad);
     var max_lines: usize = 0;
     for (graph.edges) |edge| {
         const label = edge.label orelse continue;
@@ -540,14 +543,9 @@ fn maxColumnsForWrap(wrap_width: usize, cell_w: usize, current_cols: usize, oute
     if (current_cols <= 1) return @max(current_cols, 1);
     var cols = current_cols;
     while (cols > 1) : (cols -= 1) {
-        if (canvasColsFor(cols, cell_w, outer_pad) <= wrap_width) return cols;
+        if (route_mod.canvasColsForGrid(cols, cell_w, outer_pad) <= wrap_width) return cols;
     }
     return 1;
-}
-
-fn canvasColsFor(cols: usize, cell_w: usize, outer_pad: usize) usize {
-    if (cols == 0) return 0;
-    return cols * cell_w + (cols - 1) * route_mod.gutter_w + 2 * outer_pad;
 }
 
 fn baseOuterPad(frames: []const types.SubgraphFrame) usize {
@@ -573,8 +571,8 @@ fn titleAwareOuterPad(
         if (title.len == 0) continue;
 
         const pad = if (base_outer_pad > frame.depth) base_outer_pad - frame.depth else 1;
-        const col_span = frame.col_end - frame.col_start + 1;
-        const frame_w = col_span * cell_w + (col_span - 1) * route_mod.gutter_w + 2 * pad;
+        const col_span = try std.math.add(usize, frame.col_end - frame.col_start, 1);
+        const frame_w = route_mod.canvasColsForGrid(col_span, cell_w, pad);
         if (frame_w <= 4) return error.WidthTooSmall;
 
         var title_layout = text_layout.layoutLabel(allocator, title, frame_w - 4, ambiguous) catch |err| switch (err) {
@@ -601,9 +599,9 @@ fn routeLabelAwareOuterPad(
     const w = wrap_width orelse return base_outer_pad;
     if (grid_cols == 0) return base_outer_pad;
 
-    const current_cols = canvasColsFor(grid_cols, cell_w, base_outer_pad);
+    const current_cols = route_mod.canvasColsForGrid(grid_cols, cell_w, base_outer_pad);
     var required = base_outer_pad;
-    const unpadded_cols = canvasColsFor(grid_cols, cell_w, 0);
+    const unpadded_cols = route_mod.canvasColsForGrid(grid_cols, cell_w, 0);
     if (w <= unpadded_cols) return base_outer_pad;
     const max_pad_that_fits = (w - unpadded_cols) / 2;
     if (max_pad_that_fits <= base_outer_pad) return base_outer_pad;
@@ -1147,7 +1145,7 @@ test "subgraph members occupy a contiguous column band separate from external no
         \\    C --> S_out
     ;
     const parse_flowchart = @import("parse_flowchart.zig");
-    var graph = try parse_flowchart.parseSource(alloc, src);
+    var graph = try parse_flowchart.parse(alloc, src);
     defer graph.deinit();
 
     var layout = try computeLayout(alloc, &graph, .{ .ambiguous_width = .narrow });
@@ -1177,7 +1175,7 @@ test "subgraph members occupy a contiguous column band separate from external no
 test "virtual node composition places external node after subgraph span" {
     const alloc = std.testing.allocator;
     const parse_flowchart = @import("parse_flowchart.zig");
-    var graph = try parse_flowchart.parseSource(alloc,
+    var graph = try parse_flowchart.parse(alloc,
         \\graph TD
         \\    X --> A
         \\    subgraph S

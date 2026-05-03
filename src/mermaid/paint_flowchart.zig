@@ -7,15 +7,12 @@ const paint_mod = @import("paint.zig");
 const text_layout = @import("text_layout.zig");
 const width_mod = @import("../term/width.zig");
 
-pub const PaintError = paint_mod.PaintError;
-pub const Options = paint_mod.PaintOptions;
-
 pub fn paintMermaidGraph(
     writer: *std.Io.Writer,
     allocator: std.mem.Allocator,
     graph: *const @import("types.zig").MermaidGraph,
-    opts: Options,
-) PaintError!void {
+    opts: paint_mod.PaintOptions,
+) paint_mod.PaintError!void {
     const needs_vflip = graph.direction == .bottom_up;
     var effective = graph.*;
     effective.direction = if (needs_vflip) .top_down else graph.direction;
@@ -25,6 +22,7 @@ pub fn paintMermaidGraph(
         .ambiguous_width = opts.ambiguous_width,
     }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
+        error.Overflow => return error.Overflow,
         error.WidthTooSmall => return error.WidthTooSmall,
     };
     defer layout.deinit();
@@ -49,6 +47,9 @@ pub fn paintMermaidGraph(
     defer canvas.deinit();
 
     const glyphs = canvas_mod.GlyphSet.unicode;
+    var route_scratch: route_mod.RouteScratch = .{};
+    defer route_scratch.deinit(allocator);
+
     var routed_labels: std.ArrayList(RoutedEdgeLabel) = .empty;
     defer routed_labels.deinit(allocator);
     defer deinitRoutedEdgeLabels(allocator, routed_labels.items);
@@ -91,7 +92,7 @@ pub fn paintMermaidGraph(
         if (from_ep == null or to_ep == null) continue;
         const has_frame = from_ep.? == .frame or to_ep.? == .frame;
         if (has_frame) {
-            const maybe_route = routeCompositeEdge(allocator, &canvas, &layout, from_ep.?, to_ep.?, edge, &glyphs, defer_route_labels, opts.ambiguous_width) catch |err| switch (err) {
+            const maybe_route = routeCompositeEdge(allocator, &route_scratch, &canvas, &layout, from_ep.?, to_ep.?, edge, &glyphs, defer_route_labels, opts.ambiguous_width) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
             };
             if (try routeForDeferredLabel(allocator, &layout, from_ep.?, to_ep.?, edge, maybe_route, defer_route_labels, opts.ambiguous_width)) |route| {
@@ -99,7 +100,7 @@ pub fn paintMermaidGraph(
             }
             continue;
         }
-        const maybe_route = route_mod.routeEdge(allocator, &canvas, &layout, edge, layout_dir, &glyphs, defer_route_labels, opts.ambiguous_width) catch |err| switch (err) {
+        const maybe_route = route_mod.routeEdgeWithScratch(allocator, &route_scratch, &canvas, &layout, edge, layout_dir, &glyphs, defer_route_labels, opts.ambiguous_width) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
         };
         if (try routeForDeferredLabel(allocator, &layout, from_ep.?, to_ep.?, edge, maybe_route, defer_route_labels, opts.ambiguous_width)) |route| {
@@ -168,6 +169,7 @@ fn hasBlockedSingleColumnBandedEdge(layout: *const types.Layout, graph: *const t
 
 fn routeCompositeEdge(
     allocator: std.mem.Allocator,
+    route_scratch: *route_mod.RouteScratch,
     canvas: *canvas_mod.Canvas,
     layout: *const @import("types.zig").Layout,
     from_ep: @import("types.zig").EndpointTarget,
@@ -183,8 +185,9 @@ fn routeCompositeEdge(
     const start_port = epFacingPort(layout, from_ep, goal_center) orelse return null;
     const goal_port = epFacingPort(layout, to_ep, start_center) orelse return null;
 
-    return try route_mod.routeEdgeWithPorts(
+    return try route_mod.routeEdgeWithPortsScratch(
         allocator,
+        route_scratch,
         canvas,
         layout,
         edge.from,
@@ -221,7 +224,7 @@ fn appendRoutedEdgeLabel(
     route: route_mod.EdgeRoute,
     defer_route_labels: bool,
     ambiguous: width_mod.AmbiguousWidth,
-) PaintError!void {
+) paint_mod.PaintError!void {
     var owned_route = route;
     errdefer owned_route.deinit(allocator);
 
@@ -245,7 +248,7 @@ fn routeForDeferredLabel(
     maybe_route: ?route_mod.EdgeRoute,
     defer_route_labels: bool,
     ambiguous: width_mod.AmbiguousWidth,
-) PaintError!?route_mod.EdgeRoute {
+) paint_mod.PaintError!?route_mod.EdgeRoute {
     var route = maybe_route orelse {
         if (!defer_route_labels or edgeLabelWidth(edge, ambiguous) == 0) return null;
         return try syntheticLabelRoute(allocator, layout, from_ep, to_ep);
@@ -267,7 +270,7 @@ fn syntheticLabelRoute(
     layout: *const types.Layout,
     from_ep: types.EndpointTarget,
     to_ep: types.EndpointTarget,
-) PaintError!route_mod.EdgeRoute {
+) paint_mod.PaintError!route_mod.EdgeRoute {
     const start_center = epCenter(layout, from_ep) orelse return error.WidthTooSmall;
     const goal_center = epCenter(layout, to_ep) orelse return error.WidthTooSmall;
     const start_port = epFacingPort(layout, from_ep, goal_center) orelse return error.WidthTooSmall;
@@ -301,7 +304,7 @@ fn appendSyntheticVertical(
     from_row: usize,
     to_row: usize,
     col: usize,
-) PaintError!void {
+) paint_mod.PaintError!void {
     if (from_row == to_row) return;
     const dir: route_mod.Dir4 = if (to_row > from_row) .down else .up;
     var row = from_row;
@@ -321,7 +324,7 @@ fn appendSyntheticHorizontal(
     from_col: usize,
     to_col: usize,
     row: usize,
-) PaintError!void {
+) paint_mod.PaintError!void {
     if (from_col == to_col) return;
     const dir: route_mod.Dir4 = if (to_col > from_col) .right else .left;
     var col = from_col;
@@ -393,7 +396,7 @@ fn redrawWrappedEdgeLabels(
     layout_dir: types.Direction,
     routed_labels: []const RoutedEdgeLabel,
     ambiguous: width_mod.AmbiguousWidth,
-) PaintError!void {
+) paint_mod.PaintError!void {
     const sorted_edge_indexes = try allocator.alloc(usize, routed_labels.len);
     defer allocator.free(sorted_edge_indexes);
     for (sorted_edge_indexes, 0..) |*idx, i| idx.* = i;
@@ -435,7 +438,7 @@ fn redrawWrappedEdgeLabel(
     layout_dir: types.Direction,
     routed_label: RoutedEdgeLabel,
     ambiguous: width_mod.AmbiguousWidth,
-) PaintError!void {
+) paint_mod.PaintError!void {
     const glyphs = canvas_mod.GlyphSet.unicode;
     const edge = routed_label.edge;
     const label = edge.label orelse return;
@@ -655,7 +658,7 @@ fn drawPlacedLabel(
     max_line_width: usize,
     placement: LabelPlacement,
     ambiguous: width_mod.AmbiguousWidth,
-) PaintError!void {
+) paint_mod.PaintError!void {
     for (lines, 0..) |line, idx| {
         const col = placement.col + (max_line_width - line.width) / 2;
         try canvas.drawLabel(placement.row + idx, col, line.text, ambiguous);
@@ -763,7 +766,7 @@ fn drawSubgraphTitle(
     frame: @import("types.zig").SubgraphFrame,
     wrap_width: ?usize,
     ambiguous: width_mod.AmbiguousWidth,
-) PaintError!void {
+) paint_mod.PaintError!void {
     const title = frame.title orelse return;
     if (title.len == 0) return;
     const box = frameBox(layout, canvas.rows, canvas.cols, frame) orelse return;

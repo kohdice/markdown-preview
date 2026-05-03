@@ -12,6 +12,7 @@ pub const RenderError = error{
     UnsupportedFeature,
     WidthTooSmall,
     OutOfMemory,
+    Overflow,
     WriteFailed,
 };
 
@@ -19,7 +20,6 @@ pub const Options = struct {
     wrap_width: ?usize,
     ambiguous_width: width_mod.AmbiguousWidth,
     enable_ansi: bool = false,
-    color_mode: ansi_mod.ColorMode = .truecolor,
 };
 
 const StyleKind = enum { static_, abstract_ };
@@ -92,6 +92,7 @@ pub fn paintClass(
 
     var layout = computeClassLayout(allocator, &diagram, opts.wrap_width, opts.ambiguous_width) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
+        error.Overflow => return error.Overflow,
         error.WidthTooSmall => return error.WidthTooSmall,
     };
     defer layout.deinit();
@@ -123,11 +124,14 @@ pub fn paintClass(
 
     const protected_rects = try classProtectedRects(allocator, &layout);
     defer allocator.free(protected_rects);
+    var route_scratch: route_mod.RouteScratch = .{};
+    defer route_scratch.deinit(allocator);
+
     const defer_relation_labels = opts.wrap_width != null;
     const relation_label_wrap_width = @min(text_layout.edgeLabelWrapWidth(opts.wrap_width orelse canvas.cols), canvas.cols);
 
     for (diagram.relations) |rel| {
-        drawRelation(allocator, &canvas, &layout, protected_rects, rel, &glyphs, defer_relation_labels, relation_label_wrap_width, opts.ambiguous_width) catch |err| switch (err) {
+        drawRelation(allocator, &route_scratch, &canvas, &layout, protected_rects, rel, &glyphs, defer_relation_labels, relation_label_wrap_width, opts.ambiguous_width) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.WidthTooSmall => return error.WidthTooSmall,
         };
@@ -137,7 +141,7 @@ pub fn paintClass(
         error.OutOfMemory => return error.OutOfMemory,
     };
 
-    if (opts.enable_ansi and opts.color_mode != .none and spans.items.len > 0) {
+    if (opts.enable_ansi and spans.items.len > 0) {
         try writeCanvasWithSpans(writer, allocator, &canvas, spans.items, opts);
     } else {
         canvas_mod.writeCanvas(writer, &canvas, opts.wrap_width, opts.ambiguous_width) catch return error.WriteFailed;
@@ -237,7 +241,7 @@ fn writeStyleClose(writer: *std.Io.Writer, kind: StyleKind) RenderError!void {
     writer.writeAll(seq) catch return error.WriteFailed;
 }
 
-pub const ClassLayoutError = error{ OutOfMemory, WidthTooSmall };
+pub const ClassLayoutError = error{ OutOfMemory, Overflow, WidthTooSmall };
 
 fn computeClassLayout(
     allocator: std.mem.Allocator,
@@ -276,7 +280,8 @@ fn computeClassLayout(
     var max_level: usize = 0;
     for (levels) |l| max_level = @max(max_level, l);
 
-    const level_counts = try allocator.alloc(usize, max_level + 1);
+    const level_slots = try std.math.add(usize, max_level, 1);
+    const level_counts = try allocator.alloc(usize, level_slots);
     defer allocator.free(level_counts);
     @memset(level_counts, 0);
 
@@ -299,24 +304,24 @@ fn computeClassLayout(
     else
         null;
     var cell_h = computeRequiredBoxHeight(class_layouts);
-    cell_h += try extraCellHeightForRelationLabels(allocator, diagram, label_wrap_width, ambiguous);
+    cell_h = try std.math.add(usize, cell_h, try extraCellHeightForRelationLabels(allocator, diagram, label_wrap_width, ambiguous));
 
-    const level_row_starts = try allocator.alloc(usize, max_level + 1);
+    const level_row_starts = try allocator.alloc(usize, level_slots);
     defer allocator.free(level_row_starts);
 
     var rows: usize = 0;
-    var level_cursor = max_level + 1;
+    var level_cursor = level_slots;
     while (level_cursor > 0) {
         level_cursor -= 1;
         level_row_starts[level_cursor] = rows;
-        rows += std.math.divCeil(usize, level_counts[level_cursor], max_cols_per_row) catch unreachable;
+        rows = try std.math.add(usize, rows, std.math.divCeil(usize, level_counts[level_cursor], max_cols_per_row) catch unreachable);
     }
     if (rows == 0) rows = 1;
 
     const positions = try allocator.alloc(types.GridPos, n);
     errdefer allocator.free(positions);
 
-    const level_next_indices = try allocator.alloc(usize, max_level + 1);
+    const level_next_indices = try allocator.alloc(usize, level_slots);
     defer allocator.free(level_next_indices);
     @memset(level_next_indices, 0);
 
@@ -325,7 +330,7 @@ fn computeClassLayout(
         const local_idx = level_next_indices[level];
         level_next_indices[level] += 1;
         positions[i] = .{
-            .row = level_row_starts[level] + local_idx / max_cols_per_row,
+            .row = try std.math.add(usize, level_row_starts[level], local_idx / max_cols_per_row),
             .col = local_idx % max_cols_per_row,
         };
     }
@@ -395,9 +400,10 @@ fn assignClassLevels(
 
 fn maxColumnsForWrap(wrap_width: ?usize, cell_w: usize, class_count: usize, outer_pad: usize) usize {
     const w = wrap_width orelse return @max(class_count, 1);
-    if (w <= 2 * outer_pad + cell_w) return 1;
-    const available = w - 2 * outer_pad;
-    return 1 + (available - cell_w) / (cell_w + route_mod.gutter_w);
+    if (route_mod.canvasColsForGrid(1, cell_w, outer_pad) >= w) return 1;
+    const available = w - route_mod.canvasColsForGrid(1, 0, outer_pad);
+    const step_w = std.math.add(usize, cell_w, route_mod.gutter_w) catch return 1;
+    return 1 + (available - cell_w) / step_w;
 }
 
 fn classContentBudget(wrap_width: ?usize, outer_pad: usize) ClassLayoutError!?usize {
@@ -655,7 +661,7 @@ fn namespaceBounds(ns: types.ClassNamespace, positions: []const types.GridPos, c
 
 fn namespaceFrameWidth(bounds: NamespaceBounds, cell_w: usize) usize {
     const class_cols = bounds.max_col - bounds.min_col + 1;
-    return class_cols * cell_w + (class_cols - 1) * route_mod.gutter_w + 2 * namespace_frame_padding + 2;
+    return route_mod.canvasColsForGrid(class_cols, cell_w, namespace_frame_padding) +| 2;
 }
 
 fn namespaceTitleWidth(frame_w: usize) ClassLayoutError!usize {
@@ -856,6 +862,7 @@ fn classProtectedRects(allocator: std.mem.Allocator, layout: *const ClassLayout)
 
 fn drawRelation(
     allocator: std.mem.Allocator,
+    route_scratch: *route_mod.RouteScratch,
     canvas: *canvas_mod.Canvas,
     layout: *const ClassLayout,
     protected_rects: []const route_mod.ProtectedRect,
@@ -882,8 +889,9 @@ fn drawRelation(
     const goal_row = tgt_top + tgt_box_h;
     const goal_col = tgt_left + base.cell_w / 2;
 
-    var route = try route_mod.routeEdgeWithPorts(
+    var route = try route_mod.routeEdgeWithPortsScratch(
         allocator,
+        route_scratch,
         canvas,
         base,
         rel.from,
@@ -1089,9 +1097,9 @@ test "paintClass renders class box with attribute type and method params" {
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "Animal") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "+ name: str") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "+ save(entity): Result") != null);
+    try std.testing.expect(std.mem.find(u8, out, "Animal") != null);
+    try std.testing.expect(std.mem.find(u8, out, "+ name: str") != null);
+    try std.testing.expect(std.mem.find(u8, out, "+ save(entity): Result") != null);
 }
 
 test "paintClass collapses multi-whitespace and tabs in attribute name" {
@@ -1104,10 +1112,10 @@ test "paintClass collapses multi-whitespace and tabs in attribute name" {
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "+ retry count: int") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "+ is ready: bool") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "retry   count") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "is\tready") == null);
+    try std.testing.expect(std.mem.find(u8, out, "+ retry count: int") != null);
+    try std.testing.expect(std.mem.find(u8, out, "+ is ready: bool") != null);
+    try std.testing.expect(std.mem.find(u8, out, "retry   count") == null);
+    try std.testing.expect(std.mem.find(u8, out, "is\tready") == null);
 }
 
 test "paintClass renders inheritance with triangle head" {
@@ -1123,7 +1131,7 @@ test "paintClass renders inheritance with triangle head" {
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "△") != null);
+    try std.testing.expect(std.mem.find(u8, out, "△") != null);
 }
 
 test "paintClass renders composition with filled diamond" {
@@ -1139,7 +1147,7 @@ test "paintClass renders composition with filled diamond" {
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "◆") != null);
+    try std.testing.expect(std.mem.find(u8, out, "◆") != null);
 }
 
 test "paintClass renders aggregation with empty diamond" {
@@ -1155,7 +1163,7 @@ test "paintClass renders aggregation with empty diamond" {
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "◇") != null);
+    try std.testing.expect(std.mem.find(u8, out, "◇") != null);
 }
 
 test "paintClass association arrow head points toward target (upward)" {
@@ -1171,8 +1179,8 @@ test "paintClass association arrow head points toward target (upward)" {
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "▲") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "▼") == null);
+    try std.testing.expect(std.mem.find(u8, out, "▲") != null);
+    try std.testing.expect(std.mem.find(u8, out, "▼") == null);
 }
 
 test "paintClass shows literal star in abstract method type label" {
@@ -1190,7 +1198,7 @@ test "paintClass shows literal star in abstract method type label" {
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "run(): *") != null);
+    try std.testing.expect(std.mem.find(u8, out, "run(): *") != null);
 }
 
 test "paintClass wraps static member with SGR underline when enable_ansi" {
@@ -1208,8 +1216,8 @@ test "paintClass wraps static member with SGR underline when enable_ansi" {
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = true });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[4m") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[24m") != null);
+    try std.testing.expect(std.mem.find(u8, out, "\x1b[4m") != null);
+    try std.testing.expect(std.mem.find(u8, out, "\x1b[24m") != null);
 }
 
 test "paintClass wraps static and abstract method with both SGR when enable_ansi" {
@@ -1227,10 +1235,10 @@ test "paintClass wraps static and abstract method with both SGR when enable_ansi
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = true });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[4m") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[24m") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[3m") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[23m") != null);
+    try std.testing.expect(std.mem.find(u8, out, "\x1b[4m") != null);
+    try std.testing.expect(std.mem.find(u8, out, "\x1b[24m") != null);
+    try std.testing.expect(std.mem.find(u8, out, "\x1b[3m") != null);
+    try std.testing.expect(std.mem.find(u8, out, "\x1b[23m") != null);
 }
 
 test "paintClass wraps abstract method with SGR italic when enable_ansi" {
@@ -1248,8 +1256,8 @@ test "paintClass wraps abstract method with SGR italic when enable_ansi" {
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = true });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[3m") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[23m") != null);
+    try std.testing.expect(std.mem.find(u8, out, "\x1b[3m") != null);
+    try std.testing.expect(std.mem.find(u8, out, "\x1b[23m") != null);
 }
 
 test "paintClass emits no SGR when enable_ansi is false" {
@@ -1268,31 +1276,7 @@ test "paintClass emits no SGR when enable_ansi is false" {
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow, .enable_ansi = false });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[") == null);
-}
-
-test "paintClass under color_mode=.none emits no SGR even with enable_ansi=true" {
-    const alloc = std.testing.allocator;
-    var diagram = try compile_mod.compile(alloc,
-        \\classDiagram
-        \\    class C {
-        \\        +count$
-        \\        +run()*
-        \\    }
-    );
-    defer diagram.deinit();
-
-    var sink: std.Io.Writer.Allocating = .init(alloc);
-    defer sink.deinit();
-    try paintClass(&sink.writer, alloc, &diagram.class_, .{
-        .wrap_width = null,
-        .ambiguous_width = .narrow,
-        .enable_ansi = true,
-        .color_mode = .none,
-    });
-
-    const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[") == null);
+    try std.testing.expect(std.mem.find(u8, out, "\x1b[") == null);
 }
 
 test "paintClass hides stripped dollar on static attribute" {
@@ -1310,8 +1294,8 @@ test "paintClass hides stripped dollar on static attribute" {
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "count") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "$") == null);
+    try std.testing.expect(std.mem.find(u8, out, "count") != null);
+    try std.testing.expect(std.mem.find(u8, out, "$") == null);
 }
 
 test "paintClass separates attributes and methods with a divider" {
@@ -1333,7 +1317,7 @@ test "paintClass separates attributes and methods with a divider" {
 
     var tee_l_count: usize = 0;
     var idx: usize = 0;
-    while (std.mem.indexOfPos(u8, out, idx, "├")) |found| {
+    while (std.mem.findPos(u8, out, idx, "├")) |found| {
         tee_l_count += 1;
         idx = found + "├".len;
     }
@@ -1356,9 +1340,9 @@ test "paintClass renders namespace frame with name" {
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "Shapes") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "Circle") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "Square") != null);
+    try std.testing.expect(std.mem.find(u8, out, "Shapes") != null);
+    try std.testing.expect(std.mem.find(u8, out, "Circle") != null);
+    try std.testing.expect(std.mem.find(u8, out, "Square") != null);
 }
 
 fn expectComputeClassBoxLayoutsHandlesAllocationFailures(allocator: std.mem.Allocator) !void {
@@ -1448,11 +1432,14 @@ test "drawRelation returns WidthTooSmall when deferred label has no route path" 
     const glyphs = canvas_mod.GlyphSet.unicode;
     const protected_rects = try classProtectedRects(alloc, &layout);
     defer alloc.free(protected_rects);
+    var route_scratch: route_mod.RouteScratch = .{};
+    defer route_scratch.deinit(alloc);
 
     try std.testing.expectError(
         error.WidthTooSmall,
         drawRelation(
             alloc,
+            &route_scratch,
             &canvas,
             &layout,
             protected_rects,
@@ -1491,9 +1478,9 @@ test "paintClass marker_at from places triangle at source end" {
     var dog_line: ?usize = null;
     var idx: usize = 0;
     while (line_iter.next()) |line| : (idx += 1) {
-        if (std.mem.indexOf(u8, line, "△") != null and triangle_line == null) triangle_line = idx;
-        if (std.mem.indexOf(u8, line, "Animal") != null and animal_line == null) animal_line = idx;
-        if (std.mem.indexOf(u8, line, "Dog") != null and dog_line == null) dog_line = idx;
+        if (std.mem.find(u8, line, "△") != null and triangle_line == null) triangle_line = idx;
+        if (std.mem.find(u8, line, "Animal") != null and animal_line == null) animal_line = idx;
+        if (std.mem.find(u8, line, "Dog") != null and dog_line == null) dog_line = idx;
     }
     try std.testing.expect(triangle_line != null);
     try std.testing.expect(animal_line != null);
@@ -1520,7 +1507,7 @@ test "paintClass bare -- renders as association with arrow" {
     try paintClass(&sink.writer, alloc, &diagram.class_, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "▲") != null);
+    try std.testing.expect(std.mem.find(u8, out, "▲") != null);
 }
 
 test "computeClassLayout places single class at origin with rows=cols=1" {

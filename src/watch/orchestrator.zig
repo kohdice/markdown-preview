@@ -5,7 +5,6 @@ const loop = @import("loop.zig");
 const raw_term = @import("../term/raw.zig");
 const session_mod = @import("session.zig");
 const term = @import("../term.zig");
-const ansi = term.ansi;
 const terminal = term.terminal;
 const width = term.width;
 
@@ -16,7 +15,7 @@ const default_term_cols: usize = 80;
 const default_term_rows: usize = 24;
 
 pub const WatchOptions = struct {
-    allocator: std.mem.Allocator,
+    app_allocator: std.mem.Allocator,
     io: std.Io,
     cwd: std.Io.Dir,
     path: []const u8,
@@ -26,7 +25,6 @@ pub const WatchOptions = struct {
     stdin_file: std.Io.File,
     enable_ansi: bool,
     ambiguous_width: width.AmbiguousWidth,
-    color_mode: ansi.ColorMode = .truecolor,
 };
 
 pub fn run(opts: WatchOptions) !u8 {
@@ -52,10 +50,9 @@ pub fn run(opts: WatchOptions) !u8 {
     };
 
     var session: session_mod.WatchSession = undefined;
-    session.init(opts.allocator, .{
+    session.init(opts.app_allocator, .{
         .enable_ansi = opts.enable_ansi,
         .ambiguous_width = opts.ambiguous_width,
-        .color_mode = opts.color_mode,
     });
     defer session.deinit();
 
@@ -72,7 +69,7 @@ pub fn run(opts: WatchOptions) !u8 {
     var hash: content_hash.ContentHash = .{};
 
     _ = session.refreshFrom(opts.io, opts.cwd, opts.path, wrap_width, &hash);
-    session.pgr.displayPage(opts.stdout, &session.buffer, scroll_offset, term_size.rows, opts.enable_ansi, opts.color_mode);
+    session.pgr.displayPage(opts.stdout, &session.buffer, scroll_offset, term_size.rows, opts.enable_ansi);
 
     var watcher = file_watcher.FileWatcher.init(dir_z, name_z) catch |err| {
         try opts.stderr.print("mp: unable to watch '{s}': {s}\n", .{ opts.path, @errorName(err) });

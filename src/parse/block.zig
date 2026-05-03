@@ -95,7 +95,7 @@ pub fn listItem(line: []const u8) ?ListItem {
     if (indent >= line.len) return null;
 
     const marker = line[indent];
-    if (std.mem.indexOfScalar(u8, unordered_list_markers, marker) == null) return null;
+    if (std.mem.findScalar(u8, unordered_list_markers, marker) == null) return null;
     if (indent + 1 >= line.len) return null;
     if (!isHorizontalWhitespace(line[indent + 1])) return null;
 
@@ -140,7 +140,7 @@ pub fn orderedListItem(line: []const u8) ?OrderedListItem {
 
     if (digit_end >= line.len) return null;
     const marker = line[digit_end];
-    if (std.mem.indexOfScalar(u8, ordered_list_markers, marker) == null) return null;
+    if (std.mem.findScalar(u8, ordered_list_markers, marker) == null) return null;
 
     if (digit_end + 1 < line.len and !isHorizontalWhitespace(line[digit_end + 1])) return null;
 
@@ -176,14 +176,14 @@ pub fn fence(line: []const u8) ?Fence {
     if (index >= line.len) return null;
 
     const fence_char = line[index];
-    if (std.mem.indexOfScalar(u8, fence_chars, fence_char) == null) return null;
+    if (std.mem.findScalar(u8, fence_chars, fence_char) == null) return null;
 
     const fence_len = countRepeatedByte(line[index..], fence_char);
     if (fence_len < min_fence_len) return null;
 
     const info_start = index + fence_len;
     const info = std.mem.trim(u8, line[info_start..], horizontal_whitespace);
-    const lang_end = std.mem.indexOfAny(u8, info, horizontal_whitespace) orelse info.len;
+    const lang_end = std.mem.findAny(u8, info, horizontal_whitespace) orelse info.len;
 
     return .{
         .fence_char = fence_char,
@@ -208,7 +208,7 @@ pub fn isThematicBreak(line: []const u8) bool {
     if (trimmed.len < min_thematic_break_markers) return false;
 
     const marker = trimmed[0];
-    if (std.mem.indexOfScalar(u8, thematic_break_markers, marker) == null) return false;
+    if (std.mem.findScalar(u8, thematic_break_markers, marker) == null) return false;
 
     var marker_count: usize = 0;
     for (trimmed) |char| {

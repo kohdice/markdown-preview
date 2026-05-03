@@ -20,12 +20,9 @@ pub const Options = struct {
     ambiguous_width: width_mod.AmbiguousWidth,
     enable_ansi: bool,
     use_ascii: bool = false,
-    color_mode: ansi_mod.ColorMode = .truecolor,
 };
 
-fn seriesRole(idx: usize) u8 {
-    return @as(u8, @intCast(idx & 0x07));
-}
+const series_role_count = theme.default_series_palette.len;
 
 const PLOT_ROWS: usize = 20;
 const MAX_SERIES_POINTS: usize = 1024;
@@ -487,7 +484,7 @@ fn drawWrappedLegend(
 ) error{OutOfMemory}!void {
     var row = top;
     for (chart.series, layout.items, 0..) |series, item, series_idx| {
-        const role = seriesRole(series_idx);
+        const role: u8 = @intCast(series_idx % series_role_count);
         canvas.setGlyphRole(row, 0, legendGlyph(series.kind, xy), role);
         for (item.lines, 0..) |line, line_idx| {
             try canvas.drawLabelRole(row + line_idx, 2, line.text, role, ambiguous);
@@ -533,7 +530,7 @@ fn drawVerticalSeries(
     const n_bar_series = countBarSeries(chart);
     const local_data_count = @max(@as(usize, 1), data_end - data_start);
     for (chart.series, 0..) |series, series_idx| {
-        const role = seriesRole(series_idx);
+        const role: u8 = @intCast(series_idx % series_role_count);
         switch (series.kind) {
             .bar => {
                 const series_end = @min(series.data.len, data_end);
@@ -760,7 +757,7 @@ fn planHorizontalTickLabels(
 
 fn drawHorizontalSeries(canvas: *canvas_mod.Canvas, chart: *const types.XyChart, yr: YRange, row_positions: []const usize, plot_left: usize, plot_w: usize, xy: *const XyGlyphs) void {
     for (chart.series, 0..) |series, series_idx| {
-        const role = seriesRole(series_idx);
+        const role: u8 = @intCast(series_idx % series_role_count);
         switch (series.kind) {
             .bar => for (series.data, 0..) |v, i| {
                 if (i >= row_positions.len) break;
@@ -799,7 +796,7 @@ fn drawHorizontalGrid(canvas: *canvas_mod.Canvas, tick_values: []const f64, yr: 
 
 fn writeXyCanvas(writer: *std.Io.Writer, canvas: *const canvas_mod.Canvas, chart: *const types.XyChart, opts: Options) RenderError!void {
     if (opts.enable_ansi and chart.series.len > 0) {
-        canvas_mod.writeCanvasAnsi(writer, canvas, opts.wrap_width, opts.ambiguous_width, &theme.default_series_palette, opts.color_mode) catch return error.WriteFailed;
+        canvas_mod.writeCanvasAnsi(writer, canvas, opts.wrap_width, opts.ambiguous_width, &theme.default_series_palette) catch return error.WriteFailed;
     } else {
         canvas_mod.writeCanvas(writer, canvas, opts.wrap_width, opts.ambiguous_width) catch return error.WriteFailed;
     }
@@ -890,7 +887,7 @@ fn writeVertical(
     var line_idx: usize = 0;
     for (chart.series, 0..) |series, series_idx| {
         const n = series.data.len;
-        const role = seriesRole(series_idx);
+        const role: u8 = @intCast(series_idx % series_role_count);
         if (n == 0) {
             if (series.kind == .bar) bar_idx += 1 else line_idx += 1;
             continue;
@@ -1053,7 +1050,7 @@ fn writeHorizontal(
     for (chart.series, 0..) |series, series_idx| {
         const n = series.data.len;
         if (n == 0) continue;
-        const role = seriesRole(series_idx);
+        const role: u8 = @intCast(series_idx % series_role_count);
         switch (series.kind) {
             .bar => {
                 for (series.data, 0..) |v, i| {
@@ -1223,7 +1220,7 @@ fn drawLegend(
     var line_n: usize = 0;
     for (chart.series, 0..) |series, series_idx| {
         if (col >= canvas.cols) return;
-        canvas.setGlyphRole(row, col, legendGlyph(series.kind, xy), seriesRole(series_idx));
+        canvas.setGlyphRole(row, col, legendGlyph(series.kind, xy), @intCast(series_idx % series_role_count));
         col += 2;
         var buf: [32]u8 = undefined;
         const name = legendItemName(&buf, series.kind, &bar_n, &line_n);
@@ -1718,10 +1715,10 @@ test "paintXyChart renders empty chart (title only) as bare plot frame" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "Demo") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "│") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "┼") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "─") != null);
+    try std.testing.expect(std.mem.find(u8, out, "Demo") != null);
+    try std.testing.expect(std.mem.find(u8, out, "│") != null);
+    try std.testing.expect(std.mem.find(u8, out, "┼") != null);
+    try std.testing.expect(std.mem.find(u8, out, "─") != null);
 }
 
 test "paintXyChart renders vertical bar chart with category x-axis" {
@@ -1733,9 +1730,9 @@ test "paintXyChart renders vertical bar chart with category x-axis" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "█") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "│") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "┼") != null);
+    try std.testing.expect(std.mem.find(u8, out, "█") != null);
+    try std.testing.expect(std.mem.find(u8, out, "│") != null);
+    try std.testing.expect(std.mem.find(u8, out, "┼") != null);
 }
 
 test "paintXyChart renders vertical line chart across 4 data points" {
@@ -1746,10 +1743,10 @@ test "paintXyChart renders vertical line chart across 4 data points" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "╯") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "╭") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "│") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "┼") != null);
+    try std.testing.expect(std.mem.find(u8, out, "╯") != null);
+    try std.testing.expect(std.mem.find(u8, out, "╭") != null);
+    try std.testing.expect(std.mem.find(u8, out, "│") != null);
+    try std.testing.expect(std.mem.find(u8, out, "┼") != null);
 }
 
 test "paintXyChart places title text on the top row" {
@@ -1760,7 +1757,7 @@ test "paintXyChart places title text on the top row" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    const nl = std.mem.indexOfScalar(u8, out, '\n') orelse out.len;
+    const nl = std.mem.findScalar(u8, out, '\n') orelse out.len;
     try std.testing.expectEqualStrings("Hello", out[0..nl]);
 }
 
@@ -1772,7 +1769,7 @@ test "paintXyChart falls back to 0..100 range when no series present" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "100") != null);
+    try std.testing.expect(std.mem.find(u8, out, "100") != null);
 }
 
 test "paintXyChart pads auto-range for bar [50, 100] to span 45..105" {
@@ -1783,8 +1780,8 @@ test "paintXyChart pads auto-range for bar [50, 100] to span 45..105" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "50") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "100") != null);
+    try std.testing.expect(std.mem.find(u8, out, "50") != null);
+    try std.testing.expect(std.mem.find(u8, out, "100") != null);
 }
 
 test "paintXyChart does not floor auto-range when min >= span * 0.5" {
@@ -1795,7 +1792,7 @@ test "paintXyChart does not floor auto-range when min >= span * 0.5" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "0") == null);
+    try std.testing.expect(std.mem.find(u8, out, "0") == null);
 }
 
 test "paintXyChart preserves negative values in auto-range for bar [-10, 10]" {
@@ -1806,7 +1803,7 @@ test "paintXyChart preserves negative values in auto-range for bar [-10, 10]" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "-10") != null);
+    try std.testing.expect(std.mem.find(u8, out, "-10") != null);
 }
 
 test "paintXyChart emits y-axis nice tick labels for explicit range 0-->100" {
@@ -1818,9 +1815,9 @@ test "paintXyChart emits y-axis nice tick labels for explicit range 0-->100" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "20") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "40") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "100") != null);
+    try std.testing.expect(std.mem.find(u8, out, "20") != null);
+    try std.testing.expect(std.mem.find(u8, out, "40") != null);
+    try std.testing.expect(std.mem.find(u8, out, "100") != null);
 }
 
 test "paintXyChart does not emit old fixed-interval tick labels for 0-->100" {
@@ -1832,8 +1829,8 @@ test "paintXyChart does not emit old fixed-interval tick labels for 0-->100" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "33.3") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "66.7") == null);
+    try std.testing.expect(std.mem.find(u8, out, "33.3") == null);
+    try std.testing.expect(std.mem.find(u8, out, "66.7") == null);
 }
 
 test "paintXyChart does not clip overlong category labels with ellipsis" {
@@ -1845,8 +1842,8 @@ test "paintXyChart does not clip overlong category labels with ellipsis" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "…") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "VeryLongCategoryLab") != null);
+    try std.testing.expect(std.mem.find(u8, out, "…") == null);
+    try std.testing.expect(std.mem.find(u8, out, "VeryLongCategoryLab") != null);
 }
 
 test "paintXyChart renders x-axis title below category labels" {
@@ -1858,8 +1855,8 @@ test "paintXyChart renders x-axis title below category labels" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    const jan_pos = std.mem.indexOf(u8, out, "Jan") orelse return error.TestUnexpectedResult;
-    const months_pos = std.mem.indexOf(u8, out, "Months") orelse return error.TestUnexpectedResult;
+    const jan_pos = std.mem.find(u8, out, "Jan") orelse return error.TestUnexpectedResult;
+    const months_pos = std.mem.find(u8, out, "Months") orelse return error.TestUnexpectedResult;
     try std.testing.expect(months_pos > jan_pos);
 }
 
@@ -1897,9 +1894,9 @@ test "paintXyChart horizontal renders y-axis title on last row" {
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     const trimmed = std.mem.trimEnd(u8, out, "\n");
-    const nl = std.mem.lastIndexOfScalar(u8, trimmed, '\n');
+    const nl = std.mem.findScalarLast(u8, trimmed, '\n');
     const last_line = if (nl) |i| trimmed[i + 1 ..] else trimmed;
-    try std.testing.expect(std.mem.indexOf(u8, last_line, "Revenue") != null);
+    try std.testing.expect(std.mem.find(u8, last_line, "Revenue") != null);
 }
 
 test "paintXyChart auto-ranges y-axis from series data when range absent" {
@@ -1910,8 +1907,8 @@ test "paintXyChart auto-ranges y-axis from series data when range absent" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "10") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "16") != null);
+    try std.testing.expect(std.mem.find(u8, out, "10") != null);
+    try std.testing.expect(std.mem.find(u8, out, "16") != null);
 }
 
 test "paintXyChart differentiates two line series with ascending and descending staircase" {
@@ -1923,8 +1920,8 @@ test "paintXyChart differentiates two line series with ascending and descending 
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "╯") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "╰") != null);
+    try std.testing.expect(std.mem.find(u8, out, "╯") != null);
+    try std.testing.expect(std.mem.find(u8, out, "╰") != null);
 }
 
 test "paintXyChart horizontal places category labels on the left of y-axis" {
@@ -1936,9 +1933,9 @@ test "paintXyChart horizontal places category labels on the left of y-axis" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "alpha") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "beta") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "gamma") != null);
+    try std.testing.expect(std.mem.find(u8, out, "alpha") != null);
+    try std.testing.expect(std.mem.find(u8, out, "beta") != null);
+    try std.testing.expect(std.mem.find(u8, out, "gamma") != null);
     var it = std.mem.splitScalar(u8, out, '\n');
     while (it.next()) |line| {
         const alpha_byte = std.mem.find(u8, line, "alpha") orelse continue;
@@ -1957,10 +1954,10 @@ test "paintXyChart horizontal renders tick labels on the bottom" {
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
     const trimmed = std.mem.trimEnd(u8, out, "\n");
-    const nl = std.mem.lastIndexOfScalar(u8, trimmed, '\n');
+    const nl = std.mem.findScalarLast(u8, trimmed, '\n');
     const last_line = if (nl) |i| trimmed[i + 1 ..] else trimmed;
-    try std.testing.expect(std.mem.indexOf(u8, last_line, "0") != null);
-    try std.testing.expect(std.mem.indexOf(u8, last_line, "100") != null);
+    try std.testing.expect(std.mem.find(u8, last_line, "0") != null);
+    try std.testing.expect(std.mem.find(u8, last_line, "100") != null);
 }
 
 test "paintXyChart horizontal 2-series places legend on top" {
@@ -1975,7 +1972,7 @@ test "paintXyChart horizontal 2-series places legend on top" {
     defer std.testing.allocator.free(out);
     var it = std.mem.splitScalar(u8, out, '\n');
     const first_line = it.next() orelse "";
-    try std.testing.expect(std.mem.indexOf(u8, first_line, "Bar 1") != null);
+    try std.testing.expect(std.mem.find(u8, first_line, "Bar 1") != null);
 }
 
 test "paintXyChart horizontal renders x-axis title below tick labels" {
@@ -1987,9 +1984,9 @@ test "paintXyChart horizontal renders x-axis title below tick labels" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "Months") != null);
-    const months_pos = std.mem.indexOf(u8, out, "Months").?;
-    const tick_pos = std.mem.indexOf(u8, out, "┼") orelse 0;
+    try std.testing.expect(std.mem.find(u8, out, "Months") != null);
+    const months_pos = std.mem.find(u8, out, "Months").?;
+    const tick_pos = std.mem.find(u8, out, "┼") orelse 0;
     try std.testing.expect(months_pos > tick_pos);
 }
 
@@ -2003,10 +2000,10 @@ test "paintXyChart horizontal renders both x-axis and y-axis titles in correct o
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "Months") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "Revenue") != null);
-    const months_pos = std.mem.indexOf(u8, out, "Months").?;
-    const revenue_pos = std.mem.indexOf(u8, out, "Revenue").?;
+    try std.testing.expect(std.mem.find(u8, out, "Months") != null);
+    try std.testing.expect(std.mem.find(u8, out, "Revenue") != null);
+    const months_pos = std.mem.find(u8, out, "Months").?;
+    const revenue_pos = std.mem.find(u8, out, "Revenue").?;
     try std.testing.expect(revenue_pos > months_pos);
 }
 
@@ -2067,7 +2064,7 @@ test "paintXyChart horizontal bar with negative values stays crash-free" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "█") != null);
+    try std.testing.expect(std.mem.find(u8, out, "█") != null);
 }
 
 test "paintXyChart horizontal bar chart renders category, tick, bar, and origin" {
@@ -2079,10 +2076,10 @@ test "paintXyChart horizontal bar chart renders category, tick, bar, and origin"
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "a") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "█") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "┼") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "█████") != null);
+    try std.testing.expect(std.mem.find(u8, out, "a") != null);
+    try std.testing.expect(std.mem.find(u8, out, "█") != null);
+    try std.testing.expect(std.mem.find(u8, out, "┼") != null);
+    try std.testing.expect(std.mem.find(u8, out, "█████") != null);
 }
 
 test "paintXyChart horizontal ascending line contains staircase corners" {
@@ -2093,9 +2090,9 @@ test "paintXyChart horizontal ascending line contains staircase corners" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "╰") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "╮") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "●") == null);
+    try std.testing.expect(std.mem.find(u8, out, "╰") != null);
+    try std.testing.expect(std.mem.find(u8, out, "╮") != null);
+    try std.testing.expect(std.mem.find(u8, out, "●") == null);
 }
 
 test "paintXyChart horizontal descending line contains opposite corners" {
@@ -2106,8 +2103,8 @@ test "paintXyChart horizontal descending line contains opposite corners" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "╯") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "╭") != null);
+    try std.testing.expect(std.mem.find(u8, out, "╯") != null);
+    try std.testing.expect(std.mem.find(u8, out, "╭") != null);
 }
 
 test "paintXyChart horizontal single-point line renders without dot marker" {
@@ -2118,8 +2115,8 @@ test "paintXyChart horizontal single-point line renders without dot marker" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "●") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "│") != null);
+    try std.testing.expect(std.mem.find(u8, out, "●") == null);
+    try std.testing.expect(std.mem.find(u8, out, "│") != null);
 }
 
 test "paintXyChart legend uses Bar N / Line N naming for mixed series" {
@@ -2131,9 +2128,9 @@ test "paintXyChart legend uses Bar N / Line N naming for mixed series" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "Bar 1") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "Line 1") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "series") == null);
+    try std.testing.expect(std.mem.find(u8, out, "Bar 1") != null);
+    try std.testing.expect(std.mem.find(u8, out, "Line 1") != null);
+    try std.testing.expect(std.mem.find(u8, out, "series") == null);
 }
 
 test "paintXyChart omits legend for single series" {
@@ -2144,8 +2141,8 @@ test "paintXyChart omits legend for single series" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "Bar") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "Line") == null);
+    try std.testing.expect(std.mem.find(u8, out, "Bar") == null);
+    try std.testing.expect(std.mem.find(u8, out, "Line") == null);
 }
 
 test "paintXyChart legend shows Line 1 when first series is line" {
@@ -2157,8 +2154,8 @@ test "paintXyChart legend shows Line 1 when first series is line" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "Line 1") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "Bar 1") != null);
+    try std.testing.expect(std.mem.find(u8, out, "Line 1") != null);
+    try std.testing.expect(std.mem.find(u8, out, "Bar 1") != null);
 }
 
 test "paintXyChart legend numbers per-kind for bar+line+bar series" {
@@ -2171,9 +2168,9 @@ test "paintXyChart legend numbers per-kind for bar+line+bar series" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "Bar 1") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "Line 1") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "Bar 2") != null);
+    try std.testing.expect(std.mem.find(u8, out, "Bar 1") != null);
+    try std.testing.expect(std.mem.find(u8, out, "Line 1") != null);
+    try std.testing.expect(std.mem.find(u8, out, "Bar 2") != null);
 }
 
 test "paintXyChart places legend on row 0 when no title" {
@@ -2187,8 +2184,8 @@ test "paintXyChart places legend on row 0 when no title" {
     defer std.testing.allocator.free(out);
     var it = std.mem.splitScalar(u8, out, '\n');
     const first_line = it.next() orelse "";
-    try std.testing.expect(std.mem.indexOf(u8, first_line, "Bar 1") != null);
-    try std.testing.expect(std.mem.indexOf(u8, first_line, "Line 1") != null);
+    try std.testing.expect(std.mem.find(u8, first_line, "Bar 1") != null);
+    try std.testing.expect(std.mem.find(u8, first_line, "Line 1") != null);
 }
 
 test "paintXyChart places legend on row 1 just below title row 0" {
@@ -2204,9 +2201,9 @@ test "paintXyChart places legend on row 1 just below title row 0" {
     var it = std.mem.splitScalar(u8, out, '\n');
     const line0 = it.next() orelse "";
     const line1 = it.next() orelse "";
-    try std.testing.expect(std.mem.indexOf(u8, line0, "T") != null);
-    try std.testing.expect(std.mem.indexOf(u8, line0, "Bar") == null);
-    try std.testing.expect(std.mem.indexOf(u8, line1, "Bar 1") != null);
+    try std.testing.expect(std.mem.find(u8, line0, "T") != null);
+    try std.testing.expect(std.mem.find(u8, line0, "Bar") == null);
+    try std.testing.expect(std.mem.find(u8, line1, "Bar 1") != null);
 }
 
 test "paintXyChart centers legend horizontally within totalW" {
@@ -2221,7 +2218,7 @@ test "paintXyChart centers legend horizontally within totalW" {
     var it = std.mem.splitScalar(u8, out, '\n');
     const first_line = it.next() orelse "";
     const total_w = width_mod.displayWidth(first_line, .narrow);
-    const bar_byte = std.mem.indexOf(u8, first_line, "Bar 1") orelse return error.TestUnexpectedResult;
+    const bar_byte = std.mem.find(u8, first_line, "Bar 1") orelse return error.TestUnexpectedResult;
     const bar_col = width_mod.displayWidth(first_line[0..bar_byte], .narrow);
     try std.testing.expect(bar_col >= 10);
     try std.testing.expect(bar_col < total_w - 10);
@@ -2252,7 +2249,7 @@ test "paintXyChart renders ascending line with corner_br ╯" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "╯") != null);
+    try std.testing.expect(std.mem.find(u8, out, "╯") != null);
 }
 
 test "paintXyChart renders ascending line with corner_tl ╭" {
@@ -2263,7 +2260,7 @@ test "paintXyChart renders ascending line with corner_tl ╭" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "╭") != null);
+    try std.testing.expect(std.mem.find(u8, out, "╭") != null);
 }
 
 test "paintXyChart renders descending line with corner_tr ╮" {
@@ -2274,7 +2271,7 @@ test "paintXyChart renders descending line with corner_tr ╮" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "╮") != null);
+    try std.testing.expect(std.mem.find(u8, out, "╮") != null);
 }
 
 test "paintXyChart renders descending line with corner_bl ╰" {
@@ -2285,7 +2282,7 @@ test "paintXyChart renders descending line with corner_bl ╰" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "╰") != null);
+    try std.testing.expect(std.mem.find(u8, out, "╰") != null);
 }
 
 test "paintXyChart renders flat line with ─ and no corners" {
@@ -2296,11 +2293,11 @@ test "paintXyChart renders flat line with ─ and no corners" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "─") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "╭") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "╮") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "╰") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "╯") == null);
+    try std.testing.expect(std.mem.find(u8, out, "─") != null);
+    try std.testing.expect(std.mem.find(u8, out, "╭") == null);
+    try std.testing.expect(std.mem.find(u8, out, "╮") == null);
+    try std.testing.expect(std.mem.find(u8, out, "╰") == null);
+    try std.testing.expect(std.mem.find(u8, out, "╯") == null);
     try std.testing.expect(std.mem.count(u8, out, "│") <= 21);
 }
 
@@ -2312,8 +2309,8 @@ test "paintXyChart renders single-point line without dot marker" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "─") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "●") == null);
+    try std.testing.expect(std.mem.find(u8, out, "─") != null);
+    try std.testing.expect(std.mem.find(u8, out, "●") == null);
 }
 
 test "paintXyChart vertical line omits dot markers" {
@@ -2324,7 +2321,7 @@ test "paintXyChart vertical line omits dot markers" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "●") == null);
+    try std.testing.expect(std.mem.find(u8, out, "●") == null);
 }
 
 test "paintXyChart ascending 2-point line draws vertical staircase fill" {
@@ -2347,7 +2344,7 @@ test "paintXyChart draws single bar series with singleBarW >= 8 columns wide" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "████████") != null);
+    try std.testing.expect(std.mem.find(u8, out, "████████") != null);
 }
 
 test "paintXyChart renders clustered 2-bar series with >= 240 block glyphs" {
@@ -2380,7 +2377,7 @@ test "paintXyChart handles 8 bar series clustered without division-by-zero" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "█") != null);
+    try std.testing.expect(std.mem.find(u8, out, "█") != null);
 }
 
 test "paintXyChart widens plot cols with dataCount * 6 when categories exceed PLOT_WIDTH_MIN" {
@@ -2420,7 +2417,7 @@ test "paintXyChart draws \xe2\x94\xa4 y-tick glyphs along y-axis" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "┤") != null);
+    try std.testing.expect(std.mem.find(u8, out, "┤") != null);
 }
 
 test "paintXyChart draws \xe2\x94\xac x-tick glyphs at category band centers" {
@@ -2444,7 +2441,7 @@ test "paintXyChart scatters \xc2\xb7 dot grid across tick rows in plot area" {
     defer diagram.deinit();
     const out = try renderToString(std.testing.allocator, &diagram.xychart);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "·") != null);
+    try std.testing.expect(std.mem.find(u8, out, "·") != null);
     try std.testing.expect(std.mem.count(u8, out, "·") >= 150);
 }
 
@@ -2467,16 +2464,16 @@ test "paintXyChart use_ascii=true substitutes +|-#. for unicode drawing glyphs" 
     });
     const out = try sink.toOwnedSlice();
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "+") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "|") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "-") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "#") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, ".") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "┼") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "│") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "─") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "█") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "·") == null);
+    try std.testing.expect(std.mem.find(u8, out, "+") != null);
+    try std.testing.expect(std.mem.find(u8, out, "|") != null);
+    try std.testing.expect(std.mem.find(u8, out, "-") != null);
+    try std.testing.expect(std.mem.find(u8, out, "#") != null);
+    try std.testing.expect(std.mem.find(u8, out, ".") != null);
+    try std.testing.expect(std.mem.find(u8, out, "┼") == null);
+    try std.testing.expect(std.mem.find(u8, out, "│") == null);
+    try std.testing.expect(std.mem.find(u8, out, "─") == null);
+    try std.testing.expect(std.mem.find(u8, out, "█") == null);
+    try std.testing.expect(std.mem.find(u8, out, "·") == null);
 }
 
 test "paintXyChart returns UnsupportedFeature for series exceeding 1024 points" {
@@ -2529,8 +2526,8 @@ test "paintXyChart wraps series colors modulo 8 (series 0 and series 8 share rol
     while (lines.next()) |line| {
         var count: usize = 0;
         var pos: usize = 0;
-        while (std.mem.indexOfPos(u8, line, pos, "\x1b[38;2;")) |idx| {
-            const m = std.mem.indexOfScalarPos(u8, line, idx, 'm') orelse break;
+        while (std.mem.findPos(u8, line, pos, "\x1b[38;2;")) |idx| {
+            const m = std.mem.findScalarPos(u8, line, idx, 'm') orelse break;
             count += 1;
             pos = m + 1;
         }
@@ -2546,7 +2543,7 @@ test "paintXyChart wraps series colors modulo 8 (series 0 and series 8 share rol
     while (lines2.next()) |line| {
         var c: usize = 0;
         var p0: usize = 0;
-        while (std.mem.indexOfPos(u8, line, p0, sgr0)) |idx| {
+        while (std.mem.findPos(u8, line, p0, sgr0)) |idx| {
             c += 1;
             p0 = idx + sgr0.len;
         }
@@ -2569,7 +2566,7 @@ test "paintXyChart with enable_ansi=true emits truecolor escape for bars" {
         .ambiguous_width = .narrow,
         .enable_ansi = true,
     });
-    try std.testing.expect(std.mem.indexOf(u8, sink.writer.buffered(), "\x1b[38;2;") != null);
+    try std.testing.expect(std.mem.find(u8, sink.writer.buffered(), "\x1b[38;2;") != null);
 }
 
 test "paintXyChart with 2 bar series produces two distinct SGR foreground sequences" {
@@ -2587,8 +2584,8 @@ test "paintXyChart with 2 bar series produces two distinct SGR foreground sequen
     var first: ?[]const u8 = null;
     var distinct_found = false;
     var pos: usize = 0;
-    while (std.mem.indexOfPos(u8, out, pos, "\x1b[38;2;")) |idx| {
-        const m = std.mem.indexOfScalarPos(u8, out, idx, 'm') orelse break;
+    while (std.mem.findPos(u8, out, pos, "\x1b[38;2;")) |idx| {
+        const m = std.mem.findScalarPos(u8, out, idx, 'm') orelse break;
         const seq = out[idx .. m + 1];
         if (first) |f| {
             if (!std.mem.eql(u8, f, seq)) {
@@ -2614,7 +2611,7 @@ test "paintXyChart with enable_ansi=false (default) emits no SGR escape" {
         .ambiguous_width = .narrow,
         .enable_ansi = false,
     });
-    try std.testing.expect(std.mem.indexOf(u8, sink.writer.buffered(), "\x1b[") == null);
+    try std.testing.expect(std.mem.find(u8, sink.writer.buffered(), "\x1b[") == null);
 }
 
 test "vertical wrapped xychart places category labels in their plot slots" {

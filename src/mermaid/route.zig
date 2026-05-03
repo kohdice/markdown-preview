@@ -19,6 +19,7 @@ const connectivity_left_shift = 2;
 const connectivity_right_shift = 3;
 
 pub const Dir4 = enum { up, down, left, right };
+const astar_direction_count = @typeInfo(Dir4).@"enum".fields.len;
 
 pub const Axis = enum { horizontal, vertical };
 
@@ -54,6 +55,55 @@ pub const EdgeRoute = struct {
     }
 };
 
+pub const RouteScratch = struct {
+    open: std.PriorityQueue(AStarEntry, void, lessEntry) = .empty,
+    came_from: std.ArrayList(SearchKey) = .empty,
+    g_score: std.ArrayList(u32) = .empty,
+    generation: std.ArrayList(u32) = .empty,
+    current_generation: u32 = 0,
+
+    pub fn deinit(self: *RouteScratch, allocator: std.mem.Allocator) void {
+        self.open.deinit(allocator);
+        self.came_from.deinit(allocator);
+        self.g_score.deinit(allocator);
+        self.generation.deinit(allocator);
+        self.* = .{};
+    }
+
+    fn begin(self: *RouteScratch, allocator: std.mem.Allocator, rows: usize, cols: usize) error{OutOfMemory}!bool {
+        if (rows > std.math.maxInt(u32) or cols > std.math.maxInt(u32)) return false;
+        const cells = std.math.mul(usize, rows, cols) catch return error.OutOfMemory;
+        const state_count = std.math.mul(usize, cells, astar_direction_count) catch return error.OutOfMemory;
+
+        const old_len = self.generation.items.len;
+        try self.came_from.resize(allocator, state_count);
+        try self.g_score.resize(allocator, state_count);
+        try self.generation.resize(allocator, state_count);
+        if (state_count > old_len) @memset(self.generation.items[old_len..], 0);
+
+        self.open.clearRetainingCapacity();
+        if (self.current_generation == std.math.maxInt(u32)) {
+            @memset(self.generation.items, 0);
+            self.current_generation = 1;
+        } else {
+            self.current_generation += 1;
+        }
+        return true;
+    }
+
+    fn score(self: *const RouteScratch, index: usize) u32 {
+        return if (self.generation.items[index] == self.current_generation)
+            self.g_score.items[index]
+        else
+            std.math.maxInt(u32);
+    }
+
+    fn setScore(self: *RouteScratch, index: usize, value: u32) void {
+        self.generation.items[index] = self.current_generation;
+        self.g_score.items[index] = value;
+    }
+};
+
 pub const ProtectedRect = struct {
     top: usize,
     left: usize,
@@ -69,16 +119,19 @@ const LabelPlacement = struct {
 };
 
 pub fn cellStepW(layout: *const types.Layout) usize {
-    return layout.cell_w + gutter_w;
+    return layout.cell_w +| gutter_w;
 }
 
 pub fn cellStepH(layout: *const types.Layout) usize {
-    return layout.cell_h + gutter_h;
+    return layout.cell_h +| gutter_h;
 }
 
 pub fn canvasRows(layout: *const types.Layout) usize {
     if (layout.rows == 0) return 0;
-    return layout.rows * layout.cell_h + (layout.rows - 1) * gutter_h + 2 * layout.verticalOuterPad();
+    const cells = layout.rows *| layout.cell_h;
+    const gutters = (layout.rows - 1) *| gutter_h;
+    const padding = 2 *| layout.verticalOuterPad();
+    return cells +| gutters +| padding;
 }
 
 pub fn canvasCols(layout: *const types.Layout) usize {
@@ -87,15 +140,18 @@ pub fn canvasCols(layout: *const types.Layout) usize {
 
 pub fn canvasColsForGrid(cols: usize, cell_w: usize, outer_pad: usize) usize {
     if (cols == 0) return 0;
-    return cols * cell_w + (cols - 1) * gutter_w + 2 * outer_pad;
+    const cells = cols *| cell_w;
+    const gutters = (cols - 1) *| gutter_w;
+    const padding = 2 *| outer_pad;
+    return cells +| gutters +| padding;
 }
 
 pub fn boxTop(layout: *const types.Layout, grid_row: usize) usize {
-    return layout.verticalOuterPad() + grid_row * cellStepH(layout);
+    return layout.verticalOuterPad() +| (grid_row *| cellStepH(layout));
 }
 
 pub fn boxLeft(layout: *const types.Layout, grid_col: usize) usize {
-    return layout.outer_pad + grid_col * cellStepW(layout);
+    return layout.outer_pad +| (grid_col *| cellStepW(layout));
 }
 
 pub fn routeEdge(
@@ -108,10 +164,27 @@ pub fn routeEdge(
     defer_label_placement: bool,
     ambiguous: width_mod.AmbiguousWidth,
 ) RouteError!?EdgeRoute {
+    var scratch: RouteScratch = .{};
+    defer scratch.deinit(allocator);
+    return routeEdgeWithScratch(allocator, &scratch, canvas, layout, edge, direction, glyphs, defer_label_placement, ambiguous);
+}
+
+pub fn routeEdgeWithScratch(
+    allocator: std.mem.Allocator,
+    scratch: *RouteScratch,
+    canvas: *canvas_mod.Canvas,
+    layout: *const types.Layout,
+    edge: types.Edge,
+    direction: types.Direction,
+    glyphs: *const canvas_mod.GlyphSet,
+    defer_label_placement: bool,
+    ambiguous: width_mod.AmbiguousWidth,
+) RouteError!?EdgeRoute {
     const ports = computePorts(layout, edge, direction) orelse return null;
 
-    const maybe_path = aStarPath(
+    const maybe_path = aStarPathWithScratch(
         allocator,
+        scratch,
         layout,
         canvas.rows,
         canvas.cols,
@@ -160,8 +233,49 @@ pub fn routeEdgeWithPorts(
     defer_label_placement: bool,
     ambiguous: width_mod.AmbiguousWidth,
 ) RouteError!EdgeRoute {
-    const maybe_path = aStarPath(
+    var scratch: RouteScratch = .{};
+    defer scratch.deinit(allocator);
+    return routeEdgeWithPortsScratch(
         allocator,
+        &scratch,
+        canvas,
+        layout,
+        from_id,
+        to_id,
+        start_row,
+        start_col,
+        start_dir,
+        goal_row,
+        goal_col,
+        edge_label,
+        edge_style,
+        glyphs,
+        defer_label_placement,
+        ambiguous,
+    );
+}
+
+pub fn routeEdgeWithPortsScratch(
+    allocator: std.mem.Allocator,
+    scratch: *RouteScratch,
+    canvas: *canvas_mod.Canvas,
+    layout: *const types.Layout,
+    from_id: types.NodeId,
+    to_id: types.NodeId,
+    start_row: usize,
+    start_col: usize,
+    start_dir: Dir4,
+    goal_row: usize,
+    goal_col: usize,
+    edge_label: ?[]const u8,
+    edge_style: types.EdgeStyle,
+    glyphs: *const canvas_mod.GlyphSet,
+    defer_label_placement: bool,
+    ambiguous: width_mod.AmbiguousWidth,
+) RouteError!EdgeRoute {
+    const maybe_path = aStarPathWithScratch(
+        allocator,
+        scratch,
         layout,
         canvas.rows,
         canvas.cols,
@@ -436,7 +550,8 @@ fn lessEntry(context: void, a: AStarEntry, b: AStarEntry) std.math.Order {
 fn manhattan(a_r: usize, a_c: usize, b_r: usize, b_c: usize) u32 {
     const dr = if (a_r > b_r) a_r - b_r else b_r - a_r;
     const dc = if (a_c > b_c) a_c - b_c else b_c - a_c;
-    return @intCast(dr + dc);
+    const total = std.math.add(usize, dr, dc) catch return std.math.maxInt(u32);
+    return std.math.cast(u32, total) orelse std.math.maxInt(u32);
 }
 
 fn isBoxInterior(
@@ -472,25 +587,50 @@ pub fn aStarPath(
     goal_row: usize,
     goal_col: usize,
 ) error{OutOfMemory}!?std.ArrayList(SearchKey) {
+    var scratch: RouteScratch = .{};
+    defer scratch.deinit(allocator);
+    return aStarPathWithScratch(
+        allocator,
+        &scratch,
+        layout,
+        canvas_rows_,
+        canvas_cols_,
+        from_id,
+        to_id,
+        start_row,
+        start_col,
+        start_dir,
+        goal_row,
+        goal_col,
+    );
+}
+
+fn aStarPathWithScratch(
+    allocator: std.mem.Allocator,
+    scratch: *RouteScratch,
+    layout: *const types.Layout,
+    canvas_rows_: usize,
+    canvas_cols_: usize,
+    from_id: types.NodeId,
+    to_id: types.NodeId,
+    start_row: usize,
+    start_col: usize,
+    start_dir: Dir4,
+    goal_row: usize,
+    goal_col: usize,
+) error{OutOfMemory}!?std.ArrayList(SearchKey) {
     if (start_row >= canvas_rows_ or start_col >= canvas_cols_) return null;
     if (goal_row >= canvas_rows_ or goal_col >= canvas_cols_) return null;
-
-    var open = std.PriorityQueue(AStarEntry, void, lessEntry).empty;
-    defer open.deinit(allocator);
-
-    var came_from = std.AutoHashMap(SearchKey, SearchKey).init(allocator);
-    defer came_from.deinit();
-
-    var g_score = std.AutoHashMap(SearchKey, u32).init(allocator);
-    defer g_score.deinit();
+    if (!try scratch.begin(allocator, canvas_rows_, canvas_cols_)) return null;
 
     const start_key: SearchKey = .{
         .row = @intCast(start_row),
         .col = @intCast(start_col),
         .dir = start_dir,
     };
-    try g_score.put(start_key, 0);
-    try open.push(allocator, .{
+    const start_index = stateIndex(canvas_cols_, start_key);
+    scratch.setScore(start_index, 0);
+    try scratch.open.push(allocator, .{
         .key = start_key,
         .g = 0,
         .f = manhattan(start_row, start_col, goal_row, goal_col),
@@ -503,12 +643,13 @@ pub fn aStarPath(
         .{ .dr = 0, .dc = 1, .dir = .right },
     };
 
-    while (open.pop()) |current| {
-        const recorded = g_score.get(current.key) orelse std.math.maxInt(u32);
+    while (scratch.open.pop()) |current| {
+        const current_index = stateIndex(canvas_cols_, current.key);
+        const recorded = scratch.score(current_index);
         if (recorded < current.g) continue;
 
         if (current.key.row == goal_row and current.key.col == goal_col) {
-            return try reconstructPath(allocator, came_from, current.key);
+            return try reconstructPath(allocator, scratch, canvas_cols_, start_key, current.key);
         }
 
         for (neighbors) |n| {
@@ -525,25 +666,35 @@ pub fn aStarPath(
             if (at_goal and n.dir != start_dir) continue;
 
             const turn_penalty: u32 = if (n.dir != current.key.dir) astar_turn_penalty else 0;
-            const tentative_g = current.g + astar_step_cost + turn_penalty;
+            const step_with_turn = std.math.add(u32, astar_step_cost, turn_penalty) catch std.math.maxInt(u32);
+            const tentative_g = std.math.add(u32, current.g, step_with_turn) catch continue;
 
             const neighbor_key: SearchKey = .{ .row = new_row, .col = new_col, .dir = n.dir };
-            const existing_g = g_score.get(neighbor_key) orelse std.math.maxInt(u32);
+            const neighbor_index = stateIndex(canvas_cols_, neighbor_key);
+            const existing_g = scratch.score(neighbor_index);
             if (tentative_g >= existing_g) continue;
 
-            try g_score.put(neighbor_key, tentative_g);
-            try came_from.put(neighbor_key, current.key);
+            scratch.setScore(neighbor_index, tentative_g);
+            scratch.came_from.items[neighbor_index] = current.key;
             const h = manhattan(new_row, new_col, goal_row, goal_col);
-            try open.push(allocator, .{ .key = neighbor_key, .g = tentative_g, .f = tentative_g + h });
+            const f = std.math.add(u32, tentative_g, h) catch std.math.maxInt(u32);
+            try scratch.open.push(allocator, .{ .key = neighbor_key, .g = tentative_g, .f = f });
         }
     }
 
     return null;
 }
 
+fn stateIndex(canvas_cols_: usize, key: SearchKey) usize {
+    const cell_index = @as(usize, key.row) * canvas_cols_ + @as(usize, key.col);
+    return cell_index * astar_direction_count + @intFromEnum(key.dir);
+}
+
 fn reconstructPath(
     allocator: std.mem.Allocator,
-    came_from: std.AutoHashMap(SearchKey, SearchKey),
+    scratch: *const RouteScratch,
+    canvas_cols_: usize,
+    start: SearchKey,
     end: SearchKey,
 ) error{OutOfMemory}!std.ArrayList(SearchKey) {
     var path: std.ArrayList(SearchKey) = .empty;
@@ -551,7 +702,8 @@ fn reconstructPath(
 
     var cur = end;
     try path.append(allocator, cur);
-    while (came_from.get(cur)) |parent| {
+    while (!std.meta.eql(cur, start)) {
+        const parent = scratch.came_from.items[stateIndex(canvas_cols_, cur)];
         try path.append(allocator, parent);
         cur = parent;
     }
@@ -810,18 +962,26 @@ fn findWrappedLabelPlacement(
     var best: ?LabelPlacement = null;
     var best_score: usize = std.math.maxInt(usize);
 
-    for (0..max_row + 1) |row| {
-        for (0..max_col + 1) |col| {
-            const placement: LabelPlacement = .{ .row = row, .col = col };
-            if (!labelPlacementTouchesRoutePath(path, placement, lines.len, max_line_width)) continue;
-            if (!canPlaceWrappedLabel(canvas, protected_rects, lines, max_line_width, placement, glyphs)) continue;
+    for (path) |point| {
+        const point_row: usize = @intCast(point.row);
+        const point_col: usize = @intCast(point.col);
+        const row_first = if (point_row > lines.len) point_row - lines.len else 0;
+        const row_last = @min(point_row +| 1, max_row);
+        const col_first = if (point_col > max_line_width) point_col - max_line_width else 0;
+        const col_last = @min(point_col +| 1, max_col);
 
-            const row_distance = if (row > base_row) row - base_row else base_row - row;
-            const col_distance = if (col > base_col) col - base_col else base_col - col;
-            const score = row_distance * canvas.cols + col_distance;
-            if (score < best_score) {
-                best = placement;
-                best_score = score;
+        for (row_first..row_last + 1) |row| {
+            for (col_first..col_last + 1) |col| {
+                const placement: LabelPlacement = .{ .row = row, .col = col };
+                if (!canPlaceWrappedLabel(canvas, protected_rects, lines, max_line_width, placement, glyphs)) continue;
+
+                const row_distance = if (row > base_row) row - base_row else base_row - row;
+                const col_distance = if (col > base_col) col - base_col else base_col - col;
+                const score = (row_distance *| canvas.cols) +| col_distance;
+                if (score < best_score) {
+                    best = placement;
+                    best_score = score;
+                }
             }
         }
     }
@@ -848,27 +1008,6 @@ fn canPlaceWrappedLabel(
         }
     }
     return true;
-}
-
-fn labelPlacementTouchesRoutePath(
-    path: []const SearchKey,
-    placement: LabelPlacement,
-    line_count: usize,
-    max_line_width: usize,
-) bool {
-    if (line_count == 0 or max_line_width == 0) return false;
-
-    const row_min = if (placement.row == 0) 0 else placement.row - 1;
-    const row_max = placement.row + line_count;
-    const col_min = if (placement.col == 0) 0 else placement.col - 1;
-    const col_max = placement.col + max_line_width;
-
-    for (path) |point| {
-        const row: usize = @intCast(point.row);
-        const col: usize = @intCast(point.col);
-        if (row >= row_min and row <= row_max and col >= col_min and col <= col_max) return true;
-    }
-    return false;
 }
 
 fn isProtectedRectCell(rects: []const ProtectedRect, row: usize, col: usize) bool {

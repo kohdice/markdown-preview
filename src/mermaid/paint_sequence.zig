@@ -1612,12 +1612,12 @@ test "paintSequence renders participant boxes and arrow" {
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "Alice") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "Bob") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "Hello") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "Hi") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "►") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "◄") != null);
+    try std.testing.expect(std.mem.find(u8, out, "Alice") != null);
+    try std.testing.expect(std.mem.find(u8, out, "Bob") != null);
+    try std.testing.expect(std.mem.find(u8, out, "Hello") != null);
+    try std.testing.expect(std.mem.find(u8, out, "Hi") != null);
+    try std.testing.expect(std.mem.find(u8, out, "►") != null);
+    try std.testing.expect(std.mem.find(u8, out, "◄") != null);
 }
 
 test "paintSequence handles single participant with no messages" {
@@ -1629,7 +1629,7 @@ test "paintSequence handles single participant with no messages" {
     defer sink.deinit();
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "Alice") != null);
+    try std.testing.expect(std.mem.find(u8, out, "Alice") != null);
 }
 
 test "paintSequence keeps hard-break labels separated for single-line layout" {
@@ -1663,8 +1663,8 @@ test "renderer draws filled and open arrow heads" {
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "►") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "◁") != null);
+    try std.testing.expect(std.mem.find(u8, out, "►") != null);
+    try std.testing.expect(std.mem.find(u8, out, "◁") != null);
 }
 
 test "note with after_index=-1 is NOT rendered" {
@@ -1683,8 +1683,8 @@ test "note with after_index=-1 is NOT rendered" {
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "early") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "msg") != null);
+    try std.testing.expect(std.mem.find(u8, out, "early") == null);
+    try std.testing.expect(std.mem.find(u8, out, "msg") != null);
 }
 
 test "note with after_index>=0 IS rendered" {
@@ -1701,7 +1701,7 @@ test "note with after_index>=0 IS rendered" {
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "visible") != null);
+    try std.testing.expect(std.mem.find(u8, out, "visible") != null);
 }
 
 test "activate/deactivate flags are parsed but ASCII does not draw activation (upstream parity)" {
@@ -1718,9 +1718,9 @@ test "activate/deactivate flags are parsed but ASCII does not draw activation (u
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "Hello") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "World") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "║") == null);
+    try std.testing.expect(std.mem.find(u8, out, "Hello") != null);
+    try std.testing.expect(std.mem.find(u8, out, "World") != null);
+    try std.testing.expect(std.mem.find(u8, out, "║") == null);
 }
 
 test "block header uses kind [label] format" {
@@ -1738,7 +1738,7 @@ test "block header uses kind [label] format" {
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "loop [every minute]") != null);
+    try std.testing.expect(std.mem.find(u8, out, "loop [every minute]") != null);
 }
 
 test "label-less block renders kind only without brackets" {
@@ -1756,8 +1756,8 @@ test "label-less block renders kind only without brackets" {
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "loop") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "loop [") == null);
+    try std.testing.expect(std.mem.find(u8, out, "loop") != null);
+    try std.testing.expect(std.mem.find(u8, out, "loop [") == null);
 }
 
 test "nested blocks render outer before inner" {
@@ -1777,13 +1777,13 @@ test "nested blocks render outer before inner" {
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    const loop_pos = std.mem.indexOf(u8, out, "loop [outer]") orelse return error.WriteFailed;
-    const alt_pos = std.mem.indexOf(u8, out, "alt [inner]") orelse return error.WriteFailed;
+    const loop_pos = std.mem.find(u8, out, "loop [outer]") orelse return error.WriteFailed;
+    const alt_pos = std.mem.find(u8, out, "alt [inner]") orelse return error.WriteFailed;
     try std.testing.expect(loop_pos < alt_pos);
 
-    const msg_end = std.mem.indexOf(u8, out, "yes") orelse return error.WriteFailed;
+    const msg_end = std.mem.find(u8, out, "yes") orelse return error.WriteFailed;
     const rest = out[msg_end..];
-    const first_bl = std.mem.indexOf(u8, rest, "└") orelse return error.WriteFailed;
+    const first_bl = std.mem.find(u8, rest, "└") orelse return error.WriteFailed;
     if (first_bl > 0) {
         try std.testing.expect(rest[first_bl - 1] != '\n');
     }
@@ -1804,7 +1804,7 @@ test "empty block still renders frame" {
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "loop [empty]") != null);
+    try std.testing.expect(std.mem.find(u8, out, "loop [empty]") != null);
 }
 
 test "activate/deactivate with multiple messages renders normally without activation marks" {
@@ -1822,10 +1822,10 @@ test "activate/deactivate with multiple messages renders normally without activa
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "Hello") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "working") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "Done") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "║") == null);
+    try std.testing.expect(std.mem.find(u8, out, "Hello") != null);
+    try std.testing.expect(std.mem.find(u8, out, "working") != null);
+    try std.testing.expect(std.mem.find(u8, out, "Done") != null);
+    try std.testing.expect(std.mem.find(u8, out, "║") == null);
 }
 
 test "Note over two participants spans both lifelines" {
@@ -1844,10 +1844,10 @@ test "Note over two participants spans both lifelines" {
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    const arrow_pos = std.mem.indexOf(u8, out, "Hello") orelse return error.WriteFailed;
+    const arrow_pos = std.mem.find(u8, out, "Hello") orelse return error.WriteFailed;
     const rest = out[arrow_pos..];
-    const tl = std.mem.indexOf(u8, rest, "┌") orelse return error.WriteFailed;
-    const tr = std.mem.indexOf(u8, rest, "┐") orelse return error.WriteFailed;
+    const tl = std.mem.find(u8, rest, "┌") orelse return error.WriteFailed;
+    const tr = std.mem.find(u8, rest, "┐") orelse return error.WriteFailed;
     const note_span = tr - tl;
     try std.testing.expect(note_span > 20);
 }
@@ -1866,7 +1866,7 @@ test "long Note over is not silently dropped" {
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "very long note") != null);
+    try std.testing.expect(std.mem.find(u8, out, "very long note") != null);
 }
 
 test "Note left of with long text is not silently dropped" {
@@ -1885,7 +1885,7 @@ test "Note left of with long text is not silently dropped" {
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "left side note") != null);
+    try std.testing.expect(std.mem.find(u8, out, "left side note") != null);
 }
 
 test "long else label is fully rendered" {
@@ -1905,7 +1905,7 @@ test "long else label is fully rendered" {
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "failed because timeout exceeded") != null);
+    try std.testing.expect(std.mem.find(u8, out, "failed because timeout exceeded") != null);
 }
 
 test "nested block with long inner header is fully rendered" {
@@ -1925,7 +1925,7 @@ test "nested block with long inner header is fully rendered" {
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "very long inner condition label here") != null);
+    try std.testing.expect(std.mem.find(u8, out, "very long inner condition label here") != null);
 }
 
 test "nested else divider label is fully rendered" {
@@ -1947,7 +1947,7 @@ test "nested else divider label is fully rendered" {
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "failed with a very long reason description") != null);
+    try std.testing.expect(std.mem.find(u8, out, "failed with a very long reason description") != null);
 }
 
 test "nested block outer frame has no gaps on inner block rows" {
@@ -1967,8 +1967,8 @@ test "nested block outer frame has no gaps on inner block rows" {
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "│┌") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "│└") != null);
+    try std.testing.expect(std.mem.find(u8, out, "│┌") != null);
+    try std.testing.expect(std.mem.find(u8, out, "│└") != null);
 }
 
 test "final flush of nested empty blocks has outer frame borders" {
@@ -1988,9 +1988,9 @@ test "final flush of nested empty blocks has outer frame borders" {
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "loop [outer]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "alt [inner]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "│└") != null);
+    try std.testing.expect(std.mem.find(u8, out, "loop [outer]") != null);
+    try std.testing.expect(std.mem.find(u8, out, "alt [inner]") != null);
+    try std.testing.expect(std.mem.find(u8, out, "│└") != null);
 }
 
 test "sequential blocks at same index are not nested" {
@@ -2010,10 +2010,10 @@ test "sequential blocks at same index are not nested" {
     try paintSequence(&sink.writer, alloc, &diagram.sequence, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "loop [a]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "loop [b]") != null);
-    const a_pos = std.mem.indexOf(u8, out, "loop [a]").?;
-    const b_pos = std.mem.indexOf(u8, out, "loop [b]").?;
+    try std.testing.expect(std.mem.find(u8, out, "loop [a]") != null);
+    try std.testing.expect(std.mem.find(u8, out, "loop [b]") != null);
+    const a_pos = std.mem.find(u8, out, "loop [a]").?;
+    const b_pos = std.mem.find(u8, out, "loop [b]").?;
     try std.testing.expect(a_pos < b_pos);
-    try std.testing.expect(std.mem.indexOf(u8, out, "│┌ loop") == null);
+    try std.testing.expect(std.mem.find(u8, out, "│┌ loop") == null);
 }

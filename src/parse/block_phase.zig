@@ -467,7 +467,7 @@ const Walker = struct {
     fn tryParseTable(self: *Walker, cursor: *BlockCursor) anyerror!?ast.BlockNode {
         const header_line = cursor.peekLine() orelse return null;
         if (parse_block.indentedCodeContent(header_line) != null) return null;
-        if (std.mem.indexOfScalar(u8, header_line, '|') == null) return null;
+        if (std.mem.findScalar(u8, header_line, '|') == null) return null;
 
         const delim_line = cursor.peekNextLine() orelse return null;
         if (parse_block.indentedCodeContent(delim_line) != null) return null;
@@ -475,8 +475,12 @@ const Walker = struct {
 
         const header_count = parse_table.countCells(header_line);
         if (header_count == 0) return null;
-        const align_count = parse_table.countAlignmentCells(delim_line);
+        const align_count = parse_table.countCells(delim_line);
         if (header_count != align_count) return null;
+
+        const table_inline_work_start = self.inline_work.items.len;
+        var table_committed = false;
+        defer if (!table_committed) self.inline_work.shrinkRetainingCapacity(table_inline_work_start);
 
         const alignments = try self.allocator.alloc(ast.Alignment, align_count);
         parse_table.fillAlignments(delim_line, alignments) catch |err| switch (err) {
@@ -508,7 +512,7 @@ const Walker = struct {
         while (cursor.peekLine()) |row_line| {
             if (block_cursor.isBlankLine(row_line)) break;
             if (parse_block.indentedCodeContent(row_line) != null) break;
-            if (std.mem.indexOfScalar(u8, row_line, '|') == null) break;
+            if (std.mem.findScalar(u8, row_line, '|') == null) break;
             if (parse_block.isBlockLevelStart(row_line)) break;
 
             const row_count = parse_table.countCells(row_line);
@@ -516,24 +520,33 @@ const Walker = struct {
 
             const row = try self.allocator.alloc(ast.TableCell, row_count);
             for (row) |*cell| cell.* = .{};
-            var iter = parse_table.iterateCells(row_line);
-            var i: usize = 0;
-            while (iter.nextTrimmed()) |cell_text| {
-                if (i >= row_count) break;
-                if (cell_text.len > 0) {
-                    try self.inline_work.append(self.allocator, .{
-                        .target = &row[i].children,
-                        .input = .{ .slice = cell_text },
-                    });
-                }
-                i += 1;
-            }
-            if (iter.invalid) break;
+            {
+                const row_inline_work_start = self.inline_work.items.len;
+                var row_committed = false;
+                defer if (!row_committed) self.inline_work.shrinkRetainingCapacity(row_inline_work_start);
 
-            try rows.append(self.allocator, row);
+                var iter = parse_table.iterateCells(row_line);
+                var i: usize = 0;
+                while (iter.nextTrimmed()) |cell_text| {
+                    if (i >= row_count) break;
+                    if (cell_text.len > 0) {
+                        try self.inline_work.append(self.allocator, .{
+                            .target = &row[i].children,
+                            .input = .{ .slice = cell_text },
+                        });
+                    }
+                    i += 1;
+                }
+                if (iter.invalid) break;
+
+                try rows.append(self.allocator, row);
+                row_committed = true;
+            }
+
             cursor.advanceLine();
         }
 
+        table_committed = true;
         return .{
             .table = .{
                 .header = header,

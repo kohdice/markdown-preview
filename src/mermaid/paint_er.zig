@@ -11,6 +11,7 @@ pub const RenderError = error{
     UnsupportedFeature,
     WidthTooSmall,
     OutOfMemory,
+    Overflow,
     WriteFailed,
 };
 
@@ -61,6 +62,7 @@ pub fn paintEr(
     var layout = computeErLayout(allocator, &diagram, opts.wrap_width, opts.ambiguous_width) catch |err| switch (err) {
         error.WidthTooSmall => return error.WidthTooSmall,
         error.OutOfMemory => return error.OutOfMemory,
+        error.Overflow => return error.Overflow,
     };
     defer layout.deinit();
 
@@ -77,6 +79,9 @@ pub fn paintEr(
 
     const protected_rects = try erProtectedRects(allocator, &layout);
     defer allocator.free(protected_rects);
+    var route_scratch: route_mod.RouteScratch = .{};
+    defer route_scratch.deinit(allocator);
+
     const defer_relation_labels = opts.wrap_width != null;
     const relation_label_wrap_width = @min(text_layout.edgeLabelWrapWidth(opts.wrap_width orelse canvas.cols), canvas.cols);
 
@@ -88,7 +93,7 @@ pub fn paintEr(
     }
 
     for (diagram.relations) |rel| {
-        drawRelation(allocator, &canvas, &layout, protected_rects, rel, &glyphs, defer_relation_labels, relation_label_wrap_width, opts.ambiguous_width) catch |err| switch (err) {
+        drawRelation(allocator, &route_scratch, &canvas, &layout, protected_rects, rel, &glyphs, defer_relation_labels, relation_label_wrap_width, opts.ambiguous_width) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.WidthTooSmall => return error.WidthTooSmall,
         };
@@ -101,7 +106,7 @@ pub fn paintEr(
     canvas_mod.writeCanvas(writer, &canvas, opts.wrap_width, opts.ambiguous_width) catch return error.WriteFailed;
 }
 
-pub const ErLayoutError = error{ OutOfMemory, WidthTooSmall };
+pub const ErLayoutError = error{ OutOfMemory, Overflow, WidthTooSmall };
 
 fn computeErLayout(
     allocator: std.mem.Allocator,
@@ -140,7 +145,8 @@ fn computeErLayout(
     var max_level: usize = 0;
     for (levels) |l| max_level = @max(max_level, l);
 
-    const level_counts = try allocator.alloc(usize, max_level + 1);
+    const level_slots = try std.math.add(usize, max_level, 1);
+    const level_counts = try allocator.alloc(usize, level_slots);
     defer allocator.free(level_counts);
     @memset(level_counts, 0);
 
@@ -167,21 +173,21 @@ fn computeErLayout(
     else
         null;
     var cell_h = computeRequiredBoxHeight(entity_layouts);
-    cell_h += try extraCellHeightForRelationLabels(allocator, diagram, label_wrap_width, ambiguous);
+    cell_h = try std.math.add(usize, cell_h, try extraCellHeightForRelationLabels(allocator, diagram, label_wrap_width, ambiguous));
 
-    const level_row_starts = try allocator.alloc(usize, max_level + 1);
+    const level_row_starts = try allocator.alloc(usize, level_slots);
     defer allocator.free(level_row_starts);
 
     var rows: usize = 0;
-    var level_cursor = max_level + 1;
+    var level_cursor = level_slots;
     while (level_cursor > 0) {
         level_cursor -= 1;
         level_row_starts[level_cursor] = rows;
-        rows += std.math.divCeil(usize, level_counts[level_cursor], max_cols_per_row) catch unreachable;
+        rows = try std.math.add(usize, rows, std.math.divCeil(usize, level_counts[level_cursor], max_cols_per_row) catch unreachable);
     }
     if (rows == 0) rows = 1;
 
-    const level_next_indices = try allocator.alloc(usize, max_level + 1);
+    const level_next_indices = try allocator.alloc(usize, level_slots);
     defer allocator.free(level_next_indices);
     @memset(level_next_indices, 0);
 
@@ -190,7 +196,7 @@ fn computeErLayout(
         const local_idx = level_next_indices[level];
         level_next_indices[level] += 1;
         positions[i] = .{
-            .row = level_row_starts[level] + local_idx / max_cols_per_row,
+            .row = try std.math.add(usize, level_row_starts[level], local_idx / max_cols_per_row),
             .col = local_idx % max_cols_per_row,
         };
     }
@@ -216,7 +222,8 @@ fn computeErLayout(
 fn maxColumnsForWrap(wrap_width: ?usize, cell_w: usize, entity_count: usize) usize {
     const w = wrap_width orelse return @max(entity_count, 1);
     if (w <= cell_w) return 1;
-    return 1 + (w - cell_w) / (cell_w + route_mod.gutter_w);
+    const step_w = std.math.add(usize, cell_w, route_mod.gutter_w) catch return 1;
+    return 1 + (w - cell_w) / step_w;
 }
 
 fn erContentBudget(wrap_width: ?usize) ErLayoutError!?usize {
@@ -476,6 +483,7 @@ fn erProtectedRects(allocator: std.mem.Allocator, layout: *const ErLayout) error
 
 fn drawRelation(
     allocator: std.mem.Allocator,
+    route_scratch: *route_mod.RouteScratch,
     canvas: *canvas_mod.Canvas,
     layout: *const ErLayout,
     protected_rects: []const route_mod.ProtectedRect,
@@ -501,8 +509,9 @@ fn drawRelation(
     const goal_row = tgt_top + tgt_box_h;
     const goal_col = tgt_left + base.cell_w / 2;
 
-    var route = try route_mod.routeEdgeWithPorts(
+    var route = try route_mod.routeEdgeWithPortsScratch(
         allocator,
+        route_scratch,
         canvas,
         base,
         rel.from,
@@ -585,9 +594,9 @@ test "paintEr renders entity box with attributes" {
     try paintEr(&sink.writer, alloc, &diagram.er, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "CUSTOMER") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "PK string id") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "string name") != null);
+    try std.testing.expect(std.mem.find(u8, out, "CUSTOMER") != null);
+    try std.testing.expect(std.mem.find(u8, out, "PK string id") != null);
+    try std.testing.expect(std.mem.find(u8, out, "string name") != null);
 }
 
 test "paintEr renders one-to-many with circle and crow glyphs" {
@@ -603,13 +612,13 @@ test "paintEr renders one-to-many with circle and crow glyphs" {
     try paintEr(&sink.writer, alloc, &diagram.er, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "CUSTOMER") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "ORDER") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "○") != null or
-        std.mem.indexOf(u8, out, "╤") != null or
-        std.mem.indexOf(u8, out, "╪") != null or
-        std.mem.indexOf(u8, out, "╫") != null or
-        std.mem.indexOf(u8, out, "╬") != null);
+    try std.testing.expect(std.mem.find(u8, out, "CUSTOMER") != null);
+    try std.testing.expect(std.mem.find(u8, out, "ORDER") != null);
+    try std.testing.expect(std.mem.find(u8, out, "○") != null or
+        std.mem.find(u8, out, "╤") != null or
+        std.mem.find(u8, out, "╪") != null or
+        std.mem.find(u8, out, "╫") != null or
+        std.mem.find(u8, out, "╬") != null);
 }
 
 test "paintEr renders identifying vs non-identifying distinctly" {
@@ -635,8 +644,8 @@ test "paintEr renders identifying vs non-identifying distinctly" {
 
     const ident = ident_sink.writer.buffered();
     const dotted = dotted_sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, dotted, "╎") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ident, "╎") == null);
+    try std.testing.expect(std.mem.find(u8, dotted, "╎") != null);
+    try std.testing.expect(std.mem.find(u8, ident, "╎") == null);
 }
 
 test "paintEr renders relation label on the routed path" {
@@ -652,7 +661,7 @@ test "paintEr renders relation label on the routed path" {
     try paintEr(&sink.writer, alloc, &diagram.er, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "places") != null);
+    try std.testing.expect(std.mem.find(u8, out, "places") != null);
 }
 
 test "paintEr handles empty entity block" {
@@ -668,7 +677,7 @@ test "paintEr handles empty entity block" {
     try paintEr(&sink.writer, alloc, &diagram.er, .{ .wrap_width = null, .ambiguous_width = .narrow });
 
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "ORDER") != null);
+    try std.testing.expect(std.mem.find(u8, out, "ORDER") != null);
 }
 
 test "paintEr wraps same-level entities to fit wrap_width" {

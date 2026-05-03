@@ -3,8 +3,6 @@ const source_mod = @import("source.zig");
 const types = @import("types.zig");
 const label_mod = @import("label.zig");
 
-pub const Source = source_mod.Source;
-
 pub const ParseError = error{
     InvalidMermaid,
     UnsupportedFeature,
@@ -50,7 +48,7 @@ const Parser = struct {
     }
 };
 
-pub fn parseSource(allocator: std.mem.Allocator, source: anytype) ParseError!types.SequenceDiagram {
+pub fn parse(allocator: std.mem.Allocator, source: anytype) ParseError!types.SequenceDiagram {
     const owned_source = try source_mod.normalizeOwned(allocator, source);
     return parseFromOwned(allocator, owned_source);
 }
@@ -153,9 +151,15 @@ fn parseLine(parser: *Parser, line: []const u8) ParseError!void {
     if (std.mem.eql(u8, line, "end")) {
         if (parser.ctx_stack.items.len > 0) {
             var ctx = parser.ctx_stack.pop().?;
+            var ctx_owned = true;
+            errdefer if (ctx_owned) ctx.dividers.deinit(parser.allocator);
+
             const msg_len: u32 = @intCast(parser.messages.items.len);
             const end_idx: u32 = if (msg_len > 0) @max(msg_len - 1, ctx.start_index) else ctx.start_index;
             const divs = try ctx.dividers.toOwnedSlice(parser.allocator);
+            var divs_owned = true;
+            errdefer if (divs_owned and divs.len > 0) parser.allocator.free(divs);
+
             const parent_order: ?u32 = if (parser.ctx_stack.items.len > 0)
                 parser.ctx_stack.items[parser.ctx_stack.items.len - 1].source_order
             else
@@ -169,6 +173,8 @@ fn parseLine(parser: *Parser, line: []const u8) ParseError!void {
                 .parent_order = parent_order,
                 .dividers = divs,
             });
+            divs_owned = false;
+            ctx_owned = false;
         }
         return;
     }
@@ -303,7 +309,7 @@ fn tryParseNote(parser: *Parser, line: []const u8) ParseError!bool {
         return false;
     }
 
-    const colon_idx = std.mem.indexOfScalar(u8, rest, ':') orelse return false;
+    const colon_idx = std.mem.findScalar(u8, rest, ':') orelse return false;
     const participants_text = std.mem.trim(u8, rest[0..colon_idx], " \t");
     const raw_text = std.mem.trim(u8, rest[colon_idx + 1 ..], " \t");
     if (participants_text.len == 0) return false;
@@ -312,7 +318,7 @@ fn tryParseNote(parser: *Parser, line: []const u8) ParseError!bool {
     var ids_len: usize = 0;
 
     if (placement == .over) {
-        if (std.mem.indexOfScalar(u8, participants_text, ',')) |comma| {
+        if (std.mem.findScalar(u8, participants_text, ',')) |comma| {
             const p1 = std.mem.trim(u8, participants_text[0..comma], " \t");
             const p2 = std.mem.trim(u8, participants_text[comma + 1 ..], " \t");
             if (p1.len == 0 or p2.len == 0) return false;
@@ -376,7 +382,7 @@ fn tryParseParticipant(parser: *Parser, line: []const u8) ParticipantError!void 
     if (trimmed.len == 0) return error.InvalidMermaid;
 
     const as_marker = " as ";
-    if (std.mem.indexOf(u8, trimmed, as_marker)) |idx| {
+    if (std.mem.find(u8, trimmed, as_marker)) |idx| {
         const id_text = std.mem.trimEnd(u8, trimmed[0..idx], " \t");
         const raw_label = std.mem.trimStart(u8, trimmed[idx + as_marker.len ..], " \t");
         if (id_text.len == 0 or raw_label.len == 0) return error.InvalidMermaid;
@@ -460,7 +466,7 @@ fn parseMessage(parser: *Parser, line: []const u8) ParseError!void {
         after_arrow = after_arrow[ws_len + 1 ..];
     }
 
-    const colon_idx = std.mem.indexOfScalar(u8, after_arrow, ':') orelse return error.InvalidMermaid;
+    const colon_idx = std.mem.findScalar(u8, after_arrow, ':') orelse return error.InvalidMermaid;
     const to_text = std.mem.trim(u8, after_arrow[0..colon_idx], " \t");
     const raw_label = std.mem.trim(u8, after_arrow[colon_idx + 1 ..], " \t");
 
@@ -484,13 +490,13 @@ fn parseMessage(parser: *Parser, line: []const u8) ParseError!void {
 }
 
 test "parses bare sequenceDiagram header" {
-    var d = try parseSource(std.testing.allocator, "sequenceDiagram\n");
+    var d = try parse(std.testing.allocator, "sequenceDiagram\n");
     defer d.deinit();
     try std.testing.expectEqual(@as(usize, 0), d.participants.len);
 }
 
 test "parses explicit participant declarations" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    participant Alice
         \\    participant Bob
@@ -502,7 +508,7 @@ test "parses explicit participant declarations" {
 }
 
 test "parses participant with as alias" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    participant A as Alice
     );
@@ -512,11 +518,11 @@ test "parses participant with as alias" {
 }
 
 test "rejects source missing sequenceDiagram header" {
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator, "A->>B: hi\n"));
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator, "A->>B: hi\n"));
 }
 
 test "ignores comment lines" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\%% this is a comment
         \\    Alice->>Bob: Hello
@@ -526,7 +532,7 @@ test "ignores comment lines" {
 }
 
 test "silently ignores malformed message without colon" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    A->>B missing colon
     );
@@ -535,20 +541,20 @@ test "silently ignores malformed message without colon" {
 }
 
 test "silently ignores label containing zero-width codepoint" {
-    var d = try parseSource(std.testing.allocator, "sequenceDiagram\n    A->>B: foo\u{200D}bar\n");
+    var d = try parse(std.testing.allocator, "sequenceDiagram\n    A->>B: foo\u{200D}bar\n");
     defer d.deinit();
     try std.testing.expectEqual(@as(usize, 0), d.messages.len);
 }
 
 test "accepts message label containing display clusters with zero-width dependents" {
-    var d = try parseSource(std.testing.allocator, "sequenceDiagram\n    A->>B: e\u{0301} \u{2764}\u{FE0F} \u{1F468}\u{200D}\u{1F469}\n");
+    var d = try parse(std.testing.allocator, "sequenceDiagram\n    A->>B: e\u{0301} \u{2764}\u{FE0F} \u{1F468}\u{200D}\u{1F469}\n");
     defer d.deinit();
     try std.testing.expectEqual(@as(usize, 1), d.messages.len);
     try std.testing.expectEqualStrings("e\u{0301} \u{2764}\u{FE0F} \u{1F468}\u{200D}\u{1F469}", d.messages[0].label);
 }
 
 test "preserves <br> in message label as hard-break markers" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    A->>B: first<br/>second<br>third<BR>fourth
     );
@@ -558,7 +564,7 @@ test "preserves <br> in message label as hard-break markers" {
 }
 
 test "auto-interns participants from messages" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    A->>B: msg1
         \\    B->>C: msg2
@@ -569,7 +575,7 @@ test "auto-interns participants from messages" {
 }
 
 test "actor keyword sets participant kind" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    actor Alice
         \\    participant Bob
@@ -580,7 +586,7 @@ test "actor keyword sets participant kind" {
 }
 
 test "accepts hyphenated actor ID (upstream \\S+? parity)" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    participant user-1
     );
@@ -589,7 +595,7 @@ test "accepts hyphenated actor ID (upstream \\S+? parity)" {
 }
 
 test "accepts numeric actor ID" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    actor 123 as User
     );
@@ -599,7 +605,7 @@ test "accepts numeric actor ID" {
 }
 
 test "silently accepts autonumber" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    autonumber
         \\    A->>B: Hello
@@ -609,7 +615,7 @@ test "silently accepts autonumber" {
 }
 
 test "silently accepts create/destroy lines" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    create participant C
         \\    A->>C: Hello
@@ -620,7 +626,7 @@ test "silently accepts create/destroy lines" {
 }
 
 test "->> produces line_style=.solid, arrow_head=.filled" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    A->>B: Hello
     );
@@ -630,7 +636,7 @@ test "->> produces line_style=.solid, arrow_head=.filled" {
 }
 
 test "-> produces line_style=.solid, arrow_head=.open" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    A->B: Hello
     );
@@ -640,7 +646,7 @@ test "-> produces line_style=.solid, arrow_head=.open" {
 }
 
 test "--> produces line_style=.dashed, arrow_head=.open" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    A-->B: Hello
     );
@@ -650,7 +656,7 @@ test "--> produces line_style=.dashed, arrow_head=.open" {
 }
 
 test "-->> produces line_style=.dashed, arrow_head=.filled" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    A-->>B: Reply
     );
@@ -660,7 +666,7 @@ test "-->> produces line_style=.dashed, arrow_head=.filled" {
 }
 
 test "activate/deactivate shortcut sets message flags" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    A->>+B: Hello
         \\    B-->>-A: World
@@ -673,7 +679,7 @@ test "activate/deactivate shortcut sets message flags" {
 }
 
 test "note after 1 message gets after_index=0" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    A->>B: Hello
         \\    Note right of B: A note
@@ -686,7 +692,7 @@ test "note after 1 message gets after_index=0" {
 }
 
 test "note before any message gets after_index=-1" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    participant A
         \\    participant B
@@ -698,7 +704,7 @@ test "note before any message gets after_index=-1" {
 }
 
 test "alt/else block records dividers with message_index and label" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    alt condition
         \\        A->>B: yes
@@ -718,7 +724,7 @@ test "alt/else block records dividers with message_index and label" {
 }
 
 test "standalone activate/deactivate lines are silently ignored" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    activate B
         \\    A->>B: Hello
@@ -731,7 +737,7 @@ test "standalone activate/deactivate lines are silently ignored" {
 }
 
 test "loop block records start_index and end_index" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    loop every minute
         \\        A->>B: ping
@@ -746,7 +752,7 @@ test "loop block records start_index and end_index" {
 }
 
 test "critical block with option separator records divider" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    critical establish connection
         \\        A->>B: connect
@@ -763,7 +769,7 @@ test "critical block with option separator records divider" {
 }
 
 test "par block with and separator records divider" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    par task1
         \\        A->>B: req1
@@ -779,7 +785,7 @@ test "par block with and separator records divider" {
 }
 
 test "nested blocks produce separate block entries" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    loop outer
         \\        alt check
@@ -794,7 +800,7 @@ test "nested blocks produce separate block entries" {
 }
 
 test "divider == text == is silently accepted" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    A->>B: Hello
         \\    == Phase 2 ==
@@ -805,7 +811,7 @@ test "divider == text == is silently accepted" {
 }
 
 test "Note over two participants" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    participant A
         \\    participant B
@@ -820,7 +826,7 @@ test "Note over two participants" {
 }
 
 test "LOOP x is silent-ignored (case-sensitive block keywords)" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    LOOP x
         \\    A->>B: Hello
@@ -832,7 +838,7 @@ test "LOOP x is silent-ignored (case-sensitive block keywords)" {
 }
 
 test "top-level else with empty stack is silent-ignored" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    else orphan
         \\    A->>B: Hello
@@ -843,7 +849,7 @@ test "top-level else with empty stack is silent-ignored" {
 }
 
 test "loop internal else records as divider (upstream parity)" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    loop x
         \\    else y
@@ -861,7 +867,7 @@ test "loop internal option records as divider (upstream parity)" {
     // Upstream mermaid treats `else`, `and`, and `option` as a generic
     // divider keyword inside any non-empty block context rather than
     // pairing them with a specific block kind.
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    loop x
         \\    option y
@@ -878,7 +884,7 @@ test "loop internal option records as divider (upstream parity)" {
 test "top-level option with empty stack is silent-ignored" {
     // Upstream parity: branch keywords outside any block fall through to
     // message parsing, which silently ignores syntactically invalid lines.
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    option orphan
         \\    A->>B: m
@@ -889,7 +895,7 @@ test "top-level option with empty stack is silent-ignored" {
 }
 
 test "Note left of participant" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    participant A
         \\    Note left of A: left note
@@ -901,7 +907,7 @@ test "Note left of participant" {
 }
 
 test "auto-interns dotted actor IDs from messages" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    user-1->>api.v1: ok
     );
@@ -911,7 +917,7 @@ test "auto-interns dotted actor IDs from messages" {
 }
 
 test "note auto-intern head Note adds participants even with after_index=-1" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    Note over A,B: early
     );
@@ -925,7 +931,7 @@ test "note auto-intern head Note adds participants even with after_index=-1" {
 }
 
 test "note auto-intern after message adds new participant" {
-    var d = try parseSource(std.testing.allocator,
+    var d = try parse(std.testing.allocator,
         \\sequenceDiagram
         \\    A->>B: x
         \\    Note over C: n
@@ -937,21 +943,45 @@ test "note auto-intern after message adds new participant" {
 }
 
 test "Note keyword is case-insensitive" {
-    var d1 = try parseSource(std.testing.allocator, "sequenceDiagram\nnote over A: n\n");
+    var d1 = try parse(std.testing.allocator, "sequenceDiagram\nnote over A: n\n");
     defer d1.deinit();
     try std.testing.expectEqual(@as(usize, 1), d1.notes.len);
 
-    var d2 = try parseSource(std.testing.allocator, "sequenceDiagram\nNOTE OVER A: n\n");
+    var d2 = try parse(std.testing.allocator, "sequenceDiagram\nNOTE OVER A: n\n");
     defer d2.deinit();
     try std.testing.expectEqual(@as(usize, 1), d2.notes.len);
 
-    var d3 = try parseSource(std.testing.allocator, "sequenceDiagram\nNote LEFT OF A: n\n");
+    var d3 = try parse(std.testing.allocator, "sequenceDiagram\nNote LEFT OF A: n\n");
     defer d3.deinit();
     try std.testing.expectEqual(@as(usize, 1), d3.notes.len);
     try std.testing.expectEqual(types.NotePlacement.left_of, d3.notes[0].placement);
 
-    var d4 = try parseSource(std.testing.allocator, "sequenceDiagram\nNOTE right of A: n\n");
+    var d4 = try parse(std.testing.allocator, "sequenceDiagram\nNOTE right of A: n\n");
     defer d4.deinit();
     try std.testing.expectEqual(@as(usize, 1), d4.notes.len);
     try std.testing.expectEqual(types.NotePlacement.right_of, d4.notes[0].placement);
+}
+
+fn expectParseSequenceHandlesAllocationFailures(allocator: std.mem.Allocator) !void {
+    var d = try parse(allocator,
+        \\sequenceDiagram
+        \\    participant A
+        \\    participant B
+        \\    alt condition
+        \\        A->>B: yes
+        \\    else failed
+        \\        B->>A: no
+        \\    end
+    );
+    defer d.deinit();
+    try std.testing.expectEqual(@as(usize, 2), d.participants.len);
+    try std.testing.expectEqual(@as(usize, 1), d.blocks.len);
+}
+
+test "parse cleans up sequence allocation failures" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        expectParseSequenceHandlesAllocationFailures,
+        .{},
+    );
 }

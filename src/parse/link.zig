@@ -193,6 +193,21 @@ pub fn parseInlineTarget(allocator: std.mem.Allocator, text: []const u8) !Inline
     };
 }
 
+pub fn parseInlineTargetBorrowing(allocator: std.mem.Allocator, text: []const u8) !InlineTargetParse {
+    return switch (scanInlineTargetRaw(text)) {
+        .match => |raw_target| .{ .match = .{
+            .url = try materializeLinkText(allocator, raw_target.url_raw),
+            .title = if (raw_target.title_raw) |raw_title|
+                try materializeLinkText(allocator, raw_title)
+            else
+                null,
+            .end = raw_target.end,
+        } },
+        .incomplete => .incomplete,
+        .invalid => .invalid,
+    };
+}
+
 fn materializeLinkText(allocator: std.mem.Allocator, raw: []const u8) ![]const u8 {
     if (!needsLinkMaterialization(raw)) return raw;
 
@@ -504,4 +519,33 @@ fn isEscapable(char: u8) bool {
 fn isInvalidBareDestinationByte(char: u8) bool {
     if (char == ascii_delete) return true;
     return char < ascii_space and char != '\t' and char != '\n' and char != '\r';
+}
+
+test "parseInlineTargetBorrowing keeps plain target slices borrowed" {
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{
+        .fail_index = 0,
+        .resize_fail_index = 0,
+    });
+    const text = "https://example.test \"title\")";
+
+    const parsed = try parseInlineTargetBorrowing(failing.allocator(), text);
+    const target = switch (parsed) {
+        .match => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+
+    try std.testing.expectEqualStrings("https://example.test", target.url);
+    try std.testing.expectEqual(@intFromPtr(text.ptr), @intFromPtr(target.url.ptr));
+    try std.testing.expectEqualStrings("title", target.title.?);
+}
+
+test "parseInlineTargetBorrowing materializes escaped target text only when needed" {
+    const parsed = try parseInlineTargetBorrowing(std.testing.allocator, "a\\*b)");
+    const target = switch (parsed) {
+        .match => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    defer std.testing.allocator.free(target.url);
+
+    try std.testing.expectEqualStrings("a*b", target.url);
 }

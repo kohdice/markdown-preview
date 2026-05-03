@@ -449,8 +449,8 @@ pub const XyChart = struct {
     x_axis: XyAxis = .{},
     y_axis: XyAxis = .{},
     series: []XySeries = &.{},
-    /// Owns a copy of the (directive-stripped) source plus any allocated
-    /// auxiliary strings (titles, category labels, …).
+    /// Owns the directive-stripped source; parsed labels borrow from this
+    /// buffer so chart parsing does not copy label text again.
     owned_strings: [][]u8 = &.{},
 
     pub fn deinit(self: *XyChart) void {

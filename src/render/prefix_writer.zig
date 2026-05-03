@@ -102,7 +102,7 @@ pub const PrefixWriter = struct {
                 self.at_line_start = false;
             }
 
-            if (std.mem.indexOfScalarPos(u8, bytes, pos, '\n')) |nl| {
+            if (std.mem.findScalarPos(u8, bytes, pos, '\n')) |nl| {
                 try self.parent.writeAll(bytes[pos .. nl + 1]);
                 pos = nl + 1;
                 self.at_line_start = true;

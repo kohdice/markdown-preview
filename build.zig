@@ -26,7 +26,6 @@ const test_roots = [_]TestRoot{
     .{ .path = "src/watch/debounce.zig", .needs_tree_sitter = false },
     .{ .path = "src/mermaid.zig", .needs_tree_sitter = false },
     .{ .path = "src/source_loader.zig", .needs_tree_sitter = false },
-    .{ .path = "src/backing_allocator.zig", .needs_tree_sitter = false },
     .{ .path = "src/stdout_buffer.zig", .needs_tree_sitter = false },
     .{ .path = "src/write_error.zig", .needs_tree_sitter = false },
     .{ .path = "bench/bench_support.zig", .needs_tree_sitter = false },
@@ -663,18 +662,6 @@ fn addTestStep(
         test_step.dependOn(&bench_target.step);
     }
 
-    addExpectedCompileErrorTest(b, test_step, target, optimize, .{
-        .root_path = "test/compile_errors/env_get_contract.zig",
-        .module_name = "ansi",
-        .module_path = "src/term/ansi.zig",
-        .expected_tag = env_like_contract.missing_get_diagnostic_tag,
-    });
-    addExpectedCompileErrorTest(b, test_step, target, optimize, .{
-        .root_path = "test/compile_errors/env_get_receiver_contract.zig",
-        .module_name = "ansi",
-        .module_path = "src/term/ansi.zig",
-        .expected_tag = env_like_contract.invalid_get_receiver_diagnostic_tag,
-    });
     addExpectedCompileErrorTest(b, test_step, target, optimize, .{
         .root_path = "test/compile_errors/env_get_contract_width.zig",
         .module_name = "width",

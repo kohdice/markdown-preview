@@ -27,6 +27,7 @@ const list_bullet = struct {
 
 pub const MermaidCacheEntry = struct {
     diagram: mermaid.Diagram,
+    key_owned_by_diagram: bool = false,
     used_in_render: bool = false,
 };
 
@@ -38,13 +39,6 @@ fn bulletForDepth(depth: usize) []const u8 {
         1 => list_bullet.level1,
         2 => list_bullet.level2,
         else => unreachable,
-    };
-}
-
-fn canHighlight(mode: ansi.ColorMode) bool {
-    return switch (mode) {
-        .ansi256, .truecolor => true,
-        .none, .ansi16 => false,
     };
 }
 
@@ -65,7 +59,6 @@ pub const RenderSession = struct {
     prefix_stack: *prefix_writer.PrefixStack,
     scratch: std.mem.Allocator,
     persistent_allocator: std.mem.Allocator,
-    cycle_allocator: std.mem.Allocator,
     table_scratch: *render_table.TableScratch,
     wrap_writer: *width.WrapWriter,
     wrap_width: ?usize,
@@ -98,7 +91,7 @@ pub const RenderSession = struct {
             if (marker.len == 0) break :blk marker;
             if (!self.ctx.enable_ansi or style.isPlain()) break :blk marker;
             var tmp: std.Io.Writer.Allocating = .init(self.scratch);
-            try ansi.writeStyled(&tmp.writer, self.ctx.enable_ansi, self.ctx.color_mode, style, marker);
+            try ansi.writeStyled(&tmp.writer, self.ctx.enable_ansi, style, marker);
             break :blk tmp.written();
         };
         try self.pushSegment(.{ .indent = indent, .marker = rendered_marker });
@@ -167,7 +160,7 @@ pub const RenderSession = struct {
     }
 
     fn writeThematicBreak(self: *RenderSession) !void {
-        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, .{
+        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, .{
             .fg = self.ctx.palette.muted,
         }, thematic_break_display);
     }
@@ -227,14 +220,14 @@ pub const RenderSession = struct {
         var content_col: usize = item.indent;
         if (item.number) |number| {
             var sgr_state: ansi.StyledState = .{};
-            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, &sgr_state, marker_style, number);
+            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, &sgr_state, marker_style, number);
             const marker_buf: [2]u8 = .{ item.marker, ' ' };
-            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, &sgr_state, marker_style, &marker_buf);
+            try ansi.writeStyledRun(self.writer, self.ctx.enable_ansi, &sgr_state, marker_style, &marker_buf);
             try ansi.flushStyle(self.writer, &sgr_state);
             content_col += width.displayWidth(number, self.ctx.ambiguous_width) + width.displayWidth(&marker_buf, self.ctx.ambiguous_width);
         } else {
             const marker_text = bulletForDepth(depth);
-            try ansi.writeStyled(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, marker_style, marker_text);
+            try ansi.writeStyled(self.writer, self.ctx.enable_ansi, marker_style, marker_text);
             content_col += width.displayWidth(marker_text, self.ctx.ambiguous_width);
         }
         content_col += checkboxWidth(item.checked, self.ctx.ambiguous_width);
@@ -305,19 +298,19 @@ pub const RenderSession = struct {
 
     fn writeCodeFence(self: *RenderSession, code_fence: ast.CodeFence) !void {
         const fence_style: ansi.TextStyle = .{ .fg = self.ctx.palette.code_fence, .dim = true };
-        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, fence_style, code_fence.opener);
+        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, fence_style, code_fence.opener);
 
         if (std.ascii.eqlIgnoreCase(code_fence.language, "mermaid")) {
             if (code_fence.content.len > 0) {
                 try self.writer.writeByte('\n');
                 self.writeMermaidBody(code_fence.content) catch |err| switch (err) {
-                    error.InvalidMermaid, error.UnsupportedDiagram, error.UnsupportedFeature, error.WidthTooSmall => try self.writeMermaidFallback(code_fence.content, err),
+                    error.InvalidMermaid, error.UnsupportedDiagram, error.UnsupportedFeature, error.WidthTooSmall, error.Overflow => try self.writeMermaidFallback(code_fence.content, err),
                     else => return err,
                 };
             }
             if (code_fence.closer) |closer| {
                 try self.writer.writeByte('\n');
-                try ansi.writeStyled(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, fence_style, closer);
+                try ansi.writeStyled(self.writer, self.ctx.enable_ansi, fence_style, closer);
             }
             return;
         }
@@ -330,7 +323,7 @@ pub const RenderSession = struct {
 
         if (code_fence.closer) |closer| {
             try self.writer.writeByte('\n');
-            try ansi.writeStyled(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, fence_style, closer);
+            try ansi.writeStyled(self.writer, self.ctx.enable_ansi, fence_style, closer);
         }
     }
 
@@ -339,7 +332,6 @@ pub const RenderSession = struct {
             .enable_ansi = self.ctx.enable_ansi,
             .wrap_width = self.wrap_width,
             .ambiguous_width = self.ctx.ambiguous_width,
-            .color_mode = self.ctx.color_mode,
         };
         if (self.mermaid_cache.getPtr(content)) |entry| {
             entry.used_in_render = true;
@@ -348,37 +340,35 @@ pub const RenderSession = struct {
         }
 
         const owned_key = try self.persistent_allocator.dupe(u8, content);
-        const gop = try self.mermaid_cache.getOrPut(self.persistent_allocator, owned_key);
-        if (gop.found_existing) {
-            self.persistent_allocator.free(owned_key);
-            gop.value_ptr.used_in_render = true;
-            try mermaid.paint(self.writer, self.scratch, &gop.value_ptr.diagram, opts);
-            return;
-        }
-
-        var has_value = false;
-        errdefer |err| {
-            if (!has_value or err != error.WidthTooSmall) {
-                if (self.mermaid_cache.fetchRemove(owned_key)) |removed| {
-                    if (has_value) {
-                        var diagram = removed.value.diagram;
-                        diagram.deinit();
-                    }
-                    self.persistent_allocator.free(removed.key);
-                } else {
-                    self.persistent_allocator.free(owned_key);
-                }
+        const compiled = try mermaid.compileForCache(self.persistent_allocator, owned_key);
+        var stored = false;
+        errdefer {
+            if (!stored) {
+                var diagram = compiled.diagram;
+                diagram.deinit();
+                if (!compiled.key_owned_by_diagram) self.persistent_allocator.free(owned_key);
             }
         }
 
-        gop.value_ptr.* = .{
-            .diagram = try mermaid.compile(self.persistent_allocator, owned_key),
+        try self.mermaid_cache.putNoClobber(self.persistent_allocator, owned_key, .{
+            .diagram = compiled.diagram,
+            .key_owned_by_diagram = compiled.key_owned_by_diagram,
             .used_in_render = true,
-        };
-        has_value = true;
+        });
+        stored = true;
         self.mermaid_compile_count.* += 1;
 
-        try mermaid.paint(self.writer, self.scratch, &gop.value_ptr.diagram, opts);
+        const entry = self.mermaid_cache.getPtr(owned_key) orelse unreachable;
+        errdefer |err| {
+            if (err != error.WidthTooSmall) {
+                if (self.mermaid_cache.fetchRemove(owned_key)) |removed| {
+                    var diagram = removed.value.diagram;
+                    diagram.deinit();
+                    if (!removed.value.key_owned_by_diagram) self.persistent_allocator.free(removed.key);
+                }
+            }
+        }
+        try mermaid.paint(self.writer, self.scratch, &entry.diagram, opts);
     }
 
     fn writeMermaidFallback(self: *RenderSession, content: []const u8, err: mermaid.PaintError) !void {
@@ -387,6 +377,7 @@ pub const RenderSession = struct {
             error.UnsupportedFeature => "[mermaid: feature not yet supported by mp]",
             error.InvalidMermaid => "[mermaid: parse error]",
             error.WidthTooSmall => "[mermaid: terminal width too small to render diagram]",
+            error.Overflow => "[mermaid: diagram too large to render]",
             else => "[mermaid: render error]",
         };
         if (self.wrap_width) |wrap_w| {
@@ -395,7 +386,7 @@ pub const RenderSession = struct {
                 return;
             }
         }
-        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, .{
+        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, .{
             .fg = self.ctx.palette.inline_code,
         }, label);
         try self.writer.writeByte('\n');
@@ -410,7 +401,7 @@ pub const RenderSession = struct {
 
     fn writeWrappedMermaidFallbackText(self: *RenderSession, text: []const u8, wrap_w: usize) !void {
         self.wrap_writer.reset(self.writer, wrap_w);
-        try ansi.writeStyled(&self.wrap_writer.writer, self.ctx.enable_ansi, self.ctx.color_mode, .{
+        try ansi.writeStyled(&self.wrap_writer.writer, self.ctx.enable_ansi, .{
             .fg = self.ctx.palette.inline_code,
         }, text);
         try self.wrap_writer.finish();
@@ -418,17 +409,16 @@ pub const RenderSession = struct {
 
     fn writeFenceBody(self: *RenderSession, content: []const u8, language: ?highlight.Language) !void {
         if (language) |lang| {
-            if (self.ctx.enable_ansi and canHighlight(self.ctx.color_mode)) {
+            if (self.ctx.enable_ansi) {
                 self.highlighter.writeHighlightedBlock(
                     self.scratch,
                     self.writer,
                     content,
                     lang,
                     self.ctx.syn_palette,
-                    self.ctx.color_mode,
                 ) catch |err| switch (err) {
                     error.QueryUnavailable => {
-                        try ansi.writeStyled(self.writer, true, self.ctx.color_mode, .{ .fg = self.ctx.palette.inline_code }, content);
+                        try ansi.writeStyled(self.writer, true, .{ .fg = self.ctx.palette.inline_code }, content);
                     },
                     else => return err,
                 };
@@ -436,18 +426,18 @@ pub const RenderSession = struct {
             }
 
             if (!self.ctx.enable_ansi) {
-                try ansi.writeStyled(self.writer, false, self.ctx.color_mode, .{}, content);
+                try ansi.writeStyled(self.writer, false, .{}, content);
                 return;
             }
         }
 
-        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, .{
+        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, .{
             .fg = self.ctx.palette.inline_code,
         }, content);
     }
 
     fn writeCodeBlock(self: *RenderSession, code_block: ast.CodeBlock) !void {
-        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, .{
+        try ansi.writeStyled(self.writer, self.ctx.enable_ansi, .{
             .fg = self.ctx.palette.inline_code,
         }, code_block.content);
     }
@@ -455,11 +445,11 @@ pub const RenderSession = struct {
     fn writeCheckbox(self: *RenderSession, checked: ?bool) !void {
         if (checked) |is_checked| {
             if (is_checked) {
-                try ansi.writeStyled(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, .{
+                try ansi.writeStyled(self.writer, self.ctx.enable_ansi, .{
                     .fg = self.ctx.palette.list_marker,
                 }, checkbox_checked);
             } else {
-                try ansi.writeStyled(self.writer, self.ctx.enable_ansi, self.ctx.color_mode, .{
+                try ansi.writeStyled(self.writer, self.ctx.enable_ansi, .{
                     .fg = self.ctx.palette.muted,
                     .dim = true,
                 }, checkbox_unchecked);
@@ -524,7 +514,6 @@ test "RenderSession.write renders heading content without document trailing newl
         .prefix_stack = &prefix_stack,
         .scratch = allocator,
         .persistent_allocator = allocator,
-        .cycle_allocator = allocator,
         .table_scratch = &table_scratch,
         .wrap_writer = &wrap,
         .wrap_width = null,
