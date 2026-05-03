@@ -66,7 +66,7 @@ fn detectAutoAnsi(
     );
     return switch (mode) {
         .escape_codes => true,
-        .no_color, .windows_api => false,
+        else => false,
     };
 }
 
