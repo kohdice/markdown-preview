@@ -26,7 +26,10 @@ pub fn main(init: std.process.Init) !u8 {
 
     const stdout_is_tty = stdout_file.isTty(io) catch false;
     const enable_ansi = try detectAutoAnsi(io, stdout_file, init.environ_map);
-    const wrap_width = if (stdout_is_tty) terminal.getTerminalWidth(stdout_file.handle) else null;
+    const wrap_width = if (stdout_is_tty)
+        if (terminal.getTerminalSize(stdout_file.handle)) |size| size.cols else null
+    else
+        null;
     const ambiguous_default = terminal.detectAmbiguousWidthFromEnv(init.environ_map);
 
     const exit_code = cli.run(.{

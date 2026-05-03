@@ -15,11 +15,6 @@ pub fn getTerminalSize(handle: std.posix.fd_t) ?TerminalSize {
     return null;
 }
 
-pub fn getTerminalWidth(handle: std.posix.fd_t) ?usize {
-    const size = getTerminalSize(handle) orelse return null;
-    return size.cols;
-}
-
 const EnvAdapter = struct {
     map: *const std.process.Environ.Map,
     pub fn get(self: @This(), name: []const u8) ?[]const u8 {
