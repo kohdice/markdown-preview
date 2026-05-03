@@ -443,9 +443,11 @@ pub fn build(b: *std.Build) void {
     const ts_support = prepareTreeSitterSupport(b, target, optimize, ts_deps);
 
     const source_mod = createModule(b, "src/source.zig", target, optimize);
+    const memory_policy_mod = createModule(b, "src/memory_policy.zig", target, optimize);
     const bench_support_mod = createModule(b, "bench/bench_support.zig", target, optimize);
     const bench_fixtures_mod = createModule(b, "bench/fixtures.zig", target, optimize);
     const render_buffer_mod = createModule(b, "src/watch/render_buffer.zig", target, optimize);
+    render_buffer_mod.addImport("memory_policy", memory_policy_mod);
 
     const mermaid_mod = createModule(b, "src/mermaid.zig", target, optimize);
     mermaid_mod.addImport("source", source_mod);
@@ -456,9 +458,10 @@ pub fn build(b: *std.Build) void {
     // via src/lib.zig; the re-export here only lets tests exercise both
     // the facade contract and lower-level helpers from a single module.
     const internals_mod = createTreeSitterModule(b, "src/internals.zig", target, optimize, ts_support);
+    internals_mod.addImport("memory_policy", memory_policy_mod);
     internals_mod.addImport("source", source_mod);
 
-    const exe = addMpExecutable(b, "mp", target, optimize, source_mod, ts_support);
+    const exe = addMpExecutable(b, "mp", target, optimize, source_mod, memory_policy_mod, ts_support);
     b.installArtifact(exe);
 
     const benches = addBenchExecutables(b, target, optimize, .{
@@ -473,7 +476,7 @@ pub fn build(b: *std.Build) void {
         .forward_build_args = true,
     });
     addBenchSteps(b, benches);
-    addTestStep(b, target, optimize, source_mod, bench_support_mod, internals_mod, ts_support, benches);
+    addTestStep(b, target, optimize, source_mod, memory_policy_mod, bench_support_mod, internals_mod, ts_support, benches);
 }
 
 const BenchModules = struct {
@@ -550,6 +553,7 @@ fn addMpExecutable(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     source_mod: *std.Build.Module,
+    memory_policy_mod: *std.Build.Module,
     ts_support: TreeSitterSupport,
 ) *std.Build.Step.Compile {
     const exe_mod = createTreeSitterModule(b, "src/main.zig", target, optimize, ts_support);
@@ -557,6 +561,7 @@ fn addMpExecutable(
     build_options.addOption([]const u8, "version", manifest.version);
 
     exe_mod.addImport("source", source_mod);
+    exe_mod.addImport("memory_policy", memory_policy_mod);
     exe_mod.addOptions("build_options", build_options);
     return addExecutableArtifact(b, name, exe_mod);
 }
@@ -633,6 +638,7 @@ fn addTestStep(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     source_mod: *std.Build.Module,
+    memory_policy_mod: *std.Build.Module,
     bench_support_mod: *std.Build.Module,
     internals_mod: *std.Build.Module,
     ts_support: TreeSitterSupport,
@@ -647,6 +653,7 @@ fn addTestStep(
         }
         test_mod.addImport("bench_support", bench_support_mod);
         test_mod.addImport("source", source_mod);
+        test_mod.addImport("memory_policy", memory_policy_mod);
         if (test_root.needs_internals) {
             test_mod.addImport("internals", internals_mod);
         }

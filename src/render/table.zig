@@ -6,6 +6,7 @@ const width = @import("../term/width.zig");
 const render_inline = @import("inline.zig");
 const render_context = @import("context.zig");
 const cell_segment = @import("cell_segment.zig");
+const memory_policy = @import("memory_policy");
 
 const RenderContext = render_context.RenderContext;
 const CellRecord = cell_segment.CellRecord;
@@ -143,11 +144,11 @@ pub const TableScratch = struct {
     }
 
     pub fn reset(self: *TableScratch, allocator: std.mem.Allocator) void {
-        clearRetainingBounded(usize, &self.col_widths, allocator, scratch_retained_bytes_limit);
-        clearRetainingBounded(usize, &self.row_offsets, allocator, scratch_retained_bytes_limit);
-        clearRetainingBounded(u8, &self.bytes_buf, allocator, scratch_retained_bytes_limit);
-        clearRetainingBounded(CellRecord, &self.cell_segments, allocator, scratch_retained_bytes_limit);
-        clearRetainingBounded(u32, &self.cell_seg_offsets, allocator, scratch_retained_bytes_limit);
+        memory_policy.clearRetainingBounded(usize, &self.col_widths, allocator, scratch_retained_bytes_limit);
+        memory_policy.clearRetainingBounded(usize, &self.row_offsets, allocator, scratch_retained_bytes_limit);
+        memory_policy.clearRetainingBounded(u8, &self.bytes_buf, allocator, scratch_retained_bytes_limit);
+        memory_policy.clearRetainingBounded(CellRecord, &self.cell_segments, allocator, scratch_retained_bytes_limit);
+        memory_policy.clearRetainingBounded(u32, &self.cell_seg_offsets, allocator, scratch_retained_bytes_limit);
     }
 
     pub fn deinit(self: *TableScratch, allocator: std.mem.Allocator) void {
@@ -159,19 +160,6 @@ pub const TableScratch = struct {
         self.* = .{};
     }
 };
-
-fn clearRetainingBounded(
-    comptime T: type,
-    list: *std.ArrayList(T),
-    allocator: std.mem.Allocator,
-    byte_limit: usize,
-) void {
-    if (@sizeOf(T) != 0 and list.capacity > byte_limit / @sizeOf(T)) {
-        list.clearAndFree(allocator);
-    } else {
-        list.clearRetainingCapacity();
-    }
-}
 
 const TablePlacement = enum {
     top_level,

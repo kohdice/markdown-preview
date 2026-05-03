@@ -1,6 +1,9 @@
 const std = @import("std");
 const input = @import("input.zig");
 const render_buffer_mod = @import("render_buffer.zig");
+const memory_policy = @import("memory_policy");
+
+const retained_row_hash_bytes_limit: usize = 64 * 1024;
 
 pub fn applyAction(action: input.KeyAction, scroll_offset: *usize, total_lines: usize, term_rows: usize) bool {
     const content_rows = if (term_rows > 1) term_rows - 1 else 1;
@@ -71,8 +74,8 @@ pub const Pager = struct {
     }
 
     pub fn invalidate(self: *Pager) void {
-        self.prev_row_hashes.clearRetainingCapacity();
-        self.curr_row_hashes.clearRetainingCapacity();
+        memory_policy.clearRetainingBounded(u64, &self.prev_row_hashes, self.allocator, retained_row_hash_bytes_limit);
+        memory_policy.clearRetainingBounded(u64, &self.curr_row_hashes, self.allocator, retained_row_hash_bytes_limit);
         self.prev_scroll = null;
         self.prev_enable_ansi = null;
         self.prev_content_rows = null;
@@ -145,7 +148,7 @@ pub const Pager = struct {
     }
 
     fn hashVisibleRows(self: *Pager, visible: VisibleRows) !void {
-        self.curr_row_hashes.clearRetainingCapacity();
+        memory_policy.clearRetainingBounded(u64, &self.curr_row_hashes, self.allocator, retained_row_hash_bytes_limit);
         const row_count = visible.count();
         try self.curr_row_hashes.ensureTotalCapacity(self.allocator, row_count);
         var k: usize = 0;
@@ -158,7 +161,7 @@ pub const Pager = struct {
         const tmp = self.prev_row_hashes;
         self.prev_row_hashes = self.curr_row_hashes;
         self.curr_row_hashes = tmp;
-        self.curr_row_hashes.clearRetainingCapacity();
+        memory_policy.clearRetainingBounded(u64, &self.curr_row_hashes, self.allocator, retained_row_hash_bytes_limit);
     }
 };
 
@@ -206,54 +209,6 @@ fn writeStatusLine(
     }
 }
 
-const VisibleRange = struct {
-    start: usize,
-    end: usize,
-};
-
-fn visibleRange(
-    line_offsets: []const usize,
-    data_len: usize,
-    scroll_offset: usize,
-    content_rows: usize,
-) VisibleRange {
-    if (line_offsets.len == 0) return .{ .start = 0, .end = 0 };
-
-    const first = @min(scroll_offset, line_offsets.len - 1);
-    const last = @min(scroll_offset + content_rows, line_offsets.len);
-    const start = line_offsets[first];
-    const end = if (last < line_offsets.len) line_offsets[last] else data_len;
-    return .{ .start = start, .end = end };
-}
-
-test "visibleRange selects correct byte range" {
-    const offsets = [_]usize{ 0, 4, 8, 12 };
-    const range = visibleRange(&offsets, 15, 1, 2);
-    try std.testing.expectEqual(@as(usize, 4), range.start);
-    try std.testing.expectEqual(@as(usize, 12), range.end);
-}
-
-test "visibleRange from start" {
-    const offsets = [_]usize{ 0, 4, 8 };
-    const range = visibleRange(&offsets, 10, 0, 2);
-    try std.testing.expectEqual(@as(usize, 0), range.start);
-    try std.testing.expectEqual(@as(usize, 8), range.end);
-}
-
-test "visibleRange clamps to end of data" {
-    const offsets = [_]usize{ 0, 4, 8 };
-    const range = visibleRange(&offsets, 10, 1, 5);
-    try std.testing.expectEqual(@as(usize, 4), range.start);
-    try std.testing.expectEqual(@as(usize, 10), range.end);
-}
-
-test "visibleRange empty offsets" {
-    const offsets = [_]usize{};
-    const range = visibleRange(&offsets, 0, 0, 10);
-    try std.testing.expectEqual(@as(usize, 0), range.start);
-    try std.testing.expectEqual(@as(usize, 0), range.end);
-}
-
 test "visibleRows strips trailing newlines" {
     const allocator = std.testing.allocator;
     var rb: render_buffer_mod.RenderBuffer = undefined;
@@ -293,6 +248,19 @@ test "Pager reuses capacity across repaints without unbounded growth" {
         out.clearRetainingCapacity();
     }
     try std.testing.expectEqual(first_cap, pgr.prev_row_hashes.capacity);
+}
+
+test "Pager invalidate releases excessive row-hash capacity" {
+    const allocator = std.testing.allocator;
+    var pgr = Pager.init(allocator);
+    defer pgr.deinit();
+
+    try pgr.prev_row_hashes.ensureTotalCapacity(allocator, retained_row_hash_bytes_limit / @sizeOf(u64) + 1);
+    try pgr.curr_row_hashes.ensureTotalCapacity(allocator, retained_row_hash_bytes_limit / @sizeOf(u64) + 1);
+
+    pgr.invalidate();
+    try std.testing.expectEqual(@as(usize, 0), pgr.prev_row_hashes.capacity);
+    try std.testing.expectEqual(@as(usize, 0), pgr.curr_row_hashes.capacity);
 }
 
 test "Pager diffing skips emission for unchanged rows" {
