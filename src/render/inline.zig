@@ -244,7 +244,7 @@ pub fn writeAndMeasureInlineChain(
 }
 
 const SegmentVisitor = struct {
-    pub const Error = error{ WriteFailed, OutOfMemory };
+    pub const Error = error{ WriteFailed, OutOfMemory, Overflow };
     const Self = @This();
 
     ctx: *const RenderContext,

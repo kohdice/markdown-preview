@@ -223,7 +223,10 @@ pub fn writeTable(
             );
         }
         try builder.finishCell();
-        try scratch.cell_seg_offsets.append(allocator, @intCast(scratch.cell_segments.items.len));
+        try scratch.cell_seg_offsets.append(
+            allocator,
+            std.math.cast(u32, scratch.cell_segments.items.len) orelse return error.Overflow,
+        );
     }
 
     try scratch.row_offsets.append(allocator, col_count);
@@ -240,7 +243,10 @@ pub fn writeTable(
                 body_style,
             );
             try builder.finishCell();
-            try scratch.cell_seg_offsets.append(allocator, @intCast(scratch.cell_segments.items.len));
+            try scratch.cell_seg_offsets.append(
+                allocator,
+                std.math.cast(u32, scratch.cell_segments.items.len) orelse return error.Overflow,
+            );
         }
         try scratch.row_offsets.append(allocator, scratch.cell_seg_offsets.items.len - 1);
     }
@@ -373,7 +379,7 @@ fn writeRowFromScratch(
     var row_height: usize = 1;
     for (0..row_cell_count) |c| {
         const k = row_cell_start + c;
-        const seg_count = seg_offsets[k + 1] - seg_offsets[k];
+        const seg_count: usize = seg_offsets[k + 1] - seg_offsets[k];
         if (seg_count > row_height) row_height = seg_count;
     }
 
@@ -383,8 +389,8 @@ fn writeRowFromScratch(
             var rec: ?CellRecord = null;
             if (c < row_cell_count) {
                 const k = row_cell_start + c;
-                const seg_start = seg_offsets[k];
-                const seg_end = seg_offsets[k + 1];
+                const seg_start: usize = seg_offsets[k];
+                const seg_end: usize = seg_offsets[k + 1];
                 if (line_idx < seg_end - seg_start) {
                     rec = segments[seg_start + line_idx];
                 }

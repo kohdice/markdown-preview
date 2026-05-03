@@ -22,11 +22,11 @@ pub const CellSegmentBuilder = struct {
     sgr_state: ansi.StyledState,
     active_style: ansi.TextStyle,
     style_at_last_space: ansi.TextStyle,
-    seg_byte_start: u32,
-    col: u32,
-    last_space_parent_pos: ?u32,
-    col_before_last_space: u32,
-    col_after_last_space: u32,
+    seg_byte_start: usize,
+    col: usize,
+    last_space_parent_pos: ?usize,
+    col_before_last_space: usize,
+    col_after_last_space: usize,
     suppress_next_emoji: bool,
 
     pub fn init(
@@ -65,7 +65,7 @@ pub const CellSegmentBuilder = struct {
         self.sgr_state = .{};
         self.active_style = .{};
         self.style_at_last_space = .{};
-        self.seg_byte_start = @intCast(self.parent_buf.items.len);
+        self.seg_byte_start = self.parent_buf.items.len;
         self.col = 0;
         self.last_space_parent_pos = null;
         self.col_before_last_space = 0;
@@ -77,12 +77,11 @@ pub const CellSegmentBuilder = struct {
         try ansi.flushStyle(&self.parent_writer.writer, &self.sgr_state);
         try self.parent_writer.writer.flush();
 
-        const seg_end: u32 = @intCast(self.parent_buf.items.len);
-        try self.segments.append(self.allocator, .{
-            .byte_start = self.seg_byte_start,
-            .byte_end = seg_end,
-            .display_width = self.col,
-        });
+        try self.segments.append(self.allocator, try makeCellRecord(
+            self.seg_byte_start,
+            self.parent_buf.items.len,
+            self.col,
+        ));
     }
 
     pub fn writeStyled(
@@ -134,7 +133,7 @@ pub const CellSegmentBuilder = struct {
                 continue;
             }
 
-            const cw: u32 = @intCast(width.codepointWidth(cp, self.ambiguous));
+            const cw = width.codepointWidth(cp, self.ambiguous);
             try self.appendChar(text[i..][0..len], cw);
             i += len;
         }
@@ -144,40 +143,43 @@ pub const CellSegmentBuilder = struct {
         try self.hardBreak();
     }
 
-    fn appendChar(self: *CellSegmentBuilder, bytes: []const u8, cw: u32) !void {
+    fn appendChar(self: *CellSegmentBuilder, bytes: []const u8, cw: usize) !void {
         const is_space = bytes.len == 1 and bytes[0] == ' ';
 
-        if (self.wrap_width > 0 and self.col + cw > self.wrap_width) {
-            if (is_space) {
-                try self.hardBreak();
-                return;
-            }
-            if (self.last_space_parent_pos) |space_pos| {
-                try self.softBreakAt(space_pos);
-            } else {
-                try self.hardBreak();
+        if (self.wrap_width > 0) {
+            const next_col_before_wrap = try std.math.add(usize, self.col, cw);
+            if (next_col_before_wrap > self.wrap_width) {
+                if (is_space) {
+                    try self.hardBreak();
+                    return;
+                }
+                if (self.last_space_parent_pos) |space_pos| {
+                    try self.softBreakAt(space_pos);
+                } else {
+                    try self.hardBreak();
+                }
             }
         }
 
         if (is_space) {
-            self.last_space_parent_pos = @intCast(self.parent_buf.items.len);
+            self.last_space_parent_pos = self.parent_buf.items.len;
             self.col_before_last_space = self.col;
             self.style_at_last_space = self.active_style;
         }
         try self.parent_buf.appendSlice(self.allocator, bytes);
-        self.col += cw;
+        self.col = try std.math.add(usize, self.col, cw);
         if (is_space) self.col_after_last_space = self.col;
     }
 
-    fn softBreakAt(self: *CellSegmentBuilder, space_parent_pos: u32) !void {
+    fn softBreakAt(self: *CellSegmentBuilder, space_parent_pos: usize) !void {
         if (!self.enable_ansi) {
-            try self.segments.append(self.allocator, .{
-                .byte_start = self.seg_byte_start,
-                .byte_end = space_parent_pos,
-                .display_width = self.col_before_last_space,
-            });
+            try self.segments.append(self.allocator, try makeCellRecord(
+                self.seg_byte_start,
+                space_parent_pos,
+                self.col_before_last_space,
+            ));
 
-            self.seg_byte_start = @intCast(@as(usize, space_parent_pos) + 1);
+            self.seg_byte_start = space_parent_pos + 1;
             self.col = self.col - self.col_after_last_space;
             self.last_space_parent_pos = null;
             self.col_before_last_space = 0;
@@ -211,14 +213,13 @@ pub const CellSegmentBuilder = struct {
         try ansi.flushStyle(&self.parent_writer.writer, &self.sgr_state);
         try self.parent_writer.writer.flush();
 
-        const seg_end: u32 = @intCast(self.parent_buf.items.len);
-        try self.segments.append(self.allocator, .{
-            .byte_start = self.seg_byte_start,
-            .byte_end = seg_end,
-            .display_width = self.col_before_last_space,
-        });
+        try self.segments.append(self.allocator, try makeCellRecord(
+            self.seg_byte_start,
+            self.parent_buf.items.len,
+            self.col_before_last_space,
+        ));
 
-        self.seg_byte_start = @intCast(self.parent_buf.items.len);
+        self.seg_byte_start = self.parent_buf.items.len;
 
         try ansi.writeStyledRun(
             &self.parent_writer.writer,
@@ -248,14 +249,13 @@ pub const CellSegmentBuilder = struct {
         try ansi.flushStyle(&self.parent_writer.writer, &self.sgr_state);
         try self.parent_writer.writer.flush();
 
-        const seg_end: u32 = @intCast(self.parent_buf.items.len);
-        try self.segments.append(self.allocator, .{
-            .byte_start = self.seg_byte_start,
-            .byte_end = seg_end,
-            .display_width = self.col,
-        });
+        try self.segments.append(self.allocator, try makeCellRecord(
+            self.seg_byte_start,
+            self.parent_buf.items.len,
+            self.col,
+        ));
 
-        self.seg_byte_start = @intCast(self.parent_buf.items.len);
+        self.seg_byte_start = self.parent_buf.items.len;
         self.col = 0;
         self.last_space_parent_pos = null;
         self.col_before_last_space = 0;
@@ -274,6 +274,14 @@ pub const CellSegmentBuilder = struct {
 
 fn isStrippedControl(byte: u8) bool {
     return byte < 0x20 or byte == 0x7F;
+}
+
+fn makeCellRecord(byte_start: usize, byte_end: usize, display_width: usize) error{Overflow}!CellRecord {
+    return .{
+        .byte_start = std.math.cast(u32, byte_start) orelse return error.Overflow,
+        .byte_end = std.math.cast(u32, byte_end) orelse return error.Overflow,
+        .display_width = std.math.cast(u32, display_width) orelse return error.Overflow,
+    };
 }
 
 const ParentBufWriter = struct {
@@ -499,4 +507,12 @@ test "CellSegmentBuilder reopens the active style after a split" {
     try testing.expect(std.mem.endsWith(u8, seg0, "\x1b[0m"));
     try testing.expect(std.mem.startsWith(u8, seg1, "\x1b[1m"));
     try testing.expect(std.mem.endsWith(u8, seg1, "\x1b[0m"));
+}
+
+test "makeCellRecord rejects values beyond u32" {
+    const too_large = @as(usize, std.math.maxInt(u32)) + 1;
+    try testing.expectError(
+        error.Overflow,
+        makeCellRecord(too_large, too_large, too_large),
+    );
 }
