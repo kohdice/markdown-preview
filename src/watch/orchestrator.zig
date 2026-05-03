@@ -46,7 +46,7 @@ pub fn run(opts: WatchOptions) !u8 {
     defer session.deinit();
 
     var term_size = terminal.getTerminalSize(opts.stdout_file.handle) orelse terminal.TerminalSize{ .cols = default_term_cols, .rows = default_term_rows };
-    var wrap_width: ?usize = if (opts.enable_ansi) term_size.cols else null;
+    var wrap_width: ?usize = term_size.cols;
 
     var rt = raw_term.RawTerm.setup(opts.stdin_file.handle, opts.stdout) catch {
         try opts.stderr.writeAll("mp: failed to configure terminal\n");
