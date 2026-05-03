@@ -1,5 +1,6 @@
 const std = @import("std");
 const env_like = @import("env_like.zig");
+const utf8 = @import("utf8.zig");
 
 const ESC = 0x1b;
 
@@ -476,7 +477,7 @@ pub const WrapWriter = struct {
         @memcpy(self.pending[p .. p + still_needed], bytes[0..still_needed]);
 
         const char_bytes = self.pending[0..seq_len];
-        const cp = decodeCodepointExact(char_bytes) catch {
+        const cp = utf8.decodeCodepointExact(char_bytes) catch {
             try self.appendCharAdvance(self.pending[0..1], 1);
             const leftover = seq_len - 1;
             if (leftover > 0) {
@@ -862,31 +863,8 @@ fn isEastAsianAmbiguous(cp: u21) bool {
     return false;
 }
 
-pub const DecodeResult = union(enum) {
-    ok: struct { cp: u21, len: usize },
-    invalid,
-    incomplete,
-};
-
-pub fn nextCodepoint(bytes: []const u8, i: usize) DecodeResult {
-    if (i >= bytes.len) return .incomplete;
-    const first = bytes[i];
-    if (first < 0x80) return .{ .ok = .{ .cp = first, .len = 1 } };
-    const len = std.unicode.utf8ByteSequenceLength(first) catch return .invalid;
-    if (i + len > bytes.len) return .incomplete;
-    const cp = decodeCodepointExact(bytes[i..][0..len]) catch return .invalid;
-    return .{ .ok = .{ .cp = cp, .len = len } };
-}
-
-fn decodeCodepointExact(bytes: []const u8) !u21 {
-    return switch (bytes.len) {
-        1 => bytes[0],
-        2 => std.unicode.utf8Decode2(bytes[0..2].*),
-        3 => std.unicode.utf8Decode3(bytes[0..3].*),
-        4 => std.unicode.utf8Decode4(bytes[0..4].*),
-        else => error.InvalidUtf8,
-    };
-}
+pub const DecodeResult = utf8.CodepointDecode;
+pub const nextCodepoint = utf8.decodeCodepoint;
 
 pub const DisplayCluster = struct {
     bytes: []const u8,
