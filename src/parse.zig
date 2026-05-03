@@ -45,9 +45,13 @@ fn buildDocument(
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
 
-    var builder = parse_inline.InlineBuilder.init(arena.allocator());
+    var builder = parse_inline.InlineBuilder.initWithScratchAllocator(
+        arena.allocator(),
+        allocator,
+    );
+    defer builder.deinitScratch();
     try builder.reserve(estimateInlineNodeCapacity(bytes));
-    const block_doc = try block_phase.buildBlockDocument(arena.allocator(), &builder, bytes);
+    const block_doc = try block_phase.buildBlockDocument(arena.allocator(), bytes);
     const resolved = try inline_phase.resolveInlines(&builder, block_doc);
     return .{
         .source = bytes,

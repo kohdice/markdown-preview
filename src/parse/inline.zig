@@ -27,6 +27,7 @@ const min_hard_break_spaces: usize = 2;
 
 pub const InlineBuilder = struct {
     allocator: std.mem.Allocator,
+    scratch_allocator: std.mem.Allocator,
     nodes: std.ArrayList(ast.InlineNode) = .empty,
     next: std.ArrayList(ast.InlineRef) = .empty,
     temp_prev: std.ArrayList(TokenRef) = .empty,
@@ -36,8 +37,16 @@ pub const InlineBuilder = struct {
     temp_inline_link_scratch: std.ArrayList(u8) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) InlineBuilder {
+        return initWithScratchAllocator(allocator, allocator);
+    }
+
+    pub fn initWithScratchAllocator(
+        allocator: std.mem.Allocator,
+        scratch_allocator: std.mem.Allocator,
+    ) InlineBuilder {
         return .{
             .allocator = allocator,
+            .scratch_allocator = scratch_allocator,
         };
     }
 
@@ -45,6 +54,20 @@ pub const InlineBuilder = struct {
         if (capacity == 0) return;
         try self.nodes.ensureTotalCapacityPrecise(self.allocator, capacity);
         try self.next.ensureTotalCapacityPrecise(self.allocator, capacity);
+    }
+
+    pub fn deinitScratch(self: *InlineBuilder) void {
+        self.temp_prev.deinit(self.scratch_allocator);
+        self.temp_delimiters.deinit(self.scratch_allocator);
+        self.temp_brackets.deinit(self.scratch_allocator);
+        self.temp_reference_scratch.deinit(self.scratch_allocator);
+        self.temp_inline_link_scratch.deinit(self.scratch_allocator);
+
+        self.temp_prev = .empty;
+        self.temp_delimiters = .empty;
+        self.temp_brackets = .empty;
+        self.temp_reference_scratch = .empty;
+        self.temp_inline_link_scratch = .empty;
     }
 
     pub const Storage = struct {
@@ -84,6 +107,31 @@ pub const InlineBuilder = struct {
         return try parser.parse();
     }
 };
+
+test "InlineBuilder keeps materialized inline payloads outside scratch allocator" {
+    var storage_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer storage_arena.deinit();
+
+    var builder = InlineBuilder.initWithScratchAllocator(
+        storage_arena.allocator(),
+        std.testing.allocator,
+    );
+    errdefer builder.deinitScratch();
+    var link_defs: DefMap = .{};
+
+    _ = try builder.parseSlice("[x](a\\*b)", &link_defs);
+    const storage = builder.finish();
+    builder.deinitScratch();
+
+    var found_link = false;
+    for (storage.nodes) |node| {
+        if (node == .link) {
+            found_link = true;
+            try std.testing.expectEqualStrings("a*b", node.link.url);
+        }
+    }
+    try std.testing.expect(found_link);
+}
 
 const InlineChain = struct {
     head: ast.InlineRef = ast.no_inline,
@@ -259,7 +307,7 @@ const TempParser = struct {
                     if (col + 1 < line.len and line[col + 1] == '[') {
                         try self.appendText(line[plain_start..col]);
                         const ref = try self.appendNode(.{ .text = line[col .. col + image_opener_text.len] });
-                        try self.brackets.append(self.builder.allocator, .{
+                        try self.brackets.append(self.builder.scratch_allocator, .{
                             .node = ref,
                             .line_index = line_index,
                             .content_start = col + image_opener_text.len,
@@ -274,7 +322,7 @@ const TempParser = struct {
                 '[' => {
                     try self.appendText(line[plain_start..col]);
                     const ref = try self.appendNode(.{ .text = line[col .. col + 1] });
-                    try self.brackets.append(self.builder.allocator, .{
+                    try self.brackets.append(self.builder.scratch_allocator, .{
                         .node = ref,
                         .line_index = line_index,
                         .content_start = col + 1,
@@ -307,7 +355,7 @@ const TempParser = struct {
                         if (class.can_open or class.can_close) {
                             try self.appendText(line[plain_start..col]);
                             const ref = try self.appendNode(.{ .text = line[col .. col + run_len] });
-                            try self.delimiters.append(self.builder.allocator, .{
+                            try self.delimiters.append(self.builder.scratch_allocator, .{
                                 .node = ref,
                                 .ch = line[col],
                                 .remaining = @intCast(run_len),
@@ -331,7 +379,7 @@ const TempParser = struct {
                         if (class.can_open or class.can_close) {
                             try self.appendText(line[plain_start..col]);
                             const ref = try self.appendNode(.{ .text = line[col .. col + run_len] });
-                            try self.delimiters.append(self.builder.allocator, .{
+                            try self.delimiters.append(self.builder.scratch_allocator, .{
                                 .node = ref,
                                 .ch = '~',
                                 .remaining = @intCast(run_len),
@@ -392,7 +440,7 @@ const TempParser = struct {
         const ref = std.math.cast(TokenRef, self.builder.nodes.items.len) orelse return error.Overflow;
         try self.builder.nodes.append(self.builder.allocator, node);
         try self.builder.next.append(self.builder.allocator, no_token);
-        try self.prev.append(self.builder.allocator, no_token);
+        try self.prev.append(self.builder.scratch_allocator, no_token);
         return ref;
     }
 
@@ -508,10 +556,10 @@ const TempParser = struct {
         while (line_index < self.lines.len) {
             const current_line = self.lines[line_index];
             if (self.inline_link_scratch.items.len > 0) {
-                try self.inline_link_scratch.append(self.builder.allocator, '\n');
+                try self.inline_link_scratch.append(self.builder.scratch_allocator, '\n');
             }
             try self.inline_link_scratch.appendSlice(
-                self.builder.allocator,
+                self.builder.scratch_allocator,
                 current_line[line_start_col..],
             );
 
@@ -596,10 +644,10 @@ const TempParser = struct {
             const label = if (ref_end > ref_start)
                 line[ref_start..ref_end]
             else
-                try self.captureRange(opener.line_index, opener.content_start, line_index, close_col);
+                try self.captureRangeScratch(opener.line_index, opener.content_start, line_index, close_col);
 
             if (try lookupReferenceDefinition(
-                self.builder.allocator,
+                self.builder.scratch_allocator,
                 self.link_defs,
                 &self.reference_label_scratch,
                 label,
@@ -617,9 +665,9 @@ const TempParser = struct {
         if (close_col + 1 < line.len and (line[close_col + 1] == '(' or line[close_col + 1] == '['))
             return null;
 
-        const label = try self.captureRange(opener.line_index, opener.content_start, line_index, close_col);
+        const label = try self.captureRangeScratch(opener.line_index, opener.content_start, line_index, close_col);
         if (try lookupReferenceDefinition(
-            self.builder.allocator,
+            self.builder.scratch_allocator,
             self.link_defs,
             &self.reference_label_scratch,
             label,
@@ -745,6 +793,27 @@ const TempParser = struct {
         end_line: usize,
         end_col: usize,
     ) ![]const u8 {
+        return self.captureRangeWithAllocator(self.builder.allocator, start_line, start_col, end_line, end_col);
+    }
+
+    fn captureRangeScratch(
+        self: *TempParser,
+        start_line: usize,
+        start_col: usize,
+        end_line: usize,
+        end_col: usize,
+    ) ![]const u8 {
+        return self.captureRangeWithAllocator(self.builder.scratch_allocator, start_line, start_col, end_line, end_col);
+    }
+
+    fn captureRangeWithAllocator(
+        self: *TempParser,
+        allocator: std.mem.Allocator,
+        start_line: usize,
+        start_col: usize,
+        end_line: usize,
+        end_col: usize,
+    ) ![]const u8 {
         if (start_line == end_line) {
             return self.lines[start_line][start_col..end_col];
         }
@@ -763,7 +832,6 @@ const TempParser = struct {
             if (line_index < end_line) total_len += 1;
         }
 
-        const allocator = self.builder.allocator;
         const buffer = try allocator.alloc(u8, total_len);
         var out: usize = 0;
         line_index = start_line;
