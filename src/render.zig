@@ -1,7 +1,6 @@
 const std = @import("std");
 const ast = @import("ast.zig");
 const term = @import("term.zig");
-const ansi = term.ansi;
 const highlight = term.highlight;
 const theme = term.theme;
 const width = term.width;
@@ -10,10 +9,11 @@ const render_table = @import("render/table.zig");
 const render_context = @import("render/context.zig");
 const prefix_writer_mod = @import("render/prefix_writer.zig");
 
+pub const retained_arena_limit: usize = 4 * 1024 * 1024;
+
 pub const RenderOptions = struct {
     enable_ansi: bool = false,
     ambiguous_width: width.AmbiguousWidth = .narrow,
-    color_mode: ansi.ColorMode = .truecolor,
 };
 
 pub const Renderer = struct {
@@ -23,7 +23,7 @@ pub const Renderer = struct {
     syn_palette: theme.SyntaxPalette,
     highlighter: highlight.Highlighter,
     table_scratch: render_table.TableScratch = .{},
-    wrap_line_buf: std.ArrayListUnmanaged(u8) = .empty,
+    wrap_line_buf: std.ArrayList(u8) = .empty,
     scratch: std.heap.ArenaAllocator,
     mermaid_cache: render_block.MermaidCache = .empty,
     mermaid_compile_count: usize = 0,
@@ -45,7 +45,7 @@ pub const Renderer = struct {
         var mermaid_it = self.mermaid_cache.iterator();
         while (mermaid_it.next()) |entry| {
             entry.value_ptr.diagram.deinit();
-            self.persistent_allocator.free(entry.key_ptr.*);
+            if (!entry.value_ptr.key_owned_by_diagram) self.persistent_allocator.free(entry.key_ptr.*);
         }
         self.mermaid_cache.deinit(self.persistent_allocator);
         self.highlighter.deinit();
@@ -59,10 +59,9 @@ pub const Renderer = struct {
         writer: *std.Io.Writer,
         doc: *const ast.Document,
         wrap_width: ?usize,
-        cycle_allocator: std.mem.Allocator,
     ) !void {
-        _ = self.scratch.reset(.retain_capacity);
-        self.table_scratch.reset();
+        _ = self.scratch.reset(.{ .retain_with_limit = retained_arena_limit });
+        self.table_scratch.reset(self.persistent_allocator);
         self.markMermaidCacheUnused();
         errdefer self.pruneUnusedMermaidCache(self.scratch.allocator()) catch {};
 
@@ -79,7 +78,6 @@ pub const Renderer = struct {
             .ambiguous_width = self.opts.ambiguous_width,
             .palette = self.palette,
             .syn_palette = self.syn_palette,
-            .color_mode = self.opts.color_mode,
         };
         var session: render_block.RenderSession = .{
             .ctx = &ctx,
@@ -87,7 +85,6 @@ pub const Renderer = struct {
             .prefix_stack = &prefix_stack,
             .scratch = self.scratch.allocator(),
             .persistent_allocator = self.persistent_allocator,
-            .cycle_allocator = cycle_allocator,
             .wrap_width = wrap_width,
             .highlighter = &self.highlighter,
             .table_scratch = &self.table_scratch,
@@ -108,7 +105,7 @@ pub const Renderer = struct {
     }
 
     fn pruneUnusedMermaidCache(self: *Renderer, allocator: std.mem.Allocator) !void {
-        var stale_keys: std.ArrayListUnmanaged([]const u8) = .empty;
+        var stale_keys: std.ArrayList([]const u8) = .empty;
         defer stale_keys.deinit(allocator);
 
         var it = self.mermaid_cache.iterator();
@@ -122,7 +119,7 @@ pub const Renderer = struct {
             const removed = self.mermaid_cache.fetchRemove(key) orelse continue;
             var diagram = removed.value.diagram;
             diagram.deinit();
-            self.persistent_allocator.free(removed.key);
+            if (!removed.value.key_owned_by_diagram) self.persistent_allocator.free(removed.key);
         }
     }
 };
@@ -141,5 +138,4 @@ test {
     _ = @import("render/code_test.zig");
     _ = @import("render/mermaid_cache_test.zig");
     _ = @import("render/highlight_color_bypass_parity_test.zig");
-    _ = @import("render/color_mode_propagation_test.zig");
 }

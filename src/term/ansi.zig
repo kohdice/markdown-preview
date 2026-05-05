@@ -1,5 +1,4 @@
 const std = @import("std");
-const env_like = @import("env_like.zig");
 const theme = @import("theme.zig");
 
 pub const reset_sequence = "\x1b[0m";
@@ -14,41 +13,8 @@ const hsl_sector_angle: f32 = 60.0;
 const hsl_full_turn: f32 = 360.0;
 const style_prefix_buf_size: usize = 48;
 const truecolor_seq_buf_size: usize = 24;
-const ansi256_seq_buf_size: usize = 12;
-const ansi16_seq_buf_size: usize = 8;
 const write_styled_fast_path_limit: usize = 256;
 const write_styled_fast_path_buf_size: usize = style_prefix_buf_size + write_styled_fast_path_limit + reset_sequence.len;
-
-const rec601 = struct {
-    const r_weight: u32 = 299;
-    const g_weight: u32 = 587;
-    const b_weight: u32 = 114;
-    const scale: u32 = 1000;
-};
-
-const ansi16 = struct {
-    const base_code: u8 = 30;
-    const bright_offset: u8 = 60;
-    const bright_luma_threshold: u32 = 100;
-    const dominant_threshold: u32 = 3;
-    const dominant_scale: u32 = 5;
-    const red_mask: u8 = 1;
-    const green_mask: u8 = 2;
-    const blue_mask: u8 = 4;
-};
-
-const ansi256 = struct {
-    const cube_base: u8 = 16;
-    const cube_axis_size: u32 = 6;
-    const cube_green_stride: u32 = cube_axis_size;
-    const cube_red_stride: u32 = cube_axis_size * cube_axis_size;
-    const channel_quantization_divisor: u32 = 256;
-    const grayscale_base: u8 = 232;
-    const grayscale_steps: u32 = 23;
-    const grayscale_step_size: u32 = 10;
-    const grayscale_delta_threshold: u8 = 10;
-    const grayscale_black_luma_threshold: u32 = 8;
-};
 
 const sgr = struct {
     const bold = "\x1b[1m";
@@ -56,10 +22,7 @@ const sgr = struct {
     const italic = italic_on;
     const underline = underline_on;
     const strikethrough = "\x1b[9m";
-    const fg_truecolor_fmt = "\x1b[38;2;{};{};{}m";
 };
-
-pub const ColorMode = enum { none, ansi16, ansi256, truecolor };
 
 pub const Hsl = struct { h: f32, s: f32, l: f32 };
 
@@ -120,92 +83,10 @@ pub fn rgbToHsl(rgb: theme.Rgb) Hsl {
     return .{ .h = h, .s = s, .l = l };
 }
 
-pub fn detectColorMode(env: anytype) ColorMode {
-    const Env = if (@TypeOf(env) == type) env else @TypeOf(env);
-    comptime env_like.requireGetContract(Env);
-
-    if (env.get("NO_COLOR")) |_| return .none;
-    if (env.get("COLORTERM")) |v| {
-        if (std.mem.eql(u8, v, "truecolor") or std.mem.eql(u8, v, "24bit")) return .truecolor;
-    }
-    if (env.get("TERM")) |v| {
-        if (std.mem.indexOf(u8, v, "256color") != null) return .ansi256;
-        if (!std.mem.eql(u8, v, "dumb") and v.len > 0) return .ansi16;
-    }
-    return .none;
-}
-
-pub fn writeSgrFg(writer: *std.Io.Writer, rgb: theme.Rgb, mode: ColorMode) !void {
-    switch (mode) {
-        .none => return,
-        .truecolor => {
-            var buf: [truecolor_seq_buf_size]u8 = undefined;
-            const len = formatTruecolor(&buf, rgb.r, rgb.g, rgb.b);
-            try writer.writeAll(buf[0..len]);
-        },
-        .ansi256 => {
-            var buf: [ansi256_seq_buf_size]u8 = undefined;
-            const len = formatAnsi256(&buf, ansi256Index(rgb.r, rgb.g, rgb.b));
-            try writer.writeAll(buf[0..len]);
-        },
-        .ansi16 => {
-            var buf: [ansi16_seq_buf_size]u8 = undefined;
-            const len = formatAnsi16(&buf, ansi16Code(rgb.r, rgb.g, rgb.b));
-            try writer.writeAll(buf[0..len]);
-        },
-    }
-}
-
-fn rec601Luma(r: u8, g: u8, b: u8) u32 {
-    return (@as(u32, r) * rec601.r_weight + @as(u32, g) * rec601.g_weight + @as(u32, b) * rec601.b_weight) / rec601.scale;
-}
-
-fn ansi16Code(r: u8, g: u8, b: u8) u8 {
-    const luma = rec601Luma(r, g, b);
-    const max_c: u32 = @max(@max(r, g), b);
-    if (max_c == 0) return ansi16.base_code;
-    const thr = max_c * ansi16.dominant_threshold;
-    var code: u8 = ansi16.base_code;
-    if (@as(u32, r) * ansi16.dominant_scale >= thr) code += ansi16.red_mask;
-    if (@as(u32, g) * ansi16.dominant_scale >= thr) code += ansi16.green_mask;
-    if (@as(u32, b) * ansi16.dominant_scale >= thr) code += ansi16.blue_mask;
-    if (luma > ansi16.bright_luma_threshold) code += ansi16.bright_offset;
-    return code;
-}
-
-fn formatAnsi16(buf: []u8, code: u8) usize {
-    const prefix = "\x1b[";
-    @memcpy(buf[0..prefix.len], prefix);
-    var pos: usize = prefix.len;
-    pos += writeDecimal(buf[pos..], code);
-    buf[pos] = 'm';
-    pos += 1;
-    return pos;
-}
-
-fn ansi256Index(r: u8, g: u8, b: u8) u8 {
-    const max_c = @max(@max(r, g), b);
-    const min_c = @min(@min(r, g), b);
-    if (max_c - min_c < ansi256.grayscale_delta_threshold) {
-        const luma = rec601Luma(r, g, b);
-        if (luma < ansi256.grayscale_black_luma_threshold) return ansi256.cube_base;
-        const step = @min(@as(u32, ansi256.grayscale_steps), (luma - ansi256.grayscale_black_luma_threshold) / ansi256.grayscale_step_size);
-        return ansi256.grayscale_base + @as(u8, @intCast(step));
-    }
-    const qr = (@as(u32, r) * ansi256.cube_axis_size) / ansi256.channel_quantization_divisor;
-    const qg = (@as(u32, g) * ansi256.cube_axis_size) / ansi256.channel_quantization_divisor;
-    const qb = (@as(u32, b) * ansi256.cube_axis_size) / ansi256.channel_quantization_divisor;
-    return ansi256.cube_base + @as(u8, @intCast(ansi256.cube_red_stride * qr + ansi256.cube_green_stride * qg + qb));
-}
-
-fn formatAnsi256(buf: []u8, idx: u8) usize {
-    const prefix = "\x1b[38;5;";
-    @memcpy(buf[0..prefix.len], prefix);
-    var pos: usize = prefix.len;
-    pos += writeDecimal(buf[pos..], idx);
-    buf[pos] = 'm';
-    pos += 1;
-    return pos;
+pub fn writeSgrFg(writer: *std.Io.Writer, rgb: theme.Rgb) !void {
+    var buf: [truecolor_seq_buf_size]u8 = undefined;
+    const len = formatTruecolor(&buf, rgb.r, rgb.g, rgb.b);
+    try writer.writeAll(buf[0..len]);
 }
 
 pub const TextStyle = struct {
@@ -233,15 +114,13 @@ pub const TextStyle = struct {
     }
 };
 
-pub fn applyStyle(writer: *std.Io.Writer, mode: ColorMode, style: TextStyle) !void {
+pub fn applyStyle(writer: *std.Io.Writer, style: TextStyle) !void {
     var buf: [style_prefix_buf_size]u8 = undefined;
-    const len = buildStylePrefix(&buf, mode, style);
+    const len = buildStylePrefix(&buf, style);
     if (len > 0) try writer.writeAll(buf[0..len]);
 }
 
-fn buildStylePrefix(buf: *[style_prefix_buf_size]u8, mode: ColorMode, style: TextStyle) usize {
-    if (mode == .none) return 0;
-
+fn buildStylePrefix(buf: *[style_prefix_buf_size]u8, style: TextStyle) usize {
     var pos: usize = 0;
     if (style.bold) {
         @memcpy(buf[pos..][0..sgr.bold.len], sgr.bold);
@@ -264,12 +143,7 @@ fn buildStylePrefix(buf: *[style_prefix_buf_size]u8, mode: ColorMode, style: Tex
         pos += sgr.strikethrough.len;
     }
     if (style.fg) |fg| {
-        pos += switch (mode) {
-            .none => 0,
-            .truecolor => formatTruecolor(buf[pos..], fg.r, fg.g, fg.b),
-            .ansi256 => formatAnsi256(buf[pos..], ansi256Index(fg.r, fg.g, fg.b)),
-            .ansi16 => formatAnsi16(buf[pos..], ansi16Code(fg.r, fg.g, fg.b)),
-        };
+        pos += formatTruecolor(buf[pos..], fg.r, fg.g, fg.b);
     }
     return pos;
 }
@@ -313,12 +187,11 @@ pub const StyledState = struct {
 pub fn writeStyledRun(
     writer: *std.Io.Writer,
     enabled: bool,
-    mode: ColorMode,
     state: *StyledState,
     style: TextStyle,
     text: []const u8,
 ) !void {
-    if (!enabled or mode == .none or style.isPlain()) {
+    if (!enabled or style.isPlain()) {
         try flushStyle(writer, state);
         if (text.len > 0) try writeSanitized(writer, text);
         return;
@@ -330,7 +203,7 @@ pub fn writeStyledRun(
         }
         try writer.writeAll(reset_sequence);
     }
-    try applyStyle(writer, mode, style);
+    try applyStyle(writer, style);
     if (text.len > 0) try writeSanitized(writer, text);
     state.current = style;
 }
@@ -354,12 +227,11 @@ fn stylesEqual(a: TextStyle, b: TextStyle) bool {
 pub fn writeStyled(
     writer: *std.Io.Writer,
     enabled: bool,
-    mode: ColorMode,
     style: TextStyle,
     text: []const u8,
 ) !void {
     if (text.len == 0) return;
-    if (!enabled or mode == .none or style.isPlain()) {
+    if (!enabled or style.isPlain()) {
         try writeSanitized(writer, text);
         return;
     }
@@ -367,7 +239,7 @@ pub fn writeStyled(
     if (text.len <= write_styled_fast_path_limit and !containsControlChar(text)) {
         var buf: [write_styled_fast_path_buf_size]u8 = undefined;
         var pos: usize = 0;
-        pos += buildStylePrefix(buf[0..style_prefix_buf_size], mode, style);
+        pos += buildStylePrefix(buf[0..style_prefix_buf_size], style);
         @memcpy(buf[pos..][0..text.len], text);
         pos += text.len;
         @memcpy(buf[pos..][0..reset_sequence.len], reset_sequence);
@@ -376,7 +248,7 @@ pub fn writeStyled(
         return;
     }
 
-    try applyStyle(writer, mode, style);
+    try applyStyle(writer, style);
     try writeSanitized(writer, text);
     try writer.writeAll(reset_sequence);
 }
@@ -404,48 +276,64 @@ fn writeSanitized(writer: *std.Io.Writer, text: []const u8) !void {
     if (start < text.len) try writer.writeAll(text[start..]);
 }
 
+fn isCsiParamOrIntermediateByte(byte: u8) bool {
+    return byte >= 0x20 and byte <= 0x3f;
+}
+
+fn isCsiFinalByte(byte: u8) bool {
+    return byte >= 0x40 and byte <= 0x7e;
+}
+
+fn skipCsi(input: []const u8, start: usize) ?usize {
+    if (start + 1 >= input.len) return null;
+    if (input[start] != 0x1b or input[start + 1] != '[') return null;
+
+    var i = start + 2;
+    while (i < input.len and isCsiParamOrIntermediateByte(input[i])) : (i += 1) {}
+    if (i >= input.len or !isCsiFinalByte(input[i])) return null;
+    return i + 1;
+}
+
+/// Return a copy of `input` with ANSI CSI sequences removed.
+pub fn stripCsiAlloc(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+    var output: std.ArrayList(u8) = .empty;
+    errdefer output.deinit(allocator);
+
+    var i: usize = 0;
+    while (i < input.len) {
+        if (skipCsi(input, i)) |after| {
+            i = after;
+            continue;
+        }
+
+        try output.append(allocator, input[i]);
+        i += 1;
+    }
+
+    return output.toOwnedSlice(allocator);
+}
+
 const testing = std.testing;
 
-test "writeSgrFg emits ESC[38;2;R;G;Bm in truecolor mode" {
+test "stripCsiAlloc removes complete CSI sequences" {
+    const stripped = try stripCsiAlloc(testing.allocator, "\x1b[31mred\x1b[0m plain");
+    defer testing.allocator.free(stripped);
+
+    try testing.expectEqualStrings("red plain", stripped);
+}
+
+test "stripCsiAlloc preserves incomplete CSI bytes" {
+    const stripped = try stripCsiAlloc(testing.allocator, "plain \x1b[31");
+    defer testing.allocator.free(stripped);
+
+    try testing.expectEqualStrings("plain \x1b[31", stripped);
+}
+
+test "writeSgrFg emits ESC[38;2;R;G;Bm" {
     var buf: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf.deinit();
-    try writeSgrFg(&buf.writer, .{ .r = 59, .g = 130, .b = 246 }, .truecolor);
+    try writeSgrFg(&buf.writer, .{ .r = 59, .g = 130, .b = 246 });
     try testing.expectEqualStrings("\x1b[38;2;59;130;246m", buf.writer.buffered());
-}
-
-test "writeSgrFg writes nothing in none mode" {
-    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer buf.deinit();
-    try writeSgrFg(&buf.writer, .{ .r = 59, .g = 130, .b = 246 }, .none);
-    try testing.expectEqualStrings("", buf.writer.buffered());
-}
-
-test "writeSgrFg in ansi256 mode maps pure red to color cube 196" {
-    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer buf.deinit();
-    try writeSgrFg(&buf.writer, .{ .r = 255, .g = 0, .b = 0 }, .ansi256);
-    try testing.expectEqualStrings("\x1b[38;5;196m", buf.writer.buffered());
-}
-
-test "writeSgrFg in ansi256 mode maps mid-gray to grayscale index 244" {
-    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer buf.deinit();
-    try writeSgrFg(&buf.writer, .{ .r = 128, .g = 128, .b = 128 }, .ansi256);
-    try testing.expectEqualStrings("\x1b[38;5;244m", buf.writer.buffered());
-}
-
-test "writeSgrFg in ansi16 mode maps bright red to code 91" {
-    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer buf.deinit();
-    try writeSgrFg(&buf.writer, .{ .r = 255, .g = 64, .b = 64 }, .ansi16);
-    try testing.expectEqualStrings("\x1b[91m", buf.writer.buffered());
-}
-
-test "writeSgrFg in ansi16 mode maps dark blue to code 34" {
-    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer buf.deinit();
-    try writeSgrFg(&buf.writer, .{ .r = 0, .g = 0, .b = 64 }, .ansi16);
-    try testing.expectEqualStrings("\x1b[34m", buf.writer.buffered());
 }
 
 test "hslToRgb converts pure red HSL (0, 1, 0.5) to RGB (255, 0, 0)" {
@@ -462,48 +350,12 @@ test "rgbToHsl converts pure blue RGB (0, 0, 255) to HSL (240, 1, 0.5)" {
     try testing.expectApproxEqAbs(@as(f32, 0.5), hsl.l, 0.01);
 }
 
-test "detectColorMode returns truecolor when COLORTERM=truecolor" {
-    const env = env_like.StubEnv(.{.{ "COLORTERM", "truecolor" }});
-    try testing.expectEqual(ColorMode.truecolor, detectColorMode(env));
-}
-
-test "detectColorMode returns ansi256 when TERM contains 256color" {
-    const env = env_like.StubEnv(.{.{ "TERM", "xterm-256color" }});
-    try testing.expectEqual(ColorMode.ansi256, detectColorMode(env));
-}
-
-test "detectColorMode returns none when NO_COLOR is set" {
-    const env = env_like.StubEnv(.{
-        .{ "NO_COLOR", "1" },
-        .{ "COLORTERM", "truecolor" },
-    });
-    try testing.expectEqual(ColorMode.none, detectColorMode(env));
-}
-
-test "detectColorMode accepts pointer env adapters" {
-    const PointerEnv = struct {
-        no_color: ?[]const u8 = null,
-        colorterm: ?[]const u8 = null,
-        term: ?[]const u8 = null,
-
-        pub fn get(self: @This(), name: []const u8) ?[]const u8 {
-            if (std.mem.eql(u8, name, "NO_COLOR")) return self.no_color;
-            if (std.mem.eql(u8, name, "COLORTERM")) return self.colorterm;
-            if (std.mem.eql(u8, name, "TERM")) return self.term;
-            return null;
-        }
-    };
-
-    var env: PointerEnv = .{ .colorterm = "24bit" };
-    try testing.expectEqual(ColorMode.truecolor, detectColorMode(&env));
-}
-
 test "writeStyledRun first call emits prefix and text, no reset" {
     var buf: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf.deinit();
     var state: StyledState = .{};
     const style: TextStyle = .{ .fg = .{ .r = 255, .g = 0, .b = 0 } };
-    try writeStyledRun(&buf.writer, true, .truecolor, &state, style, "hello");
+    try writeStyledRun(&buf.writer, true, &state, style, "hello");
     try testing.expectEqualStrings("\x1b[38;2;255;0;0mhello", buf.writer.buffered());
     try testing.expect(state.current != null);
 }
@@ -513,8 +365,8 @@ test "writeStyledRun second call with same style skips prefix and reset" {
     defer buf.deinit();
     var state: StyledState = .{};
     const style: TextStyle = .{ .fg = .{ .r = 255, .g = 0, .b = 0 } };
-    try writeStyledRun(&buf.writer, true, .truecolor, &state, style, "A");
-    try writeStyledRun(&buf.writer, true, .truecolor, &state, style, "B");
+    try writeStyledRun(&buf.writer, true, &state, style, "A");
+    try writeStyledRun(&buf.writer, true, &state, style, "B");
     try testing.expectEqualStrings("\x1b[38;2;255;0;0mAB", buf.writer.buffered());
 }
 
@@ -524,8 +376,8 @@ test "writeStyledRun different style emits reset and new prefix" {
     var state: StyledState = .{};
     const red: TextStyle = .{ .fg = .{ .r = 255, .g = 0, .b = 0 } };
     const blue: TextStyle = .{ .fg = .{ .r = 0, .g = 0, .b = 255 } };
-    try writeStyledRun(&buf.writer, true, .truecolor, &state, red, "X");
-    try writeStyledRun(&buf.writer, true, .truecolor, &state, blue, "Y");
+    try writeStyledRun(&buf.writer, true, &state, red, "X");
+    try writeStyledRun(&buf.writer, true, &state, blue, "Y");
     try testing.expectEqualStrings(
         "\x1b[38;2;255;0;0mX\x1b[0m\x1b[38;2;0;0;255mY",
         buf.writer.buffered(),
@@ -537,7 +389,7 @@ test "flushStyle emits reset when state is set and nothing when cleared" {
     defer buf.deinit();
     var state: StyledState = .{};
     const red: TextStyle = .{ .fg = .{ .r = 255, .g = 0, .b = 0 } };
-    try writeStyledRun(&buf.writer, true, .truecolor, &state, red, "Z");
+    try writeStyledRun(&buf.writer, true, &state, red, "Z");
     try flushStyle(&buf.writer, &state);
     try flushStyle(&buf.writer, &state);
     try testing.expectEqualStrings("\x1b[38;2;255;0;0mZ\x1b[0m", buf.writer.buffered());
@@ -549,44 +401,9 @@ test "writeStyledRun with ansi disabled emits plain text only" {
     defer buf.deinit();
     var state: StyledState = .{};
     const style: TextStyle = .{ .fg = .{ .r = 255, .g = 0, .b = 0 } };
-    try writeStyledRun(&buf.writer, false, .truecolor, &state, style, "plain");
+    try writeStyledRun(&buf.writer, false, &state, style, "plain");
     try testing.expectEqualStrings("plain", buf.writer.buffered());
     try testing.expectEqual(@as(?TextStyle, null), state.current);
-}
-
-test "writeStyledRun with color_mode=.none emits plain text even when enabled" {
-    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer buf.deinit();
-    var state: StyledState = .{};
-    const style: TextStyle = .{ .fg = .{ .r = 255, .g = 0, .b = 0 }, .bold = true };
-    try writeStyledRun(&buf.writer, true, .none, &state, style, "plain");
-    try testing.expectEqualStrings("plain", buf.writer.buffered());
-    try testing.expectEqual(@as(?TextStyle, null), state.current);
-}
-
-test "writeStyledRun with color_mode=.ansi16 emits ansi16 fg code not truecolor" {
-    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer buf.deinit();
-    var state: StyledState = .{};
-    const style: TextStyle = .{ .fg = .{ .r = 255, .g = 64, .b = 64 } };
-    try writeStyledRun(&buf.writer, true, .ansi16, &state, style, "r");
-    try flushStyle(&buf.writer, &state);
-    const out = buf.writer.buffered();
-    try testing.expect(std.mem.indexOf(u8, out, "\x1b[91m") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "38;2;") == null);
-    try testing.expect(std.mem.indexOf(u8, out, "38;5;") == null);
-}
-
-test "writeStyledRun with color_mode=.ansi256 emits 38;5; not 38;2;" {
-    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer buf.deinit();
-    var state: StyledState = .{};
-    const style: TextStyle = .{ .fg = .{ .r = 255, .g = 0, .b = 0 } };
-    try writeStyledRun(&buf.writer, true, .ansi256, &state, style, "r");
-    try flushStyle(&buf.writer, &state);
-    const out = buf.writer.buffered();
-    try testing.expect(std.mem.indexOf(u8, out, "\x1b[38;5;") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "38;2;") == null);
 }
 
 test "writeStyled fast path boundary at 256 bytes" {
@@ -595,13 +412,13 @@ test "writeStyled fast path boundary at 256 bytes" {
     var buf256: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf256.deinit();
     const text256 = "a" ** 256;
-    try writeStyled(&buf256.writer, true, .truecolor, style, text256);
+    try writeStyled(&buf256.writer, true, style, text256);
     const out256 = buf256.writer.buffered();
 
     var buf257: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf257.deinit();
     const text257 = "a" ** 257;
-    try writeStyled(&buf257.writer, true, .truecolor, style, text257);
+    try writeStyled(&buf257.writer, true, style, text257);
     const out257 = buf257.writer.buffered();
 
     try testing.expect(std.mem.startsWith(u8, out256, "\x1b[38;2;0;0;0m"));

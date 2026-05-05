@@ -27,17 +27,26 @@ const min_hard_break_spaces: usize = 2;
 
 pub const InlineBuilder = struct {
     allocator: std.mem.Allocator,
-    nodes: std.ArrayListUnmanaged(ast.InlineNode) = .empty,
-    next: std.ArrayListUnmanaged(ast.InlineRef) = .empty,
-    temp_prev: std.ArrayListUnmanaged(TokenRef) = .empty,
-    temp_delimiters: std.ArrayListUnmanaged(Delimiter) = .empty,
-    temp_brackets: std.ArrayListUnmanaged(Bracket) = .empty,
-    temp_reference_scratch: std.ArrayListUnmanaged(u8) = .empty,
-    temp_inline_link_scratch: std.ArrayListUnmanaged(u8) = .empty,
+    scratch_allocator: std.mem.Allocator,
+    nodes: std.ArrayList(ast.InlineNode) = .empty,
+    next: std.ArrayList(ast.InlineRef) = .empty,
+    temp_prev: std.ArrayList(TokenRef) = .empty,
+    temp_delimiters: std.ArrayList(Delimiter) = .empty,
+    temp_brackets: std.ArrayList(Bracket) = .empty,
+    temp_reference_scratch: std.ArrayList(u8) = .empty,
+    temp_inline_link_scratch: std.ArrayList(u8) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) InlineBuilder {
+        return initWithScratchAllocator(allocator, allocator);
+    }
+
+    pub fn initWithScratchAllocator(
+        allocator: std.mem.Allocator,
+        scratch_allocator: std.mem.Allocator,
+    ) InlineBuilder {
         return .{
             .allocator = allocator,
+            .scratch_allocator = scratch_allocator,
         };
     }
 
@@ -45,6 +54,20 @@ pub const InlineBuilder = struct {
         if (capacity == 0) return;
         try self.nodes.ensureTotalCapacityPrecise(self.allocator, capacity);
         try self.next.ensureTotalCapacityPrecise(self.allocator, capacity);
+    }
+
+    pub fn deinitScratch(self: *InlineBuilder) void {
+        self.temp_prev.deinit(self.scratch_allocator);
+        self.temp_delimiters.deinit(self.scratch_allocator);
+        self.temp_brackets.deinit(self.scratch_allocator);
+        self.temp_reference_scratch.deinit(self.scratch_allocator);
+        self.temp_inline_link_scratch.deinit(self.scratch_allocator);
+
+        self.temp_prev = .empty;
+        self.temp_delimiters = .empty;
+        self.temp_brackets = .empty;
+        self.temp_reference_scratch = .empty;
+        self.temp_inline_link_scratch = .empty;
     }
 
     pub const Storage = struct {
@@ -85,6 +108,31 @@ pub const InlineBuilder = struct {
     }
 };
 
+test "InlineBuilder keeps materialized inline payloads outside scratch allocator" {
+    var storage_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer storage_arena.deinit();
+
+    var builder = InlineBuilder.initWithScratchAllocator(
+        storage_arena.allocator(),
+        std.testing.allocator,
+    );
+    errdefer builder.deinitScratch();
+    var link_defs: DefMap = .{};
+
+    _ = try builder.parseSlice("[x](a\\*b)", &link_defs);
+    const storage = builder.finish();
+    builder.deinitScratch();
+
+    var found_link = false;
+    for (storage.nodes) |node| {
+        if (node == .link) {
+            found_link = true;
+            try std.testing.expectEqualStrings("a*b", node.link.url);
+        }
+    }
+    try std.testing.expect(found_link);
+}
+
 const InlineChain = struct {
     head: ast.InlineRef = ast.no_inline,
     tail: ast.InlineRef = ast.no_inline,
@@ -104,6 +152,30 @@ const Delimiter = struct {
     can_open: bool,
     can_close: bool,
     active: bool = true,
+};
+
+const OpenerBottoms = struct {
+    star: [max_emphasis_delim_run]usize = [_]usize{0} ** max_emphasis_delim_run,
+    underscore: [max_emphasis_delim_run]usize = [_]usize{0} ** max_emphasis_delim_run,
+    tilde: usize = 0,
+
+    fn ptr(self: *OpenerBottoms, ch: u8, remaining: u8) *usize {
+        return switch (ch) {
+            '*' => &self.star[@as(usize, remaining) % max_emphasis_delim_run],
+            '_' => &self.underscore[@as(usize, remaining) % max_emphasis_delim_run],
+            '~' => &self.tilde,
+            else => unreachable,
+        };
+    }
+
+    fn reset(self: *OpenerBottoms, ch: u8) void {
+        switch (ch) {
+            '*' => self.star = [_]usize{0} ** max_emphasis_delim_run,
+            '_' => self.underscore = [_]usize{0} ** max_emphasis_delim_run,
+            '~' => self.tilde = 0,
+            else => unreachable,
+        }
+    }
 };
 
 const Bracket = struct {
@@ -142,11 +214,12 @@ const TempParser = struct {
     lines: []const []const u8,
     link_defs: *const DefMap,
     start_index: usize,
-    prev: std.ArrayListUnmanaged(TokenRef),
-    delimiters: std.ArrayListUnmanaged(Delimiter),
-    brackets: std.ArrayListUnmanaged(Bracket),
-    reference_label_scratch: std.ArrayListUnmanaged(u8),
-    inline_link_scratch: std.ArrayListUnmanaged(u8),
+    prev: std.ArrayList(TokenRef),
+    delimiters: std.ArrayList(Delimiter),
+    brackets: std.ArrayList(Bracket),
+    reference_label_scratch: std.ArrayList(u8),
+    inline_link_scratch: std.ArrayList(u8),
+    opener_bottoms: OpenerBottoms = .{},
     chain: InlineChain = .{},
 
     fn init(
@@ -234,7 +307,7 @@ const TempParser = struct {
                     if (col + 1 < line.len and line[col + 1] == '[') {
                         try self.appendText(line[plain_start..col]);
                         const ref = try self.appendNode(.{ .text = line[col .. col + image_opener_text.len] });
-                        try self.brackets.append(self.builder.allocator, .{
+                        try self.brackets.append(self.builder.scratch_allocator, .{
                             .node = ref,
                             .line_index = line_index,
                             .content_start = col + image_opener_text.len,
@@ -249,7 +322,7 @@ const TempParser = struct {
                 '[' => {
                     try self.appendText(line[plain_start..col]);
                     const ref = try self.appendNode(.{ .text = line[col .. col + 1] });
-                    try self.brackets.append(self.builder.allocator, .{
+                    try self.brackets.append(self.builder.scratch_allocator, .{
                         .node = ref,
                         .line_index = line_index,
                         .content_start = col + 1,
@@ -282,7 +355,7 @@ const TempParser = struct {
                         if (class.can_open or class.can_close) {
                             try self.appendText(line[plain_start..col]);
                             const ref = try self.appendNode(.{ .text = line[col .. col + run_len] });
-                            try self.delimiters.append(self.builder.allocator, .{
+                            try self.delimiters.append(self.builder.scratch_allocator, .{
                                 .node = ref,
                                 .ch = line[col],
                                 .remaining = @intCast(run_len),
@@ -306,7 +379,7 @@ const TempParser = struct {
                         if (class.can_open or class.can_close) {
                             try self.appendText(line[plain_start..col]);
                             const ref = try self.appendNode(.{ .text = line[col .. col + run_len] });
-                            try self.delimiters.append(self.builder.allocator, .{
+                            try self.delimiters.append(self.builder.scratch_allocator, .{
                                 .node = ref,
                                 .ch = '~',
                                 .remaining = @intCast(run_len),
@@ -367,7 +440,7 @@ const TempParser = struct {
         const ref = std.math.cast(TokenRef, self.builder.nodes.items.len) orelse return error.Overflow;
         try self.builder.nodes.append(self.builder.allocator, node);
         try self.builder.next.append(self.builder.allocator, no_token);
-        try self.prev.append(self.builder.allocator, no_token);
+        try self.prev.append(self.builder.scratch_allocator, no_token);
         return ref;
     }
 
@@ -464,17 +537,29 @@ const TempParser = struct {
         const line = self.lines[start_line];
         if (close_col + 1 >= line.len or line[close_col + 1] != '(') return null;
 
+        const tail_start = close_col + link_tail_open_len;
+        switch (try parse_link.parseInlineTargetBorrowing(self.builder.allocator, line[tail_start..])) {
+            .match => |target| return .{
+                .url = target.url,
+                .title = target.title,
+                .end_line = start_line,
+                .end_col = tail_start + target.end,
+            },
+            .invalid => return null,
+            .incomplete => {},
+        }
+
         self.inline_link_scratch.clearRetainingCapacity();
 
         var line_index = start_line;
-        var line_start_col = close_col + link_tail_open_len;
+        var line_start_col = tail_start;
         while (line_index < self.lines.len) {
             const current_line = self.lines[line_index];
             if (self.inline_link_scratch.items.len > 0) {
-                try self.inline_link_scratch.append(self.builder.allocator, '\n');
+                try self.inline_link_scratch.append(self.builder.scratch_allocator, '\n');
             }
             try self.inline_link_scratch.appendSlice(
-                self.builder.allocator,
+                self.builder.scratch_allocator,
                 current_line[line_start_col..],
             );
 
@@ -559,10 +644,10 @@ const TempParser = struct {
             const label = if (ref_end > ref_start)
                 line[ref_start..ref_end]
             else
-                try self.captureRange(opener.line_index, opener.content_start, line_index, close_col);
+                try self.captureRangeScratch(opener.line_index, opener.content_start, line_index, close_col);
 
             if (try lookupReferenceDefinition(
-                self.builder.allocator,
+                self.builder.scratch_allocator,
                 self.link_defs,
                 &self.reference_label_scratch,
                 label,
@@ -580,9 +665,9 @@ const TempParser = struct {
         if (close_col + 1 < line.len and (line[close_col + 1] == '(' or line[close_col + 1] == '['))
             return null;
 
-        const label = try self.captureRange(opener.line_index, opener.content_start, line_index, close_col);
+        const label = try self.captureRangeScratch(opener.line_index, opener.content_start, line_index, close_col);
         if (try lookupReferenceDefinition(
-            self.builder.allocator,
+            self.builder.scratch_allocator,
             self.link_defs,
             &self.reference_label_scratch,
             label,
@@ -611,8 +696,9 @@ const TempParser = struct {
 
     fn findMatchingOpener(self: *TempParser, closer_index: usize) ?usize {
         const closer = self.delimiters.items[closer_index];
+        const bottom = self.opener_bottoms.ptr(closer.ch, closer.remaining);
         var index = closer_index;
-        while (index > 0) {
+        while (index > bottom.*) {
             index -= 1;
             const opener = self.delimiters.items[index];
             if (!opener.active or !opener.can_open) continue;
@@ -623,6 +709,7 @@ const TempParser = struct {
 
             return index;
         }
+        bottom.* = closer_index;
         return null;
     }
 
@@ -682,6 +769,7 @@ const TempParser = struct {
             self.chain.tail = closer_node;
         }
 
+        self.opener_bottoms.reset(opener.ch);
         return true;
     }
 
@@ -705,6 +793,27 @@ const TempParser = struct {
         end_line: usize,
         end_col: usize,
     ) ![]const u8 {
+        return self.captureRangeWithAllocator(self.builder.allocator, start_line, start_col, end_line, end_col);
+    }
+
+    fn captureRangeScratch(
+        self: *TempParser,
+        start_line: usize,
+        start_col: usize,
+        end_line: usize,
+        end_col: usize,
+    ) ![]const u8 {
+        return self.captureRangeWithAllocator(self.builder.scratch_allocator, start_line, start_col, end_line, end_col);
+    }
+
+    fn captureRangeWithAllocator(
+        self: *TempParser,
+        allocator: std.mem.Allocator,
+        start_line: usize,
+        start_col: usize,
+        end_line: usize,
+        end_col: usize,
+    ) ![]const u8 {
         if (start_line == end_line) {
             return self.lines[start_line][start_col..end_col];
         }
@@ -723,7 +832,6 @@ const TempParser = struct {
             if (line_index < end_line) total_len += 1;
         }
 
-        const allocator = self.builder.allocator;
         const buffer = try allocator.alloc(u8, total_len);
         var out: usize = 0;
         line_index = start_line;
@@ -841,7 +949,7 @@ fn violatesMultipleOfThree(opener_len: u8, closer_len: u8) bool {
 fn lookupReferenceDefinition(
     allocator: std.mem.Allocator,
     link_defs: *const DefMap,
-    scratch: *std.ArrayListUnmanaged(u8),
+    scratch: *std.ArrayList(u8),
     label: []const u8,
 ) !?ast.LinkDef {
     if (!parse_link.referenceLabelLengthFits(label)) return null;
@@ -1030,9 +1138,9 @@ fn tryParseBareUrl(text: []const u8, start: usize) ?BareUrlResult {
     if (pos <= start + prefix_len) return null;
 
     const domain_start = start + prefix_len;
-    const path_start = std.mem.indexOfScalarPos(u8, text[0..pos], domain_start, '/') orelse pos;
+    const path_start = std.mem.findScalarPos(u8, text[0..pos], domain_start, '/') orelse pos;
     const domain = text[domain_start..path_start];
-    if (std.mem.indexOfScalar(u8, domain, '.') == null) return null;
+    if (std.mem.findScalar(u8, domain, '.') == null) return null;
 
     return .{ .end = pos };
 }

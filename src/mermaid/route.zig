@@ -1,6 +1,7 @@
 const std = @import("std");
 const types = @import("types.zig");
 const canvas_mod = @import("canvas.zig");
+const text_layout = @import("text_layout.zig");
 const width_mod = @import("../term/width.zig");
 
 pub const RouteError = error{
@@ -18,6 +19,7 @@ const connectivity_left_shift = 2;
 const connectivity_right_shift = 3;
 
 pub const Dir4 = enum { up, down, left, right };
+const astar_direction_count = @typeInfo(Dir4).@"enum".fields.len;
 
 pub const Axis = enum { horizontal, vertical };
 
@@ -35,30 +37,121 @@ pub const EdgeEndpoints = struct {
 
 pub const SearchKey = struct { row: u32, col: u32, dir: Dir4 };
 
+pub const RoutePath = struct {
+    points: []SearchKey = &.{},
+
+    pub fn deinit(self: *RoutePath, allocator: std.mem.Allocator) void {
+        allocator.free(self.points);
+        self.* = .{};
+    }
+};
+
+pub const EdgeRoute = struct {
+    endpoints: EdgeEndpoints,
+    label_path: RoutePath = .{},
+
+    pub fn deinit(self: *EdgeRoute, allocator: std.mem.Allocator) void {
+        self.label_path.deinit(allocator);
+    }
+};
+
+pub const RouteScratch = struct {
+    open: std.PriorityQueue(AStarEntry, void, lessEntry) = .empty,
+    came_from: std.ArrayList(SearchKey) = .empty,
+    g_score: std.ArrayList(u32) = .empty,
+    generation: std.ArrayList(u32) = .empty,
+    current_generation: u32 = 0,
+
+    pub fn deinit(self: *RouteScratch, allocator: std.mem.Allocator) void {
+        self.open.deinit(allocator);
+        self.came_from.deinit(allocator);
+        self.g_score.deinit(allocator);
+        self.generation.deinit(allocator);
+        self.* = .{};
+    }
+
+    fn begin(self: *RouteScratch, allocator: std.mem.Allocator, rows: usize, cols: usize) error{OutOfMemory}!bool {
+        if (rows > std.math.maxInt(u32) or cols > std.math.maxInt(u32)) return false;
+        const cells = std.math.mul(usize, rows, cols) catch return error.OutOfMemory;
+        const state_count = std.math.mul(usize, cells, astar_direction_count) catch return error.OutOfMemory;
+
+        const old_len = self.generation.items.len;
+        try self.came_from.resize(allocator, state_count);
+        try self.g_score.resize(allocator, state_count);
+        try self.generation.resize(allocator, state_count);
+        if (state_count > old_len) @memset(self.generation.items[old_len..], 0);
+
+        self.open.clearRetainingCapacity();
+        if (self.current_generation == std.math.maxInt(u32)) {
+            @memset(self.generation.items, 0);
+            self.current_generation = 1;
+        } else {
+            self.current_generation += 1;
+        }
+        return true;
+    }
+
+    fn score(self: *const RouteScratch, index: usize) u32 {
+        return if (self.generation.items[index] == self.current_generation)
+            self.g_score.items[index]
+        else
+            std.math.maxInt(u32);
+    }
+
+    fn setScore(self: *RouteScratch, index: usize, value: u32) void {
+        self.generation.items[index] = self.current_generation;
+        self.g_score.items[index] = value;
+    }
+};
+
+pub const ProtectedRect = struct {
+    top: usize,
+    left: usize,
+    height: usize,
+    width: usize,
+};
+
+pub const WrappedLabelAnchor = enum { start, middle, end };
+
+const LabelPlacement = struct {
+    row: usize,
+    col: usize,
+};
+
 pub fn cellStepW(layout: *const types.Layout) usize {
-    return layout.cell_w + gutter_w;
+    return layout.cell_w +| gutter_w;
 }
 
 pub fn cellStepH(layout: *const types.Layout) usize {
-    return layout.cell_h + gutter_h;
+    return layout.cell_h +| gutter_h;
 }
 
 pub fn canvasRows(layout: *const types.Layout) usize {
     if (layout.rows == 0) return 0;
-    return layout.rows * layout.cell_h + (layout.rows - 1) * gutter_h + 2 * layout.outer_pad;
+    const cells = layout.rows *| layout.cell_h;
+    const gutters = (layout.rows - 1) *| gutter_h;
+    const padding = 2 *| layout.verticalOuterPad();
+    return cells +| gutters +| padding;
 }
 
 pub fn canvasCols(layout: *const types.Layout) usize {
-    if (layout.cols == 0) return 0;
-    return layout.cols * layout.cell_w + (layout.cols - 1) * gutter_w + 2 * layout.outer_pad;
+    return canvasColsForGrid(layout.cols, layout.cell_w, layout.outer_pad);
+}
+
+pub fn canvasColsForGrid(cols: usize, cell_w: usize, outer_pad: usize) usize {
+    if (cols == 0) return 0;
+    const cells = cols *| cell_w;
+    const gutters = (cols - 1) *| gutter_w;
+    const padding = 2 *| outer_pad;
+    return cells +| gutters +| padding;
 }
 
 pub fn boxTop(layout: *const types.Layout, grid_row: usize) usize {
-    return layout.outer_pad + grid_row * cellStepH(layout);
+    return layout.verticalOuterPad() +| (grid_row *| cellStepH(layout));
 }
 
 pub fn boxLeft(layout: *const types.Layout, grid_col: usize) usize {
-    return layout.outer_pad + grid_col * cellStepW(layout);
+    return layout.outer_pad +| (grid_col *| cellStepW(layout));
 }
 
 pub fn routeEdge(
@@ -68,12 +161,30 @@ pub fn routeEdge(
     edge: types.Edge,
     direction: types.Direction,
     glyphs: *const canvas_mod.GlyphSet,
+    defer_label_placement: bool,
     ambiguous: width_mod.AmbiguousWidth,
-) RouteError!void {
-    const ports = computePorts(layout, edge, direction) orelse return;
+) RouteError!?EdgeRoute {
+    var scratch: RouteScratch = .{};
+    defer scratch.deinit(allocator);
+    return routeEdgeWithScratch(allocator, &scratch, canvas, layout, edge, direction, glyphs, defer_label_placement, ambiguous);
+}
 
-    const maybe_path = aStarPath(
+pub fn routeEdgeWithScratch(
+    allocator: std.mem.Allocator,
+    scratch: *RouteScratch,
+    canvas: *canvas_mod.Canvas,
+    layout: *const types.Layout,
+    edge: types.Edge,
+    direction: types.Direction,
+    glyphs: *const canvas_mod.GlyphSet,
+    defer_label_placement: bool,
+    ambiguous: width_mod.AmbiguousWidth,
+) RouteError!?EdgeRoute {
+    const ports = computePorts(layout, edge, direction) orelse return null;
+
+    const maybe_path = aStarPathWithScratch(
         allocator,
+        scratch,
         layout,
         canvas.rows,
         canvas.cols,
@@ -90,17 +201,19 @@ pub fn routeEdge(
 
     if (maybe_path) |path_list| {
         var path = path_list;
-        defer path.deinit(allocator);
+        errdefer path.deinit(allocator);
 
         drawAStarPath(canvas, path.items, glyphs, ports.initial_dir, edge.style);
 
-        if (edge.label) |label| {
-            placeEdgeLabelOnPath(canvas, label, path.items, ambiguous);
+        if (!defer_label_placement) {
+            if (edge.label) |label| {
+                try placeEdgeLabelOnPath(canvas, label, path.items, ambiguous);
+            }
         }
-        return;
+        return try edgeRouteFromPath(allocator, &path, ports.initial_dir, defer_label_placement);
     }
 
-    try routeFallback(canvas, layout, edge, direction, glyphs, ambiguous, edge.style);
+    return try routeFallback(allocator, canvas, layout, edge, direction, glyphs, defer_label_placement, ambiguous, edge.style);
 }
 
 pub fn routeEdgeWithPorts(
@@ -117,10 +230,52 @@ pub fn routeEdgeWithPorts(
     edge_label: ?[]const u8,
     edge_style: types.EdgeStyle,
     glyphs: *const canvas_mod.GlyphSet,
+    defer_label_placement: bool,
     ambiguous: width_mod.AmbiguousWidth,
-) RouteError!EdgeEndpoints {
-    const maybe_path = aStarPath(
+) RouteError!EdgeRoute {
+    var scratch: RouteScratch = .{};
+    defer scratch.deinit(allocator);
+    return routeEdgeWithPortsScratch(
         allocator,
+        &scratch,
+        canvas,
+        layout,
+        from_id,
+        to_id,
+        start_row,
+        start_col,
+        start_dir,
+        goal_row,
+        goal_col,
+        edge_label,
+        edge_style,
+        glyphs,
+        defer_label_placement,
+        ambiguous,
+    );
+}
+
+pub fn routeEdgeWithPortsScratch(
+    allocator: std.mem.Allocator,
+    scratch: *RouteScratch,
+    canvas: *canvas_mod.Canvas,
+    layout: *const types.Layout,
+    from_id: types.NodeId,
+    to_id: types.NodeId,
+    start_row: usize,
+    start_col: usize,
+    start_dir: Dir4,
+    goal_row: usize,
+    goal_col: usize,
+    edge_label: ?[]const u8,
+    edge_style: types.EdgeStyle,
+    glyphs: *const canvas_mod.GlyphSet,
+    defer_label_placement: bool,
+    ambiguous: width_mod.AmbiguousWidth,
+) RouteError!EdgeRoute {
+    const maybe_path = aStarPathWithScratch(
+        allocator,
+        scratch,
         layout,
         canvas.rows,
         canvas.cols,
@@ -137,19 +292,20 @@ pub fn routeEdgeWithPorts(
 
     if (maybe_path) |path_list| {
         var path = path_list;
-        defer path.deinit(allocator);
+        errdefer path.deinit(allocator);
 
         drawAStarPath(canvas, path.items, glyphs, start_dir, edge_style);
 
-        if (edge_label) |label| {
-            placeEdgeLabelOnPath(canvas, label, path.items, ambiguous);
+        if (!defer_label_placement) {
+            if (edge_label) |label| {
+                try placeEdgeLabelOnPath(canvas, label, path.items, ambiguous);
+            }
         }
 
-        const end_dir = if (path.items.len == 0) start_dir else path.items[path.items.len - 1].dir;
-        return .{ .start_dir = start_dir, .end_dir = end_dir };
+        return try edgeRouteFromPath(allocator, &path, start_dir, defer_label_placement);
     }
 
-    try drawPortFallback(
+    return try drawPortFallback(
         allocator,
         canvas,
         start_row,
@@ -160,10 +316,9 @@ pub fn routeEdgeWithPorts(
         edge_label,
         edge_style,
         glyphs,
+        defer_label_placement,
         ambiguous,
     );
-
-    return .{ .start_dir = start_dir, .end_dir = .up };
 }
 
 fn drawPortFallback(
@@ -177,59 +332,143 @@ fn drawPortFallback(
     edge_label: ?[]const u8,
     edge_style: types.EdgeStyle,
     glyphs: *const canvas_mod.GlyphSet,
+    defer_label_placement: bool,
     ambiguous: width_mod.AmbiguousWidth,
-) RouteError!void {
-    if (start_row >= canvas.rows or start_col >= canvas.cols) return;
-    if (goal_row >= canvas.rows or goal_col >= canvas.cols) return;
-    if (start_dir != .up) return;
-    if (goal_row >= start_row) return;
+) RouteError!EdgeRoute {
+    if (start_row >= canvas.rows or start_col >= canvas.cols) return edgeRouteWithoutPath(start_dir, start_dir);
+    if (goal_row >= canvas.rows or goal_col >= canvas.cols) return edgeRouteWithoutPath(start_dir, start_dir);
 
-    var path: std.ArrayListUnmanaged(SearchKey) = .empty;
-    defer path.deinit(allocator);
-
+    var path: std.ArrayList(SearchKey) = .empty;
+    errdefer path.deinit(allocator);
     try path.append(allocator, .{
         .row = @intCast(start_row),
         .col = @intCast(start_col),
-        .dir = .up,
+        .dir = start_dir,
     });
 
-    const bend_row = if (start_col == goal_col) goal_row else (start_row + goal_row) / 2;
+    switch (axisOf(start_dir)) {
+        .vertical => {
+            const forward = switch (start_dir) {
+                .up => goal_row < start_row,
+                .down => goal_row > start_row,
+                else => unreachable,
+            };
+            if (!forward) {
+                path.deinit(allocator);
+                return edgeRouteWithoutPath(start_dir, start_dir);
+            }
 
-    var r: usize = start_row;
-    while (r > bend_row) : (r -= 1) {
-        try path.append(allocator, .{
-            .row = @intCast(r - 1),
-            .col = @intCast(start_col),
-            .dir = .up,
-        });
-    }
+            const bend_row = if (start_col == goal_col) goal_row else (start_row + goal_row) / 2;
+            try appendPortVerticalSegment(allocator, &path, start_row, bend_row, start_col, start_dir);
 
-    if (start_col != goal_col) {
-        const horiz_dir: Dir4 = if (goal_col > start_col) .right else .left;
-        var c: usize = start_col;
-        while (c != goal_col) {
-            if (goal_col > start_col) c += 1 else c -= 1;
-            try path.append(allocator, .{
-                .row = @intCast(bend_row),
-                .col = @intCast(c),
-                .dir = horiz_dir,
-            });
-        }
+            if (start_col != goal_col) {
+                const horiz_dir: Dir4 = if (goal_col > start_col) .right else .left;
+                try appendPortHorizontalSegment(allocator, &path, start_col, goal_col, bend_row, horiz_dir);
+                try appendPortVerticalSegment(allocator, &path, bend_row, goal_row, goal_col, start_dir);
+            }
+        },
+        .horizontal => {
+            const forward = switch (start_dir) {
+                .left => goal_col < start_col,
+                .right => goal_col > start_col,
+                else => unreachable,
+            };
+            if (!forward) {
+                path.deinit(allocator);
+                return edgeRouteWithoutPath(start_dir, start_dir);
+            }
 
-        r = bend_row;
-        while (r > goal_row) : (r -= 1) {
-            try path.append(allocator, .{
-                .row = @intCast(r - 1),
-                .col = @intCast(goal_col),
-                .dir = .up,
-            });
-        }
+            const bend_col = if (start_row == goal_row) goal_col else (start_col + goal_col) / 2;
+            try appendPortHorizontalSegment(allocator, &path, start_col, bend_col, start_row, start_dir);
+
+            if (start_row != goal_row) {
+                const vert_dir: Dir4 = if (goal_row > start_row) .down else .up;
+                try appendPortVerticalSegment(allocator, &path, start_row, goal_row, bend_col, vert_dir);
+                try appendPortHorizontalSegment(allocator, &path, bend_col, goal_col, goal_row, start_dir);
+            }
+        },
     }
 
     drawAStarPath(canvas, path.items, glyphs, start_dir, edge_style);
 
-    if (edge_label) |label| {
-        placeEdgeLabelOnPath(canvas, label, path.items, ambiguous);
+    if (!defer_label_placement) {
+        if (edge_label) |label| {
+            try placeEdgeLabelOnPath(canvas, label, path.items, ambiguous);
+        }
+    }
+
+    return try edgeRouteFromPath(allocator, &path, start_dir, defer_label_placement);
+}
+
+fn appendPortVerticalSegment(
+    allocator: std.mem.Allocator,
+    path: *std.ArrayList(SearchKey),
+    from_row: usize,
+    to_row: usize,
+    col: usize,
+    dir: Dir4,
+) RouteError!void {
+    if (from_row == to_row) return;
+    var r = from_row;
+    while (r != to_row) {
+        if (to_row > from_row) r += 1 else r -= 1;
+        try path.append(allocator, .{
+            .row = @intCast(r),
+            .col = @intCast(col),
+            .dir = dir,
+        });
+    }
+}
+
+fn appendPortHorizontalSegment(
+    allocator: std.mem.Allocator,
+    path: *std.ArrayList(SearchKey),
+    from_col: usize,
+    to_col: usize,
+    row: usize,
+    dir: Dir4,
+) RouteError!void {
+    if (from_col == to_col) return;
+    var c = from_col;
+    while (c != to_col) {
+        if (to_col > from_col) c += 1 else c -= 1;
+        try path.append(allocator, .{
+            .row = @intCast(row),
+            .col = @intCast(c),
+            .dir = dir,
+        });
+    }
+}
+
+fn edgeRouteWithoutPath(start_dir: Dir4, end_dir: Dir4) EdgeRoute {
+    return .{ .endpoints = .{ .start_dir = start_dir, .end_dir = end_dir } };
+}
+
+fn edgeRouteFromPath(
+    allocator: std.mem.Allocator,
+    path: *std.ArrayList(SearchKey),
+    start_dir: Dir4,
+    keep_path: bool,
+) RouteError!EdgeRoute {
+    const end_dir = if (path.items.len == 0) start_dir else path.items[path.items.len - 1].dir;
+    if (keep_path) {
+        return .{
+            .endpoints = .{ .start_dir = start_dir, .end_dir = end_dir },
+            .label_path = .{ .points = try path.toOwnedSlice(allocator) },
+        };
+    }
+    path.deinit(allocator);
+    path.* = .empty;
+    return edgeRouteWithoutPath(start_dir, end_dir);
+}
+
+fn appendPathPoint(path: ?*std.ArrayList(SearchKey), allocator: std.mem.Allocator, row: usize, col: usize, dir: Dir4) RouteError!void {
+    if (path) |p| {
+        try p.append(allocator, .{
+            .row = @intCast(row),
+            .col = @intCast(col),
+            .dir = dir,
+        });
     }
 }
 
@@ -264,11 +503,34 @@ fn computePorts(layout: *const types.Layout, edge: types.Edge, direction: types.
             .goal_col = tgt_w_center,
         },
         .left_right => .{
-            .start_row = src_h_center,
-            .start_col = src_left + layout.cell_w - 1,
-            .initial_dir = .right,
-            .goal_row = tgt_h_center,
-            .goal_col = if (tgt_left == 0) 0 else tgt_left - 1,
+            .start_row = if (tgt_top > src_top and tgt_left <= src_left)
+                src_top + layout.cell_h - 1
+            else if (tgt_top < src_top and tgt_left <= src_left)
+                src_top
+            else
+                src_h_center,
+            .start_col = if (tgt_left <= src_left and tgt_top != src_top)
+                src_w_center
+            else
+                src_left + layout.cell_w - 1,
+            .initial_dir = if (tgt_top > src_top and tgt_left <= src_left)
+                .down
+            else if (tgt_top < src_top and tgt_left <= src_left)
+                .up
+            else
+                .right,
+            .goal_row = if (tgt_top > src_top and tgt_left <= src_left)
+                tgt_top - 1
+            else if (tgt_top < src_top and tgt_left <= src_left)
+                tgt_top + layout.cell_h
+            else
+                tgt_h_center,
+            .goal_col = if (tgt_left <= src_left and tgt_top != src_top)
+                tgt_w_center
+            else if (tgt_left == 0)
+                0
+            else
+                tgt_left - 1,
         },
         else => unreachable,
     };
@@ -288,7 +550,8 @@ fn lessEntry(context: void, a: AStarEntry, b: AStarEntry) std.math.Order {
 fn manhattan(a_r: usize, a_c: usize, b_r: usize, b_c: usize) u32 {
     const dr = if (a_r > b_r) a_r - b_r else b_r - a_r;
     const dc = if (a_c > b_c) a_c - b_c else b_c - a_c;
-    return @intCast(dr + dc);
+    const total = std.math.add(usize, dr, dc) catch return std.math.maxInt(u32);
+    return std.math.cast(u32, total) orelse std.math.maxInt(u32);
 }
 
 fn isBoxInterior(
@@ -323,26 +586,51 @@ pub fn aStarPath(
     start_dir: Dir4,
     goal_row: usize,
     goal_col: usize,
-) RouteError!?std.ArrayListUnmanaged(SearchKey) {
+) error{OutOfMemory}!?std.ArrayList(SearchKey) {
+    var scratch: RouteScratch = .{};
+    defer scratch.deinit(allocator);
+    return aStarPathWithScratch(
+        allocator,
+        &scratch,
+        layout,
+        canvas_rows_,
+        canvas_cols_,
+        from_id,
+        to_id,
+        start_row,
+        start_col,
+        start_dir,
+        goal_row,
+        goal_col,
+    );
+}
+
+fn aStarPathWithScratch(
+    allocator: std.mem.Allocator,
+    scratch: *RouteScratch,
+    layout: *const types.Layout,
+    canvas_rows_: usize,
+    canvas_cols_: usize,
+    from_id: types.NodeId,
+    to_id: types.NodeId,
+    start_row: usize,
+    start_col: usize,
+    start_dir: Dir4,
+    goal_row: usize,
+    goal_col: usize,
+) error{OutOfMemory}!?std.ArrayList(SearchKey) {
     if (start_row >= canvas_rows_ or start_col >= canvas_cols_) return null;
     if (goal_row >= canvas_rows_ or goal_col >= canvas_cols_) return null;
-
-    var open = std.PriorityQueue(AStarEntry, void, lessEntry).empty;
-    defer open.deinit(allocator);
-
-    var came_from = std.AutoHashMap(SearchKey, SearchKey).init(allocator);
-    defer came_from.deinit();
-
-    var g_score = std.AutoHashMap(SearchKey, u32).init(allocator);
-    defer g_score.deinit();
+    if (!try scratch.begin(allocator, canvas_rows_, canvas_cols_)) return null;
 
     const start_key: SearchKey = .{
         .row = @intCast(start_row),
         .col = @intCast(start_col),
         .dir = start_dir,
     };
-    try g_score.put(start_key, 0);
-    try open.push(allocator, .{
+    const start_index = stateIndex(canvas_cols_, start_key);
+    scratch.setScore(start_index, 0);
+    try scratch.open.push(allocator, .{
         .key = start_key,
         .g = 0,
         .f = manhattan(start_row, start_col, goal_row, goal_col),
@@ -355,12 +643,13 @@ pub fn aStarPath(
         .{ .dr = 0, .dc = 1, .dir = .right },
     };
 
-    while (open.pop()) |current| {
-        const recorded = g_score.get(current.key) orelse std.math.maxInt(u32);
+    while (scratch.open.pop()) |current| {
+        const current_index = stateIndex(canvas_cols_, current.key);
+        const recorded = scratch.score(current_index);
         if (recorded < current.g) continue;
 
         if (current.key.row == goal_row and current.key.col == goal_col) {
-            return try reconstructPath(allocator, came_from, current.key);
+            return try reconstructPath(allocator, scratch, canvas_cols_, start_key, current.key);
         }
 
         for (neighbors) |n| {
@@ -377,33 +666,44 @@ pub fn aStarPath(
             if (at_goal and n.dir != start_dir) continue;
 
             const turn_penalty: u32 = if (n.dir != current.key.dir) astar_turn_penalty else 0;
-            const tentative_g = current.g + astar_step_cost + turn_penalty;
+            const step_with_turn = std.math.add(u32, astar_step_cost, turn_penalty) catch std.math.maxInt(u32);
+            const tentative_g = std.math.add(u32, current.g, step_with_turn) catch continue;
 
             const neighbor_key: SearchKey = .{ .row = new_row, .col = new_col, .dir = n.dir };
-            const existing_g = g_score.get(neighbor_key) orelse std.math.maxInt(u32);
+            const neighbor_index = stateIndex(canvas_cols_, neighbor_key);
+            const existing_g = scratch.score(neighbor_index);
             if (tentative_g >= existing_g) continue;
 
-            try g_score.put(neighbor_key, tentative_g);
-            try came_from.put(neighbor_key, current.key);
+            scratch.setScore(neighbor_index, tentative_g);
+            scratch.came_from.items[neighbor_index] = current.key;
             const h = manhattan(new_row, new_col, goal_row, goal_col);
-            try open.push(allocator, .{ .key = neighbor_key, .g = tentative_g, .f = tentative_g + h });
+            const f = std.math.add(u32, tentative_g, h) catch std.math.maxInt(u32);
+            try scratch.open.push(allocator, .{ .key = neighbor_key, .g = tentative_g, .f = f });
         }
     }
 
     return null;
 }
 
+fn stateIndex(canvas_cols_: usize, key: SearchKey) usize {
+    const cell_index = @as(usize, key.row) * canvas_cols_ + @as(usize, key.col);
+    return cell_index * astar_direction_count + @intFromEnum(key.dir);
+}
+
 fn reconstructPath(
     allocator: std.mem.Allocator,
-    came_from: std.AutoHashMap(SearchKey, SearchKey),
+    scratch: *const RouteScratch,
+    canvas_cols_: usize,
+    start: SearchKey,
     end: SearchKey,
-) !std.ArrayListUnmanaged(SearchKey) {
-    var path: std.ArrayListUnmanaged(SearchKey) = .empty;
+) error{OutOfMemory}!std.ArrayList(SearchKey) {
+    var path: std.ArrayList(SearchKey) = .empty;
     errdefer path.deinit(allocator);
 
     var cur = end;
     try path.append(allocator, cur);
-    while (came_from.get(cur)) |parent| {
+    while (!std.meta.eql(cur, start)) {
+        const parent = scratch.came_from.items[stateIndex(canvas_cols_, cur)];
         try path.append(allocator, parent);
         cur = parent;
     }
@@ -528,7 +828,7 @@ fn placeEdgeLabelOnPath(
     label: []const u8,
     path: []const SearchKey,
     ambiguous: width_mod.AmbiguousWidth,
-) void {
+) RouteError!void {
     const label_w = width_mod.displayWidth(label, ambiguous);
     if (label_w == 0 or path.len < 2) return;
 
@@ -564,35 +864,186 @@ fn placeEdgeLabelOnPath(
         const half = label_w / 2;
         const col = if (mid.col > half) mid.col - half else 0;
         if (col + label_w <= canvas.cols) {
-            canvas.drawLabel(mid.row - 1, col, label, ambiguous);
+            try canvas.drawLabel(mid.row - 1, col, label, ambiguous);
+            return;
         }
         return;
     }
 
     const col_right = mid.col + 2;
     if (col_right + label_w <= canvas.cols) {
-        canvas.drawLabel(mid.row, col_right, label, ambiguous);
+        try canvas.drawLabel(mid.row, col_right, label, ambiguous);
         return;
     }
     const half = label_w / 2;
     const col = if (mid.col > half) mid.col - half else 0;
     if (col + label_w <= canvas.cols) {
-        canvas.drawLabel(mid.row, col, label, ambiguous);
+        try canvas.drawLabel(mid.row, col, label, ambiguous);
     }
 }
 
+pub fn placeWrappedLabelOnRouteAnchored(
+    allocator: std.mem.Allocator,
+    canvas: *canvas_mod.Canvas,
+    protected_rects: []const ProtectedRect,
+    path: []const SearchKey,
+    label: []const u8,
+    max_width: usize,
+    ambiguous: width_mod.AmbiguousWidth,
+    glyphs: *const canvas_mod.GlyphSet,
+    anchor: WrappedLabelAnchor,
+) RouteError!bool {
+    if (label.len == 0 or path.len == 0 or max_width == 0) return false;
+
+    var layout = text_layout.layoutLabel(allocator, label, @min(max_width, canvas.cols), ambiguous) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    defer layout.deinit();
+
+    if (layout.lines.len == 0 or layout.max_line_width == 0) return false;
+    if (layout.lines.len > canvas.rows or layout.max_line_width > canvas.cols) return false;
+
+    const anchor_point = routeLabelAnchor(path, anchor);
+    const preferred_row = if (anchor_point.row > layout.lines.len / 2)
+        anchor_point.row - layout.lines.len / 2
+    else
+        0;
+    const preferred_col = if (anchor_point.col > layout.max_line_width / 2)
+        anchor_point.col - layout.max_line_width / 2
+    else
+        0;
+
+    const placement = findWrappedLabelPlacement(
+        canvas,
+        protected_rects,
+        path,
+        layout.lines,
+        layout.max_line_width,
+        preferred_row,
+        preferred_col,
+        glyphs,
+    ) orelse return false;
+
+    for (layout.lines, 0..) |line, idx| {
+        const col = placement.col + (layout.max_line_width - line.width) / 2;
+        try canvas.drawLabel(placement.row + idx, col, line.text, ambiguous);
+    }
+    return true;
+}
+
+fn routeLabelAnchor(path: []const SearchKey, anchor: WrappedLabelAnchor) LabelPlacement {
+    const idx = switch (anchor) {
+        .start => 0,
+        .middle => path.len / 2,
+        .end => path.len - 1,
+    };
+    const point = path[idx];
+    return .{
+        .row = @intCast(point.row),
+        .col = @intCast(point.col),
+    };
+}
+
+fn findWrappedLabelPlacement(
+    canvas: *const canvas_mod.Canvas,
+    protected_rects: []const ProtectedRect,
+    path: []const SearchKey,
+    lines: []const types.LabelLine,
+    max_line_width: usize,
+    preferred_row: usize,
+    preferred_col: usize,
+    glyphs: *const canvas_mod.GlyphSet,
+) ?LabelPlacement {
+    const max_row = canvas.rows - lines.len;
+    const max_col = canvas.cols - max_line_width;
+    const base_row = @min(preferred_row, max_row);
+    const base_col = @min(preferred_col, max_col);
+
+    var best: ?LabelPlacement = null;
+    var best_score: usize = std.math.maxInt(usize);
+
+    for (path) |point| {
+        const point_row: usize = @intCast(point.row);
+        const point_col: usize = @intCast(point.col);
+        const row_first = if (point_row > lines.len) point_row - lines.len else 0;
+        const row_last = @min(point_row +| 1, max_row);
+        const col_first = if (point_col > max_line_width) point_col - max_line_width else 0;
+        const col_last = @min(point_col +| 1, max_col);
+
+        for (row_first..row_last + 1) |row| {
+            for (col_first..col_last + 1) |col| {
+                const placement: LabelPlacement = .{ .row = row, .col = col };
+                if (!canPlaceWrappedLabel(canvas, protected_rects, lines, max_line_width, placement, glyphs)) continue;
+
+                const row_distance = if (row > base_row) row - base_row else base_row - row;
+                const col_distance = if (col > base_col) col - base_col else base_col - col;
+                const score = (row_distance *| canvas.cols) +| col_distance;
+                if (score < best_score) {
+                    best = placement;
+                    best_score = score;
+                }
+            }
+        }
+    }
+
+    return best;
+}
+
+fn canPlaceWrappedLabel(
+    canvas: *const canvas_mod.Canvas,
+    protected_rects: []const ProtectedRect,
+    lines: []const types.LabelLine,
+    max_line_width: usize,
+    placement: LabelPlacement,
+    glyphs: *const canvas_mod.GlyphSet,
+) bool {
+    for (lines, 0..) |line, idx| {
+        const row = placement.row + idx;
+        const col = placement.col + (max_line_width - line.width) / 2;
+        var c = col;
+        while (c < col + line.width) : (c += 1) {
+            if (isProtectedRectCell(protected_rects, row, c)) return false;
+            const cell = canvas.cells[row * canvas.cols + c];
+            if (!isRouteLabelDrawableCell(cell, glyphs)) return false;
+        }
+    }
+    return true;
+}
+
+fn isProtectedRectCell(rects: []const ProtectedRect, row: usize, col: usize) bool {
+    for (rects) |rect| {
+        if (row >= rect.top and row < rect.top + rect.height and
+            col >= rect.left and col < rect.left + rect.width)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn isRouteLabelDrawableCell(cell: canvas_mod.Cell, glyphs: *const canvas_mod.GlyphSet) bool {
+    if (cell.kind != .glyph) return false;
+    if (cell.cp == ' ') return true;
+    if (cell.cp == glyphs.h_line_dashed or cell.cp == glyphs.v_line_dashed) return true;
+    if (isArrowHead(cell.cp, glyphs)) return false;
+    const own = connectivity(cell.cp, glyphs);
+    return own.u or own.d or own.l or own.r;
+}
+
 fn routeFallback(
+    allocator: std.mem.Allocator,
     canvas: *canvas_mod.Canvas,
     layout: *const types.Layout,
     edge: types.Edge,
     direction: types.Direction,
     glyphs: *const canvas_mod.GlyphSet,
+    defer_label_placement: bool,
     ambiguous: width_mod.AmbiguousWidth,
     edge_style: types.EdgeStyle,
-) RouteError!void {
+) RouteError!?EdgeRoute {
     switch (direction) {
-        .top_down => try routeVertical(canvas, layout, edge, glyphs, ambiguous, .down, edge_style),
-        .left_right => try routeHorizontal(canvas, layout, edge, glyphs, ambiguous, .right, edge_style),
+        .top_down => return try routeVertical(allocator, canvas, layout, edge, glyphs, defer_label_placement, ambiguous, .down, edge_style),
+        .left_right => return try routeHorizontal(allocator, canvas, layout, edge, glyphs, defer_label_placement, ambiguous, .right, edge_style),
         else => unreachable,
     }
 }
@@ -601,14 +1052,16 @@ const VerticalFlow = enum { down, up };
 const HorizontalFlow = enum { right, left };
 
 fn routeVertical(
+    allocator: std.mem.Allocator,
     canvas: *canvas_mod.Canvas,
     layout: *const types.Layout,
     edge: types.Edge,
     glyphs: *const canvas_mod.GlyphSet,
+    defer_label_placement: bool,
     ambiguous: width_mod.AmbiguousWidth,
     flow: VerticalFlow,
     edge_style: types.EdgeStyle,
-) RouteError!void {
+) RouteError!?EdgeRoute {
     const src_pos = layout.positions[edge.from];
     const tgt_pos = layout.positions[edge.to];
 
@@ -633,7 +1086,7 @@ fn routeVertical(
         .down => tgt_edge_row > src_edge_row,
         .up => tgt_edge_row < src_edge_row,
     };
-    if (!forward) return;
+    if (!forward) return null;
 
     const exit_tee = switch (flow) {
         .down => glyphs.tee_t,
@@ -644,8 +1097,12 @@ fn routeVertical(
         .up => .up,
     };
     const arrow = endGlyphFor(edge_style, end_dir, glyphs);
+    var path: std.ArrayList(SearchKey) = .empty;
+    errdefer path.deinit(allocator);
+    const path_ptr: ?*std.ArrayList(SearchKey) = if (defer_label_placement) &path else null;
 
     canvas.setGlyph(src_edge_row, src_center, exit_tee);
+    try appendPathPoint(path_ptr, allocator, src_edge_row, src_center, end_dir);
 
     const bend_row = switch (flow) {
         .down => tgt_edge_row - 1,
@@ -654,6 +1111,7 @@ fn routeVertical(
 
     if (src_center == tgt_center) {
         drawVerticalShaft(canvas, src_center, src_edge_row, bend_row, glyphs, flow);
+        try appendVerticalPath(path_ptr, allocator, src_center, src_edge_row, bend_row, flow);
         canvas.setGlyph(bend_row, tgt_center, arrow);
     } else {
         const shaft_end: usize = switch (flow) {
@@ -661,31 +1119,41 @@ fn routeVertical(
             .up => bend_row + 1,
         };
         drawVerticalShaft(canvas, src_center, src_edge_row, shaft_end, glyphs, flow);
+        try appendVerticalPath(path_ptr, allocator, src_center, src_edge_row, shaft_end, flow);
 
         const corner_at_src = switch (flow) {
             .down => if (tgt_center > src_center) glyphs.corner_bl else glyphs.corner_br,
             .up => if (tgt_center > src_center) glyphs.corner_tl else glyphs.corner_tr,
         };
         canvas.setGlyph(bend_row, src_center, corner_at_src);
+        try appendPathPoint(path_ptr, allocator, bend_row, src_center, end_dir);
 
         drawHorizontalRun(canvas, bend_row, src_center, tgt_center, glyphs);
+        try appendHorizontalRunPath(path_ptr, allocator, bend_row, src_center, tgt_center, if (tgt_center > src_center) .right else .left);
         canvas.setGlyph(bend_row, tgt_center, arrow);
+        try appendPathPoint(path_ptr, allocator, bend_row, tgt_center, end_dir);
     }
 
-    if (edge.label) |label| {
-        placeEdgeLabel(canvas, label, bend_row, src_center, tgt_center, ambiguous);
+    if (!defer_label_placement) {
+        if (edge.label) |label| {
+            try placeEdgeLabel(canvas, label, bend_row, src_center, tgt_center, ambiguous);
+        }
     }
+
+    return try edgeRouteFromPath(allocator, &path, end_dir, defer_label_placement);
 }
 
 fn routeHorizontal(
+    allocator: std.mem.Allocator,
     canvas: *canvas_mod.Canvas,
     layout: *const types.Layout,
     edge: types.Edge,
     glyphs: *const canvas_mod.GlyphSet,
+    defer_label_placement: bool,
     ambiguous: width_mod.AmbiguousWidth,
     flow: HorizontalFlow,
     edge_style: types.EdgeStyle,
-) RouteError!void {
+) RouteError!?EdgeRoute {
     const src_pos = layout.positions[edge.from];
     const tgt_pos = layout.positions[edge.to];
 
@@ -710,7 +1178,7 @@ fn routeHorizontal(
         .right => tgt_edge_col > src_edge_col,
         .left => tgt_edge_col < src_edge_col,
     };
-    if (!forward) return;
+    if (!forward) return null;
 
     const exit_tee = switch (flow) {
         .right => glyphs.tee_l,
@@ -721,8 +1189,12 @@ fn routeHorizontal(
         .left => .left,
     };
     const arrow = endGlyphFor(edge_style, end_dir, glyphs);
+    var path: std.ArrayList(SearchKey) = .empty;
+    errdefer path.deinit(allocator);
+    const path_ptr: ?*std.ArrayList(SearchKey) = if (defer_label_placement) &path else null;
 
     canvas.setGlyph(src_center_row, src_edge_col, exit_tee);
+    try appendPathPoint(path_ptr, allocator, src_center_row, src_edge_col, end_dir);
 
     const bend_col = switch (flow) {
         .right => tgt_edge_col - 1,
@@ -731,6 +1203,7 @@ fn routeHorizontal(
 
     if (src_center_row == tgt_center_row) {
         drawHorizontalShaft(canvas, src_center_row, src_edge_col, bend_col, glyphs, flow);
+        try appendHorizontalPath(path_ptr, allocator, src_center_row, src_edge_col, bend_col, flow);
         canvas.setGlyph(src_center_row, bend_col, arrow);
     } else {
         const shaft_end: usize = switch (flow) {
@@ -738,20 +1211,28 @@ fn routeHorizontal(
             .left => bend_col + 1,
         };
         drawHorizontalShaft(canvas, src_center_row, src_edge_col, shaft_end, glyphs, flow);
+        try appendHorizontalPath(path_ptr, allocator, src_center_row, src_edge_col, shaft_end, flow);
 
         const corner_at_src = switch (flow) {
             .right => if (tgt_center_row > src_center_row) glyphs.corner_tr else glyphs.corner_br,
             .left => if (tgt_center_row > src_center_row) glyphs.corner_tl else glyphs.corner_bl,
         };
         canvas.setGlyph(src_center_row, bend_col, corner_at_src);
+        try appendPathPoint(path_ptr, allocator, src_center_row, bend_col, end_dir);
 
         drawVerticalRun(canvas, bend_col, src_center_row, tgt_center_row, glyphs);
+        try appendVerticalRunPath(path_ptr, allocator, bend_col, src_center_row, tgt_center_row, if (tgt_center_row > src_center_row) .down else .up);
         canvas.setGlyph(tgt_center_row, bend_col, arrow);
+        try appendPathPoint(path_ptr, allocator, tgt_center_row, bend_col, end_dir);
     }
 
-    if (edge.label) |label| {
-        placeEdgeLabelHorizontal(canvas, label, src_center_row, tgt_center_row, bend_col, ambiguous);
+    if (!defer_label_placement) {
+        if (edge.label) |label| {
+            try placeEdgeLabelHorizontal(canvas, label, src_center_row, tgt_center_row, bend_col, ambiguous);
+        }
     }
+
+    return try edgeRouteFromPath(allocator, &path, end_dir, defer_label_placement);
 }
 
 fn drawVerticalShaft(
@@ -774,6 +1255,33 @@ fn drawVerticalShaft(
             var r = start_exclusive - 1;
             while (r >= end_inclusive) {
                 canvas.setGlyph(r, col, glyphs.v_line);
+                if (r == 0) break;
+                r -= 1;
+            }
+        },
+    }
+}
+
+fn appendVerticalPath(
+    path: ?*std.ArrayList(SearchKey),
+    allocator: std.mem.Allocator,
+    col: usize,
+    start_exclusive: usize,
+    end_inclusive: usize,
+    flow: VerticalFlow,
+) RouteError!void {
+    switch (flow) {
+        .down => {
+            var r = start_exclusive + 1;
+            while (r <= end_inclusive) : (r += 1) {
+                try appendPathPoint(path, allocator, r, col, .down);
+            }
+        },
+        .up => {
+            if (start_exclusive == 0) return;
+            var r = start_exclusive - 1;
+            while (r >= end_inclusive) {
+                try appendPathPoint(path, allocator, r, col, .up);
                 if (r == 0) break;
                 r -= 1;
             }
@@ -808,12 +1316,55 @@ fn drawHorizontalShaft(
     }
 }
 
+fn appendHorizontalPath(
+    path: ?*std.ArrayList(SearchKey),
+    allocator: std.mem.Allocator,
+    row: usize,
+    start_exclusive: usize,
+    end_inclusive: usize,
+    flow: HorizontalFlow,
+) RouteError!void {
+    switch (flow) {
+        .right => {
+            var c = start_exclusive + 1;
+            while (c <= end_inclusive) : (c += 1) {
+                try appendPathPoint(path, allocator, row, c, .right);
+            }
+        },
+        .left => {
+            if (start_exclusive == 0) return;
+            var c = start_exclusive - 1;
+            while (c >= end_inclusive) {
+                try appendPathPoint(path, allocator, row, c, .left);
+                if (c == 0) break;
+                c -= 1;
+            }
+        },
+    }
+}
+
 fn drawHorizontalRun(canvas: *canvas_mod.Canvas, row: usize, from_col: usize, to_col: usize, glyphs: *const canvas_mod.GlyphSet) void {
     const lo = @min(from_col, to_col);
     const hi = @max(from_col, to_col);
     var c = lo + 1;
     while (c < hi) : (c += 1) {
         canvas.setGlyph(row, c, glyphs.h_line);
+    }
+}
+
+fn appendHorizontalRunPath(
+    path: ?*std.ArrayList(SearchKey),
+    allocator: std.mem.Allocator,
+    row: usize,
+    from_col: usize,
+    to_col: usize,
+    dir: Dir4,
+) RouteError!void {
+    const lo = @min(from_col, to_col);
+    const hi = @max(from_col, to_col);
+    var c = lo + 1;
+    while (c < hi) : (c += 1) {
+        try appendPathPoint(path, allocator, row, c, dir);
     }
 }
 
@@ -826,6 +1377,22 @@ fn drawVerticalRun(canvas: *canvas_mod.Canvas, col: usize, from_row: usize, to_r
     }
 }
 
+fn appendVerticalRunPath(
+    path: ?*std.ArrayList(SearchKey),
+    allocator: std.mem.Allocator,
+    col: usize,
+    from_row: usize,
+    to_row: usize,
+    dir: Dir4,
+) RouteError!void {
+    const lo = @min(from_row, to_row);
+    const hi = @max(from_row, to_row);
+    var r = lo + 1;
+    while (r < hi) : (r += 1) {
+        try appendPathPoint(path, allocator, r, col, dir);
+    }
+}
+
 fn placeEdgeLabel(
     canvas: *canvas_mod.Canvas,
     label: []const u8,
@@ -833,7 +1400,7 @@ fn placeEdgeLabel(
     src_center: usize,
     tgt_center: usize,
     ambiguous: width_mod.AmbiguousWidth,
-) void {
+) RouteError!void {
     const label_w = width_mod.displayWidth(label, ambiguous);
     if (label_w == 0) return;
 
@@ -843,13 +1410,13 @@ fn placeEdgeLabel(
     if (src_center == tgt_center) {
         const col_right = src_center + 2;
         if (col_right + label_w <= canvas.cols) {
-            canvas.drawLabel(label_row, col_right, label, ambiguous);
+            try canvas.drawLabel(label_row, col_right, label, ambiguous);
             return;
         }
         const half = label_w / 2;
         const col = if (src_center > half) src_center - half else 0;
         if (col + label_w <= canvas.cols) {
-            canvas.drawLabel(label_row, col, label, ambiguous);
+            try canvas.drawLabel(label_row, col, label, ambiguous);
         }
         return;
     }
@@ -858,7 +1425,7 @@ fn placeEdgeLabel(
     const half = label_w / 2;
     const col = if (mid > half) mid - half else 0;
     if (col + label_w <= canvas.cols) {
-        canvas.drawLabel(label_row, col, label, ambiguous);
+        try canvas.drawLabel(label_row, col, label, ambiguous);
     }
 }
 
@@ -869,7 +1436,7 @@ fn placeEdgeLabelHorizontal(
     tgt_row: usize,
     bend_col: usize,
     ambiguous: width_mod.AmbiguousWidth,
-) void {
+) RouteError!void {
     const label_w = width_mod.displayWidth(label, ambiguous);
     if (label_w == 0) return;
 
@@ -882,7 +1449,7 @@ fn placeEdgeLabelHorizontal(
     const label_col = if (bend_col > label_w + 1) bend_col - label_w - 1 else 0;
 
     if (label_row < canvas.rows and label_col + label_w <= canvas.cols) {
-        canvas.drawLabel(label_row, label_col, label, ambiguous);
+        try canvas.drawLabel(label_row, label_col, label, ambiguous);
     }
 }
 
@@ -964,8 +1531,7 @@ test "canvas dimensions for single cell" {
     var layout: types.Layout = .{
         .allocator = std.testing.allocator,
         .positions = &.{},
-        .truncated_labels = &.{},
-        .truncation_buf = null,
+        .node_labels = &.{},
         .rows = 1,
         .cols = 1,
         .cell_w = 6,
@@ -979,8 +1545,7 @@ test "canvas dimensions include gutter between cells" {
     var layout: types.Layout = .{
         .allocator = std.testing.allocator,
         .positions = &.{},
-        .truncated_labels = &.{},
-        .truncation_buf = null,
+        .node_labels = &.{},
         .rows = 2,
         .cols = 3,
         .cell_w = 6,
@@ -1034,13 +1599,50 @@ test "mergeJunctions does not touch non-line glyphs like arrows" {
     try std.testing.expectEqual(@as(u21, '▼'), canvas.at(1, 1).cp);
 }
 
+test "placeWrappedLabelOnRouteAnchored prefers requested route end" {
+    const alloc = std.testing.allocator;
+    var canvas = try canvas_mod.Canvas.init(alloc, 3, 12);
+    defer canvas.deinit();
+
+    const path = [_]SearchKey{
+        .{ .row = 1, .col = 1, .dir = .right },
+        .{ .row = 1, .col = 8, .dir = .right },
+    };
+    const glyphs = canvas_mod.GlyphSet.unicode;
+
+    try std.testing.expect(try placeWrappedLabelOnRouteAnchored(
+        alloc,
+        &canvas,
+        &.{},
+        &path,
+        "SRC",
+        3,
+        .narrow,
+        &glyphs,
+        .start,
+    ));
+    try std.testing.expect(try placeWrappedLabelOnRouteAnchored(
+        alloc,
+        &canvas,
+        &.{},
+        &path,
+        "DST",
+        3,
+        .narrow,
+        &glyphs,
+        .end,
+    ));
+
+    try std.testing.expectEqual(@as(u21, 'S'), canvas.at(1, 0).cp);
+    try std.testing.expectEqual(@as(u21, 'D'), canvas.at(1, 7).cp);
+}
+
 test "aStarPath returns a straight path when unobstructed" {
     const alloc = std.testing.allocator;
     var layout: types.Layout = .{
         .allocator = alloc,
         .positions = &.{},
-        .truncated_labels = &.{},
-        .truncation_buf = null,
+        .node_labels = &.{},
         .rows = 1,
         .cols = 1,
         .cell_w = 1,
@@ -1062,8 +1664,7 @@ test "aStarPath prefers fewer turns on equal-length alternatives" {
     var layout: types.Layout = .{
         .allocator = alloc,
         .positions = &.{},
-        .truncated_labels = &.{},
-        .truncation_buf = null,
+        .node_labels = &.{},
         .rows = 1,
         .cols = 1,
         .cell_w = 1,
@@ -1091,8 +1692,7 @@ test "aStarPath routes around a blocking node" {
     var layout: types.Layout = .{
         .allocator = alloc,
         .positions = positions[0..],
-        .truncated_labels = &.{},
-        .truncation_buf = null,
+        .node_labels = &.{},
         .rows = 1,
         .cols = 3,
         .cell_w = 5,
@@ -1122,8 +1722,7 @@ test "routeEdgeWithPorts fallback draws a visible edge when A* is blocked" {
     var layout: types.Layout = .{
         .allocator = alloc,
         .positions = positions[0..],
-        .truncated_labels = &.{},
-        .truncation_buf = null,
+        .node_labels = &.{},
         .rows = 3,
         .cols = 1,
         .cell_w = 1,
@@ -1138,7 +1737,7 @@ test "routeEdgeWithPorts fallback draws a visible edge when A* is blocked" {
     const bottom_center_row = boxTop(&layout, 2);
     const top_center_row = boxTop(&layout, 0) + layout.cell_h - 1;
     try std.testing.expectEqual(
-        @as(?std.ArrayListUnmanaged(SearchKey), null),
+        @as(?std.ArrayList(SearchKey), null),
         try aStarPath(alloc, &layout, canvas_rows, canvas_cols, 2, 0, bottom_center_row, 0, .up, top_center_row, 0),
     );
 
@@ -1156,6 +1755,7 @@ test "routeEdgeWithPorts fallback draws a visible edge when A* is blocked" {
         null,
         .arrow,
         &canvas_mod.GlyphSet.unicode,
+        false,
         .narrow,
     );
 
@@ -1176,8 +1776,7 @@ test "routeEdgeWithPorts fallback bends horizontally when ports differ in column
     var layout: types.Layout = .{
         .allocator = alloc,
         .positions = positions[0..],
-        .truncated_labels = &.{},
-        .truncation_buf = null,
+        .node_labels = &.{},
         .rows = 3,
         .cols = 1,
         .cell_w = 5,
@@ -1206,6 +1805,7 @@ test "routeEdgeWithPorts fallback bends horizontally when ports differ in column
         null,
         .arrow,
         &canvas_mod.GlyphSet.unicode,
+        false,
         .narrow,
     );
 

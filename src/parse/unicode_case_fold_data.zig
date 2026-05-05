@@ -3,7 +3,7 @@ const std = @import("std");
 // Do not edit by hand.
 
 pub fn appendCaseFoldedCodepoint(
-    output: *std.ArrayListUnmanaged(u8),
+    output: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
     codepoint: u21,
 ) !void {
@@ -47,7 +47,7 @@ fn findMulti(codepoint: u21) ?[]const u8 {
 }
 
 fn appendUtf8Codepoint(
-    output: *std.ArrayListUnmanaged(u8),
+    output: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
     codepoint: u21,
 ) !void {

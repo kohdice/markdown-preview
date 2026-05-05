@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 
 pub const tty_size: usize = 16 * 1024;
 pub const pipe_size: usize = 64 * 1024;
@@ -66,7 +65,6 @@ test "classifyFile labels a regular file as .file" {
 }
 
 test "classifyFile labels /dev/null as .pipe, not .tty" {
-    if (builtin.os.tag == .windows) return;
     const io = std.testing.io;
     var dev_null = std.Io.Dir.openFileAbsolute(io, "/dev/null", .{ .mode = .read_write }) catch return;
     defer dev_null.close(io);

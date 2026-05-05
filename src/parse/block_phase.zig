@@ -4,7 +4,6 @@ const block_cursor = @import("block_cursor.zig");
 const parse_block = @import("block.zig");
 const parse_link = @import("link.zig");
 const parse_table = @import("table.zig");
-const parse_inline = @import("inline.zig");
 const inline_work_mod = @import("inline_work.zig");
 
 const BlockCursor = block_cursor.BlockCursor;
@@ -25,12 +24,10 @@ pub const BlockDocument = struct {
 
 pub fn buildBlockDocument(
     allocator: std.mem.Allocator,
-    builder: *parse_inline.InlineBuilder,
     source: []const u8,
 ) !BlockDocument {
     var walker = Walker{
         .allocator = allocator,
-        .builder = builder,
         .link_defs = .{},
     };
 
@@ -47,21 +44,20 @@ pub fn buildBlockDocument(
 
 const Walker = struct {
     allocator: std.mem.Allocator,
-    builder: *parse_inline.InlineBuilder,
     link_defs: ast.LinkDefMap,
-    inline_work: std.ArrayListUnmanaged(InlineWork) = .empty,
-    pending_inline: std.ArrayListUnmanaged(PendingInline) = .empty,
-    link_definition_scratch: std.ArrayListUnmanaged(u8) = .empty,
-    link_label_scratch: std.ArrayListUnmanaged(u8) = .empty,
-    paragraph_lines: std.ArrayListUnmanaged([]const u8) = .empty,
-    code_lines: std.ArrayListUnmanaged([]const u8) = .empty,
+    inline_work: std.ArrayList(InlineWork) = .empty,
+    pending_inline: std.ArrayList(PendingInline) = .empty,
+    link_definition_scratch: std.ArrayList(u8) = .empty,
+    link_label_scratch: std.ArrayList(u8) = .empty,
+    paragraph_lines: std.ArrayList([]const u8) = .empty,
+    code_lines: std.ArrayList([]const u8) = .empty,
 
     fn pushPending(self: *Walker, entry: PendingInline) !void {
         try self.pending_inline.append(self.allocator, entry);
     }
 
     fn parseBlocks(self: *Walker, cursor: *BlockCursor) anyerror![]ast.BlockNode {
-        var blocks: std.ArrayListUnmanaged(ast.BlockNode) = .empty;
+        var blocks: std.ArrayList(ast.BlockNode) = .empty;
 
         while (cursor.peekLine()) |line| {
             if (block_cursor.isBlankLine(line)) {
@@ -405,7 +401,7 @@ const Walker = struct {
     }
 
     fn parseListBlock(self: *Walker, cursor: *BlockCursor, kind: ast.ListKind) anyerror!ast.BlockNode {
-        var items: std.ArrayListUnmanaged(ast.ListItem) = .empty;
+        var items: std.ArrayList(ast.ListItem) = .empty;
         var min_indent: ?usize = null;
         var prev_child_indent: ?usize = null;
         var list_marker: ?u8 = null;
@@ -467,7 +463,7 @@ const Walker = struct {
     fn tryParseTable(self: *Walker, cursor: *BlockCursor) anyerror!?ast.BlockNode {
         const header_line = cursor.peekLine() orelse return null;
         if (parse_block.indentedCodeContent(header_line) != null) return null;
-        if (std.mem.indexOfScalar(u8, header_line, '|') == null) return null;
+        if (std.mem.findScalar(u8, header_line, '|') == null) return null;
 
         const delim_line = cursor.peekNextLine() orelse return null;
         if (parse_block.indentedCodeContent(delim_line) != null) return null;
@@ -475,15 +471,21 @@ const Walker = struct {
 
         const header_count = parse_table.countCells(header_line);
         if (header_count == 0) return null;
-        const align_count = parse_table.countAlignmentCells(delim_line);
+        const align_count = parse_table.countCells(delim_line);
         if (header_count != align_count) return null;
 
+        const table_inline_work_start = self.inline_work.items.len;
+        var table_committed = false;
+        defer if (!table_committed) self.inline_work.shrinkRetainingCapacity(table_inline_work_start);
+
         const alignments = try self.allocator.alloc(ast.Alignment, align_count);
+        defer if (!table_committed) self.allocator.free(alignments);
         parse_table.fillAlignments(delim_line, alignments) catch |err| switch (err) {
             error.UnclosedCodeSpan => return null,
         };
 
         const header = try self.allocator.alloc(ast.TableCell, header_count);
+        defer if (!table_committed) self.allocator.free(header);
         for (header) |*cell| cell.* = .{};
         {
             var iter = parse_table.iterateCells(header_line);
@@ -504,41 +506,56 @@ const Walker = struct {
         cursor.advanceLine();
         cursor.advanceLine();
 
-        var rows: std.ArrayListUnmanaged([]ast.TableCell) = .empty;
+        var rows: std.ArrayList([]ast.TableCell) = .empty;
+        defer if (!table_committed) {
+            for (rows.items) |row| self.allocator.free(row);
+            rows.deinit(self.allocator);
+        };
         while (cursor.peekLine()) |row_line| {
             if (block_cursor.isBlankLine(row_line)) break;
             if (parse_block.indentedCodeContent(row_line) != null) break;
-            if (std.mem.indexOfScalar(u8, row_line, '|') == null) break;
+            if (std.mem.findScalar(u8, row_line, '|') == null) break;
             if (parse_block.isBlockLevelStart(row_line)) break;
 
             const row_count = parse_table.countCells(row_line);
             if (row_count == 0) break;
 
             const row = try self.allocator.alloc(ast.TableCell, row_count);
+            var row_committed = false;
+            defer if (!row_committed) self.allocator.free(row);
             for (row) |*cell| cell.* = .{};
-            var iter = parse_table.iterateCells(row_line);
-            var i: usize = 0;
-            while (iter.nextTrimmed()) |cell_text| {
-                if (i >= row_count) break;
-                if (cell_text.len > 0) {
-                    try self.inline_work.append(self.allocator, .{
-                        .target = &row[i].children,
-                        .input = .{ .slice = cell_text },
-                    });
-                }
-                i += 1;
-            }
-            if (iter.invalid) break;
+            {
+                const row_inline_work_start = self.inline_work.items.len;
+                defer if (!row_committed) self.inline_work.shrinkRetainingCapacity(row_inline_work_start);
 
-            try rows.append(self.allocator, row);
+                var iter = parse_table.iterateCells(row_line);
+                var i: usize = 0;
+                while (iter.nextTrimmed()) |cell_text| {
+                    if (i >= row_count) break;
+                    if (cell_text.len > 0) {
+                        try self.inline_work.append(self.allocator, .{
+                            .target = &row[i].children,
+                            .input = .{ .slice = cell_text },
+                        });
+                    }
+                    i += 1;
+                }
+                if (iter.invalid) break;
+
+                try rows.append(self.allocator, row);
+                row_committed = true;
+            }
+
             cursor.advanceLine();
         }
 
+        const owned_rows = try rows.toOwnedSlice(self.allocator);
+        table_committed = true;
         return .{
             .table = .{
                 .header = header,
                 .alignments = alignments,
-                .rows = try rows.toOwnedSlice(self.allocator),
+                .rows = owned_rows,
             },
         };
     }
@@ -580,13 +597,11 @@ fn joinLines(allocator: std.mem.Allocator, lines: []const []const u8) ![]const u
 
 const TestBuild = struct {
     block_doc: BlockDocument,
-    builder: parse_inline.InlineBuilder,
 };
 
 fn buildForTest(allocator: std.mem.Allocator, source: []const u8) !TestBuild {
-    var builder = parse_inline.InlineBuilder.init(allocator);
-    const block_doc = try buildBlockDocument(allocator, &builder, source);
-    return .{ .block_doc = block_doc, .builder = builder };
+    const block_doc = try buildBlockDocument(allocator, source);
+    return .{ .block_doc = block_doc };
 }
 
 test "buildBlockDocument queues single-line paragraph as single pending" {
@@ -759,7 +774,6 @@ test "buildBlockDocument emits list with item paragraphs as single pending" {
     defer arena.deinit();
 
     const build_result = try buildForTest(arena.allocator(), "- alpha\n- beta\n- gamma\n");
-    _ = build_result.builder;
     const block_doc = build_result.block_doc;
     try std.testing.expect(block_doc.blocks[0] == .list);
     const list = block_doc.blocks[0].list;

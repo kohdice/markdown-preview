@@ -56,7 +56,7 @@ const ascii_space: u8 = 0x20;
 const ascii_delete: u8 = 0x7F;
 
 pub fn definition(text: []const u8) ?Definition {
-    const indent = parse_block.countIndentUpTo(text, parse_block.max_block_indent);
+    const indent = parse_block.indentAtMost(text, parse_block.max_block_indent) orelse return null;
     if (indent >= text.len or text[indent] != '[') return null;
 
     const close = findReferenceLabelEnd(text, indent + 1) orelse return null;
@@ -74,7 +74,7 @@ pub fn definition(text: []const u8) ?Definition {
 }
 
 pub fn definitionNeedsDestinationContinuation(line: []const u8) bool {
-    const indent = parse_block.countIndentUpTo(line, parse_block.max_block_indent);
+    const indent = parse_block.indentAtMost(line, parse_block.max_block_indent) orelse return false;
     if (indent >= line.len or line[indent] != '[') return false;
 
     const close = findReferenceLabelEnd(line, indent + 1) orelse return false;
@@ -87,7 +87,7 @@ pub fn definitionNeedsDestinationContinuation(line: []const u8) bool {
 }
 
 pub fn normalizeReferenceLabelInto(
-    buffer: *std.ArrayListUnmanaged(u8),
+    buffer: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
     label: []const u8,
 ) ![]const u8 {
@@ -147,7 +147,7 @@ pub fn referenceLabelLengthFits(label: []const u8) bool {
 }
 
 fn appendNormalizedReferenceLabel(
-    normalized: *std.ArrayListUnmanaged(u8),
+    normalized: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
     label: []const u8,
 ) !void {
@@ -193,10 +193,25 @@ pub fn parseInlineTarget(allocator: std.mem.Allocator, text: []const u8) !Inline
     };
 }
 
+pub fn parseInlineTargetBorrowing(allocator: std.mem.Allocator, text: []const u8) !InlineTargetParse {
+    return switch (scanInlineTargetRaw(text)) {
+        .match => |raw_target| .{ .match = .{
+            .url = try materializeLinkText(allocator, raw_target.url_raw),
+            .title = if (raw_target.title_raw) |raw_title|
+                try materializeLinkText(allocator, raw_title)
+            else
+                null,
+            .end = raw_target.end,
+        } },
+        .incomplete => .incomplete,
+        .invalid => .invalid,
+    };
+}
+
 fn materializeLinkText(allocator: std.mem.Allocator, raw: []const u8) ![]const u8 {
     if (!needsLinkMaterialization(raw)) return raw;
 
-    var buffer: std.ArrayListUnmanaged(u8) = .empty;
+    var buffer: std.ArrayList(u8) = .empty;
     errdefer buffer.deinit(allocator);
 
     var pos: usize = 0;
@@ -504,4 +519,33 @@ fn isEscapable(char: u8) bool {
 fn isInvalidBareDestinationByte(char: u8) bool {
     if (char == ascii_delete) return true;
     return char < ascii_space and char != '\t' and char != '\n' and char != '\r';
+}
+
+test "parseInlineTargetBorrowing keeps plain target slices borrowed" {
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{
+        .fail_index = 0,
+        .resize_fail_index = 0,
+    });
+    const text = "https://example.test \"title\")";
+
+    const parsed = try parseInlineTargetBorrowing(failing.allocator(), text);
+    const target = switch (parsed) {
+        .match => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+
+    try std.testing.expectEqualStrings("https://example.test", target.url);
+    try std.testing.expectEqual(@intFromPtr(text.ptr), @intFromPtr(target.url.ptr));
+    try std.testing.expectEqualStrings("title", target.title.?);
+}
+
+test "parseInlineTargetBorrowing materializes escaped target text only when needed" {
+    const parsed = try parseInlineTargetBorrowing(std.testing.allocator, "a\\*b)");
+    const target = switch (parsed) {
+        .match => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    defer std.testing.allocator.free(target.url);
+
+    try std.testing.expectEqualStrings("a*b", target.url);
 }

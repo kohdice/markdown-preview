@@ -395,6 +395,27 @@ test "parseDocument parses indented code block content" {
     try std.testing.expectEqualStrings("code\nblock", doc.blocks[0].code_block.content);
 }
 
+test "parseDocument treats tab-indented block starts as indented code" {
+    const allocator = std.testing.allocator;
+    const input =
+        "\t# Not a heading\n" ++
+        "\t> Not a quote\n" ++
+        "\t[ref]: /url\n" ++
+        "\t- Not a list\n" ++
+        "\t---\n";
+
+    var doc = try parse.parse(allocator, .{ .borrowed = input });
+    defer doc.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .code_block);
+    try std.testing.expectEqualStrings(
+        "# Not a heading\n> Not a quote\n[ref]: /url\n- Not a list\n---",
+        doc.blocks[0].code_block.content,
+    );
+    try std.testing.expectEqual(@as(usize, 0), doc.link_defs.count());
+}
+
 test "parseDocument keeps trailing blank line outside indented code block" {
     const allocator = std.testing.allocator;
     const input =
@@ -897,6 +918,22 @@ test "parseDocument uses dynamic content_col from multi-space marker" {
     try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
     try std.testing.expect(doc.blocks[0] == .list);
     const item = doc.blocks[0].list.items[0];
+    try std.testing.expectEqual(@as(usize, 1), item.blocks.len);
+    try std.testing.expect(item.blocks[0] == .paragraph);
+    try expectParagraphPlainLines(&.{ "foo", "continuation" }, &doc, &item.blocks[0].paragraph);
+}
+
+test "parseDocument uses tab-expanded list content column" {
+    const allocator = std.testing.allocator;
+    const input = "-\tfoo\n\tcontinuation\n";
+
+    var doc = try parse.parse(allocator, .{ .borrowed = input });
+    defer doc.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.len);
+    try std.testing.expect(doc.blocks[0] == .list);
+    const item = doc.blocks[0].list.items[0];
+    try std.testing.expectEqual(@as(usize, 0), item.indent);
     try std.testing.expectEqual(@as(usize, 1), item.blocks.len);
     try std.testing.expect(item.blocks[0] == .paragraph);
     try expectParagraphPlainLines(&.{ "foo", "continuation" }, &doc, &item.blocks[0].paragraph);

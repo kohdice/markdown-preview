@@ -181,7 +181,7 @@ test "table with CJK content has uniform display width across all rows" {
     var line_iter = std.mem.splitScalar(u8, std.mem.trimEnd(u8, rendered, "\n"), '\n');
     var expected_width: ?usize = null;
     while (line_iter.next()) |line| {
-        const w = internals.term.terminal.displayWidth(line, .narrow);
+        const w = internals.term.width.displayWidth(line, .narrow);
         if (expected_width) |ew| {
             try std.testing.expectEqual(ew, w);
         } else {

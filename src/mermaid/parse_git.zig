@@ -2,8 +2,6 @@ const std = @import("std");
 const source_mod = @import("source.zig");
 const types = @import("types.zig");
 
-pub const Source = source_mod.Source;
-
 pub const ParseError = error{
     InvalidMermaid,
     UnsupportedFeature,
@@ -13,10 +11,10 @@ pub const ParseError = error{
 
 const Parser = struct {
     allocator: std.mem.Allocator,
-    branches: std.ArrayListUnmanaged(types.GitBranch) = .empty,
-    commits: std.ArrayListUnmanaged(types.GitCommit) = .empty,
+    branches: std.ArrayList(types.GitBranch) = .empty,
+    commits: std.ArrayList(types.GitCommit) = .empty,
     branch_index: std.StringHashMapUnmanaged(u16) = .empty,
-    owned_strings: std.ArrayListUnmanaged([]u8) = .empty,
+    owned_strings: std.ArrayList([]u8) = .empty,
     current_lane: u16 = 0,
 
     fn ensureMain(self: *Parser) ParseError!void {
@@ -63,7 +61,7 @@ const Parser = struct {
 
 /// `source` must already be stripped of `%%{init: ...}%%` directives by
 /// `compile` or the caller. Parsing does not revisit directive semantics.
-pub fn parseSource(allocator: std.mem.Allocator, source: anytype) ParseError!types.GitGraph {
+pub fn parse(allocator: std.mem.Allocator, source: anytype) ParseError!types.GitGraph {
     const owned_source = try source_mod.normalizeOwned(allocator, source);
     return parseFromOwned(allocator, owned_source);
 }
@@ -106,7 +104,9 @@ fn parseFromOwned(allocator: std.mem.Allocator, owned_source: []u8) ParseError!t
     if (!header_seen) return error.InvalidMermaid;
 
     const branches = try parser.branches.toOwnedSlice(allocator);
+    errdefer allocator.free(branches);
     const commits = try parser.commits.toOwnedSlice(allocator);
+    errdefer allocator.free(commits);
     const owned_strings = try parser.owned_strings.toOwnedSlice(allocator);
 
     return .{
@@ -288,24 +288,24 @@ fn parseMerge(parser: *Parser, rest: []const u8) ParseError!void {
 
 test "parses gitGraph header with and without colon" {
     {
-        var g = try parseSource(std.testing.allocator, "gitGraph\n    commit\n");
+        var g = try parse(std.testing.allocator, "gitGraph\n    commit\n");
         defer g.deinit();
         try std.testing.expectEqual(@as(usize, 1), g.commits.len);
     }
     {
-        var g = try parseSource(std.testing.allocator, "gitGraph:\n    commit\n");
+        var g = try parse(std.testing.allocator, "gitGraph:\n    commit\n");
         defer g.deinit();
         try std.testing.expectEqual(@as(usize, 1), g.commits.len);
     }
     {
-        var g = try parseSource(std.testing.allocator, "gitGraph LR:\n    commit\n");
+        var g = try parse(std.testing.allocator, "gitGraph LR:\n    commit\n");
         defer g.deinit();
         try std.testing.expectEqual(@as(usize, 1), g.commits.len);
     }
 }
 
 test "parses commit with id and tag" {
-    var g = try parseSource(std.testing.allocator,
+    var g = try parse(std.testing.allocator,
         \\gitGraph
         \\    commit id: "a1" tag: "v1"
     );
@@ -316,7 +316,7 @@ test "parses commit with id and tag" {
 }
 
 test "parses commit type NORMAL|REVERSE|HIGHLIGHT" {
-    var g = try parseSource(std.testing.allocator,
+    var g = try parse(std.testing.allocator,
         \\gitGraph
         \\    commit type: NORMAL
         \\    commit type: REVERSE
@@ -330,7 +330,7 @@ test "parses commit type NORMAL|REVERSE|HIGHLIGHT" {
 }
 
 test "parses branch and checkout / switch aliases" {
-    var g = try parseSource(std.testing.allocator,
+    var g = try parse(std.testing.allocator,
         \\gitGraph
         \\    commit
         \\    branch develop
@@ -350,7 +350,7 @@ test "parses branch and checkout / switch aliases" {
 }
 
 test "parses merge with merge_from set" {
-    var g = try parseSource(std.testing.allocator,
+    var g = try parse(std.testing.allocator,
         \\gitGraph
         \\    commit
         \\    branch develop
@@ -367,7 +367,7 @@ test "parses merge with merge_from set" {
 }
 
 test "rejects cherry-pick explicitly" {
-    try std.testing.expectError(error.UnsupportedFeature, parseSource(std.testing.allocator,
+    try std.testing.expectError(error.UnsupportedFeature, parse(std.testing.allocator,
         \\gitGraph
         \\    commit
         \\    cherry-pick id: "a1"
@@ -375,21 +375,21 @@ test "rejects cherry-pick explicitly" {
 }
 
 test "rejects gitGraph TB: orientation" {
-    try std.testing.expectError(error.UnsupportedFeature, parseSource(std.testing.allocator,
+    try std.testing.expectError(error.UnsupportedFeature, parse(std.testing.allocator,
         \\gitGraph TB:
         \\    commit
     ));
 }
 
 test "rejects gitGraph BT: orientation" {
-    try std.testing.expectError(error.UnsupportedFeature, parseSource(std.testing.allocator,
+    try std.testing.expectError(error.UnsupportedFeature, parse(std.testing.allocator,
         \\gitGraph BT:
         \\    commit
     ));
 }
 
 test "rejects branch order: suffix" {
-    try std.testing.expectError(error.UnsupportedFeature, parseSource(std.testing.allocator,
+    try std.testing.expectError(error.UnsupportedFeature, parse(std.testing.allocator,
         \\gitGraph
         \\    commit
         \\    branch develop order: 2
@@ -397,21 +397,21 @@ test "rejects branch order: suffix" {
 }
 
 test "rejects unknown commit key as invalid" {
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator,
         \\gitGraph
         \\    commit rotateCommitLabel: true
     ));
 }
 
 test "rejects unknown commit type value as invalid" {
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator,
         \\gitGraph
         \\    commit type: FOO
     ));
 }
 
 test "merge from empty branch uses parent fork point as source" {
-    var g = try parseSource(std.testing.allocator,
+    var g = try parse(std.testing.allocator,
         \\gitGraph
         \\    commit
         \\    branch develop
@@ -429,7 +429,7 @@ test "merge from empty branch uses parent fork point as source" {
 }
 
 test "parses merge with id/tag/type attributes" {
-    var g = try parseSource(std.testing.allocator,
+    var g = try parse(std.testing.allocator,
         \\gitGraph
         \\    commit
         \\    branch develop
@@ -448,7 +448,7 @@ test "parses merge with id/tag/type attributes" {
 }
 
 test "rejects unknown merge attribute key as invalid" {
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator,
         \\gitGraph
         \\    commit
         \\    branch develop
@@ -459,7 +459,7 @@ test "rejects unknown merge attribute key as invalid" {
 }
 
 test "rejects unknown merge type value as invalid" {
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator,
         \\gitGraph
         \\    commit
         \\    branch develop
@@ -467,4 +467,27 @@ test "rejects unknown merge type value as invalid" {
         \\    checkout main
         \\    merge develop type: FOO
     ));
+}
+
+fn expectParseGitHandlesAllocationFailures(allocator: std.mem.Allocator) !void {
+    var g = try parse(allocator,
+        \\gitGraph
+        \\    commit id: "a"
+        \\    branch develop
+        \\    checkout develop
+        \\    commit tag: "v1"
+        \\    checkout main
+        \\    merge develop
+    );
+    defer g.deinit();
+    try std.testing.expectEqual(@as(usize, 2), g.branches.len);
+    try std.testing.expectEqual(@as(usize, 3), g.commits.len);
+}
+
+test "parse cleans up git allocation failures" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        expectParseGitHandlesAllocationFailures,
+        .{},
+    );
 }

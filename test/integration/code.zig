@@ -148,7 +148,7 @@ test "multiline zig raw string does not leak ANSI state across lines" {
 
     var reset_count: usize = 0;
     var scan: usize = 0;
-    while (std.mem.indexOfPos(u8, rendered, scan, "\x1b[0m")) |found| {
+    while (std.mem.findPos(u8, rendered, scan, "\x1b[0m")) |found| {
         reset_count += 1;
         scan = found + 4;
     }

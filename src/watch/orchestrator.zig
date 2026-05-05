@@ -5,7 +5,6 @@ const loop = @import("loop.zig");
 const raw_term = @import("../term/raw.zig");
 const session_mod = @import("session.zig");
 const term = @import("../term.zig");
-const ansi = term.ansi;
 const terminal = term.terminal;
 const width = term.width;
 
@@ -16,7 +15,7 @@ const default_term_cols: usize = 80;
 const default_term_rows: usize = 24;
 
 pub const WatchOptions = struct {
-    allocator: std.mem.Allocator,
+    app_allocator: std.mem.Allocator,
     io: std.Io,
     cwd: std.Io.Dir,
     path: []const u8,
@@ -26,7 +25,6 @@ pub const WatchOptions = struct {
     stdin_file: std.Io.File,
     enable_ansi: bool,
     ambiguous_width: width.AmbiguousWidth,
-    color_mode: ansi.ColorMode = .truecolor,
 };
 
 pub fn run(opts: WatchOptions) !u8 {
@@ -37,30 +35,18 @@ pub fn run(opts: WatchOptions) !u8 {
         return exit_failure;
     }
 
-    const dir_path = std.fs.path.dirnamePosix(opts.path) orelse ".";
-    const file_name = std.fs.path.basenamePosix(opts.path);
-
-    var dir_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const dir_z = toCString(&dir_buf, dir_path) orelse {
-        try opts.stderr.print("mp: path too long: '{s}'\n", .{opts.path});
-        return exit_failure;
-    };
-    var name_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const name_z = toCString(&name_buf, file_name) orelse {
-        try opts.stderr.print("mp: path too long: '{s}'\n", .{opts.path});
-        return exit_failure;
-    };
+    const dir_path = std.fs.path.dirname(opts.path) orelse ".";
+    const file_name = std.fs.path.basename(opts.path);
 
     var session: session_mod.WatchSession = undefined;
-    session.init(opts.allocator, .{
+    session.init(opts.app_allocator, .{
         .enable_ansi = opts.enable_ansi,
         .ambiguous_width = opts.ambiguous_width,
-        .color_mode = opts.color_mode,
     });
     defer session.deinit();
 
     var term_size = terminal.getTerminalSize(opts.stdout_file.handle) orelse terminal.TerminalSize{ .cols = default_term_cols, .rows = default_term_rows };
-    var wrap_width: ?usize = if (opts.enable_ansi) term_size.cols else null;
+    var wrap_width: ?usize = term_size.cols;
 
     var rt = raw_term.RawTerm.setup(opts.stdin_file.handle, opts.stdout) catch {
         try opts.stderr.writeAll("mp: failed to configure terminal\n");
@@ -72,9 +58,9 @@ pub fn run(opts: WatchOptions) !u8 {
     var hash: content_hash.ContentHash = .{};
 
     _ = session.refreshFrom(opts.io, opts.cwd, opts.path, wrap_width, &hash);
-    session.pgr.displayPage(opts.stdout, &session.buffer, scroll_offset, term_size.rows, opts.enable_ansi, opts.color_mode);
+    session.pgr.displayPage(opts.stdout, &session.buffer, scroll_offset, term_size.rows, opts.enable_ansi);
 
-    var watcher = file_watcher.FileWatcher.init(dir_z, name_z) catch |err| {
+    var watcher = file_watcher.FileWatcher.init(opts.cwd, dir_path, file_name) catch |err| {
         try opts.stderr.print("mp: unable to watch '{s}': {s}\n", .{ opts.path, @errorName(err) });
         return exit_failure;
     };
@@ -87,11 +73,4 @@ pub fn run(opts: WatchOptions) !u8 {
         .signal_exit => exit_failure,
         .poll_error => exit_failure,
     };
-}
-
-fn toCString(buf: *[std.Io.Dir.max_path_bytes]u8, slice: []const u8) ?[*:0]const u8 {
-    if (slice.len >= buf.len) return null;
-    @memcpy(buf[0..slice.len], slice);
-    buf[slice.len] = 0;
-    return @ptrCast(buf[0..slice.len :0]);
 }

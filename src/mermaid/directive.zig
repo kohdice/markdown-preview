@@ -1,8 +1,6 @@
 const std = @import("std");
 const source_mod = @import("source.zig");
 
-pub const Source = source_mod.Source;
-
 pub const Error = error{
     InvalidDirective,
     UnsupportedFeature,
@@ -13,10 +11,10 @@ pub fn stripInitDirectives(
     allocator: std.mem.Allocator,
     source: []const u8,
     unsafe_keys: []const []const u8,
-) Error!Source {
+) Error!source_mod.Source {
     const first = firstDirectiveStart(source) orelse return .{ .borrowed = source };
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    var buf: std.ArrayList(u8) = .empty;
     errdefer buf.deinit(allocator);
 
     try buf.appendSlice(allocator, source[0..first]);
@@ -24,7 +22,7 @@ pub fn stripInitDirectives(
     var cursor: usize = first;
     while (cursor < source.len) {
         const line_start = cursor;
-        const nl = std.mem.indexOfScalarPos(u8, source, cursor, '\n');
+        const nl = std.mem.findScalarPos(u8, source, cursor, '\n');
         const line_end = nl orelse source.len;
 
         var i = line_start;
@@ -32,11 +30,11 @@ pub fn stripInitDirectives(
 
         if (line_end - i >= 3 and source[i] == '%' and source[i + 1] == '%' and source[i + 2] == '{') {
             const body_start = i + 3;
-            const end_rel = std.mem.indexOf(u8, source[body_start..], "}%%") orelse return error.InvalidDirective;
+            const end_rel = std.mem.find(u8, source[body_start..], "}%%") orelse return error.InvalidDirective;
             const block_end = body_start + end_rel + 3;
             const body = source[body_start .. body_start + end_rel];
             for (unsafe_keys) |k| {
-                if (std.mem.indexOf(u8, body, k) != null) return error.UnsupportedFeature;
+                if (std.mem.find(u8, body, k) != null) return error.UnsupportedFeature;
             }
 
             var next = block_end;
@@ -57,7 +55,7 @@ fn firstDirectiveStart(source: []const u8) ?usize {
     var cursor: usize = 0;
     while (cursor < source.len) {
         const line_start = cursor;
-        const nl = std.mem.indexOfScalarPos(u8, source, cursor, '\n');
+        const nl = std.mem.findScalarPos(u8, source, cursor, '\n');
         const line_end = nl orelse source.len;
 
         var i = line_start;
@@ -72,7 +70,7 @@ fn firstDirectiveStart(source: []const u8) ?usize {
     return null;
 }
 
-fn freeStripped(allocator: std.mem.Allocator, result: Source) void {
+fn freeStripped(allocator: std.mem.Allocator, result: source_mod.Source) void {
     switch (result) {
         .borrowed => {},
         .owned => |b| allocator.free(b),

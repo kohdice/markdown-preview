@@ -11,10 +11,16 @@ mp [options] [--] <FILE>
 | Option              | Description                                         |
 | ------------------- | --------------------------------------------------- |
 | `--width <COLUMNS>` | Override wrapping width for one-shot file rendering |
+| `--color <WHEN>`    | Color output: `auto`, `always`, or `never`          |
 | `--watch`           | Live-reload on file changes                         |
 | `--version`         | Show version number and quit                        |
 | `-h, --help`        | Show help and quit                                  |
 | `--`                | Treat the next argument as the file                 |
+
+`--color=auto` is the default. Color is enabled when stdout supports ANSI
+escape sequences and disabled for pipes and file redirection. Use
+`--color=always` to preserve ANSI color through a pipe, such as `less -R`, or
+`--color=never` to force plain text.
 
 ### Watch mode
 
@@ -55,8 +61,7 @@ language tag. Supported tags (case-insensitive):
 | JSON       | `json`                                         |
 
 Unrecognized language tags fall back to a single-color inline code style.
-Highlighting is disabled automatically when the output is not a TTY or
-when `NO_COLOR` is set.
+Highlighted output uses ANSI 24-bit truecolor SGR sequences.
 
 ## Mermaid diagrams
 

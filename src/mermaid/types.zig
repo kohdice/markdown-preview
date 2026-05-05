@@ -449,8 +449,8 @@ pub const XyChart = struct {
     x_axis: XyAxis = .{},
     y_axis: XyAxis = .{},
     series: []XySeries = &.{},
-    /// Owns a copy of the (directive-stripped) source plus any allocated
-    /// auxiliary strings (titles, category labels, …).
+    /// Owns the directive-stripped source; parsed labels borrow from this
+    /// buffer so chart parsing does not copy label text again.
     owned_strings: [][]u8 = &.{},
 
     pub fn deinit(self: *XyChart) void {
@@ -476,13 +476,13 @@ pub fn normalizeBrTags(allocator: std.mem.Allocator, text: []const u8) ![]const 
     }
     if (!needs_alloc) return text;
 
-    var out = try std.ArrayListUnmanaged(u8).initCapacity(allocator, text.len);
+    var out = try std.ArrayList(u8).initCapacity(allocator, text.len);
     errdefer out.deinit(allocator);
     var j: usize = 0;
     while (j < text.len) {
         if (text[j] == '<') {
             if (brTagLen(text, j)) |n| {
-                try out.append(allocator, ' ');
+                try out.append(allocator, '\n');
                 j += n;
                 continue;
             }
@@ -493,7 +493,7 @@ pub fn normalizeBrTags(allocator: std.mem.Allocator, text: []const u8) ![]const 
     return try out.toOwnedSlice(allocator);
 }
 
-fn brTagLen(text: []const u8, i: usize) ?usize {
+pub fn brTagLen(text: []const u8, i: usize) ?usize {
     if (i + 4 > text.len) return null;
     if (text[i] != '<') return null;
     const b1 = text[i + 1];
@@ -519,6 +519,22 @@ pub const SubgraphFrame = struct {
     representative_node: ?NodeId = null,
 };
 
+pub const LabelLine = struct {
+    text: []const u8,
+    width: usize,
+};
+
+pub const NodeLabelLayout = struct {
+    backing: []u8,
+    lines: []LabelLine,
+    max_line_width: usize,
+
+    pub fn deinit(self: *NodeLabelLayout, allocator: std.mem.Allocator) void {
+        allocator.free(self.backing);
+        allocator.free(self.lines);
+    }
+};
+
 pub const EndpointTarget = union(enum) {
     node: NodeId,
     frame: SubgraphFrame,
@@ -527,14 +543,18 @@ pub const EndpointTarget = union(enum) {
 pub const Layout = struct {
     allocator: std.mem.Allocator,
     positions: []GridPos,
-    truncated_labels: []const []const u8,
-    truncation_buf: ?[]u8,
+    node_labels: []NodeLabelLayout,
     rows: usize,
     cols: usize,
     cell_w: usize,
     cell_h: usize,
     subgraph_frames: []SubgraphFrame = &.{},
     outer_pad: usize = 0,
+    outer_pad_y: ?usize = null,
+
+    pub fn verticalOuterPad(self: *const Layout) usize {
+        return self.outer_pad_y orelse self.outer_pad;
+    }
 
     /// Returns `.frame` when the node is a composite with a rendered frame,
     /// `.node` for ordinary nodes, or `null` for a composite that has no
@@ -552,8 +572,8 @@ pub const Layout = struct {
 
     pub fn deinit(self: *Layout) void {
         self.allocator.free(self.positions);
-        self.allocator.free(self.truncated_labels);
-        if (self.truncation_buf) |buf| self.allocator.free(buf);
+        for (self.node_labels) |*label| label.deinit(self.allocator);
+        self.allocator.free(self.node_labels);
         self.allocator.free(self.subgraph_frames);
     }
 };

@@ -2,7 +2,7 @@ const std = @import("std");
 const ast = @import("../ast.zig");
 const parse_block = @import("block.zig");
 
-pub const CellParseError = std.mem.Allocator.Error || error{UnclosedCodeSpan};
+const CellParseError = std.mem.Allocator.Error || error{UnclosedCodeSpan};
 
 pub fn isDelimiterRow(line: []const u8) bool {
     const trimmed = std.mem.trim(u8, line, parse_block.horizontal_whitespace);
@@ -33,20 +33,7 @@ fn isDelimiterCell(cell: []const u8) bool {
     return i == cell.len;
 }
 
-pub fn cellCount(line: []const u8) usize {
-    const trimmed = std.mem.trim(u8, line, parse_block.horizontal_whitespace);
-    var count: usize = 0;
-    var iter = CellIterator.init(trimmed);
-    while (iter.next()) |_| count += 1;
-    if (iter.invalid) return 0;
-    return count;
-}
-
 pub fn countCells(line: []const u8) usize {
-    return cellCount(line);
-}
-
-pub fn countAlignmentCells(line: []const u8) usize {
     const trimmed = std.mem.trim(u8, line, parse_block.horizontal_whitespace);
     var count: usize = 0;
     var iter = CellIterator.init(trimmed);
@@ -55,7 +42,7 @@ pub fn countAlignmentCells(line: []const u8) usize {
     return count;
 }
 
-pub fn fillCells(line: []const u8, out: [][]const u8) CellParseError!void {
+fn fillCells(line: []const u8, out: [][]const u8) CellParseError!void {
     const trimmed = std.mem.trim(u8, line, parse_block.horizontal_whitespace);
     var iter = CellIterator.init(trimmed);
     var i: usize = 0;
@@ -178,7 +165,7 @@ test "isDelimiterRow rejects invalid rows" {
 
 test "fillAlignments writes three alignments" {
     const line = "| :--- | :---: | ---: |";
-    try std.testing.expectEqual(@as(usize, 3), countAlignmentCells(line));
+    try std.testing.expectEqual(@as(usize, 3), countCells(line));
     var slots: [3]ast.Alignment = undefined;
     try fillAlignments(line, &slots);
     try std.testing.expectEqual(ast.Alignment.left, slots[0]);

@@ -52,7 +52,7 @@ pub fn eventLoop(
             if (rt.readSignal()) |sig| {
                 if (sig == @as(u8, @intFromEnum(std.posix.SIG.WINCH))) {
                     term_size.* = terminal.getTerminalSize(opts.stdout_file.handle) orelse term_size.*;
-                    wrap_width.* = if (opts.enable_ansi) term_size.cols else null;
+                    wrap_width.* = term_size.cols;
                     scroll_offset.* = 0;
                     debounce.clear();
                     session.pgr.invalidate();
@@ -95,7 +95,7 @@ pub fn eventLoop(
         }
 
         if (needs_redisplay) {
-            session.pgr.displayPage(opts.stdout, &session.buffer, scroll_offset.*, term_size.rows, opts.enable_ansi, opts.color_mode);
+            session.pgr.displayPage(opts.stdout, &session.buffer, scroll_offset.*, term_size.rows, opts.enable_ansi);
         }
     }
 }

@@ -29,7 +29,6 @@ pub fn loadFile(
 }
 
 fn shouldMmap(size: u64) bool {
-    if (builtin.os.tag == .windows) return false;
     return size >= mmap_threshold;
 }
 
@@ -62,20 +61,21 @@ fn readFile(
 
     adviseSequential(file.handle, len);
 
-    var buffer = try allocator.alloc(u8, len);
+    const buffer = try allocator.alloc(u8, len);
     errdefer allocator.free(buffer);
 
     var read_buf: [file_reader_buffer_size]u8 = undefined;
     var file_reader = file.reader(io, &read_buf);
-    const filled = file_reader.interface.readSliceShort(buffer) catch |err| switch (err) {
+    file_reader.interface.readSliceAll(buffer) catch |err| switch (err) {
         error.ReadFailed => return file_reader.err.?,
+        error.EndOfStream => return error.FileChanged,
+    };
+    _ = file_reader.interface.takeByte() catch |err| switch (err) {
+        error.ReadFailed => return file_reader.err.?,
+        error.EndOfStream => return .{ .owned = .{ .allocator = allocator, .buffer = buffer } },
     };
 
-    if (filled < len) {
-        buffer = try allocator.realloc(buffer, filled);
-    }
-
-    return .{ .owned = .{ .allocator = allocator, .buffer = buffer } };
+    return error.FileChanged;
 }
 
 fn adviseSequential(fd: std.posix.fd_t, len: usize) void {
@@ -99,9 +99,23 @@ test "loadFile returns owned source for small files" {
     try std.testing.expectEqualStrings(data, source.bytes());
 }
 
-test "loadFile returns mapped source at or above mmap threshold" {
-    if (builtin.os.tag == .windows) return;
+test "readFile reports FileChanged when file is larger than expected" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
 
+    try tmp.dir.writeFile(io, .{ .sub_path = "grown.md", .data = "abcdef" });
+
+    var file = try tmp.dir.openFile(io, "grown.md", .{});
+    defer file.close(io);
+
+    try std.testing.expectError(
+        error.FileChanged,
+        readFile(std.testing.allocator, io, file, 3),
+    );
+}
+
+test "loadFile returns mapped source at or above mmap threshold" {
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
