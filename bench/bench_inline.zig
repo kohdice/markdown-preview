@@ -36,7 +36,6 @@ const ParseTimeRunner = struct {
 };
 
 const RenderTimeRunner = struct {
-    allocator: std.mem.Allocator,
     renderer: *Renderer,
     doc: *const Document,
     wrap_width: ?usize,
@@ -47,7 +46,6 @@ const RenderTimeRunner = struct {
             self.renderer,
             self.doc,
             self.wrap_width,
-            self.allocator,
         );
     }
 };
@@ -134,7 +132,6 @@ fn measureRender(
     defer renderer.deinit();
 
     var runner = RenderTimeRunner{
-        .allocator = timing_allocator,
         .renderer = &renderer,
         .doc = &doc,
         .wrap_width = wrap_width,
@@ -174,10 +171,10 @@ fn profileRender(scenario: Scenario, wrap_width: ?usize) !RenderProfile {
     });
     defer renderer.deinit();
 
-    _ = try renderWithDiscarding(&renderer, &doc, wrap_width, counting.allocator());
+    _ = try renderWithDiscarding(&renderer, &doc, wrap_width);
 
     const before = counting.snapshot();
-    const output_bytes = try renderWithDiscarding(&renderer, &doc, wrap_width, counting.allocator());
+    const output_bytes = try renderWithDiscarding(&renderer, &doc, wrap_width);
     const after = counting.snapshot();
 
     return .{
@@ -190,11 +187,10 @@ fn renderWithDiscarding(
     renderer: *Renderer,
     doc: *const Document,
     wrap_width: ?usize,
-    cycle_allocator: std.mem.Allocator,
 ) !usize {
     var sink: [512]u8 = undefined;
     var discarding: std.Io.Writer.Discarding = .init(&sink);
-    try renderer.render(&discarding.writer, doc, wrap_width, cycle_allocator);
+    try renderer.render(&discarding.writer, doc, wrap_width);
     try discarding.writer.flush();
     const output_bytes = discarding.fullCount();
     std.mem.doNotOptimizeAway(output_bytes);
@@ -202,7 +198,7 @@ fn renderWithDiscarding(
 }
 
 fn makeParagraphInput(allocator: std.mem.Allocator, line_count: usize, line: []const u8) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
     for (0..line_count) |_| {
@@ -214,7 +210,7 @@ fn makeParagraphInput(allocator: std.mem.Allocator, line_count: usize, line: []c
 }
 
 fn makeRepeatedInlineInput(allocator: std.mem.Allocator, repeat_count: usize, segment: []const u8) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
     for (0..repeat_count) |_| {
@@ -225,7 +221,7 @@ fn makeRepeatedInlineInput(allocator: std.mem.Allocator, repeat_count: usize, se
 }
 
 fn makeNestedInlineInput(allocator: std.mem.Allocator, depth: usize) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
     for (0..depth) |index| {
@@ -251,7 +247,7 @@ fn makeNestedInlineInput(allocator: std.mem.Allocator, depth: usize) ![]u8 {
 }
 
 fn makeManyParagraphsInput(allocator: std.mem.Allocator, count: usize) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
     for (0..count) |i| {
@@ -262,7 +258,7 @@ fn makeManyParagraphsInput(allocator: std.mem.Allocator, count: usize) ![]u8 {
 }
 
 fn makeManyHeadingsInput(allocator: std.mem.Allocator, count: usize) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
     for (0..count) |i| {
@@ -275,7 +271,7 @@ fn makeManyHeadingsInput(allocator: std.mem.Allocator, count: usize) ![]u8 {
 }
 
 fn makeTableInput(allocator: std.mem.Allocator, rows: usize, cols: usize) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
     for (0..cols) |c| {
@@ -302,7 +298,7 @@ fn makeTableInput(allocator: std.mem.Allocator, rows: usize, cols: usize) ![]u8 
 }
 
 fn makeReferenceLinkInput(allocator: std.mem.Allocator, count: usize) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
     for (0..count) |index| {

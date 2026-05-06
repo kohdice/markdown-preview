@@ -172,7 +172,7 @@ fn runTimedPipeline(
     var discarding: std.Io.Writer.Discarding = .init(&sink);
 
     const render_timer = bench.BenchTimer.start(io);
-    try renderer.render(&discarding.writer, &doc, null, allocator);
+    try renderer.render(&discarding.writer, &doc, null);
     try discarding.writer.flush();
     const render_ns = render_timer.read();
     const output_bytes = discarding.fullCount();
@@ -217,7 +217,7 @@ fn profileAllocations(
     var discarding: std.Io.Writer.Discarding = .init(&sink);
 
     const render_before = render_counting.snapshot();
-    try renderer.render(&discarding.writer, &doc, null, render_counting.allocator());
+    try renderer.render(&discarding.writer, &doc, null);
     try discarding.writer.flush();
     const render_after = render_counting.snapshot();
     const output_bytes = discarding.fullCount();

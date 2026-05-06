@@ -2,15 +2,13 @@ const std = @import("std");
 const source_mod = @import("source.zig");
 const types = @import("types.zig");
 
-pub const Source = source_mod.Source;
-
 pub const ParseError = error{
     InvalidMermaid,
     UnsupportedFeature,
     OutOfMemory,
 };
 
-pub fn parseSource(allocator: std.mem.Allocator, source: anytype) ParseError!types.XyChart {
+pub fn parse(allocator: std.mem.Allocator, source: anytype) ParseError!types.XyChart {
     const owned_source = try source_mod.normalizeOwned(allocator, source);
     return parseFromOwned(allocator, owned_source);
 }
@@ -19,18 +17,13 @@ fn parseFromOwned(allocator: std.mem.Allocator, owned_source: []u8) ParseError!t
     var chart: types.XyChart = .{ .allocator = allocator };
     errdefer chart.deinit();
 
-    var owned: std.ArrayListUnmanaged([]u8) = .empty;
-    errdefer {
-        for (owned.items) |s| allocator.free(s);
-        owned.deinit(allocator);
-    }
+    chart.owned_strings = allocator.alloc([]u8, 1) catch {
+        allocator.free(owned_source);
+        return error.OutOfMemory;
+    };
+    chart.owned_strings[0] = owned_source;
 
-    {
-        errdefer allocator.free(owned_source);
-        try owned.append(allocator, owned_source);
-    }
-
-    var series_list: std.ArrayListUnmanaged(types.XySeries) = .empty;
+    var series_list: std.ArrayList(types.XySeries) = .empty;
     errdefer {
         for (series_list.items) |s| if (s.data.len > 0) allocator.free(s.data);
         series_list.deinit(allocator);
@@ -50,7 +43,7 @@ fn parseFromOwned(allocator: std.mem.Allocator, owned_source: []u8) ParseError!t
             continue;
         }
 
-        try parseDirective(allocator, &chart, &owned, &series_list, trimmed);
+        try parseDirective(allocator, &chart, &series_list, trimmed);
     }
 
     if (!header_seen) return error.InvalidMermaid;
@@ -62,7 +55,6 @@ fn parseFromOwned(allocator: std.mem.Allocator, owned_source: []u8) ParseError!t
         }
     }
 
-    chart.owned_strings = try owned.toOwnedSlice(allocator);
     chart.series = try series_list.toOwnedSlice(allocator);
     return chart;
 }
@@ -90,22 +82,19 @@ fn validateHeader(line: []const u8, chart: *types.XyChart) ParseError!void {
 fn parseDirective(
     allocator: std.mem.Allocator,
     chart: *types.XyChart,
-    owned: *std.ArrayListUnmanaged([]u8),
-    series_list: *std.ArrayListUnmanaged(types.XySeries),
+    series_list: *std.ArrayList(types.XySeries),
     line: []const u8,
 ) ParseError!void {
     if (takeKeyword(line, "title")) |rest| {
         const body = std.mem.trim(u8, rest, " \t");
-        const dup = try parseTitleBody(allocator, body);
-        try owned.append(allocator, dup);
-        chart.title = dup;
+        chart.title = try parseTitleBody(body);
         return;
     }
     if (takeKeyword(line, "x-axis")) |rest| {
-        return parseAxisDirective(allocator, &chart.x_axis, owned, rest, true);
+        return parseAxisDirective(allocator, &chart.x_axis, rest, true);
     }
     if (takeKeyword(line, "y-axis")) |rest| {
-        return parseAxisDirective(allocator, &chart.y_axis, owned, rest, false);
+        return parseAxisDirective(allocator, &chart.y_axis, rest, false);
     }
     if (takeKeyword(line, "bar")) |rest| {
         return parseSeriesDirective(allocator, series_list, rest, .bar);
@@ -118,7 +107,7 @@ fn parseDirective(
 
 fn parseSeriesDirective(
     allocator: std.mem.Allocator,
-    series_list: *std.ArrayListUnmanaged(types.XySeries),
+    series_list: *std.ArrayList(types.XySeries),
     rest: []const u8,
     kind: types.XySeriesKind,
 ) ParseError!void {
@@ -132,7 +121,7 @@ fn parseNumberList(allocator: std.mem.Allocator, text: []const u8) ParseError![]
     if (text.len < 2 or text[0] != '[' or text[text.len - 1] != ']') return error.InvalidMermaid;
     const inner = text[1 .. text.len - 1];
 
-    var items: std.ArrayListUnmanaged(f64) = .empty;
+    var items: std.ArrayList(f64) = .empty;
     errdefer items.deinit(allocator);
 
     var i: usize = 0;
@@ -160,7 +149,6 @@ fn parseNumberList(allocator: std.mem.Allocator, text: []const u8) ParseError![]
 fn parseAxisDirective(
     allocator: std.mem.Allocator,
     axis: *types.XyAxis,
-    owned: *std.ArrayListUnmanaged([]u8),
     rest: []const u8,
     allow_categories: bool,
 ) ParseError!void {
@@ -171,17 +159,13 @@ fn parseAxisDirective(
     var cursor: []const u8 = body;
 
     if (body[0] == '"') {
-        const end = std.mem.indexOfScalarPos(u8, body, 1, '"') orelse return error.InvalidMermaid;
-        const dup = allocator.dupe(u8, body[1..end]) catch return error.OutOfMemory;
-        try owned.append(allocator, dup);
-        title = dup;
+        const end = std.mem.findScalarPos(u8, body, 1, '"') orelse return error.InvalidMermaid;
+        title = body[1..end];
         cursor = std.mem.trim(u8, body[end + 1 ..], " \t");
     } else if (body[0] != '[' and !isNumericStart(body[0])) {
         var i: usize = 0;
         while (i < body.len and body[i] != ' ' and body[i] != '\t') : (i += 1) {}
-        const dup = allocator.dupe(u8, body[0..i]) catch return error.OutOfMemory;
-        try owned.append(allocator, dup);
-        title = dup;
+        title = body[0..i];
         cursor = std.mem.trim(u8, body[i..], " \t");
     }
 
@@ -192,13 +176,13 @@ fn parseAxisDirective(
 
     if (cursor[0] == '[') {
         if (!allow_categories) return error.InvalidMermaid;
-        const categories = try parseCategoryList(allocator, owned, cursor);
+        const categories = try parseCategoryList(allocator, cursor);
         axis.kind = .category;
         axis.categories = categories;
         return;
     }
 
-    if (std.mem.indexOf(u8, cursor, "-->")) |arrow| {
+    if (std.mem.find(u8, cursor, "-->")) |arrow| {
         const min_str = std.mem.trim(u8, cursor[0..arrow], " \t");
         const max_str = std.mem.trim(u8, cursor[arrow + 3 ..], " \t");
         const min_v = try parseNumber(min_str);
@@ -225,13 +209,12 @@ fn parseNumber(text: []const u8) ParseError!f64 {
 
 fn parseCategoryList(
     allocator: std.mem.Allocator,
-    owned: *std.ArrayListUnmanaged([]u8),
     text: []const u8,
 ) ParseError![][]const u8 {
     if (text.len < 2 or text[0] != '[' or text[text.len - 1] != ']') return error.InvalidMermaid;
     const inner = text[1 .. text.len - 1];
 
-    var items: std.ArrayListUnmanaged([]const u8) = .empty;
+    var items: std.ArrayList([]const u8) = .empty;
     errdefer items.deinit(allocator);
 
     var i: usize = 0;
@@ -239,21 +222,20 @@ fn parseCategoryList(
         while (i < inner.len and (inner[i] == ' ' or inner[i] == '\t')) : (i += 1) {}
         if (i >= inner.len) break;
 
-        var item: []u8 = undefined;
+        var item: []const u8 = undefined;
         if (inner[i] == '"') {
             const start = i + 1;
             i += 1;
             while (i < inner.len and inner[i] != '"') : (i += 1) {}
             if (i >= inner.len) return error.InvalidMermaid;
-            item = allocator.dupe(u8, inner[start..i]) catch return error.OutOfMemory;
+            item = inner[start..i];
             i += 1;
         } else {
             const start = i;
             while (i < inner.len and inner[i] != ',' and inner[i] != ' ' and inner[i] != '\t') : (i += 1) {}
             if (start == i) return error.InvalidMermaid;
-            item = allocator.dupe(u8, inner[start..i]) catch return error.OutOfMemory;
+            item = inner[start..i];
         }
-        try owned.append(allocator, item);
         try items.append(allocator, item);
 
         while (i < inner.len and (inner[i] == ' ' or inner[i] == '\t')) : (i += 1) {}
@@ -270,13 +252,13 @@ fn isNumericStart(c: u8) bool {
     return (c >= '0' and c <= '9') or c == '-' or c == '+' or c == '.';
 }
 
-fn parseTitleBody(allocator: std.mem.Allocator, body: []const u8) ParseError![]u8 {
+fn parseTitleBody(body: []const u8) ParseError![]const u8 {
     if (body.len == 0) return error.InvalidMermaid;
-    if (body[0] == '"') return parseQuotedString(allocator, body);
+    if (body[0] == '"') return parseQuotedString(body);
     for (body) |c| {
         if (c == ' ' or c == '\t') return error.InvalidMermaid;
     }
-    return allocator.dupe(u8, body) catch return error.OutOfMemory;
+    return body;
 }
 
 fn takeKeyword(line: []const u8, keyword: []const u8) ?[]const u8 {
@@ -287,28 +269,27 @@ fn takeKeyword(line: []const u8, keyword: []const u8) ?[]const u8 {
     return line[keyword.len..];
 }
 
-fn parseQuotedString(allocator: std.mem.Allocator, body: []const u8) ParseError![]u8 {
+fn parseQuotedString(body: []const u8) ParseError![]const u8 {
     if (body.len < 2 or body[0] != '"' or body[body.len - 1] != '"') return error.InvalidMermaid;
-    const inner = body[1 .. body.len - 1];
-    return allocator.dupe(u8, inner) catch return error.OutOfMemory;
+    return body[1 .. body.len - 1];
 }
 
-test "parseSource rejects source without xychart header" {
+test "parse rejects source without xychart header" {
     try std.testing.expectError(
         error.InvalidMermaid,
-        parseSource(std.testing.allocator, "flowchart TD\n  A --> B\n"),
+        parse(std.testing.allocator, "flowchart TD\n  A --> B\n"),
     );
 }
 
-test "parseSource rejects legacy xychart-beta header" {
+test "parse rejects legacy xychart-beta header" {
     try std.testing.expectError(
         error.InvalidMermaid,
-        parseSource(std.testing.allocator, "xychart-beta\n"),
+        parse(std.testing.allocator, "xychart-beta\n"),
     );
 }
 
-test "parseSource accepts bare xychart header with no body" {
-    var chart = try parseSource(std.testing.allocator, "xychart\n");
+test "parse accepts bare xychart header with no body" {
+    var chart = try parse(std.testing.allocator, "xychart\n");
     defer chart.deinit();
     try std.testing.expectEqual(@as(?[]const u8, null), chart.title);
     try std.testing.expectEqual(types.XyOrientation.vertical, chart.orientation);
@@ -317,8 +298,8 @@ test "parseSource accepts bare xychart header with no body" {
     try std.testing.expect(!chart.y_axis.has_explicit_range);
 }
 
-test "parseSource parses title directive with quoted string" {
-    var chart = try parseSource(std.testing.allocator,
+test "parse parses title directive with quoted string" {
+    var chart = try parse(std.testing.allocator,
         \\xychart
         \\title "My Chart"
     );
@@ -326,8 +307,8 @@ test "parseSource parses title directive with quoted string" {
     try std.testing.expectEqualStrings("My Chart", chart.title.?);
 }
 
-test "parseSource parses title directive with single bareword" {
-    var chart = try parseSource(std.testing.allocator,
+test "parse parses title directive with single bareword" {
+    var chart = try parse(std.testing.allocator,
         \\xychart
         \\title Chart
     );
@@ -335,15 +316,15 @@ test "parseSource parses title directive with single bareword" {
     try std.testing.expectEqualStrings("Chart", chart.title.?);
 }
 
-test "parseSource rejects multi-word unquoted title" {
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+test "parse rejects multi-word unquoted title" {
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator,
         \\xychart
         \\title Foo Bar
     ));
 }
 
-test "parseSource parses category x-axis with [a, b, c]" {
-    var chart = try parseSource(std.testing.allocator,
+test "parse parses category x-axis with [a, b, c]" {
+    var chart = try parse(std.testing.allocator,
         \\xychart
         \\x-axis [a, b, c]
     );
@@ -356,8 +337,8 @@ test "parseSource parses category x-axis with [a, b, c]" {
     try std.testing.expectEqual(@as(?[]const u8, null), chart.x_axis.title);
 }
 
-test "parseSource parses category x-axis with quoted entries containing spaces" {
-    var chart = try parseSource(std.testing.allocator,
+test "parse parses category x-axis with quoted entries containing spaces" {
+    var chart = try parse(std.testing.allocator,
         \\xychart
         \\x-axis "Months" ["Jan", "Feb Mar", "Apr"]
     );
@@ -370,8 +351,8 @@ test "parseSource parses category x-axis with quoted entries containing spaces" 
     try std.testing.expectEqualStrings("Apr", chart.x_axis.categories[2]);
 }
 
-test "parseSource parses numeric x-axis with min --> max" {
-    var chart = try parseSource(std.testing.allocator,
+test "parse parses numeric x-axis with min --> max" {
+    var chart = try parse(std.testing.allocator,
         \\xychart
         \\x-axis 0 --> 10
     );
@@ -383,8 +364,8 @@ test "parseSource parses numeric x-axis with min --> max" {
     try std.testing.expectEqual(@as(?[]const u8, null), chart.x_axis.title);
 }
 
-test "parseSource parses y-axis title-only form (has_explicit_range=false)" {
-    var chart = try parseSource(std.testing.allocator,
+test "parse parses y-axis title-only form (has_explicit_range=false)" {
+    var chart = try parse(std.testing.allocator,
         \\xychart
         \\y-axis "Revenue"
     );
@@ -393,8 +374,8 @@ test "parseSource parses y-axis title-only form (has_explicit_range=false)" {
     try std.testing.expect(!chart.y_axis.has_explicit_range);
 }
 
-test "parseSource parses y-axis with numeric range" {
-    var chart = try parseSource(std.testing.allocator,
+test "parse parses y-axis with numeric range" {
+    var chart = try parse(std.testing.allocator,
         \\xychart
         \\y-axis "Revenue" 0 --> 100
     );
@@ -406,8 +387,8 @@ test "parseSource parses y-axis with numeric range" {
     try std.testing.expectEqual(@as(f64, 100), chart.y_axis.numeric_max);
 }
 
-test "parseSource parses single bar series with positive integers" {
-    var chart = try parseSource(std.testing.allocator,
+test "parse parses single bar series with positive integers" {
+    var chart = try parse(std.testing.allocator,
         \\xychart
         \\bar [1, 2, 3]
     );
@@ -420,8 +401,8 @@ test "parseSource parses single bar series with positive integers" {
     try std.testing.expectEqual(@as(f64, 3), chart.series[0].data[2]);
 }
 
-test "parseSource parses line series with negative and fractional values" {
-    var chart = try parseSource(std.testing.allocator,
+test "parse parses line series with negative and fractional values" {
+    var chart = try parse(std.testing.allocator,
         \\xychart
         \\line [-1.5, 2.75, -0.25]
     );
@@ -433,8 +414,8 @@ test "parseSource parses line series with negative and fractional values" {
     try std.testing.expectEqual(@as(f64, -0.25), chart.series[0].data[2]);
 }
 
-test "parseSource parses leading-dot fraction .98 and signed -.34" {
-    var chart = try parseSource(std.testing.allocator,
+test "parse parses leading-dot fraction .98 and signed -.34" {
+    var chart = try parse(std.testing.allocator,
         \\xychart
         \\line [.98, -.34, +.5]
     );
@@ -444,8 +425,8 @@ test "parseSource parses leading-dot fraction .98 and signed -.34" {
     try std.testing.expectEqual(@as(f64, 0.5), chart.series[0].data[2]);
 }
 
-test "parseSource parses multiple bar and line series in source order" {
-    var chart = try parseSource(std.testing.allocator,
+test "parse parses multiple bar and line series in source order" {
+    var chart = try parse(std.testing.allocator,
         \\xychart
         \\bar [1, 2, 3]
         \\line [4, 5, 6]
@@ -461,8 +442,8 @@ test "parseSource parses multiple bar and line series in source order" {
     try std.testing.expectEqual(@as(f64, 7), chart.series[2].data[0]);
 }
 
-test "parseSource treats later axis redefinition as last-wins" {
-    var chart = try parseSource(std.testing.allocator,
+test "parse treats later axis redefinition as last-wins" {
+    var chart = try parse(std.testing.allocator,
         \\xychart
         \\x-axis [a, b, c]
         \\x-axis 0 --> 10
@@ -475,44 +456,44 @@ test "parseSource treats later axis redefinition as last-wins" {
     try std.testing.expectEqual(@as(usize, 0), chart.x_axis.categories.len);
 }
 
-test "parseSource detects horizontal orientation in header" {
-    var chart = try parseSource(std.testing.allocator, "xychart horizontal\n");
+test "parse detects horizontal orientation in header" {
+    var chart = try parse(std.testing.allocator, "xychart horizontal\n");
     defer chart.deinit();
     try std.testing.expectEqual(types.XyOrientation.horizontal, chart.orientation);
 }
 
-test "parseSource defaults orientation to vertical when unspecified" {
-    var chart = try parseSource(std.testing.allocator, "xychart\n");
+test "parse defaults orientation to vertical when unspecified" {
+    var chart = try parse(std.testing.allocator, "xychart\n");
     defer chart.deinit();
     try std.testing.expectEqual(types.XyOrientation.vertical, chart.orientation);
 }
 
-test "parseSource rejects bar series shorter than category count" {
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+test "parse rejects bar series shorter than category count" {
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator,
         \\xychart
         \\x-axis [a, b, c]
         \\bar [1, 2]
     ));
 }
 
-test "parseSource rejects bar series longer than category count" {
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+test "parse rejects bar series longer than category count" {
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator,
         \\xychart
         \\x-axis [a, b]
         \\bar [1, 2, 3]
     ));
 }
 
-test "parseSource rejects line series mismatched with category count" {
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+test "parse rejects line series mismatched with category count" {
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator,
         \\xychart
         \\x-axis [a, b]
         \\line [1, 2, 3]
     ));
 }
 
-test "parseSource rejects when any series among many mismatches categories" {
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+test "parse rejects when any series among many mismatches categories" {
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator,
         \\xychart
         \\x-axis [a, b]
         \\bar [1, 2]
@@ -520,8 +501,8 @@ test "parseSource rejects when any series among many mismatches categories" {
     ));
 }
 
-test "parseSource accepts series length equal to category count" {
-    var chart = try parseSource(std.testing.allocator,
+test "parse accepts series length equal to category count" {
+    var chart = try parse(std.testing.allocator,
         \\xychart
         \\x-axis [a, b, c]
         \\bar [1, 2, 3]
@@ -531,8 +512,8 @@ test "parseSource accepts series length equal to category count" {
     try std.testing.expectEqual(@as(usize, 3), chart.series[0].data.len);
 }
 
-test "parseSource accepts mismatched series length for numeric x-axis" {
-    var chart = try parseSource(std.testing.allocator,
+test "parse accepts mismatched series length for numeric x-axis" {
+    var chart = try parse(std.testing.allocator,
         \\xychart
         \\x-axis 0 --> 10
         \\bar [1, 2, 3, 4, 5]
@@ -542,8 +523,8 @@ test "parseSource accepts mismatched series length for numeric x-axis" {
     try std.testing.expectEqual(@as(usize, 5), chart.series[0].data.len);
 }
 
-test "parseSource accepts any series length when x-axis is implicit" {
-    var chart = try parseSource(std.testing.allocator,
+test "parse accepts any series length when x-axis is implicit" {
+    var chart = try parse(std.testing.allocator,
         \\xychart
         \\bar [1, 2, 3]
     );
@@ -551,8 +532,8 @@ test "parseSource accepts any series length when x-axis is implicit" {
     try std.testing.expectEqual(@as(usize, 1), chart.series.len);
 }
 
-test "parseSource accepts categories without any series" {
-    var chart = try parseSource(std.testing.allocator,
+test "parse accepts categories without any series" {
+    var chart = try parse(std.testing.allocator,
         \\xychart
         \\x-axis [a, b]
     );
@@ -561,29 +542,29 @@ test "parseSource accepts categories without any series" {
     try std.testing.expectEqual(@as(usize, 2), chart.x_axis.categories.len);
 }
 
-test "parseSource rejects reversed y-axis range 100 --> 0" {
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+test "parse rejects reversed y-axis range 100 --> 0" {
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator,
         \\xychart
         \\y-axis 100 --> 0
     ));
 }
 
-test "parseSource rejects degenerate y-axis range 50 --> 50" {
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+test "parse rejects degenerate y-axis range 50 --> 50" {
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator,
         \\xychart
         \\y-axis 50 --> 50
     ));
 }
 
-test "parseSource rejects reversed x-axis numeric range 10 --> -5" {
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+test "parse rejects reversed x-axis numeric range 10 --> -5" {
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator,
         \\xychart
         \\x-axis 10 --> -5
     ));
 }
 
-test "parseSource accepts ascending y-axis range 0 --> 100" {
-    var chart = try parseSource(std.testing.allocator,
+test "parse accepts ascending y-axis range 0 --> 100" {
+    var chart = try parse(std.testing.allocator,
         \\xychart
         \\y-axis 0 --> 100
     );
@@ -593,8 +574,8 @@ test "parseSource accepts ascending y-axis range 0 --> 100" {
     try std.testing.expectEqual(@as(f64, 100), chart.y_axis.numeric_max);
 }
 
-test "parseSource accepts y-axis range crossing zero -10 --> 10" {
-    var chart = try parseSource(std.testing.allocator,
+test "parse accepts y-axis range crossing zero -10 --> 10" {
+    var chart = try parse(std.testing.allocator,
         \\xychart
         \\y-axis -10 --> 10
     );
@@ -603,8 +584,8 @@ test "parseSource accepts y-axis range crossing zero -10 --> 10" {
     try std.testing.expectEqual(@as(f64, 10), chart.y_axis.numeric_max);
 }
 
-test "parseSource accepts small positive y-axis range 0.1 --> 0.2" {
-    var chart = try parseSource(std.testing.allocator,
+test "parse accepts small positive y-axis range 0.1 --> 0.2" {
+    var chart = try parse(std.testing.allocator,
         \\xychart
         \\y-axis 0.1 --> 0.2
     );
@@ -613,22 +594,22 @@ test "parseSource accepts small positive y-axis range 0.1 --> 0.2" {
     try std.testing.expectEqual(@as(f64, 0.2), chart.y_axis.numeric_max);
 }
 
-test "parseSource rejects y-axis bare category list" {
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+test "parse rejects y-axis bare category list" {
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator,
         \\xychart
         \\y-axis [a, b]
     ));
 }
 
-test "parseSource rejects y-axis title plus category list" {
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator,
+test "parse rejects y-axis title plus category list" {
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator,
         \\xychart
         \\y-axis "Revenue" [a, b]
     ));
 }
 
-test "parseSource accepts y-axis title-only form" {
-    var chart = try parseSource(std.testing.allocator,
+test "parse accepts y-axis title-only form" {
+    var chart = try parse(std.testing.allocator,
         \\xychart
         \\y-axis "Revenue"
     );
@@ -637,8 +618,8 @@ test "parseSource accepts y-axis title-only form" {
     try std.testing.expect(!chart.y_axis.has_explicit_range);
 }
 
-test "parseSource accepts y-axis with title and numeric range" {
-    var chart = try parseSource(std.testing.allocator,
+test "parse accepts y-axis with title and numeric range" {
+    var chart = try parse(std.testing.allocator,
         \\xychart
         \\y-axis "Revenue" 0 --> 100
     );
@@ -649,8 +630,8 @@ test "parseSource accepts y-axis with title and numeric range" {
     try std.testing.expectEqual(@as(f64, 100), chart.y_axis.numeric_max);
 }
 
-test "parseSource still accepts x-axis category list after tightening y-axis" {
-    var chart = try parseSource(std.testing.allocator,
+test "parse still accepts x-axis category list after tightening y-axis" {
+    var chart = try parse(std.testing.allocator,
         \\xychart
         \\x-axis [a, b]
         \\bar [1, 2]

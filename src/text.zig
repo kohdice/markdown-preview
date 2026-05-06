@@ -1,4 +1,5 @@
 const std = @import("std");
+const utf8 = @import("term/utf8.zig");
 
 const max_entity_len = 32;
 const max_hex_digits = 6;
@@ -18,24 +19,23 @@ pub const DecodeResult = struct {
     end: usize,
 };
 
-pub const Codepoint = struct {
-    cp: u21,
-    len: usize,
-};
+pub const Codepoint = utf8.Codepoint;
+pub const CodepointDecode = utf8.CodepointDecode;
 
 pub fn nextCodepoint(bytes: []const u8, pos: usize) ?Codepoint {
-    if (pos >= bytes.len) return null;
-    const len = std.unicode.utf8ByteSequenceLength(bytes[pos]) catch return null;
-    if (pos + len > bytes.len) return null;
-    const cp = std.unicode.utf8Decode(bytes[pos..][0..len]) catch return null;
-    return .{ .cp = cp, .len = len };
+    return switch (utf8.decodeCodepoint(bytes, pos)) {
+        .ok => |codepoint| codepoint,
+        .invalid, .incomplete => null,
+    };
 }
+
+pub const decodeCodepoint = utf8.decodeCodepoint;
 
 pub fn decode(text: []const u8, start: usize) ?DecodeResult {
     if (start >= text.len or text[start] != '&') return null;
 
     const max_end = @min(start + max_entity_len, text.len);
-    const semi_pos = std.mem.indexOfScalarPos(u8, text[0..max_end], start + 1, ';') orelse return null;
+    const semi_pos = std.mem.findScalarPos(u8, text[0..max_end], start + 1, ';') orelse return null;
 
     const entity_body = text[start + 1 .. semi_pos];
     if (entity_body.len == 0) return null;

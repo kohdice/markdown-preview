@@ -6,14 +6,15 @@ const paint_flowchart = @import("paint_flowchart.zig");
 const paint_git = @import("paint_git.zig");
 const paint_sequence = @import("paint_sequence.zig");
 const paint_xychart = @import("paint_xychart.zig");
-const ansi_mod = @import("../term/ansi.zig");
 const width_mod = @import("../term/width.zig");
 
 pub const PaintError = error{
     InvalidMermaid,
     UnsupportedDiagram,
     UnsupportedFeature,
+    WidthTooSmall,
     OutOfMemory,
+    Overflow,
     WriteFailed,
 };
 
@@ -21,7 +22,6 @@ pub const PaintOptions = struct {
     enable_ansi: bool,
     wrap_width: ?usize,
     ambiguous_width: width_mod.AmbiguousWidth,
-    color_mode: ansi_mod.ColorMode = .truecolor,
 };
 
 const DiagramTag = std.meta.Tag(compile_mod.Diagram);
@@ -75,45 +75,39 @@ fn paintWithTarget(
     diagram_data: anytype,
     opts: PaintOptions,
 ) PaintError!void {
+    try requireMinimumWidth(opts);
+
     return switch (target) {
         .graph => paint_flowchart.paintMermaidGraph(writer, allocator, diagram_data, opts),
         .sequence => paint_sequence.paintSequence(writer, allocator, diagram_data, .{
             .wrap_width = opts.wrap_width,
             .ambiguous_width = opts.ambiguous_width,
-        }) catch |err| mapRenderError(err),
+        }),
         .class_ => paint_class.paintClass(writer, allocator, diagram_data, .{
             .wrap_width = opts.wrap_width,
             .ambiguous_width = opts.ambiguous_width,
             .enable_ansi = opts.enable_ansi,
-            .color_mode = opts.color_mode,
-        }) catch |err| mapRenderError(err),
+        }),
         .er => paint_er.paintEr(writer, allocator, diagram_data, .{
             .wrap_width = opts.wrap_width,
             .ambiguous_width = opts.ambiguous_width,
-        }) catch |err| mapRenderError(err),
+        }),
         .git_graph => paint_git.paintGit(writer, allocator, diagram_data, .{
             .wrap_width = opts.wrap_width,
             .ambiguous_width = opts.ambiguous_width,
             .enable_ansi = opts.enable_ansi,
-            .color_mode = opts.color_mode,
-        }) catch |err| mapRenderError(err),
+        }),
         .xychart => paint_xychart.paintXyChart(writer, allocator, diagram_data, .{
             .wrap_width = opts.wrap_width,
             .ambiguous_width = opts.ambiguous_width,
             .enable_ansi = opts.enable_ansi,
-            .color_mode = opts.color_mode,
-        }) catch |err| mapRenderError(err),
+        }),
     };
 }
 
-fn mapRenderError(err: anyerror) PaintError {
-    return switch (err) {
-        error.InvalidMermaid => error.InvalidMermaid,
-        error.UnsupportedFeature => error.UnsupportedFeature,
-        error.OutOfMemory => error.OutOfMemory,
-        error.WriteFailed => error.WriteFailed,
-        else => error.InvalidMermaid,
-    };
+fn requireMinimumWidth(opts: PaintOptions) PaintError!void {
+    const w = opts.wrap_width orelse return;
+    if (w <= 1) return error.WidthTooSmall;
 }
 
 fn expectPaintProducesOutput(source: []const u8, opts: PaintOptions) !void {
@@ -139,7 +133,7 @@ fn expectPaintContains(source: []const u8, needle: []const u8, opts: PaintOption
     defer sink.deinit();
     try paint(&sink.writer, alloc, &diagram, opts);
 
-    try std.testing.expect(std.mem.indexOf(u8, sink.writer.buffered(), needle) != null);
+    try std.testing.expect(std.mem.find(u8, sink.writer.buffered(), needle) != null);
 }
 
 test "paint flowchart produces non-empty output" {
@@ -149,6 +143,19 @@ test "paint flowchart produces non-empty output" {
         .ambiguous_width = .narrow,
     };
     try expectPaintProducesOutput("graph TD\n    A --> B\n", opts);
+}
+
+test "paint preflight returns WidthTooSmall for impossible wrap width" {
+    var diagram = try compile_mod.compile(std.testing.allocator, "graph TD\n    A --> B\n");
+    defer diagram.deinit();
+
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    try std.testing.expectError(error.WidthTooSmall, paint(&sink.writer, std.testing.allocator, &diagram, .{
+        .enable_ansi = false,
+        .wrap_width = 1,
+        .ambiguous_width = .narrow,
+    }));
 }
 
 test "paint sequence produces non-empty output" {
@@ -233,9 +240,9 @@ test "compile strips multi-line init directive before flowchart and paint render
     });
 
     const output = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "A") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "B") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "▼") != null);
+    try std.testing.expect(std.mem.find(u8, output, "A") != null);
+    try std.testing.expect(std.mem.find(u8, output, "B") != null);
+    try std.testing.expect(std.mem.find(u8, output, "▼") != null);
 }
 
 test "compile+paint keeps %%{...}%% inside sequence message label" {
@@ -254,7 +261,7 @@ test "compile+paint keeps %%{...}%% inside sequence message label" {
     });
 
     const output = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "%%{x}%%") != null);
+    try std.testing.expect(std.mem.find(u8, output, "%%{x}%%") != null);
 }
 
 test "compile+paint keeps %%{...}%% inside flowchart node label" {
@@ -273,7 +280,7 @@ test "compile+paint keeps %%{...}%% inside flowchart node label" {
     });
 
     const output = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "%%{x}%%") != null);
+    try std.testing.expect(std.mem.find(u8, output, "%%{x}%%") != null);
 }
 
 test "compile silently strips init config scoped to a different diagram" {
@@ -293,9 +300,9 @@ test "compile silently strips init config scoped to a different diagram" {
     });
 
     const output = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "Alice") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Bob") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "hi") != null);
+    try std.testing.expect(std.mem.find(u8, output, "Alice") != null);
+    try std.testing.expect(std.mem.find(u8, output, "Bob") != null);
+    try std.testing.expect(std.mem.find(u8, output, "hi") != null);
 }
 
 test "compile rejects init with diagram-specific config as UnsupportedFeature" {
@@ -380,13 +387,13 @@ test "graph BT output is canvas vertical flip of graph TD" {
 }
 
 fn flipOutputForTest(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
-    var lines: std.ArrayListUnmanaged([]const u8) = .empty;
+    var lines: std.ArrayList([]const u8) = .empty;
     defer lines.deinit(alloc);
     var it = std.mem.splitScalar(u8, input, '\n');
     while (it.next()) |l| try lines.append(alloc, l);
     std.mem.reverse([]const u8, lines.items);
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    var buf: std.ArrayList(u8) = .empty;
     errdefer buf.deinit(alloc);
     for (lines.items, 0..) |line, i| {
         var view = std.unicode.Utf8View.init(line) catch return error.InvalidUtf8;
@@ -470,11 +477,11 @@ test "paint draws frame and title around flowchart subgraph" {
         .ambiguous_width = .narrow,
     });
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "┌") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "└") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "in") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "A") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "B") != null);
+    try std.testing.expect(std.mem.find(u8, out, "┌") != null);
+    try std.testing.expect(std.mem.find(u8, out, "└") != null);
+    try std.testing.expect(std.mem.find(u8, out, "in") != null);
+    try std.testing.expect(std.mem.find(u8, out, "A") != null);
+    try std.testing.expect(std.mem.find(u8, out, "B") != null);
 }
 
 test "paint drops edges to empty composite state" {
@@ -495,8 +502,8 @@ test "paint drops edges to empty composite state" {
     });
     const out = sink.writer.buffered();
     try std.testing.expect(out.len > 0);
-    try std.testing.expect(std.mem.indexOf(u8, out, "├") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "┤") == null);
+    try std.testing.expect(std.mem.find(u8, out, "├") == null);
+    try std.testing.expect(std.mem.find(u8, out, "┤") == null);
 }
 
 test "paint draws composite state frame without routing to invisible node" {
@@ -518,12 +525,12 @@ test "paint draws composite state frame without routing to invisible node" {
         .ambiguous_width = .narrow,
     });
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "Outer") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "Inner") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "┌") != null);
+    try std.testing.expect(std.mem.find(u8, out, "Outer") != null);
+    try std.testing.expect(std.mem.find(u8, out, "Inner") != null);
+    try std.testing.expect(std.mem.find(u8, out, "┌") != null);
     const has_frame_boundary_tee =
-        std.mem.indexOf(u8, out, "├") != null or
-        std.mem.indexOf(u8, out, "┤") != null;
+        std.mem.find(u8, out, "├") != null or
+        std.mem.find(u8, out, "┤") != null;
     try std.testing.expect(has_frame_boundary_tee);
 }
 
@@ -539,9 +546,9 @@ test "paint renders erDiagram" {
         .ambiguous_width = .narrow,
     });
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "CUSTOMER") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "ORDER") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "places") != null);
+    try std.testing.expect(std.mem.find(u8, out, "CUSTOMER") != null);
+    try std.testing.expect(std.mem.find(u8, out, "ORDER") != null);
+    try std.testing.expect(std.mem.find(u8, out, "places") != null);
 }
 
 test "paint renders gitGraph with LR colon header" {
@@ -556,8 +563,8 @@ test "paint renders gitGraph with LR colon header" {
         .ambiguous_width = .narrow,
     });
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "●") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "[main]") != null);
+    try std.testing.expect(std.mem.find(u8, out, "●") != null);
+    try std.testing.expect(std.mem.find(u8, out, "[main]") != null);
 }
 
 test "compile returns UnsupportedFeature for cherry-pick" {
@@ -586,8 +593,8 @@ test "paint renders stateDiagram-v2" {
         .ambiguous_width = .narrow,
     });
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "Idle") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "Running") != null);
+    try std.testing.expect(std.mem.find(u8, out, "Idle") != null);
+    try std.testing.expect(std.mem.find(u8, out, "Running") != null);
 }
 
 test "paint renders sequence diagram" {
@@ -602,9 +609,9 @@ test "paint renders sequence diagram" {
         .ambiguous_width = .narrow,
     });
     const out = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "Alice") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "Bob") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "hi") != null);
+    try std.testing.expect(std.mem.find(u8, out, "Alice") != null);
+    try std.testing.expect(std.mem.find(u8, out, "Bob") != null);
+    try std.testing.expect(std.mem.find(u8, out, "hi") != null);
 }
 
 test "compile returns InvalidMermaid for unknown diagram type" {
@@ -624,10 +631,10 @@ test "paint renders single-edge flowchart" {
     });
 
     const output = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "A") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "B") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "▼") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "┌") != null);
+    try std.testing.expect(std.mem.find(u8, output, "A") != null);
+    try std.testing.expect(std.mem.find(u8, output, "B") != null);
+    try std.testing.expect(std.mem.find(u8, output, "▼") != null);
+    try std.testing.expect(std.mem.find(u8, output, "┌") != null);
 }
 
 test "paint renders labeled edge with label text in output" {
@@ -643,7 +650,7 @@ test "paint renders labeled edge with label text in output" {
     });
 
     const output = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "yes") != null);
+    try std.testing.expect(std.mem.find(u8, output, "yes") != null);
 }
 
 test "paint keeps Unicode glyphs in wide ambiguous mode" {
@@ -659,9 +666,9 @@ test "paint keeps Unicode glyphs in wide ambiguous mode" {
     });
 
     const output = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "─") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "│") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "+") == null);
+    try std.testing.expect(std.mem.find(u8, output, "─") != null);
+    try std.testing.expect(std.mem.find(u8, output, "│") != null);
+    try std.testing.expect(std.mem.find(u8, output, "+") == null);
 }
 
 test "paint LR direction renders horizontally" {
@@ -677,9 +684,9 @@ test "paint LR direction renders horizontally" {
     });
 
     const output = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "A") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "B") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "►") != null);
+    try std.testing.expect(std.mem.find(u8, output, "A") != null);
+    try std.testing.expect(std.mem.find(u8, output, "B") != null);
+    try std.testing.expect(std.mem.find(u8, output, "►") != null);
 }
 
 test "paint empty flowchart emits nothing" {
@@ -709,11 +716,11 @@ test "paint flowchart --- edge does not emit an arrow head" {
     });
 
     const output = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "A") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "B") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "▼") == null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "▲") == null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "│") != null);
+    try std.testing.expect(std.mem.find(u8, output, "A") != null);
+    try std.testing.expect(std.mem.find(u8, output, "B") != null);
+    try std.testing.expect(std.mem.find(u8, output, "▼") == null);
+    try std.testing.expect(std.mem.find(u8, output, "▲") == null);
+    try std.testing.expect(std.mem.find(u8, output, "│") != null);
 }
 
 test "paint stateDiagram renders rounded corners for [*] and stadium states" {
@@ -729,13 +736,13 @@ test "paint stateDiagram renders rounded corners for [*] and stadium states" {
     });
 
     const output = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "╭") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "╮") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "╰") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "╯") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "│") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "●") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Idle") != null);
+    try std.testing.expect(std.mem.find(u8, output, "╭") != null);
+    try std.testing.expect(std.mem.find(u8, output, "╮") != null);
+    try std.testing.expect(std.mem.find(u8, output, "╰") != null);
+    try std.testing.expect(std.mem.find(u8, output, "╯") != null);
+    try std.testing.expect(std.mem.find(u8, output, "│") != null);
+    try std.testing.expect(std.mem.find(u8, output, "●") != null);
+    try std.testing.expect(std.mem.find(u8, output, "Idle") != null);
 }
 
 test "paint diamond node renders with diamond corners" {
@@ -751,9 +758,9 @@ test "paint diamond node renders with diamond corners" {
     });
 
     const output = sink.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "╱") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "╲") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Decide") != null);
+    try std.testing.expect(std.mem.find(u8, output, "╱") != null);
+    try std.testing.expect(std.mem.find(u8, output, "╲") != null);
+    try std.testing.expect(std.mem.find(u8, output, "Decide") != null);
 }
 
 test "paint dispatches xychart to paintXyChart" {
@@ -767,7 +774,7 @@ test "paint dispatches xychart to paintXyChart" {
         .wrap_width = null,
         .ambiguous_width = .narrow,
     });
-    try std.testing.expect(std.mem.indexOf(u8, sink.writer.buffered(), "Demo") != null);
+    try std.testing.expect(std.mem.find(u8, sink.writer.buffered(), "Demo") != null);
 }
 
 test "paint no longer returns UnsupportedDiagram for xychart" {

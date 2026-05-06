@@ -1,9 +1,12 @@
 const std = @import("std");
+const memory_policy = @import("memory_policy");
+
+const retained_buffer_bytes_limit: usize = 4 * 1024 * 1024;
 
 pub const RenderBuffer = struct {
     allocator: std.mem.Allocator,
-    bytes: std.ArrayListUnmanaged(u8) = .empty,
-    line_offsets: std.ArrayListUnmanaged(usize) = .empty,
+    bytes: std.ArrayList(u8) = .empty,
+    line_offsets: std.ArrayList(usize) = .empty,
     pending_newline: bool = false,
     writer: std.Io.Writer,
 
@@ -29,8 +32,8 @@ pub const RenderBuffer = struct {
     }
 
     pub fn reset(self: *RenderBuffer) void {
-        self.bytes.clearRetainingCapacity();
-        self.line_offsets.clearRetainingCapacity();
+        memory_policy.clearRetainingBounded(u8, &self.bytes, self.allocator, retained_buffer_bytes_limit);
+        memory_policy.clearRetainingBounded(usize, &self.line_offsets, self.allocator, retained_buffer_bytes_limit);
         self.pending_newline = false;
     }
 
@@ -89,7 +92,7 @@ pub const RenderBuffer = struct {
         try self.bytes.appendSlice(self.allocator, slice);
 
         var pos: usize = 0;
-        while (std.mem.indexOfScalarPos(u8, slice, pos, '\n')) |nl| {
+        while (std.mem.findScalarPos(u8, slice, pos, '\n')) |nl| {
             if (nl + 1 < slice.len) {
                 try self.line_offsets.append(self.allocator, base + nl + 1);
             } else {
@@ -205,4 +208,16 @@ test "RenderBuffer reset retains capacity and reproduces offsets" {
     try std.testing.expectEqual(@as(usize, 2), rb.totalLines());
     try std.testing.expectEqual(@as(usize, 0), rb.lineOffsets()[0]);
     try std.testing.expectEqual(@as(usize, 6), rb.lineOffsets()[1]);
+}
+
+test "RenderBuffer reset releases excessive retained capacity" {
+    var rb: RenderBuffer = undefined;
+    rb.init(std.testing.allocator);
+    defer rb.deinit();
+
+    try rb.bytes.ensureTotalCapacity(std.testing.allocator, retained_buffer_bytes_limit + 1);
+    try std.testing.expect(rb.bytes.capacity > retained_buffer_bytes_limit);
+
+    rb.reset();
+    try std.testing.expectEqual(@as(usize, 0), rb.bytes.capacity);
 }

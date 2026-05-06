@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const parse = @import("../parse.zig");
 const source_loader = @import("../source_loader.zig");
 
@@ -111,8 +110,6 @@ test "parse with owned source frees the buffer on deinit" {
 }
 
 test "parse with mapped source unmaps the buffer on deinit" {
-    if (builtin.os.tag == .windows) return;
-
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 

@@ -58,8 +58,13 @@ pub const Fence = struct {
     language: []const u8,
 };
 
+pub const Indent = struct {
+    bytes: usize,
+    columns: usize,
+};
+
 pub fn heading(line: []const u8) ?Heading {
-    var index = countIndentUpTo(line, max_block_indent);
+    var index = indentAtMost(line, max_block_indent) orelse return null;
     if (index >= line.len or line[index] != '#') return null;
 
     var level: u8 = 0;
@@ -91,23 +96,27 @@ fn trimClosingHashes(text: []const u8) []const u8 {
 }
 
 pub fn listItem(line: []const u8) ?ListItem {
-    const indent = countLeadingWhitespace(line);
-    if (indent >= line.len) return null;
+    const indent = leadingIndent(line);
+    if (indent.columns > max_block_indent) return null;
+    if (indent.bytes >= line.len) return null;
 
-    const marker = line[indent];
-    if (std.mem.indexOfScalar(u8, unordered_list_markers, marker) == null) return null;
-    if (indent + 1 >= line.len) return null;
-    if (!isHorizontalWhitespace(line[indent + 1])) return null;
+    const marker = line[indent.bytes];
+    if (std.mem.findScalar(u8, unordered_list_markers, marker) == null) return null;
+    if (indent.bytes + 1 >= line.len) return null;
+    if (!isHorizontalWhitespace(line[indent.bytes + 1])) return null;
 
-    var content_index = indent + 1;
-    while (content_index < line.len and isHorizontalWhitespace(line[content_index])) : (content_index += 1) {}
+    var content_index = indent.bytes + 1;
+    var content_col = indent.columns + 1;
+    while (content_index < line.len and isHorizontalWhitespace(line[content_index])) : (content_index += 1) {
+        content_col = advanceIndentColumn(content_col, line[content_index]);
+    }
 
     const checked_state = checkbox(line[content_index..]);
     return .{
-        .indent = indent,
+        .indent = indent.columns,
         .marker = marker,
         .content = checked_state.rest,
-        .content_col = content_index,
+        .content_col = content_col,
         .checked = checked_state.checked,
     };
 }
@@ -128,10 +137,11 @@ fn checkbox(content: []const u8) struct { checked: ?bool, rest: []const u8 } {
 }
 
 pub fn orderedListItem(line: []const u8) ?OrderedListItem {
-    const indent = countLeadingWhitespace(line);
-    if (indent >= line.len) return null;
+    const indent = leadingIndent(line);
+    if (indent.columns > max_block_indent) return null;
+    if (indent.bytes >= line.len) return null;
 
-    const digit_start = indent;
+    const digit_start = indent.bytes;
     var digit_end = digit_start;
     while (digit_end < line.len and line[digit_end] >= '0' and line[digit_end] <= '9') : (digit_end += 1) {}
 
@@ -140,50 +150,53 @@ pub fn orderedListItem(line: []const u8) ?OrderedListItem {
 
     if (digit_end >= line.len) return null;
     const marker = line[digit_end];
-    if (std.mem.indexOfScalar(u8, ordered_list_markers, marker) == null) return null;
+    if (std.mem.findScalar(u8, ordered_list_markers, marker) == null) return null;
 
     if (digit_end + 1 < line.len and !isHorizontalWhitespace(line[digit_end + 1])) return null;
 
     var content_index = digit_end + 1;
-    while (content_index < line.len and isHorizontalWhitespace(line[content_index])) : (content_index += 1) {}
+    var content_col = indent.columns + digit_count + 1;
+    while (content_index < line.len and isHorizontalWhitespace(line[content_index])) : (content_index += 1) {
+        content_col = advanceIndentColumn(content_col, line[content_index]);
+    }
 
     const checked_state = checkbox(line[content_index..]);
     return .{
-        .indent = indent,
+        .indent = indent.columns,
         .number = line[digit_start..digit_end],
         .marker = marker,
         .content = checked_state.rest,
-        .content_col = content_index,
+        .content_col = content_col,
         .checked = checked_state.checked,
     };
 }
 
 pub fn blockquote(line: []const u8) ?BlockQuote {
-    const indent = countIndentUpTo(line, max_block_indent);
-    if (indent >= line.len or line[indent] != '>') return null;
+    const indent = leadingIndentAtMost(line, max_block_indent) orelse return null;
+    if (indent.bytes >= line.len or line[indent.bytes] != '>') return null;
 
-    var content_index = indent + 1;
+    var content_index = indent.bytes + 1;
     while (content_index < line.len and isHorizontalWhitespace(line[content_index])) : (content_index += 1) {}
 
     return .{
-        .indent = indent,
+        .indent = indent.columns,
         .content = line[content_index..],
     };
 }
 
 pub fn fence(line: []const u8) ?Fence {
-    const index = countIndentUpTo(line, max_block_indent);
+    const index = indentAtMost(line, max_block_indent) orelse return null;
     if (index >= line.len) return null;
 
     const fence_char = line[index];
-    if (std.mem.indexOfScalar(u8, fence_chars, fence_char) == null) return null;
+    if (std.mem.findScalar(u8, fence_chars, fence_char) == null) return null;
 
     const fence_len = countRepeatedByte(line[index..], fence_char);
     if (fence_len < min_fence_len) return null;
 
     const info_start = index + fence_len;
     const info = std.mem.trim(u8, line[info_start..], horizontal_whitespace);
-    const lang_end = std.mem.indexOfAny(u8, info, horizontal_whitespace) orelse info.len;
+    const lang_end = std.mem.findAny(u8, info, horizontal_whitespace) orelse info.len;
 
     return .{
         .fence_char = fence_char,
@@ -193,7 +206,7 @@ pub fn fence(line: []const u8) ?Fence {
 }
 
 pub fn isClosingFence(line: []const u8, fence_info: Fence) bool {
-    const index = countIndentUpTo(line, max_block_indent);
+    const index = indentAtMost(line, max_block_indent) orelse return false;
     if (index >= line.len) return false;
     if (line[index] != fence_info.fence_char) return false;
 
@@ -204,11 +217,12 @@ pub fn isClosingFence(line: []const u8, fence_info: Fence) bool {
 }
 
 pub fn isThematicBreak(line: []const u8) bool {
-    const trimmed = std.mem.trim(u8, line, horizontal_whitespace);
+    const indent = indentAtMost(line, max_block_indent) orelse return false;
+    const trimmed = std.mem.trim(u8, line[indent..], horizontal_whitespace);
     if (trimmed.len < min_thematic_break_markers) return false;
 
     const marker = trimmed[0];
-    if (std.mem.indexOfScalar(u8, thematic_break_markers, marker) == null) return false;
+    if (std.mem.findScalar(u8, thematic_break_markers, marker) == null) return false;
 
     var marker_count: usize = 0;
     for (trimmed) |char| {
@@ -225,7 +239,7 @@ pub fn isThematicBreak(line: []const u8) bool {
 }
 
 pub fn setextHeadingUnderline(line: []const u8) ?SetextHeadingUnderline {
-    const indent = indentBytesAtMost(line, max_block_indent) orelse return null;
+    const indent = indentAtMost(line, max_block_indent) orelse return null;
     const trimmed = std.mem.trim(u8, line[indent..], horizontal_whitespace);
     if (trimmed.len == 0) return null;
 
@@ -270,16 +284,24 @@ pub fn isBlockLevelStart(line: []const u8) bool {
     return false;
 }
 
-pub fn countIndentUpTo(line: []const u8, max_spaces: usize) usize {
-    var count: usize = 0;
-    while (count < line.len and count < max_spaces and isHorizontalWhitespace(line[count])) : (count += 1) {}
-    return count;
+pub fn indentAtMost(line: []const u8, max_columns: usize) ?usize {
+    return (leadingIndentAtMost(line, max_columns) orelse return null).bytes;
 }
 
-pub fn countLeadingWhitespace(line: []const u8) usize {
-    var count: usize = 0;
-    while (count < line.len and isHorizontalWhitespace(line[count])) : (count += 1) {}
-    return count;
+pub fn leadingIndentColumns(line: []const u8) usize {
+    return leadingIndent(line).columns;
+}
+
+pub fn indentBytesAtLeast(line: []const u8, min_columns: usize) ?usize {
+    var index: usize = 0;
+    var columns: usize = 0;
+
+    while (index < line.len and isHorizontalWhitespace(line[index])) : (index += 1) {
+        columns = advanceIndentColumn(columns, line[index]);
+        if (columns >= min_columns) return index + 1;
+    }
+
+    return if (columns >= min_columns) index else null;
 }
 
 pub fn countRepeatedByte(text: []const u8, byte: u8) usize {
@@ -288,19 +310,34 @@ pub fn countRepeatedByte(text: []const u8, byte: u8) usize {
     return count;
 }
 
-fn indentBytesAtMost(line: []const u8, max_columns: usize) ?usize {
+pub fn leadingIndent(line: []const u8) Indent {
     var index: usize = 0;
     var columns: usize = 0;
 
     while (index < line.len and isHorizontalWhitespace(line[index])) : (index += 1) {
-        const next_columns = switch (line[index]) {
-            ' ' => columns + 1,
-            '\t' => columns + (tab_stop_columns - (columns % tab_stop_columns)),
-            else => unreachable,
-        };
+        columns = advanceIndentColumn(columns, line[index]);
+    }
+
+    return .{ .bytes = index, .columns = columns };
+}
+
+pub fn leadingIndentAtMost(line: []const u8, max_columns: usize) ?Indent {
+    var index: usize = 0;
+    var columns: usize = 0;
+
+    while (index < line.len and isHorizontalWhitespace(line[index])) : (index += 1) {
+        const next_columns = advanceIndentColumn(columns, line[index]);
         if (next_columns > max_columns) return null;
         columns = next_columns;
     }
 
-    return index;
+    return .{ .bytes = index, .columns = columns };
+}
+
+fn advanceIndentColumn(columns: usize, byte: u8) usize {
+    return switch (byte) {
+        ' ' => columns + 1,
+        '\t' => columns + (tab_stop_columns - (columns % tab_stop_columns)),
+        else => unreachable,
+    };
 }

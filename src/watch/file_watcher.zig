@@ -17,29 +17,35 @@ const KqueueWatcher = struct {
     kq: std.posix.fd_t,
     dir_fd: std.posix.fd_t,
     file_fd: ?std.posix.fd_t,
-    dir_path: [*:0]const u8,
-    file_name: [*:0]const u8,
+    file_name_buf: [std.Io.Dir.max_name_bytes + 1]u8,
+    file_name_len: usize,
 
     const Self = @This();
 
-    pub fn init(dir_path: [*:0]const u8, file_name: [*:0]const u8) !Self {
+    pub fn init(cwd: std.Io.Dir, dir_path: []const u8, file_name: []const u8) !Self {
         const rc = std.c.kqueue();
         if (rc < 0) return error.Kqueue;
         const kq: std.posix.fd_t = rc;
         errdefer std.Io.Threaded.closeFd(kq);
 
-        const dir_fd = try std.posix.openatZ(std.posix.AT.FDCWD, dir_path, .{ .ACCMODE = .RDONLY }, 0);
+        var watched_dir_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        const dir_path_z = std.fmt.bufPrintSentinel(&watched_dir_buf, "{s}", .{dir_path}, 0) catch return error.NameTooLong;
+        var file_name_buf: [std.Io.Dir.max_name_bytes + 1]u8 = undefined;
+        const file_name_z = std.fmt.bufPrintSentinel(&file_name_buf, "{s}", .{file_name}, 0) catch return error.NameTooLong;
+        const file_name_len = file_name_z.len;
+
+        const dir_fd = try std.posix.openatZ(cwd.handle, dir_path_z.ptr, .{ .ACCMODE = .RDONLY }, 0);
         errdefer std.Io.Threaded.closeFd(dir_fd);
 
-        const file_fd = try std.posix.openatZ(dir_fd, file_name, .{ .ACCMODE = .RDONLY }, 0);
+        const file_fd = try std.posix.openatZ(dir_fd, file_name_z.ptr, .{ .ACCMODE = .RDONLY }, 0);
         errdefer std.Io.Threaded.closeFd(file_fd);
 
         var watcher = Self{
             .kq = kq,
             .dir_fd = dir_fd,
             .file_fd = file_fd,
-            .dir_path = dir_path,
-            .file_name = file_name,
+            .file_name_buf = file_name_buf,
+            .file_name_len = file_name_len,
         };
         try watcher.registerAll();
         return watcher;
@@ -91,7 +97,8 @@ const KqueueWatcher = struct {
     }
 
     fn tryReopenFile(self: *Self) bool {
-        self.file_fd = std.posix.openatZ(self.dir_fd, self.file_name, .{ .ACCMODE = .RDONLY }, 0) catch return false;
+        const file_name_z = self.file_name_buf[0..self.file_name_len :0].ptr;
+        self.file_fd = std.posix.openatZ(self.dir_fd, file_name_z, .{ .ACCMODE = .RDONLY }, 0) catch return false;
         return true;
     }
 
@@ -133,8 +140,10 @@ const InotifyWatcher = struct {
     inotify_fd: std.posix.fd_t,
     dir_wd: i32,
     file_wd: ?i32,
-    dir_path: [*:0]const u8,
-    file_name: [*:0]const u8,
+    dir_path_buf: [std.Io.Dir.max_path_bytes]u8,
+    dir_path_len: usize,
+    file_name_buf: [std.Io.Dir.max_name_bytes + 1]u8,
+    file_name_len: usize,
 
     const Self = @This();
 
@@ -142,7 +151,7 @@ const InotifyWatcher = struct {
         std.os.linux.IN.DELETE_SELF | std.os.linux.IN.MOVE_SELF;
     const dir_mask = std.os.linux.IN.CREATE | std.os.linux.IN.MOVED_TO;
 
-    pub fn init(dir_path: [*:0]const u8, file_name: [*:0]const u8) !Self {
+    pub fn init(cwd: std.Io.Dir, dir_path: []const u8, file_name: []const u8) !Self {
         const init_rc = std.os.linux.inotify_init1(std.os.linux.IN.NONBLOCK | std.os.linux.IN.CLOEXEC);
         switch (std.os.linux.errno(init_rc)) {
             .SUCCESS => {},
@@ -151,7 +160,15 @@ const InotifyWatcher = struct {
         const inotify_fd: std.posix.fd_t = @intCast(init_rc);
         errdefer std.Io.Threaded.closeFd(inotify_fd);
 
-        const dir_wd_rc = std.os.linux.inotify_add_watch(inotify_fd, dir_path, dir_mask);
+        var watcher_dir_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        const dir_path_len = try buildWatchDirPath(&watcher_dir_buf, cwd, dir_path);
+        const dir_path_z = watcher_dir_buf[0..dir_path_len :0];
+
+        var file_name_buf: [std.Io.Dir.max_name_bytes + 1]u8 = undefined;
+        const file_name_z = std.fmt.bufPrintSentinel(&file_name_buf, "{s}", .{file_name}, 0) catch return error.NameTooLong;
+        const file_name_len = file_name_z.len;
+
+        const dir_wd_rc = std.os.linux.inotify_add_watch(inotify_fd, dir_path_z.ptr, dir_mask);
         switch (std.os.linux.errno(dir_wd_rc)) {
             .SUCCESS => {},
             else => return error.InotifyAddWatch,
@@ -159,7 +176,7 @@ const InotifyWatcher = struct {
         const dir_wd: i32 = @intCast(dir_wd_rc);
 
         var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-        const full_path = buildFullPath(&full_path_buf, dir_path, file_name) orelse return error.NameTooLong;
+        const full_path = buildFullPath(&full_path_buf, dir_path_z.ptr, file_name_z.ptr) orelse return error.NameTooLong;
 
         const file_wd_rc = std.os.linux.inotify_add_watch(inotify_fd, full_path, file_mask);
         const file_wd: ?i32 = switch (std.os.linux.errno(file_wd_rc)) {
@@ -171,8 +188,10 @@ const InotifyWatcher = struct {
             .inotify_fd = inotify_fd,
             .dir_wd = dir_wd,
             .file_wd = file_wd,
-            .dir_path = dir_path,
-            .file_name = file_name,
+            .dir_path_buf = watcher_dir_buf,
+            .dir_path_len = dir_path_len,
+            .file_name_buf = file_name_buf,
+            .file_name_len = file_name_len,
         };
     }
 
@@ -226,12 +245,14 @@ const InotifyWatcher = struct {
         const name_ptr: [*]const u8 = @ptrCast(@as([*]const u8, @ptrCast(event)) + @sizeOf(std.os.linux.inotify_event));
         const name_with_padding = name_ptr[0..event.len];
         const name = std.mem.sliceTo(name_with_padding, 0);
-        return std.mem.eql(u8, name, std.mem.sliceTo(self.file_name, 0));
+        return std.mem.eql(u8, name, self.file_name_buf[0..self.file_name_len]);
     }
 
     fn tryRewatch(self: *Self) void {
         var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-        const full_path = buildFullPath(&full_path_buf, self.dir_path, self.file_name) orelse return;
+        const dir_path_z = self.dir_path_buf[0..self.dir_path_len :0].ptr;
+        const file_name_z = self.file_name_buf[0..self.file_name_len :0].ptr;
+        const full_path = buildFullPath(&full_path_buf, dir_path_z, file_name_z) orelse return;
         const rc = std.os.linux.inotify_add_watch(self.inotify_fd, full_path, file_mask);
         self.file_wd = switch (std.os.linux.errno(rc)) {
             .SUCCESS => @intCast(rc),
@@ -242,16 +263,24 @@ const InotifyWatcher = struct {
     fn buildFullPath(buf: *[std.Io.Dir.max_path_bytes]u8, dir: [*:0]const u8, name: [*:0]const u8) ?[*:0]const u8 {
         const dir_slice = std.mem.sliceTo(dir, 0);
         const name_slice = std.mem.sliceTo(name, 0);
-        const needs_sep: usize = if (dir_slice.len > 0 and dir_slice[dir_slice.len - 1] != '/') 1 else 0;
-        const total = dir_slice.len + needs_sep + name_slice.len + 1;
-        if (total > buf.len) return null;
-        @memcpy(buf[0..dir_slice.len], dir_slice);
-        if (needs_sep == 1) buf[dir_slice.len] = '/';
-        @memcpy(buf[dir_slice.len + needs_sep ..][0..name_slice.len], name_slice);
-        buf[dir_slice.len + needs_sep + name_slice.len] = 0;
-        return @ptrCast(buf);
+        const sep: []const u8 = if (dir_slice.len > 0 and dir_slice[dir_slice.len - 1] != '/') "/" else "";
+        const full_path = std.fmt.bufPrintSentinel(buf, "{s}{s}{s}", .{ dir_slice, sep, name_slice }, 0) catch return null;
+        return full_path.ptr;
     }
 };
+
+fn buildWatchDirPath(buf: *[std.Io.Dir.max_path_bytes]u8, cwd: std.Io.Dir, dir_path: []const u8) error{NameTooLong}!usize {
+    if (std.fs.path.isAbsolute(dir_path) or cwd.handle == std.posix.AT.FDCWD) {
+        const path_z = std.fmt.bufPrintSentinel(buf, "{s}", .{dir_path}, 0) catch return error.NameTooLong;
+        return path_z.len;
+    }
+
+    const path_z = if (dir_path.len != 0 and !std.mem.eql(u8, dir_path, "."))
+        std.fmt.bufPrintSentinel(buf, "/proc/self/fd/{d}/{s}", .{ cwd.handle, dir_path }, 0) catch return error.NameTooLong
+    else
+        std.fmt.bufPrintSentinel(buf, "/proc/self/fd/{d}", .{cwd.handle}, 0) catch return error.NameTooLong;
+    return path_z.len;
+}
 
 test "FileWatcher detects file modification" {
     const io = std.testing.io;
@@ -264,7 +293,7 @@ test "FileWatcher detects file modification" {
 
     try tmp.dir.writeFile(io, .{ .sub_path = "test.md", .data = "hello" });
 
-    var watcher = try FileWatcher.init(dir_z, "test.md");
+    var watcher = try FileWatcher.init(std.Io.Dir.cwd(), std.mem.sliceTo(dir_z, 0), "test.md");
     defer watcher.deinit();
 
     try tmp.dir.writeFile(io, .{ .sub_path = "test.md", .data = "world" });
@@ -293,7 +322,7 @@ test "FileWatcher detects file deletion and recreation" {
 
     try tmp.dir.writeFile(io, .{ .sub_path = "test2.md", .data = "original" });
 
-    var watcher = try FileWatcher.init(dir_z, "test2.md");
+    var watcher = try FileWatcher.init(std.Io.Dir.cwd(), std.mem.sliceTo(dir_z, 0), "test2.md");
     defer watcher.deinit();
 
     try tmp.dir.deleteFile(io, "test2.md");
@@ -326,10 +355,23 @@ test "FileWatcher getFd returns valid descriptor" {
 
     try tmp.dir.writeFile(io, .{ .sub_path = "test3.md", .data = "content" });
 
-    var watcher = try FileWatcher.init(dir_z, "test3.md");
+    var watcher = try FileWatcher.init(std.Io.Dir.cwd(), std.mem.sliceTo(dir_z, 0), "test3.md");
     defer watcher.deinit();
 
     try std.testing.expect(watcher.getFd() >= 0);
 }
 
 var dir_path_buf3: [std.Io.Dir.max_path_bytes]u8 = undefined;
+
+test "FileWatcher opens relative paths from the provided cwd" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(io, .{ .sub_path = "relative.md", .data = "content" });
+
+    var watcher = try FileWatcher.init(tmp.dir, ".", "relative.md");
+    defer watcher.deinit();
+
+    try std.testing.expect(watcher.getFd() >= 0);
+}

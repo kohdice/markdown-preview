@@ -133,7 +133,7 @@ test "writeTable wraps long body cells into multi-line rows when wrap_width is s
     }
     try std.testing.expect(line_count >= 5);
 
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "hello") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "hello") != null);
 }
 
 test "writeTable keeps borders stable across multi-line rows" {
@@ -207,7 +207,7 @@ test "writeTable renders an empty body cell as one zero-width segment under wrap
     });
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "filled") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "filled") != null);
     const mids = std.mem.count(u8, rendered, "├");
     try std.testing.expectEqual(@as(usize, 1), mids);
 }
@@ -303,9 +303,9 @@ test "writeTable overflows naturally when wrap_width is below the minimum fit th
     });
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "AAAAAAAA") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "BBBBBBBB") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "CCCCCCCC") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "AAAAAAAA") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "BBBBBBBB") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "CCCCCCCC") != null);
 }
 
 test "writeTable measures natural cell width as the max segment width when explicit breaks split the cell" {
@@ -341,8 +341,8 @@ test "writeTable measures natural cell width as the max segment width when expli
     const rendered = try helpers.renderDocumentToOwnedSlice(allocator, try fixture.document(), .{});
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "┬──────────┐") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "┬───────────┐") == null);
+    try std.testing.expect(std.mem.find(u8, rendered, "┬──────────┐") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "┬───────────┐") == null);
 }
 
 test "writeTable treats soft_break as a segment boundary inside a cell" {
@@ -372,8 +372,8 @@ test "writeTable treats soft_break as a segment boundary inside a cell" {
     var saw_a = false;
     var saw_b = false;
     while (lines.next()) |line| {
-        const has_a = std.mem.indexOfScalar(u8, line, 'a') != null;
-        const has_b = std.mem.indexOfScalar(u8, line, 'b') != null;
+        const has_a = std.mem.findScalar(u8, line, 'a') != null;
+        const has_b = std.mem.findScalar(u8, line, 'b') != null;
         try std.testing.expect(!(has_a and has_b));
         if (has_a) saw_a = true;
         if (has_b) saw_b = true;
@@ -393,9 +393,9 @@ test "writeTable strips HTML-entity-decoded tabs and newlines from cell content"
     const rendered = try helpers.renderDocumentToOwnedSlice(allocator, &doc, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "abcxyz") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "pq") != null);
-    try std.testing.expect(std.mem.indexOfScalar(u8, rendered, '\t') == null);
+    try std.testing.expect(std.mem.find(u8, rendered, "abcxyz") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "pq") != null);
+    try std.testing.expect(std.mem.findScalar(u8, rendered, '\t') == null);
 
     const bars = std.mem.count(u8, rendered, "│");
     try std.testing.expectEqual(@as(usize, 6), bars);
@@ -472,16 +472,16 @@ test "writeTable right-aligns each sub-line independently" {
     var lines = std.mem.splitScalar(u8, rendered, '\n');
     var matched: usize = 0;
     while (lines.next()) |line| {
-        if (std.mem.indexOf(u8, line, "aa")) |_| {
-            try std.testing.expect(std.mem.indexOf(u8, line, "  aa │") != null);
+        if (std.mem.find(u8, line, "aa")) |_| {
+            try std.testing.expect(std.mem.find(u8, line, "  aa │") != null);
             matched += 1;
         }
-        if (std.mem.indexOf(u8, line, "bb")) |_| {
-            try std.testing.expect(std.mem.indexOf(u8, line, "  bb │") != null);
+        if (std.mem.find(u8, line, "bb")) |_| {
+            try std.testing.expect(std.mem.find(u8, line, "  bb │") != null);
             matched += 1;
         }
-        if (std.mem.indexOf(u8, line, "cc")) |_| {
-            try std.testing.expect(std.mem.indexOf(u8, line, "  cc │") != null);
+        if (std.mem.find(u8, line, "cc")) |_| {
+            try std.testing.expect(std.mem.find(u8, line, "  cc │") != null);
             matched += 1;
         }
     }
@@ -638,7 +638,7 @@ fn renderWithDiscarding(
     var sink: [256]u8 = undefined;
     var discarding: std.Io.Writer.Discarding = .init(&sink);
     const before = counting.snapshot();
-    try renderer.render(&discarding.writer, output, null, counting.allocator());
+    try renderer.render(&discarding.writer, output, null);
     const after = counting.snapshot();
     return bench.CounterSnapshot.diff(after, before);
 }
@@ -652,7 +652,7 @@ fn renderWithDiscardingWrap(
     var sink: [256]u8 = undefined;
     var discarding: std.Io.Writer.Discarding = .init(&sink);
     const before = counting.snapshot();
-    try renderer.render(&discarding.writer, output, wrap_width, counting.allocator());
+    try renderer.render(&discarding.writer, output, wrap_width);
     const after = counting.snapshot();
     return bench.CounterSnapshot.diff(after, before);
 }

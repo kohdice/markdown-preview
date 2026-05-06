@@ -1,9 +1,7 @@
 const std = @import("std");
 const source_mod = @import("source.zig");
 const types = @import("types.zig");
-const width_mod = @import("../term/width.zig");
-
-pub const Source = source_mod.Source;
+const label_mod = @import("label.zig");
 
 pub const ParseError = error{
     InvalidMermaid,
@@ -16,25 +14,25 @@ const BuildingSubgraph = struct {
     id_text: []const u8,
     title: ?[]const u8 = null,
     direction: ?types.Direction = null,
-    node_ids: std.ArrayListUnmanaged(types.NodeId) = .empty,
-    edge_indices: std.ArrayListUnmanaged(u32) = .empty,
-    children: std.ArrayListUnmanaged(BuildingSubgraph) = .empty,
+    node_ids: std.ArrayList(types.NodeId) = .empty,
+    edge_indices: std.ArrayList(u32) = .empty,
+    children: std.ArrayList(BuildingSubgraph) = .empty,
 };
 
 const Parser = struct {
     allocator: std.mem.Allocator,
-    nodes: std.ArrayListUnmanaged(types.Node) = .empty,
-    edges: std.ArrayListUnmanaged(types.Edge) = .empty,
+    nodes: std.ArrayList(types.Node) = .empty,
+    edges: std.ArrayList(types.Edge) = .empty,
     interned: std.StringHashMapUnmanaged(types.NodeId) = .empty,
 
-    root_subgraphs: std.ArrayListUnmanaged(BuildingSubgraph) = .empty,
-    ctx_stack: std.ArrayListUnmanaged(BuildingSubgraph) = .empty,
-    class_defs: std.ArrayListUnmanaged(types.ClassDef) = .empty,
-    class_assignments: std.ArrayListUnmanaged(types.ClassAssignment) = .empty,
-    node_styles: std.ArrayListUnmanaged(types.NodeStyle) = .empty,
-    link_styles: std.ArrayListUnmanaged(types.LinkStyle) = .empty,
-    owned_strings: std.ArrayListUnmanaged([]u8) = .empty,
-    touched: std.ArrayListUnmanaged(types.NodeId) = .empty,
+    root_subgraphs: std.ArrayList(BuildingSubgraph) = .empty,
+    ctx_stack: std.ArrayList(BuildingSubgraph) = .empty,
+    class_defs: std.ArrayList(types.ClassDef) = .empty,
+    class_assignments: std.ArrayList(types.ClassAssignment) = .empty,
+    node_styles: std.ArrayList(types.NodeStyle) = .empty,
+    link_styles: std.ArrayList(types.LinkStyle) = .empty,
+    owned_strings: std.ArrayList([]u8) = .empty,
+    touched: std.ArrayList(types.NodeId) = .empty,
     /// Tracks which nodes have already been claimed by a subgraph so the same
     /// node is not registered in multiple subgraphs' node_ids. Implements the
     /// upstream "first-defined subgraph wins" deduplication rule.
@@ -89,21 +87,7 @@ fn containsNodeId(slice: []const types.NodeId, id: types.NodeId) bool {
     return false;
 }
 
-pub fn isDisplayDependent(cp: u21) bool {
-    var buf: [4]u8 = undefined;
-    const len = std.unicode.utf8Encode(cp, &buf) catch return true;
-    return width_mod.displayWidth(buf[0..len], .narrow) == 0;
-}
-
-fn validateLabel(label: []const u8) ParseError!void {
-    var view = std.unicode.Utf8View.init(label) catch return error.InvalidMermaid;
-    var it = view.iterator();
-    while (it.nextCodepoint()) |cp| {
-        if (isDisplayDependent(cp)) return error.InvalidMermaid;
-    }
-}
-
-pub fn parseSource(allocator: std.mem.Allocator, source: anytype) ParseError!types.MermaidGraph {
+pub fn parse(allocator: std.mem.Allocator, source: anytype) ParseError!types.MermaidGraph {
     const owned_source = try source_mod.normalizeOwned(allocator, source);
     return parseFromOwned(allocator, owned_source);
 }
@@ -194,10 +178,11 @@ fn freeBuildingSubgraph(allocator: std.mem.Allocator, bs: *BuildingSubgraph) voi
 
 fn finalizeSubgraphs(
     allocator: std.mem.Allocator,
-    list: *std.ArrayListUnmanaged(BuildingSubgraph),
+    list: *std.ArrayList(BuildingSubgraph),
 ) ParseError![]types.Subgraph {
     if (list.items.len == 0) {
         list.deinit(allocator);
+        list.* = .empty;
         return &.{};
     }
     const out = try allocator.alloc(types.Subgraph, list.items.len);
@@ -205,21 +190,29 @@ fn finalizeSubgraphs(
     errdefer types.freeSubgraphsPublic(allocator, out);
 
     for (list.items, 0..) |*bs, i| {
-        const node_ids = try bs.node_ids.toOwnedSlice(allocator);
-        errdefer allocator.free(node_ids);
-        const edge_indices = try bs.edge_indices.toOwnedSlice(allocator);
-        errdefer allocator.free(edge_indices);
-        const children = try finalizeSubgraphs(allocator, &bs.children);
+        var node_ids: ?[]types.NodeId = try bs.node_ids.toOwnedSlice(allocator);
+        errdefer if (node_ids) |ids| allocator.free(ids);
+
+        var edge_indices: ?[]u32 = try bs.edge_indices.toOwnedSlice(allocator);
+        errdefer if (edge_indices) |indices| allocator.free(indices);
+
+        var children: ?[]types.Subgraph = try finalizeSubgraphs(allocator, &bs.children);
+        errdefer if (children) |items| types.freeSubgraphsPublic(allocator, items);
+
         out[i] = .{
             .id_text = bs.id_text,
             .title = bs.title,
             .direction = bs.direction,
-            .node_ids = node_ids,
-            .edge_indices = edge_indices,
-            .children = children,
+            .node_ids = node_ids.?,
+            .edge_indices = edge_indices.?,
+            .children = children.?,
         };
+        node_ids = null;
+        edge_indices = null;
+        children = null;
     }
     list.deinit(allocator);
+    list.* = .empty;
     return out;
 }
 
@@ -262,16 +255,16 @@ fn pushSubgraph(parser: *Parser, line: []const u8) ParseError!void {
     var id_text: []const u8 = "";
     var title: ?[]const u8 = null;
 
-    if (rest.len > 0 and std.mem.indexOf(u8, rest, "[") != null and
+    if (rest.len > 0 and std.mem.find(u8, rest, "[") != null and
         std.mem.endsWith(u8, rest, "]"))
     {
-        const lb = std.mem.indexOf(u8, rest, "[").?;
+        const lb = std.mem.find(u8, rest, "[").?;
         const id_candidate = std.mem.trim(u8, rest[0..lb], " \t");
         const inner = std.mem.trim(u8, rest[lb + 1 .. rest.len - 1], " \t");
         if (id_candidate.len > 0 and inner.len > 0) {
             id_text = id_candidate;
             title = inner;
-            try validateLabel(inner);
+            try label_mod.validate(inner);
         }
     }
 
@@ -280,7 +273,7 @@ fn pushSubgraph(parser: *Parser, line: []const u8) ParseError!void {
         try parser.owned_strings.append(parser.allocator, slug);
         id_text = slug;
         title = rest;
-        try validateLabel(rest);
+        try label_mod.validate(rest);
     }
 
     try parser.ctx_stack.append(parser.allocator, .{
@@ -291,17 +284,21 @@ fn pushSubgraph(parser: *Parser, line: []const u8) ParseError!void {
 
 fn popSubgraph(parser: *Parser) ParseError!void {
     if (parser.ctx_stack.items.len == 0) return;
-    const completed = parser.ctx_stack.pop().?;
+    var completed = parser.ctx_stack.pop().?;
+    var completed_owned = true;
+    errdefer if (completed_owned) freeBuildingSubgraph(parser.allocator, &completed);
+
     if (parser.ctx_stack.items.len > 0) {
         const top = &parser.ctx_stack.items[parser.ctx_stack.items.len - 1];
         try top.children.append(parser.allocator, completed);
     } else {
         try parser.root_subgraphs.append(parser.allocator, completed);
     }
+    completed_owned = false;
 }
 
 fn slugify(allocator: std.mem.Allocator, label: []const u8) ParseError![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     var i: usize = 0;
     var in_ws = false;
@@ -323,7 +320,7 @@ fn slugify(allocator: std.mem.Allocator, label: []const u8) ParseError![]u8 {
 }
 
 fn parseClassDef(parser: *Parser, rest: []const u8) ParseError!void {
-    const sp = std.mem.indexOfAny(u8, rest, " \t") orelse return;
+    const sp = std.mem.findAny(u8, rest, " \t") orelse return;
     const name = std.mem.trim(u8, rest[0..sp], " \t");
     const style = std.mem.trim(u8, rest[sp..], " \t");
     if (name.len == 0 or style.len == 0) return;
@@ -334,7 +331,7 @@ fn parseClassDef(parser: *Parser, rest: []const u8) ParseError!void {
 }
 
 fn parseClassAssignment(parser: *Parser, rest: []const u8) ParseError!void {
-    const sp = std.mem.indexOfAny(u8, rest, " \t") orelse return;
+    const sp = std.mem.findAny(u8, rest, " \t") orelse return;
     const ids_text = std.mem.trim(u8, rest[0..sp], " \t");
     const class_name = std.mem.trim(u8, rest[sp..], " \t");
     if (ids_text.len == 0 or class_name.len == 0) return;
@@ -352,7 +349,7 @@ fn parseClassAssignment(parser: *Parser, rest: []const u8) ParseError!void {
 }
 
 fn parseStyleLine(parser: *Parser, rest: []const u8) ParseError!void {
-    const sp = std.mem.indexOfAny(u8, rest, " \t") orelse return;
+    const sp = std.mem.findAny(u8, rest, " \t") orelse return;
     const id_text = std.mem.trim(u8, rest[0..sp], " \t");
     const style_text = std.mem.trim(u8, rest[sp..], " \t");
     if (id_text.len == 0 or style_text.len == 0) return;
@@ -364,7 +361,7 @@ fn parseStyleLine(parser: *Parser, rest: []const u8) ParseError!void {
 }
 
 fn parseLinkStyleLine(parser: *Parser, rest: []const u8) ParseError!void {
-    const sp = std.mem.indexOfAny(u8, rest, " \t") orelse return;
+    const sp = std.mem.findAny(u8, rest, " \t") orelse return;
     const target = std.mem.trim(u8, rest[0..sp], " \t");
     const style_text = std.mem.trim(u8, rest[sp..], " \t");
     if (target.len == 0 or style_text.len == 0) return;
@@ -443,7 +440,7 @@ fn parseContentLine(parser: *Parser, trimmed: []const u8) ParseError!void {
     var after_arrow = trimmed[first_arrow.start + first_arrow.len ..];
 
     while (true) {
-        if (current_arrow.label) |l| try validateLabel(l);
+        if (current_arrow.label) |l| try label_mod.validate(l);
 
         const next_arrow = try findArrow(after_arrow);
         const rhs_text = if (next_arrow) |na|
@@ -765,7 +762,7 @@ fn matchCircle(text: []const u8, start: usize) ParseError!?ShapeMatch {
 }
 
 fn parseNodeSpecList(parser: *Parser, text: []const u8) ParseError![]types.NodeId {
-    var ids: std.ArrayListUnmanaged(types.NodeId) = .empty;
+    var ids: std.ArrayList(types.NodeId) = .empty;
     errdefer ids.deinit(parser.allocator);
 
     var i: usize = 0;
@@ -803,7 +800,7 @@ fn parseNodeSpecList(parser: *Parser, text: []const u8) ParseError![]types.NodeI
         var label: []const u8 = id_text;
         if (i < text.len) {
             if (try tryParseShape(text, i)) |sh| {
-                try validateLabel(sh.label);
+                try label_mod.validate(sh.label);
                 shape = sh.shape;
                 label = sh.label;
                 i = sh.end;
@@ -842,7 +839,7 @@ fn parseNodeSpecList(parser: *Parser, text: []const u8) ParseError![]types.NodeI
 }
 
 test "parses round node A(Start)" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A(Start) --> B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A(Start) --> B\n");
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 2), graph.nodes.len);
     try std.testing.expectEqual(types.NodeShape.round, graph.nodes[0].shape);
@@ -850,67 +847,67 @@ test "parses round node A(Start)" {
 }
 
 test "parses stadium node A([Start])" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A([Start]) --> B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A([Start]) --> B\n");
     defer graph.deinit();
     try std.testing.expectEqual(types.NodeShape.stadium, graph.nodes[0].shape);
     try std.testing.expectEqualStrings("Start", graph.nodes[0].label);
 }
 
 test "parses circle node A((Start))" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A((Start)) --> B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A((Start)) --> B\n");
     defer graph.deinit();
     try std.testing.expectEqual(types.NodeShape.round, graph.nodes[0].shape);
     try std.testing.expectEqualStrings("Start", graph.nodes[0].label);
 }
 
 test "parses dotted arrow -.->" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A -.-> B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A -.-> B\n");
     defer graph.deinit();
     try std.testing.expectEqual(types.EdgeStyle.dotted, graph.edges[0].style);
 }
 
 test "parses thick arrow ==>" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A ==> B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A ==> B\n");
     defer graph.deinit();
     try std.testing.expectEqual(types.EdgeStyle.thick, graph.edges[0].style);
 }
 
 test "parses subroutine shape A[[sub]]" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A[[sub]] --> B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A[[sub]] --> B\n");
     defer graph.deinit();
     try std.testing.expectEqual(types.NodeShape.subroutine, graph.nodes[0].shape);
     try std.testing.expectEqualStrings("sub", graph.nodes[0].label);
 }
 
 test "parses hexagon shape A{{hex}}" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A{{hex}} --> B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A{{hex}} --> B\n");
     defer graph.deinit();
     try std.testing.expectEqual(types.NodeShape.hexagon, graph.nodes[0].shape);
     try std.testing.expectEqualStrings("hex", graph.nodes[0].label);
 }
 
 test "parses cylinder shape A[(db)]" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A[(db)] --> B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A[(db)] --> B\n");
     defer graph.deinit();
     try std.testing.expectEqual(types.NodeShape.cylinder, graph.nodes[0].shape);
     try std.testing.expectEqualStrings("db", graph.nodes[0].label);
 }
 
 test "parses asymmetric shape A>asym]" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A>asym] --> B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A>asym] --> B\n");
     defer graph.deinit();
     try std.testing.expectEqual(types.NodeShape.asymmetric, graph.nodes[0].shape);
     try std.testing.expectEqualStrings("asym", graph.nodes[0].label);
 }
 
 test "parses trapezoid shape A[/trap\\]" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A[/trap\\] --> B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A[/trap\\] --> B\n");
     defer graph.deinit();
     try std.testing.expectEqual(types.NodeShape.trapezoid, graph.nodes[0].shape);
 }
 
 test "parses text-embedded label -- Yes -->" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A -- Yes --> B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A -- Yes --> B\n");
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 1), graph.edges.len);
     try std.testing.expectEqualStrings("Yes", graph.edges[0].label.?);
@@ -918,28 +915,28 @@ test "parses text-embedded label -- Yes -->" {
 }
 
 test "parses text-embedded label -. Maybe .->" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A -. Maybe .-> B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A -. Maybe .-> B\n");
     defer graph.deinit();
     try std.testing.expectEqualStrings("Maybe", graph.edges[0].label.?);
     try std.testing.expectEqual(types.EdgeStyle.dotted, graph.edges[0].style);
 }
 
 test "parses text-embedded label == Sure ==>" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A == Sure ==> B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A == Sure ==> B\n");
     defer graph.deinit();
     try std.testing.expectEqualStrings("Sure", graph.edges[0].label.?);
     try std.testing.expectEqual(types.EdgeStyle.thick, graph.edges[0].style);
 }
 
 test "parses double-circle shape A(((X)))" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A(((X))) --> B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A(((X))) --> B\n");
     defer graph.deinit();
     try std.testing.expectEqual(types.NodeShape.double_circle, graph.nodes[0].shape);
     try std.testing.expectEqualStrings("X", graph.nodes[0].label);
 }
 
 test "parses bidirectional arrow <-->" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A <--> B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A <--> B\n");
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 1), graph.edges.len);
     try std.testing.expect(graph.edges[0].bidirectional);
@@ -947,33 +944,33 @@ test "parses bidirectional arrow <-->" {
 }
 
 test "parses bidirectional dotted <-.->" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A <-.-> B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A <-.-> B\n");
     defer graph.deinit();
     try std.testing.expect(graph.edges[0].bidirectional);
     try std.testing.expectEqual(types.EdgeStyle.dotted, graph.edges[0].style);
 }
 
 test "parses bidirectional thick <==>" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A <==> B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A <==> B\n");
     defer graph.deinit();
     try std.testing.expect(graph.edges[0].bidirectional);
     try std.testing.expectEqual(types.EdgeStyle.thick, graph.edges[0].style);
 }
 
 test "parses no-arrow dotted (-.-) as dotted_line" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A -.- B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A -.- B\n");
     defer graph.deinit();
     try std.testing.expectEqual(types.EdgeStyle.dotted_line, graph.edges[0].style);
 }
 
 test "parses no-arrow thick (===) as thick_line" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A === B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A === B\n");
     defer graph.deinit();
     try std.testing.expectEqual(types.EdgeStyle.thick_line, graph.edges[0].style);
 }
 
 test "silently skips click statements" {
-    var graph = try parseSource(std.testing.allocator,
+    var graph = try parse(std.testing.allocator,
         \\graph TD
         \\    A --> B
         \\    click A "https://example.com"
@@ -983,7 +980,7 @@ test "silently skips click statements" {
 }
 
 test "preserves subgraph as AST entry while keeping edges flat" {
-    var graph = try parseSource(std.testing.allocator,
+    var graph = try parse(std.testing.allocator,
         \\graph TD
         \\    subgraph outer
         \\        A --> B
@@ -999,7 +996,7 @@ test "preserves subgraph as AST entry while keeping edges flat" {
 }
 
 test "preserves classDef / class assignment / style and :::className" {
-    var graph = try parseSource(std.testing.allocator,
+    var graph = try parse(std.testing.allocator,
         \\graph TD
         \\    classDef warn fill:#f00
         \\    A[Alert]:::warn --> B
@@ -1018,7 +1015,7 @@ test "preserves classDef / class assignment / style and :::className" {
 }
 
 test "parses nested subgraphs into tree" {
-    var graph = try parseSource(std.testing.allocator,
+    var graph = try parse(std.testing.allocator,
         \\graph TD
         \\    subgraph A
         \\        subgraph B
@@ -1035,7 +1032,7 @@ test "parses nested subgraphs into tree" {
 }
 
 test "slugifies label-only subgraph (upstream rule: spaces->_, non-word removed, case preserved)" {
-    var graph = try parseSource(std.testing.allocator,
+    var graph = try parse(std.testing.allocator,
         \\graph TD
         \\    subgraph My Flow
         \\        A --> B
@@ -1048,7 +1045,7 @@ test "slugifies label-only subgraph (upstream rule: spaces->_, non-word removed,
 }
 
 test "slugifies subgraph label drops non-word chars" {
-    var graph = try parseSource(std.testing.allocator,
+    var graph = try parse(std.testing.allocator,
         \\graph TD
         \\    subgraph Hello, World!
         \\    end
@@ -1058,7 +1055,7 @@ test "slugifies subgraph label drops non-word chars" {
 }
 
 test "subgraph id [title] form preserves both separately" {
-    var graph = try parseSource(std.testing.allocator,
+    var graph = try parse(std.testing.allocator,
         \\graph TD
         \\    subgraph us-east [US East]
         \\        A --> B
@@ -1070,7 +1067,7 @@ test "subgraph id [title] form preserves both separately" {
 }
 
 test "linkStyle default is stored with .default key" {
-    var graph = try parseSource(std.testing.allocator,
+    var graph = try parse(std.testing.allocator,
         \\graph TD
         \\    A --> B
         \\    linkStyle default stroke:red
@@ -1082,7 +1079,7 @@ test "linkStyle default is stored with .default key" {
 }
 
 test "linkStyle with multiple indices produces multiple entries" {
-    var graph = try parseSource(std.testing.allocator,
+    var graph = try parse(std.testing.allocator,
         \\graph TD
         \\    A --> B
         \\    A --> C
@@ -1096,7 +1093,7 @@ test "linkStyle with multiple indices produces multiple entries" {
 }
 
 test "layout exposes subgraph frame bounding box with title" {
-    var graph = try parseSource(std.testing.allocator,
+    var graph = try parse(std.testing.allocator,
         \\graph TD
         \\    subgraph inner
         \\        A --> B
@@ -1105,7 +1102,7 @@ test "layout exposes subgraph frame bounding box with title" {
     );
     defer graph.deinit();
 
-    var layout = try @import("layout_flowchart.zig").computeLayout(std.testing.allocator, &graph, .narrow);
+    var layout = try @import("layout_flowchart.zig").computeLayout(std.testing.allocator, &graph, .{ .ambiguous_width = .narrow });
     defer layout.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), layout.subgraph_frames.len);
@@ -1117,7 +1114,7 @@ test "layout exposes subgraph frame bounding box with title" {
 }
 
 test "subgraph direction LR arranges members horizontally in a TD diagram" {
-    var graph = try parseSource(std.testing.allocator,
+    var graph = try parse(std.testing.allocator,
         \\graph TD
         \\    subgraph inner
         \\        direction LR
@@ -1126,7 +1123,7 @@ test "subgraph direction LR arranges members horizontally in a TD diagram" {
     );
     defer graph.deinit();
 
-    var layout = try @import("layout_flowchart.zig").computeLayout(std.testing.allocator, &graph, .narrow);
+    var layout = try @import("layout_flowchart.zig").computeLayout(std.testing.allocator, &graph, .{ .ambiguous_width = .narrow });
     defer layout.deinit();
 
     const row_a = layout.positions[0].row;
@@ -1143,7 +1140,7 @@ test "subgraph direction LR arranges members horizontally in a TD diagram" {
 }
 
 test "direction inside subgraph overrides subgraph direction" {
-    var graph = try parseSource(std.testing.allocator,
+    var graph = try parse(std.testing.allocator,
         \\graph TD
         \\    subgraph inner
         \\        direction LR
@@ -1156,7 +1153,7 @@ test "direction inside subgraph overrides subgraph direction" {
 }
 
 test "accepts numeric flowchart identifiers" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    1 --> 2\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    1 --> 2\n");
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 2), graph.nodes.len);
     try std.testing.expectEqualStrings("1", graph.nodes[0].id_text);
@@ -1165,7 +1162,7 @@ test "accepts numeric flowchart identifiers" {
 }
 
 test "flowchart identifier starting with click prefix is not skipped" {
-    var graph = try parseSource(std.testing.allocator,
+    var graph = try parse(std.testing.allocator,
         \\graph TD
         \\    clickbait --> B
     );
@@ -1176,7 +1173,7 @@ test "flowchart identifier starting with click prefix is not skipped" {
 }
 
 test "top-level direction is accepted but does not mutate graph.direction" {
-    var graph = try parseSource(std.testing.allocator,
+    var graph = try parse(std.testing.allocator,
         \\graph TD
         \\    direction LR
         \\    A --> B
@@ -1187,7 +1184,7 @@ test "top-level direction is accepted but does not mutate graph.direction" {
 }
 
 test "parses graph TD header" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n");
     defer graph.deinit();
     try std.testing.expectEqual(types.Direction.top_down, graph.direction);
     try std.testing.expectEqual(@as(usize, 0), graph.nodes.len);
@@ -1195,7 +1192,7 @@ test "parses graph TD header" {
 }
 
 test "parses flowchart LR header" {
-    var graph = try parseSource(std.testing.allocator, "flowchart LR\n    A --> B\n");
+    var graph = try parse(std.testing.allocator, "flowchart LR\n    A --> B\n");
     defer graph.deinit();
     try std.testing.expectEqual(types.Direction.left_right, graph.direction);
     try std.testing.expectEqual(@as(usize, 2), graph.nodes.len);
@@ -1203,7 +1200,7 @@ test "parses flowchart LR header" {
 }
 
 test "parses rectangular node declaration" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A[Start]\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A[Start]\n");
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 1), graph.nodes.len);
     try std.testing.expectEqual(types.NodeShape.rect, graph.nodes[0].shape);
@@ -1212,7 +1209,7 @@ test "parses rectangular node declaration" {
 }
 
 test "parses diamond node declaration" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    B{Decision}\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    B{Decision}\n");
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 1), graph.nodes.len);
     try std.testing.expectEqual(types.NodeShape.diamond, graph.nodes[0].shape);
@@ -1220,7 +1217,7 @@ test "parses diamond node declaration" {
 }
 
 test "parses simple edge A --> B" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A --> B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A --> B\n");
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 2), graph.nodes.len);
     try std.testing.expectEqual(@as(usize, 1), graph.edges.len);
@@ -1229,7 +1226,7 @@ test "parses simple edge A --> B" {
 }
 
 test "parses edge with no spaces A-->B" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A-->B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A-->B\n");
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 2), graph.nodes.len);
     try std.testing.expectEqual(@as(usize, 1), graph.edges.len);
@@ -1238,21 +1235,21 @@ test "parses edge with no spaces A-->B" {
 }
 
 test "parses unlabeled line A---B" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A---B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A---B\n");
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 1), graph.edges.len);
     try std.testing.expectEqual(types.EdgeStyle.line, graph.edges[0].style);
 }
 
 test "parses unlabeled line A --- B" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A --- B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A --- B\n");
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 1), graph.edges.len);
     try std.testing.expectEqual(types.EdgeStyle.line, graph.edges[0].style);
 }
 
 test "parses labeled edge A -->|yes| B" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A -->|yes| B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A -->|yes| B\n");
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 1), graph.edges.len);
     try std.testing.expectEqual(types.EdgeStyle.arrow, graph.edges[0].style);
@@ -1260,35 +1257,35 @@ test "parses labeled edge A -->|yes| B" {
 }
 
 test "parses labeled edge with space before pipe: A --> |yes| B" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A --> |yes| B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A --> |yes| B\n");
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 1), graph.edges.len);
     try std.testing.expectEqualStrings("yes", graph.edges[0].label.?);
 }
 
 test "parses labeled edge without any spaces A-->|yes|B" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A-->|yes|B\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A-->|yes|B\n");
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 1), graph.edges.len);
     try std.testing.expectEqualStrings("yes", graph.edges[0].label.?);
 }
 
 test "fans out multi-decl A & B --> C" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A & B --> C\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A & B --> C\n");
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 3), graph.nodes.len);
     try std.testing.expectEqual(@as(usize, 2), graph.edges.len);
 }
 
 test "fans out multi-decl without spaces around & A&B-->C" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A&B-->C\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A&B-->C\n");
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 3), graph.nodes.len);
     try std.testing.expectEqual(@as(usize, 2), graph.edges.len);
 }
 
 test "parses chained edge A --> B --> C" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A --> B --> C\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A --> B --> C\n");
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 3), graph.nodes.len);
     try std.testing.expectEqual(@as(usize, 2), graph.edges.len);
@@ -1299,7 +1296,7 @@ test "parses chained edge A --> B --> C" {
 }
 
 test "parses chained edge with labels A -->|x| B -->|y| C" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A -->|x| B -->|y| C\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A -->|x| B -->|y| C\n");
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 2), graph.edges.len);
     try std.testing.expectEqualStrings("x", graph.edges[0].label.?);
@@ -1307,7 +1304,7 @@ test "parses chained edge with labels A -->|x| B -->|y| C" {
 }
 
 test "fans out cross product of A & B --> C & D" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A & B --> C & D\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A & B --> C & D\n");
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 4), graph.nodes.len);
     try std.testing.expectEqual(@as(usize, 4), graph.edges.len);
@@ -1321,15 +1318,15 @@ test "ignores comment lines" {
         \\    A --> B
         \\%% trailing comment
     ;
-    var graph = try parseSource(std.testing.allocator, source);
+    var graph = try parse(std.testing.allocator, source);
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 2), graph.nodes.len);
     try std.testing.expectEqual(@as(usize, 1), graph.edges.len);
 }
 
 test "rejects missing direction with InvalidMermaid" {
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator, "graph\n    A --> B\n"));
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator, "graph XX\n"));
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator, "graph\n    A --> B\n"));
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator, "graph XX\n"));
 }
 
 test "interns nodes referenced before declaration" {
@@ -1338,7 +1335,7 @@ test "interns nodes referenced before declaration" {
         \\    A --> B
         \\    A[First]
     ;
-    var graph = try parseSource(std.testing.allocator, source);
+    var graph = try parse(std.testing.allocator, source);
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 2), graph.nodes.len);
     try std.testing.expectEqualStrings("First", graph.nodes[0].label);
@@ -1353,85 +1350,85 @@ test "last-write-wins for redefined node" {
         \\    A[Second]
         \\    A --> B
     ;
-    var graph = try parseSource(std.testing.allocator, source);
+    var graph = try parse(std.testing.allocator, source);
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 2), graph.nodes.len);
     try std.testing.expectEqualStrings("Second", graph.nodes[0].label);
 }
 
-test "rejects label containing ZWJ emoji sequence" {
-    try std.testing.expectError(
-        error.InvalidMermaid,
-        parseSource(std.testing.allocator, "graph TD\n    A[\u{1F468}\u{200D}\u{1F469}] --> B\n"),
+test "accepts labels containing display clusters with zero-width dependents" {
+    var graph = try parse(
+        std.testing.allocator,
+        "graph TD\n    A[e\u{0301}] --> B[\u{2764}\u{FE0F}] --> C[\u{1F44D}\u{1F3FB}] --> D[\u{1F468}\u{200D}\u{1F469}]\n",
     );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 4), graph.nodes.len);
+    try std.testing.expectEqualStrings("e\u{0301}", graph.nodes[0].label);
+    try std.testing.expectEqualStrings("\u{2764}\u{FE0F}", graph.nodes[1].label);
+    try std.testing.expectEqualStrings("\u{1F44D}\u{1F3FB}", graph.nodes[2].label);
+    try std.testing.expectEqualStrings("\u{1F468}\u{200D}\u{1F469}", graph.nodes[3].label);
 }
 
-test "rejects label containing combining mark" {
+test "rejects label containing standalone zero-width cluster" {
     try std.testing.expectError(
         error.InvalidMermaid,
-        parseSource(std.testing.allocator, "graph TD\n    A[e\u{0301}] --> B\n"),
-    );
-}
-
-test "rejects label containing emoji variation selector" {
-    try std.testing.expectError(
-        error.InvalidMermaid,
-        parseSource(std.testing.allocator, "graph TD\n    A[\u{2764}\u{FE0F}] --> B\n"),
-    );
-}
-
-test "rejects label containing emoji skin tone modifier" {
-    try std.testing.expectError(
-        error.InvalidMermaid,
-        parseSource(std.testing.allocator, "graph TD\n    A[\u{1F44D}\u{1F3FB}] --> B\n"),
+        parse(std.testing.allocator, "graph TD\n    A[foo\u{200D}bar] --> B\n"),
     );
 }
 
 test "rejects label containing BOM, ZWSP, ZWNJ" {
     try std.testing.expectError(
         error.InvalidMermaid,
-        parseSource(std.testing.allocator, "graph TD\n    A[foo\u{FEFF}bar] --> B\n"),
+        parse(std.testing.allocator, "graph TD\n    A[foo\u{FEFF}bar] --> B\n"),
     );
     try std.testing.expectError(
         error.InvalidMermaid,
-        parseSource(std.testing.allocator, "graph TD\n    A[foo\u{200B}bar] --> B\n"),
+        parse(std.testing.allocator, "graph TD\n    A[foo\u{200B}bar] --> B\n"),
     );
     try std.testing.expectError(
         error.InvalidMermaid,
-        parseSource(std.testing.allocator, "graph TD\n    A[foo\u{200C}bar] --> B\n"),
+        parse(std.testing.allocator, "graph TD\n    A[foo\u{200C}bar] --> B\n"),
     );
-}
-
-test "isDisplayDependent covers every codepoint for which displayWidth returns 0" {
-    try std.testing.expect(isDisplayDependent(0x200D));
-    try std.testing.expect(isDisplayDependent(0x200B));
-    try std.testing.expect(isDisplayDependent(0x200C));
-    try std.testing.expect(isDisplayDependent(0xFEFF));
-    try std.testing.expect(isDisplayDependent(0xFE0F));
-    try std.testing.expect(isDisplayDependent(0x0301));
-    try std.testing.expect(isDisplayDependent(0x1F3FB));
-    try std.testing.expect(isDisplayDependent(0x1F3FF));
-
-    try std.testing.expect(!isDisplayDependent('A'));
-    try std.testing.expect(!isDisplayDependent(' '));
-    try std.testing.expect(!isDisplayDependent(0x65E5));
-    try std.testing.expect(!isDisplayDependent(0x1F680));
 }
 
 test "accepts plain CJK and single-codepoint emoji" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\n    A[日本語] --> B[\u{1F680}]\n");
+    var graph = try parse(std.testing.allocator, "graph TD\n    A[日本語] --> B[\u{1F680}]\n");
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 2), graph.nodes.len);
     try std.testing.expectEqualStrings("日本語", graph.nodes[0].label);
 }
 
-test "parseSource rejects empty source" {
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator, ""));
-    try std.testing.expectError(error.InvalidMermaid, parseSource(std.testing.allocator, "\n\n  \n"));
+test "parse rejects empty source" {
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator, ""));
+    try std.testing.expectError(error.InvalidMermaid, parse(std.testing.allocator, "\n\n  \n"));
 }
 
-test "parseSource handles trailing newline and CRLF" {
-    var graph = try parseSource(std.testing.allocator, "graph TD\r\n    A --> B\r\n");
+test "parse handles trailing newline and CRLF" {
+    var graph = try parse(std.testing.allocator, "graph TD\r\n    A --> B\r\n");
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 1), graph.edges.len);
+}
+
+fn expectParseFlowchartHandlesAllocationFailures(allocator: std.mem.Allocator) !void {
+    var graph = try parse(allocator,
+        \\graph TD
+        \\    subgraph A
+        \\        subgraph B
+        \\            X --> Y
+        \\        end
+        \\    end
+        \\    classDef hot fill:#f00
+    );
+    defer graph.deinit();
+    try std.testing.expectEqual(@as(usize, 1), graph.subgraphs.len);
+    try std.testing.expectEqual(@as(usize, 1), graph.subgraphs[0].children.len);
+}
+
+test "parse cleans up nested flowchart allocation failures" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        expectParseFlowchartHandlesAllocationFailures,
+        .{},
+    );
 }

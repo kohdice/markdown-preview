@@ -6,6 +6,7 @@ const width = @import("../term/width.zig");
 const render_inline = @import("inline.zig");
 const render_context = @import("context.zig");
 const cell_segment = @import("cell_segment.zig");
+const memory_policy = @import("memory_policy");
 
 const RenderContext = render_context.RenderContext;
 const CellRecord = cell_segment.CellRecord;
@@ -14,6 +15,7 @@ const CellSegmentBuilder = cell_segment.CellSegmentBuilder;
 pub const min_col_width = 3;
 const border_line_stack_buf_size: usize = 2048;
 const fit_column_frozen_stack_cap: usize = 256;
+const scratch_retained_bytes_limit: usize = 4 * 1024 * 1024;
 
 pub fn fitColumnWidths(
     allocator: std.mem.Allocator,
@@ -29,13 +31,17 @@ pub fn fitColumnWidths(
     const n = col_widths.len;
     if (n == 0) return;
 
-    const frame_w = frameWidth(n, ambiguous_width);
+    const frame_w = frameWidth(n, ambiguous_width) orelse return;
     const normalized_min = normalizeColumnWidth(min_col_width, ambiguous_width);
-    if (wrap_w < frame_w + n * normalized_min) return;
+    const min_total = std.math.mul(usize, n, normalized_min) catch return;
+    const required = std.math.add(usize, frame_w, min_total) catch return;
+    if (wrap_w < required) return;
 
     const available = wrap_w - frame_w;
     var total: usize = 0;
-    for (col_widths) |w| total += w;
+    for (col_widths) |w| {
+        total = std.math.add(usize, total, w) catch return;
+    }
     if (total <= available) return;
 
     const q: usize = if (ambiguous_width == .wide) 2 else 1;
@@ -91,16 +97,18 @@ pub fn fitColumnWidths(
 
 fn normalizeColumnWidth(w: usize, ambiguous_width: width.AmbiguousWidth) usize {
     const clamped = @max(w, min_col_width);
-    if (ambiguous_width == .wide and clamped % 2 != 0) return clamped + 1;
+    if (ambiguous_width == .wide and clamped % 2 != 0) return std.math.add(usize, clamped, 1) catch clamped;
     return clamped;
 }
 
-fn frameWidth(col_count: usize, ambiguous_width: width.AmbiguousWidth) usize {
+fn frameWidth(col_count: usize, ambiguous_width: width.AmbiguousWidth) ?usize {
     if (col_count == 0) return 0;
     const row_open_w = width.displayWidth(border.vertical ++ border.cell_pad, ambiguous_width);
     const cell_separator_w = width.displayWidth(border.cell_pad ++ border.vertical ++ border.cell_pad, ambiguous_width);
     const row_close_w = width.displayWidth(border.cell_pad ++ border.vertical, ambiguous_width);
-    return row_open_w + (col_count - 1) * cell_separator_w + row_close_w;
+    const separators = std.math.mul(usize, col_count - 1, cell_separator_w) catch return null;
+    const open_and_separators = std.math.add(usize, row_open_w, separators) catch return null;
+    return std.math.add(usize, open_and_separators, row_close_w) catch return null;
 }
 
 const border = struct {
@@ -125,22 +133,22 @@ const border = struct {
 const BorderKind = enum { top, middle, bottom };
 
 pub const TableScratch = struct {
-    col_widths: std.ArrayListUnmanaged(usize) = .empty,
-    row_offsets: std.ArrayListUnmanaged(usize) = .empty,
-    bytes_buf: std.ArrayListUnmanaged(u8) = .empty,
-    cell_segments: std.ArrayListUnmanaged(CellRecord) = .empty,
-    cell_seg_offsets: std.ArrayListUnmanaged(u32) = .empty,
+    col_widths: std.ArrayList(usize) = .empty,
+    row_offsets: std.ArrayList(usize) = .empty,
+    bytes_buf: std.ArrayList(u8) = .empty,
+    cell_segments: std.ArrayList(CellRecord) = .empty,
+    cell_seg_offsets: std.ArrayList(u32) = .empty,
 
-    pub fn beginTable(self: *TableScratch) void {
-        self.reset();
+    pub fn beginTable(self: *TableScratch, allocator: std.mem.Allocator) void {
+        self.reset(allocator);
     }
 
-    pub fn reset(self: *TableScratch) void {
-        self.col_widths.clearRetainingCapacity();
-        self.row_offsets.clearRetainingCapacity();
-        self.bytes_buf.clearRetainingCapacity();
-        self.cell_segments.clearRetainingCapacity();
-        self.cell_seg_offsets.clearRetainingCapacity();
+    pub fn reset(self: *TableScratch, allocator: std.mem.Allocator) void {
+        memory_policy.clearRetainingBounded(usize, &self.col_widths, allocator, scratch_retained_bytes_limit);
+        memory_policy.clearRetainingBounded(usize, &self.row_offsets, allocator, scratch_retained_bytes_limit);
+        memory_policy.clearRetainingBounded(u8, &self.bytes_buf, allocator, scratch_retained_bytes_limit);
+        memory_policy.clearRetainingBounded(CellRecord, &self.cell_segments, allocator, scratch_retained_bytes_limit);
+        memory_policy.clearRetainingBounded(u32, &self.cell_seg_offsets, allocator, scratch_retained_bytes_limit);
     }
 
     pub fn deinit(self: *TableScratch, allocator: std.mem.Allocator) void {
@@ -176,7 +184,7 @@ pub fn writeTable(
 ) !void {
     const col_count = table.alignments.len;
 
-    scratch.beginTable();
+    scratch.beginTable(allocator);
     try scratch.col_widths.appendNTimes(allocator, 0, col_count);
 
     const cell_fg = placement.cellColor(ctx.palette);
@@ -205,7 +213,7 @@ pub fn writeTable(
 
     for (0..col_count) |c| {
         const col_w = scratch.col_widths.items[c];
-        builder.beginCell(ctx.enable_ansi, ctx.color_mode, ctx.ambiguous_width, col_w);
+        builder.beginCell(ctx.enable_ansi, ctx.ambiguous_width, col_w);
         if (c < table.header.len) {
             try render_inline.writeSegmentedInlineChain(
                 ctx,
@@ -215,7 +223,10 @@ pub fn writeTable(
             );
         }
         try builder.finishCell();
-        try scratch.cell_seg_offsets.append(allocator, @intCast(scratch.cell_segments.items.len));
+        try scratch.cell_seg_offsets.append(
+            allocator,
+            std.math.cast(u32, scratch.cell_segments.items.len) orelse return error.Overflow,
+        );
     }
 
     try scratch.row_offsets.append(allocator, col_count);
@@ -224,7 +235,7 @@ pub fn writeTable(
         const cached_len = @min(row.len, col_count);
         for (row[0..cached_len], 0..) |cell, ci| {
             const col_w = scratch.col_widths.items[ci];
-            builder.beginCell(ctx.enable_ansi, ctx.color_mode, ctx.ambiguous_width, col_w);
+            builder.beginCell(ctx.enable_ansi, ctx.ambiguous_width, col_w);
             try render_inline.writeSegmentedInlineChain(
                 ctx,
                 &builder,
@@ -232,7 +243,10 @@ pub fn writeTable(
                 body_style,
             );
             try builder.finishCell();
-            try scratch.cell_seg_offsets.append(allocator, @intCast(scratch.cell_segments.items.len));
+            try scratch.cell_seg_offsets.append(
+                allocator,
+                std.math.cast(u32, scratch.cell_segments.items.len) orelse return error.Overflow,
+            );
         }
         try scratch.row_offsets.append(allocator, scratch.cell_seg_offsets.items.len - 1);
     }
@@ -242,7 +256,7 @@ pub fn writeTable(
     const segments = scratch.cell_segments.items;
     const seg_offsets = scratch.cell_seg_offsets.items;
 
-    try writeBorder(writer, col_widths, .top, ctx.enable_ansi, ctx.color_mode, ctx.ambiguous_width, ctx.palette);
+    try writeBorder(writer, col_widths, .top, ctx.enable_ansi, ctx.ambiguous_width, ctx.palette);
     try writer.writeByte('\n');
 
     try writeRowFromScratch(
@@ -258,7 +272,7 @@ pub fn writeTable(
     );
     try writer.writeByte('\n');
 
-    try writeBorder(writer, col_widths, .middle, ctx.enable_ansi, ctx.color_mode, ctx.ambiguous_width, ctx.palette);
+    try writeBorder(writer, col_widths, .middle, ctx.enable_ansi, ctx.ambiguous_width, ctx.palette);
 
     for (0..table.rows.len) |i| {
         const row_start = scratch.row_offsets.items[i];
@@ -278,12 +292,12 @@ pub fn writeTable(
 
         if (i + 1 < table.rows.len) {
             try writer.writeByte('\n');
-            try writeBorder(writer, col_widths, .middle, ctx.enable_ansi, ctx.color_mode, ctx.ambiguous_width, ctx.palette);
+            try writeBorder(writer, col_widths, .middle, ctx.enable_ansi, ctx.ambiguous_width, ctx.palette);
         }
     }
 
     try writer.writeByte('\n');
-    try writeBorder(writer, col_widths, .bottom, ctx.enable_ansi, ctx.color_mode, ctx.ambiguous_width, ctx.palette);
+    try writeBorder(writer, col_widths, .bottom, ctx.enable_ansi, ctx.ambiguous_width, ctx.palette);
 }
 
 fn measureCells(
@@ -337,7 +351,7 @@ fn measureOneCell(
 ) !usize {
     scratch.bytes_buf.clearRetainingCapacity();
     scratch.cell_segments.clearRetainingCapacity();
-    builder.beginCell(false, .none, ctx.ambiguous_width, wrap_width);
+    builder.beginCell(false, ctx.ambiguous_width, wrap_width);
     try render_inline.writeSegmentedInlineChain(ctx, builder, first, base_style);
     try builder.finishCell();
     var maxw: usize = 0;
@@ -365,18 +379,18 @@ fn writeRowFromScratch(
     var row_height: usize = 1;
     for (0..row_cell_count) |c| {
         const k = row_cell_start + c;
-        const seg_count = seg_offsets[k + 1] - seg_offsets[k];
+        const seg_count: usize = seg_offsets[k + 1] - seg_offsets[k];
         if (seg_count > row_height) row_height = seg_count;
     }
 
     for (0..row_height) |line_idx| {
-        try ansi.writeStyled(writer, ctx.enable_ansi, ctx.color_mode, bar_style, row_open);
+        try ansi.writeStyled(writer, ctx.enable_ansi, bar_style, row_open);
         for (0..col_widths.len) |c| {
             var rec: ?CellRecord = null;
             if (c < row_cell_count) {
                 const k = row_cell_start + c;
-                const seg_start = seg_offsets[k];
-                const seg_end = seg_offsets[k + 1];
+                const seg_start: usize = seg_offsets[k];
+                const seg_end: usize = seg_offsets[k + 1];
                 if (line_idx < seg_end - seg_start) {
                     rec = segments[seg_start + line_idx];
                 }
@@ -401,10 +415,10 @@ fn writeRowFromScratch(
             try writer.splatByteAll(' ', right_pad);
 
             if (c + 1 < col_widths.len) {
-                try ansi.writeStyled(writer, ctx.enable_ansi, ctx.color_mode, bar_style, cell_separator);
+                try ansi.writeStyled(writer, ctx.enable_ansi, bar_style, cell_separator);
             }
         }
-        try ansi.writeStyled(writer, ctx.enable_ansi, ctx.color_mode, bar_style, row_close);
+        try ansi.writeStyled(writer, ctx.enable_ansi, bar_style, row_close);
 
         if (line_idx + 1 < row_height) try writer.writeByte('\n');
     }
@@ -415,7 +429,6 @@ fn writeBorder(
     col_widths: []const usize,
     kind: BorderKind,
     enable_ansi: bool,
-    color_mode: ansi.ColorMode,
     ambiguous_width: width.AmbiguousWidth,
     palette: theme.Palette,
 ) !void {
@@ -461,21 +474,21 @@ fn writeBorder(
         }
         @memcpy(buf[pos..][0..right.len], right);
         pos += right.len;
-        try ansi.writeStyled(writer, enable_ansi, color_mode, style, buf[0..pos]);
+        try ansi.writeStyled(writer, enable_ansi, style, buf[0..pos]);
     } else {
         var sgr_state: ansi.StyledState = .{};
-        try ansi.writeStyledRun(writer, enable_ansi, color_mode, &sgr_state, style, left);
+        try ansi.writeStyledRun(writer, enable_ansi, &sgr_state, style, left);
         for (0..col_widths.len) |c| {
             const segment_width = col_widths[c] + 2;
             const glyph_count = segment_width / glyph_w;
             for (0..glyph_count) |_| {
-                try ansi.writeStyledRun(writer, enable_ansi, color_mode, &sgr_state, style, border.horizontal);
+                try ansi.writeStyledRun(writer, enable_ansi, &sgr_state, style, border.horizontal);
             }
             if (c + 1 < col_widths.len) {
-                try ansi.writeStyledRun(writer, enable_ansi, color_mode, &sgr_state, style, join);
+                try ansi.writeStyledRun(writer, enable_ansi, &sgr_state, style, join);
             }
         }
-        try ansi.writeStyledRun(writer, enable_ansi, color_mode, &sgr_state, style, right);
+        try ansi.writeStyledRun(writer, enable_ansi, &sgr_state, style, right);
         try ansi.flushStyle(writer, &sgr_state);
     }
 }

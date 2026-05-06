@@ -9,31 +9,31 @@ const unwrapWriteError = @import("write_error.zig").unwrapWriteError;
 const stderr_buffer_size = 1024;
 
 pub fn main(init: std.process.Init) !u8 {
-    const arena = init.arena.allocator();
-    const args = try init.minimal.args.toSlice(arena);
+    const process_arena = init.arena.allocator();
+    const app_allocator = init.gpa;
+    const args = try init.minimal.args.toSlice(process_arena);
     const io = init.io;
 
     const stdout_file = std.Io.File.stdout();
     const stderr_file = std.Io.File.stderr();
     const stdin_file = std.Io.File.stdin();
 
-    const stdout_buffer = try arena.alloc(u8, try stdout_buffer_mod.sizeFor(io, stdout_file));
+    const stdout_buffer = try process_arena.alloc(u8, try stdout_buffer_mod.sizeFor(io, stdout_file));
     var stderr_buffer: [stderr_buffer_size]u8 = undefined;
 
-    var stdout_stream = stdout_file.writer(io, stdout_buffer);
-    var stderr_stream = stderr_file.writer(io, &stderr_buffer);
+    var stdout_stream = stdout_file.writerStreaming(io, stdout_buffer);
+    var stderr_stream = stderr_file.writerStreaming(io, &stderr_buffer);
 
-    const no_color = if (init.environ_map.get("NO_COLOR")) |v| v.len != 0 else false;
-    const force_color = if (init.environ_map.get("CLICOLOR_FORCE")) |v| v.len != 0 else false;
-    const tty_mode = try std.Io.Terminal.Mode.detect(io, stdout_file, no_color, force_color);
-    const enable_ansi = tty_mode != .no_color;
-
-    const wrap_width = if (enable_ansi) terminal.getTerminalWidth(stdout_file.handle) else null;
+    const stdout_is_tty = stdout_file.isTty(io) catch false;
+    const enable_ansi = try detectAutoAnsi(io, stdout_file, init.environ_map);
+    const wrap_width = if (stdout_is_tty)
+        if (terminal.getTerminalSize(stdout_file.handle)) |size| size.cols else null
+    else
+        null;
     const ambiguous_default = terminal.detectAmbiguousWidthFromEnv(init.environ_map);
-    const color_mode = terminal.detectColorModeFromEnv(init.environ_map);
 
     const exit_code = cli.run(.{
-        .allocator = arena,
+        .app_allocator = app_allocator,
         .io = io,
         .cwd = std.Io.Dir.cwd(),
         .args = args,
@@ -45,11 +45,31 @@ pub fn main(init: std.process.Init) !u8 {
         .enable_ansi = enable_ansi,
         .wrap_width = wrap_width,
         .ambiguous_width = ambiguous_default,
-        .color_mode = color_mode,
     }) catch |err| return unwrapWriteError(err, &stdout_stream, &stderr_stream);
 
     stdout_stream.interface.flush() catch |err| return unwrapWriteError(err, &stdout_stream, &stderr_stream);
     stderr_stream.interface.flush() catch |err| return unwrapWriteError(err, &stdout_stream, &stderr_stream);
 
     return exit_code;
+}
+
+fn detectAutoAnsi(
+    io: std.Io,
+    file: std.Io.File,
+    env: *const std.process.Environ.Map,
+) !bool {
+    const mode = try std.Io.Terminal.Mode.detect(
+        io,
+        file,
+        envFlagSet(env, "NO_COLOR"),
+        envFlagSet(env, "CLICOLOR_FORCE"),
+    );
+    return switch (mode) {
+        .escape_codes => true,
+        else => false,
+    };
+}
+
+fn envFlagSet(env: *const std.process.Environ.Map, name: []const u8) bool {
+    return if (env.get(name)) |value| value.len != 0 else false;
 }

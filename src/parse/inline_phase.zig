@@ -94,7 +94,7 @@ const Walk = struct {
 
 fn buildAll(allocator: std.mem.Allocator, source: []const u8) !ParseResult {
     var builder = parse_inline.InlineBuilder.init(allocator);
-    const block_doc = try block_phase.buildBlockDocument(allocator, &builder, source);
+    const block_doc = try block_phase.buildBlockDocument(allocator, source);
     return resolveInlines(&builder, block_doc);
 }
 

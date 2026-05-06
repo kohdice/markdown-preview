@@ -63,7 +63,7 @@ fn makeExampleFixture(
     const seed = try cwd.readFileAlloc(io, seed_path, allocator, .limited(1 << 20));
     defer allocator.free(seed);
 
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
     try out.appendSlice(allocator, seed);

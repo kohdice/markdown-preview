@@ -11,14 +11,14 @@ const parse_xychart = @import("parse_xychart.zig");
 fn expectParserAcceptsSourceForms(comptime parser: type, source: []const u8) !void {
     const alloc = std.testing.allocator;
 
-    var from_bytes = try parser.parseSource(alloc, source);
+    var from_bytes = try parser.parse(alloc, source);
     defer from_bytes.deinit();
 
-    var from_borrowed = try parser.parseSource(alloc, mermaid_source.Source{ .borrowed = source });
+    var from_borrowed = try parser.parse(alloc, mermaid_source.Source{ .borrowed = source });
     defer from_borrowed.deinit();
 
     const owned = try alloc.dupe(u8, source);
-    var from_owned = try parser.parseSource(alloc, mermaid_source.Source{ .owned = owned });
+    var from_owned = try parser.parse(alloc, mermaid_source.Source{ .owned = owned });
     defer from_owned.deinit();
 }
 
@@ -28,10 +28,10 @@ test "shared mermaid source normalization keeps sequence parse results for borro
         \\    Alice->>Bob: hi
     ;
 
-    var from_bytes = try parse_sequence.parseSource(std.testing.allocator, source);
+    var from_bytes = try parse_sequence.parse(std.testing.allocator, source);
     defer from_bytes.deinit();
 
-    var from_borrowed = try parse_sequence.parseSource(std.testing.allocator, mermaid_source.Source{ .borrowed = source });
+    var from_borrowed = try parse_sequence.parse(std.testing.allocator, mermaid_source.Source{ .borrowed = source });
     defer from_borrowed.deinit();
 
     try std.testing.expectEqual(@as(usize, 2), from_bytes.participants.len);
@@ -49,7 +49,7 @@ test "shared mermaid source normalization preserves Source.owned buffer for sequ
         \\    Alice->>Bob: hi
     );
 
-    var diagram = try parse_sequence.parseSource(alloc, mermaid_source.Source{ .owned = owned });
+    var diagram = try parse_sequence.parse(alloc, mermaid_source.Source{ .owned = owned });
     defer diagram.deinit();
 
     try std.testing.expect(diagram.owned_strings.len > 0);
