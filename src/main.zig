@@ -30,7 +30,7 @@ pub fn main(init: std.process.Init) !u8 {
         if (terminal.getTerminalSize(stdout_file.handle)) |size| size.cols else null
     else
         null;
-    const ambiguous_default = terminal.detectAmbiguousWidthFromEnv(init.environ_map);
+    const ambiguous_default = term.width.detectAmbiguousWidth(init.environ_map);
 
     const exit_code = cli.run(.{
         .app_allocator = app_allocator,

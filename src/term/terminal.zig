@@ -1,5 +1,4 @@
 const std = @import("std");
-const width = @import("width.zig");
 
 pub const TerminalSize = struct {
     cols: usize,
@@ -13,15 +12,4 @@ pub fn getTerminalSize(handle: std.posix.fd_t) ?TerminalSize {
         return .{ .cols = @intCast(winsize.col), .rows = @intCast(winsize.row) };
     }
     return null;
-}
-
-const EnvAdapter = struct {
-    map: *const std.process.Environ.Map,
-    pub fn get(self: @This(), name: []const u8) ?[]const u8 {
-        return self.map.get(name);
-    }
-};
-
-pub fn detectAmbiguousWidthFromEnv(env: *const std.process.Environ.Map) width.AmbiguousWidth {
-    return width.detectAmbiguousWidth(EnvAdapter{ .map = env });
 }
