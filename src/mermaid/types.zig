@@ -156,17 +156,13 @@ pub const MermaidGraph = struct {
     }
 };
 
-fn freeSubgraphs(allocator: std.mem.Allocator, subgraphs: []Subgraph) void {
+pub fn freeSubgraphs(allocator: std.mem.Allocator, subgraphs: []Subgraph) void {
     for (subgraphs) |sg| {
         allocator.free(sg.node_ids);
         allocator.free(sg.edge_indices);
         freeSubgraphs(allocator, sg.children);
     }
     if (subgraphs.len > 0) allocator.free(subgraphs);
-}
-
-pub fn freeSubgraphsPublic(allocator: std.mem.Allocator, subgraphs: []Subgraph) void {
-    freeSubgraphs(allocator, subgraphs);
 }
 
 pub const ParticipantId = u16;

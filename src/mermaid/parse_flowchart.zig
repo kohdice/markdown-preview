@@ -143,7 +143,7 @@ fn parseFromOwned(allocator: std.mem.Allocator, owned_source: []u8) ParseError!t
     errdefer allocator.free(edges);
 
     const subgraphs = try finalizeSubgraphs(allocator, &parser.root_subgraphs);
-    errdefer types.freeSubgraphsPublic(allocator, subgraphs);
+    errdefer types.freeSubgraphs(allocator, subgraphs);
 
     const class_defs = try parser.class_defs.toOwnedSlice(allocator);
     errdefer allocator.free(class_defs);
@@ -187,7 +187,7 @@ fn finalizeSubgraphs(
     }
     const out = try allocator.alloc(types.Subgraph, list.items.len);
     for (out) |*slot| slot.* = .{ .id_text = "" };
-    errdefer types.freeSubgraphsPublic(allocator, out);
+    errdefer types.freeSubgraphs(allocator, out);
 
     for (list.items, 0..) |*bs, i| {
         var node_ids: ?[]types.NodeId = try bs.node_ids.toOwnedSlice(allocator);
@@ -197,7 +197,7 @@ fn finalizeSubgraphs(
         errdefer if (edge_indices) |indices| allocator.free(indices);
 
         var children: ?[]types.Subgraph = try finalizeSubgraphs(allocator, &bs.children);
-        errdefer if (children) |items| types.freeSubgraphsPublic(allocator, items);
+        errdefer if (children) |items| types.freeSubgraphs(allocator, items);
 
         out[i] = .{
             .id_text = bs.id_text,

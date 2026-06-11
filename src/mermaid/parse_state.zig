@@ -149,7 +149,7 @@ fn parseFromOwned(allocator: std.mem.Allocator, owned_source: []u8) ParseError!t
     errdefer allocator.free(edges);
 
     const subgraphs = try finalizeComposites(allocator, &parser.root_subgraphs);
-    errdefer types.freeSubgraphsPublic(allocator, subgraphs);
+    errdefer types.freeSubgraphs(allocator, subgraphs);
 
     const link_styles = try parser.link_styles.toOwnedSlice(allocator);
     errdefer allocator.free(link_styles);
@@ -185,7 +185,7 @@ fn finalizeComposites(
     }
     const out = try allocator.alloc(types.Subgraph, list.items.len);
     for (out) |*slot| slot.* = .{ .id_text = "" };
-    errdefer types.freeSubgraphsPublic(allocator, out);
+    errdefer types.freeSubgraphs(allocator, out);
 
     for (list.items, 0..) |*bc, i| {
         var node_ids: ?[]types.NodeId = try bc.node_ids.toOwnedSlice(allocator);
@@ -195,7 +195,7 @@ fn finalizeComposites(
         errdefer if (edge_indices) |indices| allocator.free(indices);
 
         var children: ?[]types.Subgraph = try finalizeComposites(allocator, &bc.children);
-        errdefer if (children) |items| types.freeSubgraphsPublic(allocator, items);
+        errdefer if (children) |items| types.freeSubgraphs(allocator, items);
 
         out[i] = .{
             .id_text = bc.id_text,
