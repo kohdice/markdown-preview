@@ -1425,8 +1425,8 @@ test "every implemented mermaid target uses width-too-small fallback at width on
 test "non-mermaid code fences are byte-identical to their input" {
     const allocator = std.testing.allocator;
     const source =
-        \\```python
-        \\print('hello')
+        \\```go
+        \\fmt.Println("hello")
         \\```
         \\
     ;

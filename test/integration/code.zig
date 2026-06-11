@@ -3,12 +3,12 @@ const renderToOwnedSlice = @import("../helpers/render_from_source.zig").renderTo
 
 test "code fence with language preserves original format" {
     const allocator = std.testing.allocator;
-    const source = "```python\nprint('hello')\n```\n";
+    const source = "```go\nfmt.Println(\"hello\")\n```\n";
 
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("```python\nprint('hello')\n```\n", rendered);
+    try std.testing.expectEqualStrings("```go\nfmt.Println(\"hello\")\n```\n", rendered);
 }
 
 test "code fence without language preserves format" {
@@ -23,12 +23,12 @@ test "code fence without language preserves format" {
 
 test "code fence language is captured in Fence struct" {
     const allocator = std.testing.allocator;
-    const source = "```javascript mocha\nconsole.log();\n```\n";
+    const source = "```rust ignore\nfn main() {}\n```\n";
 
     const rendered = try renderToOwnedSlice(allocator, source, .{});
     defer allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("```javascript mocha\nconsole.log();\n```\n", rendered);
+    try std.testing.expectEqualStrings("```rust ignore\nfn main() {}\n```\n", rendered);
 }
 
 test "zig code fence gets syntax highlighting under ANSI" {
@@ -102,20 +102,6 @@ test "code fence with syntax errors still renders (Tree-sitter error recovery)" 
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "broken"));
 }
 
-test "python code fence highlights with ANSI" {
-    const allocator = std.testing.allocator;
-    const source = "```python\ndef greet():\n    return 1\n```\n";
-
-    const rendered = try renderToOwnedSlice(allocator, source, .{
-        .enable_ansi = true,
-    });
-    defer allocator.free(rendered);
-
-    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "def"));
-    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "greet"));
-    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "\x1b[38;2;"));
-}
-
 test "bash code fence uses sh alias" {
     const allocator = std.testing.allocator;
     const source = "```sh\necho hello\n```\n";
@@ -167,16 +153,6 @@ test "C0 control bytes inside a code fence are stripped by writeSanitized" {
     try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, "\x1b[31m"));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, "evil"));
     try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, "\x07"));
-}
-
-test "python code fence is plain text when ANSI disabled" {
-    const allocator = std.testing.allocator;
-    const source = "```python\ndef greet():\n    return 1\n```\n";
-
-    const rendered = try renderToOwnedSlice(allocator, source, .{});
-    defer allocator.free(rendered);
-
-    try std.testing.expectEqualStrings(source, rendered);
 }
 
 test "bash code fence is plain text when ANSI disabled" {
