@@ -9,6 +9,7 @@ const render_table = @import("table.zig");
 const highlight = @import("../term/highlight.zig");
 const render_context = @import("context.zig");
 const mermaid = @import("../mermaid.zig");
+const mermaid_cache = @import("mermaid_cache.zig");
 
 const RenderContext = render_context.RenderContext;
 
@@ -25,13 +26,8 @@ const list_bullet = struct {
     const level2 = "▪ ";
 };
 
-pub const MermaidCacheEntry = struct {
-    diagram: mermaid.Diagram,
-    key_owned_by_diagram: bool = false,
-    used_in_render: bool = false,
-};
-
-pub const MermaidCache = std.StringHashMapUnmanaged(MermaidCacheEntry);
+pub const MermaidCacheEntry = mermaid_cache.MermaidCacheEntry;
+pub const MermaidCache = mermaid_cache.MermaidCache;
 
 fn bulletForDepth(depth: usize) []const u8 {
     return switch (depth % list_bullet_count) {
@@ -65,6 +61,11 @@ pub const RenderSession = struct {
     highlighter: *highlight.Highlighter,
     mermaid_cache: *MermaidCache,
     mermaid_compile_count: *usize,
+    // The blockquote gutter is the only styled prefix and uses a constant
+    // marker with a session-invariant style, so the rendered bytes never
+    // change within a render pass. Cache them on first push to avoid a fresh
+    // Allocating writer per blockquote.
+    blockquote_gutter: ?[]const u8 = null,
 
     fn pushSegment(self: *RenderSession, segment: prefix_writer.PrefixStack.Segment) !void {
         // PrefixWriter applies the active stack at line-start; unflushed bytes
@@ -90,9 +91,12 @@ pub const RenderSession = struct {
         const rendered_marker: []const u8 = blk: {
             if (marker.len == 0) break :blk marker;
             if (!self.ctx.enable_ansi or style.isPlain()) break :blk marker;
+            if (self.blockquote_gutter) |cached| break :blk cached;
             var tmp: std.Io.Writer.Allocating = .init(self.scratch);
             try ansi.writeStyled(&tmp.writer, self.ctx.enable_ansi, style, marker);
-            break :blk tmp.written();
+            const rendered = tmp.written();
+            self.blockquote_gutter = rendered;
+            break :blk rendered;
         };
         try self.pushSegment(.{ .indent = indent, .marker = rendered_marker });
     }

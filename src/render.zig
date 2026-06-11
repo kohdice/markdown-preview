@@ -8,6 +8,7 @@ const render_block = @import("render/block.zig");
 const render_table = @import("render/table.zig");
 const render_context = @import("render/context.zig");
 const prefix_writer_mod = @import("render/prefix_writer.zig");
+const mermaid_cache = @import("render/mermaid_cache.zig");
 
 pub const retained_arena_limit: usize = 4 * 1024 * 1024;
 
@@ -25,7 +26,7 @@ pub const Renderer = struct {
     table_scratch: render_table.TableScratch = .{},
     wrap_line_buf: std.ArrayList(u8) = .empty,
     scratch: std.heap.ArenaAllocator,
-    mermaid_cache: render_block.MermaidCache = .empty,
+    mermaid_cache: mermaid_cache.MermaidCache = .empty,
     mermaid_compile_count: usize = 0,
 
     pub fn init(persistent_allocator: std.mem.Allocator, opts: RenderOptions) Renderer {
@@ -100,27 +101,11 @@ pub const Renderer = struct {
     }
 
     fn markMermaidCacheUnused(self: *Renderer) void {
-        var it = self.mermaid_cache.valueIterator();
-        while (it.next()) |entry| entry.used_in_render = false;
+        mermaid_cache.markUnused(&self.mermaid_cache);
     }
 
     fn pruneUnusedMermaidCache(self: *Renderer, allocator: std.mem.Allocator) !void {
-        var stale_keys: std.ArrayList([]const u8) = .empty;
-        defer stale_keys.deinit(allocator);
-
-        var it = self.mermaid_cache.iterator();
-        while (it.next()) |entry| {
-            if (!entry.value_ptr.used_in_render) {
-                try stale_keys.append(allocator, entry.key_ptr.*);
-            }
-        }
-
-        for (stale_keys.items) |key| {
-            const removed = self.mermaid_cache.fetchRemove(key) orelse continue;
-            var diagram = removed.value.diagram;
-            diagram.deinit();
-            if (!removed.value.key_owned_by_diagram) self.persistent_allocator.free(removed.key);
-        }
+        return mermaid_cache.pruneUnused(&self.mermaid_cache, allocator, self.persistent_allocator);
     }
 };
 
@@ -130,6 +115,7 @@ test {
     _ = @import("render/prefix_writer.zig");
     _ = @import("render/table.zig");
     _ = @import("render/cell_segment.zig");
+    _ = @import("render/mermaid_cache.zig");
     _ = @import("render/ast_helpers_test.zig");
     _ = @import("render/document_test.zig");
     _ = @import("render/inline_test.zig");
