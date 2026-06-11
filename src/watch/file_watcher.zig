@@ -270,7 +270,7 @@ const InotifyWatcher = struct {
 };
 
 fn buildWatchDirPath(buf: *[std.Io.Dir.max_path_bytes]u8, cwd: std.Io.Dir, dir_path: []const u8) error{NameTooLong}!usize {
-    if (std.fs.path.isAbsolute(dir_path) or cwd.handle == std.posix.AT.FDCWD) {
+    if (std.Io.Dir.path.isAbsolute(dir_path) or cwd.handle == std.posix.AT.FDCWD) {
         const path_z = std.fmt.bufPrintSentinel(buf, "{s}", .{dir_path}, 0) catch return error.NameTooLong;
         return path_z.len;
     }

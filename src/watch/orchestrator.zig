@@ -35,8 +35,8 @@ pub fn run(opts: WatchOptions) !u8 {
         return exit_failure;
     }
 
-    const dir_path = std.fs.path.dirname(opts.path) orelse ".";
-    const file_name = std.fs.path.basename(opts.path);
+    const dir_path = std.Io.Dir.path.dirname(opts.path) orelse ".";
+    const file_name = std.Io.Dir.path.basename(opts.path);
 
     var session: session_mod.WatchSession = undefined;
     session.init(opts.app_allocator, .{

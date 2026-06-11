@@ -70,11 +70,11 @@ test "enable_ansi=false emits zero SGR" {
 }
 
 test "Language.fromString coverage matches highlight corpus" {
-    var seen: std.EnumSet(highlight.Language) = .{};
+    var seen: std.EnumSet(highlight.Language) = .empty;
     for (language_tags) |tag| {
         const lang = highlight.Language.fromString(tag) orelse return error.UnmappedTag;
         seen.insert(lang);
     }
-    const full = std.EnumSet(highlight.Language).initFull();
+    const full: std.EnumSet(highlight.Language) = .full;
     try testing.expect(seen.eql(full));
 }
