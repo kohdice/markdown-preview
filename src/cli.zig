@@ -151,7 +151,7 @@ pub fn run(opts: RunOptions) !u8 {
     return executeCommand(opts, command);
 }
 
-pub fn executeCommand(opts: RunOptions, command: Command) !u8 {
+fn executeCommand(opts: RunOptions, command: Command) !u8 {
     return switch (command) {
         .render => |cmd| renderOnce(opts, cmd.path, cmd.width_override, cmd.color_policy),
         .version => writeVersion(opts.stdout, opts.version),
