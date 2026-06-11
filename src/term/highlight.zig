@@ -57,103 +57,8 @@ const LanguageConfig = struct {
     query: *ts.Query,
 };
 
-const QueryState = union(enum) {
-    uninitialized,
-    failed,
-    ready: *ts.Query,
-};
-
-const ScopeRef = struct {
-    node: ts.Node,
-    parent_index: ?u32,
-};
-
-const LocalDefinition = struct {
-    node: ts.Node,
-    scope_index: u32,
-    name: []const u8,
-};
-
-const Locals = struct {
-    scopes: []ScopeRef,
-    definitions: []LocalDefinition,
-
-    fn deinit(self: *Locals, allocator: std.mem.Allocator) void {
-        allocator.free(self.scopes);
-        allocator.free(self.definitions);
-    }
-
-    fn build(
-        allocator: std.mem.Allocator,
-        root: ts.Node,
-        query: *const ts.Query,
-        source: []const u8,
-    ) !Locals {
-        var scopes = std.ArrayList(ScopeRef).empty;
-        defer scopes.deinit(allocator);
-
-        var definitions = std.ArrayList(ts.Node).empty;
-        defer definitions.deinit(allocator);
-
-        const cursor = ts.QueryCursor.create();
-        defer cursor.destroy();
-        cursor.exec(query, root);
-
-        while (cursor.nextCapture()) |entry| {
-            const capture_index_in_match = entry[0];
-            const match = entry[1];
-            if (capture_index_in_match >= match.captures.len) continue;
-
-            const capture = match.captures[capture_index_in_match];
-            const name = query.captureNameForId(capture.index) orelse "";
-            if (std.mem.eql(u8, name, "local.scope")) {
-                try scopes.append(allocator, .{
-                    .node = capture.node,
-                    .parent_index = null,
-                });
-            } else if (std.mem.eql(u8, name, "local.definition")) {
-                try definitions.append(allocator, capture.node);
-            }
-        }
-
-        for (scopes.items, 0..) |scope, index| {
-            scopes.items[index].parent_index = findParentScopeIndex(scope.node, scopes.items);
-        }
-
-        var resolved_definitions = std.ArrayList(LocalDefinition).empty;
-        defer resolved_definitions.deinit(allocator);
-        for (definitions.items) |definition| {
-            const scope_index = findEnclosingScopeIndex(definition, scopes.items) orelse continue;
-            try resolved_definitions.append(allocator, .{
-                .node = definition,
-                .scope_index = scope_index,
-                .name = nodeText(definition, source),
-            });
-        }
-
-        return .{
-            .scopes = try scopes.toOwnedSlice(allocator),
-            .definitions = try resolved_definitions.toOwnedSlice(allocator),
-        };
-    }
-
-    fn isLocal(self: *const Locals, node: ts.Node, source: []const u8) bool {
-        const name = nodeText(node, source);
-        var scope_index = findEnclosingScopeIndex(node, self.scopes) orelse return false;
-        while (true) {
-            for (self.definitions) |definition| {
-                if (definition.scope_index != scope_index) continue;
-                if (std.mem.eql(u8, definition.name, name)) return true;
-            }
-
-            scope_index = self.scopes[scope_index].parent_index orelse return false;
-        }
-    }
-};
-
 const PredicateContext = struct {
     source: []const u8,
-    locals: ?*const Locals = null,
 };
 
 const StyleIdx = u16;
@@ -195,13 +100,11 @@ const ActiveCaptureQueue = std.PriorityQueue(usize, []const CaptureSpan, compare
 const TreeSitterHighlighter = struct {
     parser: ?*ts.Parser,
     languages: [language_count]LanguageState,
-    locals_queries: [language_count]QueryState,
 
     pub fn init() TreeSitterHighlighter {
         return .{
             .parser = null,
             .languages = [_]LanguageState{.uninitialized} ** language_count,
-            .locals_queries = [_]QueryState{.uninitialized} ** language_count,
         };
     }
 
@@ -209,12 +112,6 @@ const TreeSitterHighlighter = struct {
         for (&self.languages) |*state| {
             switch (state.*) {
                 .ready => |cfg| cfg.query.destroy(),
-                else => {},
-            }
-        }
-        for (&self.locals_queries) |*state| {
-            switch (state.*) {
-                .ready => |query| query.destroy(),
                 else => {},
             }
         }
@@ -253,23 +150,7 @@ const TreeSitterHighlighter = struct {
         const tree = parser.parseString(source, null) orelse return error.QueryUnavailable;
         defer tree.destroy();
 
-        var locals: ?Locals = null;
-        defer if (locals) |*l| l.deinit(allocator);
-        if (localsSpec(lang) != null) {
-            if (self.getOrInitLocalsQuery(lang)) |locals_query| {
-                locals = try Locals.build(
-                    allocator,
-                    tree.rootNode(),
-                    locals_query,
-                    source,
-                );
-            }
-        }
-
-        const predicate_ctx: PredicateContext = .{
-            .source = source,
-            .locals = if (locals) |*l| l else null,
-        };
+        const predicate_ctx: PredicateContext = .{ .source = source };
 
         const cursor = ts.QueryCursor.create();
         defer cursor.destroy();
@@ -352,30 +233,6 @@ const TreeSitterHighlighter = struct {
         };
         slot.* = .{ .ready = cfg };
         return cfg;
-    }
-
-    fn getOrInitLocalsQuery(self: *TreeSitterHighlighter, lang: Language) ?*ts.Query {
-        const slot = &self.locals_queries[lang.index()];
-        switch (slot.*) {
-            .ready => |query| return query,
-            .failed => return null,
-            .uninitialized => {},
-        }
-
-        const spec = localsSpec(lang) orelse {
-            slot.* = .failed;
-            return null;
-        };
-
-        const ts_language = spec.language_fn();
-        var error_offset: u32 = 0;
-        const query = ts.Query.create(ts_language, spec.source, &error_offset) catch {
-            slot.* = .failed;
-            return null;
-        };
-
-        slot.* = .{ .ready = query };
-        return query;
     }
 };
 
@@ -500,44 +357,6 @@ fn languageSpec(lang: Language) LanguageSpec {
             .highlights = ts_queries.json_highlights,
         },
     };
-}
-
-const LocalsSpec = struct {
-    language_fn: *const fn () callconv(.c) *const ts.Language,
-    source: []const u8,
-};
-
-fn localsSpec(lang: Language) ?LocalsSpec {
-    return switch (lang) {
-        else => null,
-    };
-}
-
-fn nodeText(node: ts.Node, source: []const u8) []const u8 {
-    return source[node.startByte()..node.endByte()];
-}
-
-fn findScopeIndex(scopes: []const ScopeRef, node: ts.Node) ?u32 {
-    for (scopes, 0..) |scope, index| {
-        if (scope.node.eql(node)) return @intCast(index);
-    }
-    return null;
-}
-
-fn findParentScopeIndex(node: ts.Node, scopes: []const ScopeRef) ?u32 {
-    var current = node.parent();
-    while (current) |parent| : (current = parent.parent()) {
-        if (findScopeIndex(scopes, parent)) |index| return index;
-    }
-    return null;
-}
-
-fn findEnclosingScopeIndex(node: ts.Node, scopes: []const ScopeRef) ?u32 {
-    var current: ?ts.Node = node;
-    while (current) |candidate| : (current = candidate.parent()) {
-        if (findScopeIndex(scopes, candidate)) |index| return index;
-    }
-    return null;
 }
 
 const PatternAtom = union(enum) {
@@ -746,7 +565,7 @@ fn evaluateSinglePredicate(
         return predMatch(args, query, match, ctx.source, false);
     }
     if (std.mem.eql(u8, name, "is-not?")) {
-        return predIsNot(args, query, match, ctx);
+        return predIsNot(args, query);
     }
     return false;
 }
@@ -800,17 +619,16 @@ fn predMatch(
 fn predIsNot(
     args: []const ts.Query.PredicateStep,
     query: *const ts.Query,
-    match: ts.Query.Match,
-    ctx: PredicateContext,
 ) bool {
     if (args.len != 1) return false;
     if (args[0].type != .string) return false;
     const property = query.stringValueForId(args[0].value_id) orelse return false;
     if (!std.mem.eql(u8, property, "local")) return false;
 
-    const locals = ctx.locals orelse return false;
-    if (match.captures.len == 0) return false;
-    return !locals.isLocal(match.captures[0].node, ctx.source);
+    // No shipped grammar provides locals scope tracking, so `#is-not? local`
+    // is always unsatisfied -- the same result the locals-less languages
+    // produced back when scope tracking existed.
+    return false;
 }
 
 fn resolvePredicateText(
