@@ -59,9 +59,7 @@ const package_specs = [_]PackageSpec{
     .{ .name = "tree_sitter_c" },
     .{ .name = "tree_sitter_rust" },
     .{ .name = "tree_sitter_go" },
-    .{ .name = "tree_sitter_javascript" },
     .{ .name = "tree_sitter_bash" },
-    .{ .name = "tree_sitter_typescript" },
     .{ .name = "tree_sitter_json" },
 };
 
@@ -136,36 +134,6 @@ const grammar_specs = [_]GrammarSpec{
         },
     },
     .{
-        .package_index = packageIndexByName("tree_sitter_javascript"),
-        .lib_name = "tree-sitter-javascript",
-        .has_scanner = true,
-        .query_assets = &.{
-            .{
-                .dep_path = "queries/highlights.scm",
-                .output_name = "javascript_base_highlights.scm",
-                .binding_name = "javascript_base_highlights",
-                .is_public = false,
-            },
-            .{
-                .dep_path = "queries/highlights-jsx.scm",
-                .output_name = "javascript_jsx_highlights.scm",
-                .binding_name = "javascript_jsx_highlights",
-                .is_public = false,
-            },
-            .{
-                .dep_path = "queries/locals.scm",
-                .output_name = "javascript_locals.scm",
-                .binding_name = "javascript_locals",
-            },
-        },
-        .query_exports = &.{
-            .{
-                .name = "javascript_highlights",
-                .parts = &.{ "javascript_base_highlights", "javascript_jsx_highlights" },
-            },
-        },
-    },
-    .{
         .package_index = packageIndexByName("tree_sitter_bash"),
         .lib_name = "tree-sitter-bash",
         .has_scanner = true,
@@ -174,52 +142,6 @@ const grammar_specs = [_]GrammarSpec{
                 .dep_path = "queries/highlights.scm",
                 .output_name = "bash_highlights.scm",
                 .binding_name = "bash_highlights",
-            },
-        },
-    },
-    .{
-        .package_index = packageIndexByName("tree_sitter_typescript"),
-        .lib_name = "tree-sitter-typescript",
-        .has_scanner = true,
-        .src_subdir = "typescript/src",
-        .query_assets = &.{
-            .{
-                .dep_path = "queries/highlights.scm",
-                .output_name = "typescript_extra_highlights.scm",
-                .binding_name = "typescript_extra_highlights",
-                .is_public = false,
-            },
-            .{
-                .dep_path = "queries/locals.scm",
-                .output_name = "typescript_extra_locals.scm",
-                .binding_name = "typescript_extra_locals",
-                .is_public = false,
-            },
-        },
-        .query_exports = &.{
-            .{
-                .name = "typescript_highlights",
-                .parts = &.{ "javascript_base_highlights", "typescript_extra_highlights" },
-            },
-            .{
-                .name = "typescript_locals",
-                .parts = &.{ "typescript_extra_locals", "javascript_locals" },
-            },
-        },
-    },
-    .{
-        .package_index = packageIndexByName("tree_sitter_typescript"),
-        .lib_name = "tree-sitter-tsx",
-        .has_scanner = true,
-        .src_subdir = "tsx/src",
-        .query_exports = &.{
-            .{
-                .name = "tsx_highlights",
-                .parts = &.{ "javascript_base_highlights", "javascript_jsx_highlights", "typescript_extra_highlights" },
-            },
-            .{
-                .name = "tsx_locals",
-                .parts = &.{"javascript_locals"},
             },
         },
     },

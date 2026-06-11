@@ -12,10 +12,7 @@ extern fn tree_sitter_zig() callconv(.c) *const ts.Language;
 extern fn tree_sitter_c() callconv(.c) *const ts.Language;
 extern fn tree_sitter_rust() callconv(.c) *const ts.Language;
 extern fn tree_sitter_go() callconv(.c) *const ts.Language;
-extern fn tree_sitter_javascript() callconv(.c) *const ts.Language;
 extern fn tree_sitter_bash() callconv(.c) *const ts.Language;
-extern fn tree_sitter_typescript() callconv(.c) *const ts.Language;
-extern fn tree_sitter_tsx() callconv(.c) *const ts.Language;
 extern fn tree_sitter_json() callconv(.c) *const ts.Language;
 
 pub const Language = enum {
@@ -23,10 +20,7 @@ pub const Language = enum {
     c,
     rust,
     go,
-    javascript,
     bash,
-    typescript,
-    tsx,
     json,
 
     pub fn fromString(lang: []const u8) ?Language {
@@ -46,18 +40,9 @@ const language_aliases = LanguageAliasMap.initComptime(.{
     .{ "rust", .rust },
     .{ "rs", .rust },
     .{ "go", .go },
-    .{ "javascript", .javascript },
-    .{ "js", .javascript },
-    // tree-sitter-javascript parses JSX without TypeScript syntax.
-    .{ "jsx", .javascript },
     .{ "bash", .bash },
     .{ "sh", .bash },
     .{ "shell", .bash },
-    .{ "typescript", .typescript },
-    .{ "ts", .typescript },
-    .{ "mts", .typescript },
-    .{ "cts", .typescript },
-    .{ "tsx", .tsx },
     .{ "json", .json },
 });
 
@@ -506,21 +491,9 @@ fn languageSpec(lang: Language) LanguageSpec {
             .language_fn = tree_sitter_go,
             .highlights = ts_queries.go_highlights,
         },
-        .javascript => .{
-            .language_fn = tree_sitter_javascript,
-            .highlights = ts_queries.javascript_highlights,
-        },
         .bash => .{
             .language_fn = tree_sitter_bash,
             .highlights = ts_queries.bash_highlights,
-        },
-        .typescript => .{
-            .language_fn = tree_sitter_typescript,
-            .highlights = ts_queries.typescript_highlights,
-        },
-        .tsx => .{
-            .language_fn = tree_sitter_tsx,
-            .highlights = ts_queries.tsx_highlights,
         },
         .json => .{
             .language_fn = tree_sitter_json,
@@ -536,18 +509,6 @@ const LocalsSpec = struct {
 
 fn localsSpec(lang: Language) ?LocalsSpec {
     return switch (lang) {
-        .javascript => .{
-            .language_fn = tree_sitter_javascript,
-            .source = ts_queries.javascript_locals,
-        },
-        .typescript => .{
-            .language_fn = tree_sitter_typescript,
-            .source = ts_queries.typescript_locals,
-        },
-        .tsx => .{
-            .language_fn = tree_sitter_tsx,
-            .source = ts_queries.tsx_locals,
-        },
         else => null,
     };
 }
@@ -880,9 +841,9 @@ fn captureToStyle(name: []const u8, sp: theme.SyntaxPalette) ansi.TextStyle {
     if (std.mem.startsWith(u8, name, "number") or std.mem.startsWith(u8, name, "constant.numeric")) return .{ .fg = sp.number };
     if (std.mem.startsWith(u8, name, "function") or std.mem.startsWith(u8, name, "constant.builtin")) return .{ .fg = sp.func };
     if (std.mem.startsWith(u8, name, "operator") or std.mem.startsWith(u8, name, "punctuation")) return .{ .fg = sp.operator };
-    // Markup prefixes (used by JSX in tsx/javascript); placed last so the
-    // languages above keep their colors. `variable` and generic `constant`
-    // catch-alls are omitted because Rust uses those capture names too.
+    // Markup capture prefixes; placed last so the languages above keep their
+    // colors. `variable` and generic `constant` catch-alls are omitted
+    // because Rust uses those capture names too.
     if (std.mem.startsWith(u8, name, "tag")) return .{ .fg = sp.keyword };
     if (std.mem.startsWith(u8, name, "attribute")) return .{ .fg = sp.func };
     if (std.mem.startsWith(u8, name, "property")) return .{ .fg = sp.type_name };
@@ -916,18 +877,9 @@ test "Language.fromString recognizes all supported names and aliases" {
     try std.testing.expectEqual(Language.rust, Language.fromString("rust").?);
     try std.testing.expectEqual(Language.rust, Language.fromString("rs").?);
     try std.testing.expectEqual(Language.go, Language.fromString("go").?);
-    try std.testing.expectEqual(Language.javascript, Language.fromString("javascript").?);
-    try std.testing.expectEqual(Language.javascript, Language.fromString("js").?);
-    try std.testing.expectEqual(Language.javascript, Language.fromString("jsx").?);
     try std.testing.expectEqual(Language.bash, Language.fromString("bash").?);
     try std.testing.expectEqual(Language.bash, Language.fromString("sh").?);
     try std.testing.expectEqual(Language.bash, Language.fromString("shell").?);
-    try std.testing.expectEqual(Language.typescript, Language.fromString("typescript").?);
-    try std.testing.expectEqual(Language.typescript, Language.fromString("ts").?);
-    try std.testing.expectEqual(Language.typescript, Language.fromString("mts").?);
-    try std.testing.expectEqual(Language.typescript, Language.fromString("cts").?);
-    try std.testing.expectEqual(Language.tsx, Language.fromString("tsx").?);
-    try std.testing.expectEqual(Language.tsx, Language.fromString("TSX").?);
     try std.testing.expectEqual(Language.json, Language.fromString("json").?);
     try std.testing.expectEqual(@as(?Language, null), Language.fromString(""));
     try std.testing.expectEqual(@as(?Language, null), Language.fromString("klingon"));
@@ -1052,10 +1004,7 @@ test "Highlighter: highlights every supported language end-to-end" {
         .{ .lang = .c, .source = "int main(void) { return 0; }", .expected_token = "return" },
         .{ .lang = .rust, .source = "fn main() { let x = 1; }", .expected_token = "let" },
         .{ .lang = .go, .source = "package main\nfunc main() {}", .expected_token = "package" },
-        .{ .lang = .javascript, .source = "const x = 1;\n", .expected_token = "const" },
         .{ .lang = .bash, .source = "echo hello\n", .expected_token = "echo" },
-        .{ .lang = .typescript, .source = "const x: number = 1;\n", .expected_token = "const" },
-        .{ .lang = .tsx, .source = "const el = <div>hi</div>;\n", .expected_token = "const" },
         .{ .lang = .json, .source = "{\"k\": 1}\n", .expected_token = "1" },
     };
 
@@ -1160,44 +1109,6 @@ test "Highlighter: lua-match highlights Zig type identifiers" {
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, type_color ++ "MyType"));
 }
 
-test "Highlighter: javascript require is builtin when not shadowed" {
-    var hl = Highlighter.init();
-    defer hl.deinit();
-
-    const allocator = std.testing.allocator;
-    var buf: std.Io.Writer.Allocating = .init(allocator);
-    defer buf.deinit();
-
-    const source = "require('fs');";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .javascript, theme.default_syntax_palette);
-
-    var list = buf.toArrayList();
-    defer list.deinit(allocator);
-    const rendered = try list.toOwnedSlice(allocator);
-    defer allocator.free(rendered);
-
-    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, func_ansi ++ "require"));
-}
-
-test "Highlighter: javascript local require does not use builtin styling" {
-    var hl = Highlighter.init();
-    defer hl.deinit();
-
-    const allocator = std.testing.allocator;
-    var buf: std.Io.Writer.Allocating = .init(allocator);
-    defer buf.deinit();
-
-    const source = "function demo(require) { return require; }";
-    try hl.writeHighlightedBlock(allocator, &buf.writer, source, .javascript, theme.default_syntax_palette);
-
-    var list = buf.toArrayList();
-    defer list.deinit(allocator);
-    const rendered = try list.toOwnedSlice(allocator);
-    defer allocator.free(rendered);
-
-    try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, func_ansi ++ "require"));
-}
-
 test "Highlighter: @spell meta capture does not override @comment italic" {
     var hl = Highlighter.init();
     defer hl.deinit();
@@ -1291,29 +1202,6 @@ fn renderHighlightedForTest(
     return try list.toOwnedSlice(allocator);
 }
 
-test "Highlighter: typescript highlights const and number type" {
-    var hl = Highlighter.init();
-    defer hl.deinit();
-
-    const allocator = std.testing.allocator;
-    const rendered = try renderHighlightedForTest(&hl, allocator, "const x: number = 1;\n", .typescript);
-    defer allocator.free(rendered);
-
-    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, keyword_ansi ++ "const"));
-    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, type_name_ansi ++ "number"));
-}
-
-test "Highlighter: tsx highlights const in function form" {
-    var hl = Highlighter.init();
-    defer hl.deinit();
-
-    const allocator = std.testing.allocator;
-    const rendered = try renderHighlightedForTest(&hl, allocator, "const greet = (name: string) => name;\n", .tsx);
-    defer allocator.free(rendered);
-
-    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, keyword_ansi ++ "const"));
-}
-
 test "Highlighter: json colors keys as strings and numbers as numbers" {
     var hl = Highlighter.init();
     defer hl.deinit();
@@ -1324,74 +1212,6 @@ test "Highlighter: json colors keys as strings and numbers as numbers" {
 
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, string_ansi ++ "\"k\""));
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, number_ansi ++ "1"));
-}
-
-test "Highlighter: tsx highlights jsx tag and attribute" {
-    var hl = Highlighter.init();
-    defer hl.deinit();
-
-    const allocator = std.testing.allocator;
-    const source = "const el = <div className=\"hi\">text</div>;\n";
-    const rendered = try renderHighlightedForTest(&hl, allocator, source, .tsx);
-    defer allocator.free(rendered);
-
-    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, keyword_ansi ++ "div"));
-    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, func_ansi ++ "className"));
-}
-
-test "Highlighter: javascript highlights jsx tag when used as jsx alias" {
-    var hl = Highlighter.init();
-    defer hl.deinit();
-
-    const allocator = std.testing.allocator;
-    const rendered = try renderHighlightedForTest(&hl, allocator, "const el = <span>hi</span>;\n", .javascript);
-    defer allocator.free(rendered);
-
-    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, keyword_ansi ++ "span"));
-}
-
-test "Highlighter: typescript require is builtin when not shadowed" {
-    var hl = Highlighter.init();
-    defer hl.deinit();
-
-    const allocator = std.testing.allocator;
-    const rendered = try renderHighlightedForTest(&hl, allocator, "require('fs');", .typescript);
-    defer allocator.free(rendered);
-
-    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, func_ansi ++ "require"));
-}
-
-test "Highlighter: typescript local require does not use builtin styling" {
-    var hl = Highlighter.init();
-    defer hl.deinit();
-
-    const allocator = std.testing.allocator;
-    const rendered = try renderHighlightedForTest(&hl, allocator, "function demo(require) { return require; }", .typescript);
-    defer allocator.free(rendered);
-
-    try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, func_ansi ++ "require"));
-}
-
-test "Highlighter: tsx require is builtin when not shadowed" {
-    var hl = Highlighter.init();
-    defer hl.deinit();
-
-    const allocator = std.testing.allocator;
-    const rendered = try renderHighlightedForTest(&hl, allocator, "require('fs');", .tsx);
-    defer allocator.free(rendered);
-
-    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, func_ansi ++ "require"));
-}
-
-test "Highlighter: tsx local require does not use builtin styling" {
-    var hl = Highlighter.init();
-    defer hl.deinit();
-
-    const allocator = std.testing.allocator;
-    const rendered = try renderHighlightedForTest(&hl, allocator, "function demo(require) { return require; }", .tsx);
-    defer allocator.free(rendered);
-
-    try std.testing.expect(!std.mem.containsAtLeast(u8, rendered, 1, func_ansi ++ "require"));
 }
 
 test "Highlighter: large fenced block above threshold falls back to plain style" {

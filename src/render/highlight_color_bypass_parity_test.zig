@@ -9,10 +9,7 @@ const language_tags = [_][]const u8{
     "c",
     "rust",
     "go",
-    "javascript",
     "bash",
-    "typescript",
-    "tsx",
     "json",
 };
 
