@@ -63,8 +63,6 @@ const package_specs = [_]PackageSpec{
     .{ .name = "tree_sitter_bash" },
     .{ .name = "tree_sitter_cpp" },
     .{ .name = "tree_sitter_typescript" },
-    .{ .name = "tree_sitter_html" },
-    .{ .name = "tree_sitter_css" },
     .{ .name = "tree_sitter_json" },
 };
 
@@ -242,30 +240,6 @@ const grammar_specs = [_]GrammarSpec{
             .{
                 .name = "tsx_locals",
                 .parts = &.{"javascript_locals"},
-            },
-        },
-    },
-    .{
-        .package_index = packageIndexByName("tree_sitter_html"),
-        .lib_name = "tree-sitter-html",
-        .has_scanner = true,
-        .query_assets = &.{
-            .{
-                .dep_path = "queries/highlights.scm",
-                .output_name = "html_highlights.scm",
-                .binding_name = "html_highlights",
-            },
-        },
-    },
-    .{
-        .package_index = packageIndexByName("tree_sitter_css"),
-        .lib_name = "tree-sitter-css",
-        .has_scanner = true,
-        .query_assets = &.{
-            .{
-                .dep_path = "queries/highlights.scm",
-                .output_name = "css_highlights.scm",
-                .binding_name = "css_highlights",
             },
         },
     },

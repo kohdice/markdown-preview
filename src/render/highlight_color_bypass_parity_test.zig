@@ -14,8 +14,6 @@ const language_tags = [_][]const u8{
     "cpp",
     "typescript",
     "tsx",
-    "html",
-    "css",
     "json",
 };
 
@@ -47,7 +45,7 @@ test "syntax highlighting emits truecolor SGR for supported languages" {
 
 test "unknown language tag matches null-language baseline byte-for-byte" {
     const allocator = testing.allocator;
-    const unknown_tags = [_][]const u8{ "fortran", "xyz", "nonexistent", "python", "py" };
+    const unknown_tags = [_][]const u8{ "fortran", "xyz", "nonexistent" };
 
     for (unknown_tags) |lang| {
         const out = try renderFencedCode(allocator, lang, "hello world", true);

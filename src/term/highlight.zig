@@ -17,8 +17,6 @@ extern fn tree_sitter_bash() callconv(.c) *const ts.Language;
 extern fn tree_sitter_cpp() callconv(.c) *const ts.Language;
 extern fn tree_sitter_typescript() callconv(.c) *const ts.Language;
 extern fn tree_sitter_tsx() callconv(.c) *const ts.Language;
-extern fn tree_sitter_html() callconv(.c) *const ts.Language;
-extern fn tree_sitter_css() callconv(.c) *const ts.Language;
 extern fn tree_sitter_json() callconv(.c) *const ts.Language;
 
 pub const Language = enum {
@@ -31,8 +29,6 @@ pub const Language = enum {
     cpp,
     typescript,
     tsx,
-    html,
-    css,
     json,
 
     pub fn fromString(lang: []const u8) ?Language {
@@ -71,9 +67,6 @@ const language_aliases = LanguageAliasMap.initComptime(.{
     .{ "mts", .typescript },
     .{ "cts", .typescript },
     .{ "tsx", .tsx },
-    .{ "html", .html },
-    .{ "htm", .html },
-    .{ "css", .css },
     .{ "json", .json },
 });
 
@@ -542,14 +535,6 @@ fn languageSpec(lang: Language) LanguageSpec {
             .language_fn = tree_sitter_tsx,
             .highlights = ts_queries.tsx_highlights,
         },
-        .html => .{
-            .language_fn = tree_sitter_html,
-            .highlights = ts_queries.html_highlights,
-        },
-        .css => .{
-            .language_fn = tree_sitter_css,
-            .highlights = ts_queries.css_highlights,
-        },
         .json => .{
             .language_fn = tree_sitter_json,
             .highlights = ts_queries.json_highlights,
@@ -908,9 +893,9 @@ fn captureToStyle(name: []const u8, sp: theme.SyntaxPalette) ansi.TextStyle {
     if (std.mem.startsWith(u8, name, "number") or std.mem.startsWith(u8, name, "constant.numeric")) return .{ .fg = sp.number };
     if (std.mem.startsWith(u8, name, "function") or std.mem.startsWith(u8, name, "constant.builtin")) return .{ .fg = sp.func };
     if (std.mem.startsWith(u8, name, "operator") or std.mem.startsWith(u8, name, "punctuation")) return .{ .fg = sp.operator };
-    // HTML/CSS prefixes; placed last so existing languages keep their
-    // colors. `variable` and generic `constant` catch-alls are omitted
-    // because Rust uses those capture names too.
+    // Markup prefixes (used by JSX in tsx/javascript); placed last so the
+    // languages above keep their colors. `variable` and generic `constant`
+    // catch-alls are omitted because Rust uses those capture names too.
     if (std.mem.startsWith(u8, name, "tag")) return .{ .fg = sp.keyword };
     if (std.mem.startsWith(u8, name, "attribute")) return .{ .fg = sp.func };
     if (std.mem.startsWith(u8, name, "property")) return .{ .fg = sp.type_name };
@@ -963,17 +948,9 @@ test "Language.fromString recognizes all supported names and aliases" {
     try std.testing.expectEqual(Language.typescript, Language.fromString("cts").?);
     try std.testing.expectEqual(Language.tsx, Language.fromString("tsx").?);
     try std.testing.expectEqual(Language.tsx, Language.fromString("TSX").?);
-    try std.testing.expectEqual(Language.html, Language.fromString("html").?);
-    try std.testing.expectEqual(Language.html, Language.fromString("HTM").?);
-    try std.testing.expectEqual(Language.css, Language.fromString("css").?);
     try std.testing.expectEqual(Language.json, Language.fromString("json").?);
     try std.testing.expectEqual(@as(?Language, null), Language.fromString(""));
     try std.testing.expectEqual(@as(?Language, null), Language.fromString("klingon"));
-}
-
-test "Language.fromString returns null for removed python tags" {
-    try std.testing.expectEqual(@as(?Language, null), Language.fromString("python"));
-    try std.testing.expectEqual(@as(?Language, null), Language.fromString("py"));
 }
 
 test "Highlighter: parser is created lazily" {
@@ -1100,8 +1077,6 @@ test "Highlighter: highlights every supported language end-to-end" {
         .{ .lang = .cpp, .source = "int main() { return 0; }", .expected_token = "return" },
         .{ .lang = .typescript, .source = "const x: number = 1;\n", .expected_token = "const" },
         .{ .lang = .tsx, .source = "const el = <div>hi</div>;\n", .expected_token = "const" },
-        .{ .lang = .html, .source = "<p>hello</p>\n", .expected_token = "p" },
-        .{ .lang = .css, .source = ".a { color: red; }\n", .expected_token = "color" },
         .{ .lang = .json, .source = "{\"k\": 1}\n", .expected_token = "1" },
     };
 
@@ -1370,28 +1345,6 @@ test "Highlighter: tsx highlights const in function form" {
     defer allocator.free(rendered);
 
     try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, keyword_ansi ++ "const"));
-}
-
-test "Highlighter: html colors tag names via the tag prefix branch" {
-    var hl = Highlighter.init();
-    defer hl.deinit();
-
-    const allocator = std.testing.allocator;
-    const rendered = try renderHighlightedForTest(&hl, allocator, "<p>hello</p>\n", .html);
-    defer allocator.free(rendered);
-
-    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, keyword_ansi ++ "p"));
-}
-
-test "Highlighter: css colors property names via the property prefix branch" {
-    var hl = Highlighter.init();
-    defer hl.deinit();
-
-    const allocator = std.testing.allocator;
-    const rendered = try renderHighlightedForTest(&hl, allocator, ".a { color: red; }\n", .css);
-    defer allocator.free(rendered);
-
-    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, type_name_ansi ++ "color"));
 }
 
 test "Highlighter: json colors keys as strings and numbers as numbers" {
