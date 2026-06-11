@@ -139,10 +139,6 @@ pub const CellSegmentBuilder = struct {
         }
     }
 
-    pub fn breakSegment(self: *CellSegmentBuilder) !void {
-        try self.hardBreak();
-    }
-
     fn appendChar(self: *CellSegmentBuilder, bytes: []const u8, cw: usize) !void {
         const is_space = bytes.len == 1 and bytes[0] == ' ';
 
@@ -150,13 +146,13 @@ pub const CellSegmentBuilder = struct {
             const next_col_before_wrap = try std.math.add(usize, self.col, cw);
             if (next_col_before_wrap > self.wrap_width) {
                 if (is_space) {
-                    try self.hardBreak();
+                    try self.breakSegment();
                     return;
                 }
                 if (self.last_space_parent_pos) |space_pos| {
                     try self.softBreakAt(space_pos);
                 } else {
-                    try self.hardBreak();
+                    try self.breakSegment();
                 }
             }
         }
@@ -245,7 +241,7 @@ pub const CellSegmentBuilder = struct {
         self.style_at_last_space = .{};
     }
 
-    fn hardBreak(self: *CellSegmentBuilder) !void {
+    pub fn breakSegment(self: *CellSegmentBuilder) !void {
         try ansi.flushStyle(&self.parent_writer.writer, &self.sgr_state);
         try self.parent_writer.writer.flush();
 
