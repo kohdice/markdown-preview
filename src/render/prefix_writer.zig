@@ -63,10 +63,6 @@ pub const PrefixWriter = struct {
         };
     }
 
-    pub fn finish(self: *PrefixWriter) std.Io.Writer.Error!void {
-        try self.writer.flush();
-    }
-
     const vtable: std.Io.Writer.VTable = .{
         .drain = drain,
         .flush = std.Io.Writer.defaultFlush,
