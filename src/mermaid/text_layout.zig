@@ -43,6 +43,8 @@ pub fn layoutLabel(
 
     var line_width: usize = 0;
     var last_space: ?usize = null;
+    var width_before_last_space: usize = 0;
+    var last_space_width: usize = 0;
     var max_line_width: usize = 0;
 
     var i: usize = 0;
@@ -80,8 +82,8 @@ pub fn layoutLabel(
                     const suffix_len = suffix.len;
                     @memmove(line.items[0..suffix_len], suffix);
                     line.shrinkRetainingCapacity(suffix_len);
-                    line_width = width_mod.displayWidth(line.items, ambiguous);
-                    last_space = std.mem.findScalarLast(u8, line.items, ' ');
+                    line_width = line_width - width_before_last_space - last_space_width;
+                    last_space = null;
                     continue;
                 }
 
@@ -99,7 +101,11 @@ pub fn layoutLabel(
         }
 
         if (isAsciiSpace(cluster.bytes) and line.items.len == 0) continue;
-        if (isAsciiSpace(cluster.bytes)) last_space = line.items.len;
+        if (isAsciiSpace(cluster.bytes)) {
+            last_space = line.items.len;
+            width_before_last_space = line_width;
+            last_space_width = cluster.width;
+        }
         try line.appendSlice(allocator, cluster.bytes);
         line_width += cluster.width;
     }
@@ -262,6 +268,37 @@ test "layoutLabel converts raw flowchart br tags to multiline text" {
     defer layout.deinit();
 
     try expectLines(&layout, &.{ "first", "second", "third", "fourth" });
+}
+
+test "layoutLabel wraps every word of a multi-word label by space splits" {
+    const allocator = std.testing.allocator;
+    var layout = try layoutLabel(allocator, "aa bb cc dd ee ff gg hh", 4, .narrow);
+    defer layout.deinit();
+
+    try expectLines(&layout, &.{ "aa", "bb", "cc", "dd", "ee", "ff", "gg", "hh" });
+    for (layout.lines) |l| {
+        try std.testing.expectEqual(@as(usize, 2), l.width);
+    }
+}
+
+test "layoutLabel carries a suffix width correctly across consecutive spaces" {
+    const allocator = std.testing.allocator;
+    var layout = try layoutLabel(allocator, "a  bcd", 4, .narrow);
+    defer layout.deinit();
+
+    try expectLines(&layout, &.{ "a ", "bcd" });
+    try std.testing.expectEqual(@as(usize, 2), layout.lines[0].width);
+    try std.testing.expectEqual(@as(usize, 3), layout.lines[1].width);
+}
+
+test "layoutLabel carries a CJK suffix width using wide-character widths" {
+    const allocator = std.testing.allocator;
+    var layout = try layoutLabel(allocator, "a 日本", 4, .narrow);
+    defer layout.deinit();
+
+    try expectLines(&layout, &.{ "a", "日本" });
+    try std.testing.expectEqual(@as(usize, 1), layout.lines[0].width);
+    try std.testing.expectEqual(@as(usize, 4), layout.lines[1].width);
 }
 
 test "drawCenteredLabel centers multiline labels inside a fixed rectangle" {
