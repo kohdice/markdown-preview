@@ -13,13 +13,7 @@ text below applies to each component in this section.
 | tree-sitter-c          | https://github.com/tree-sitter/tree-sitter-c          | `v0.24.1`                                  | Copyright (c) 2014 Max Brunsfeld                      |
 | tree-sitter-rust       | https://github.com/tree-sitter/tree-sitter-rust       | `v0.24.2`                                  | Copyright (c) 2017 Maxim Sokolov                      |
 | tree-sitter-go         | https://github.com/tree-sitter/tree-sitter-go         | `v0.25.0`                                  | Copyright (c) 2014 Max Brunsfeld                      |
-| tree-sitter-python     | https://github.com/tree-sitter/tree-sitter-python     | `v0.25.0`                                  | Copyright (c) 2016 Max Brunsfeld                      |
-| tree-sitter-javascript | https://github.com/tree-sitter/tree-sitter-javascript | `v0.25.0`                                  | Copyright (c) 2014 Max Brunsfeld                      |
 | tree-sitter-bash       | https://github.com/tree-sitter/tree-sitter-bash       | `v0.25.1`                                  | Copyright (c) 2017 Max Brunsfeld                      |
-| tree-sitter-cpp        | https://github.com/tree-sitter/tree-sitter-cpp        | `v0.23.4`                                  | Copyright (c) 2014 Max Brunsfeld                      |
-| tree-sitter-typescript | https://github.com/tree-sitter/tree-sitter-typescript | `v0.23.2`                                  | Copyright (c) 2017 Max Brunsfeld                      |
-| tree-sitter-html       | https://github.com/tree-sitter/tree-sitter-html       | `v0.23.2`                                  | Copyright (c) 2014 Max Brunsfeld                      |
-| tree-sitter-css        | https://github.com/tree-sitter/tree-sitter-css        | `v0.23.2`                                  | Copyright (c) 2018 Max Brunsfeld                      |
 | tree-sitter-json       | https://github.com/tree-sitter/tree-sitter-json       | `v0.24.8`                                  | Copyright (c) 2014 Max Brunsfeld                      |
 | tree-sitter-zig        | https://github.com/kohdice/tree-sitter-zig            | `6c2f4f90cab7c72ec27d9dd19361649cc59f41c2` | Copyright (c) 2024 Amaan Qureshi <amaanq12@gmail.com> |
 | Solarized              | https://github.com/altercation/solarized              | `master` palette values                    | Copyright (c) 2011 Ethan Schoonover                   |
