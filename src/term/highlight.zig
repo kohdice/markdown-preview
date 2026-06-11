@@ -526,6 +526,32 @@ fn predicatesPass(
     return true;
 }
 
+const PredicateKind = enum {
+    eq,
+    not_eq,
+    any_of,
+    not_any_of,
+    match,
+    not_match,
+    lua_match,
+    is_not,
+
+    const name_map = std.StaticStringMap(PredicateKind).initComptime(.{
+        .{ "eq?", .eq },
+        .{ "not-eq?", .not_eq },
+        .{ "any-of?", .any_of },
+        .{ "not-any-of?", .not_any_of },
+        .{ "match?", .match },
+        .{ "not-match?", .not_match },
+        .{ "lua-match?", .lua_match },
+        .{ "is-not?", .is_not },
+    });
+
+    fn fromName(name: []const u8) ?PredicateKind {
+        return name_map.get(name);
+    }
+};
+
 fn evaluateSinglePredicate(
     name: []const u8,
     args: []const ts.Query.PredicateStep,
@@ -543,31 +569,31 @@ fn evaluateSinglePredicate(
     // and cause string literals to regress to plain color.
     if (name.len > 0 and name[name.len - 1] == '!') return true;
 
-    if (std.mem.eql(u8, name, "eq?")) {
-        return predEq(args, query, match, ctx.source, false);
-    }
-    if (std.mem.eql(u8, name, "not-eq?")) {
-        return predEq(args, query, match, ctx.source, true);
-    }
-    if (std.mem.eql(u8, name, "any-of?")) {
-        return predAnyOf(args, query, match, ctx.source, false);
-    }
-    if (std.mem.eql(u8, name, "not-any-of?")) {
-        return predAnyOf(args, query, match, ctx.source, true);
-    }
-    if (std.mem.eql(u8, name, "match?")) {
-        return predMatch(args, query, match, ctx.source, false);
-    }
-    if (std.mem.eql(u8, name, "not-match?")) {
-        return predMatch(args, query, match, ctx.source, true);
-    }
-    if (std.mem.eql(u8, name, "lua-match?")) {
-        return predMatch(args, query, match, ctx.source, false);
-    }
-    if (std.mem.eql(u8, name, "is-not?")) {
-        return predIsNot(args, query);
-    }
-    return false;
+    return switch (PredicateKind.fromName(name) orelse return false) {
+        .eq => predEq(args, query, match, ctx.source, false),
+        .not_eq => predEq(args, query, match, ctx.source, true),
+        .any_of => predAnyOf(args, query, match, ctx.source, false),
+        .not_any_of => predAnyOf(args, query, match, ctx.source, true),
+        .match => predMatch(args, query, match, ctx.source, false),
+        .not_match => predMatch(args, query, match, ctx.source, true),
+        .lua_match => predMatch(args, query, match, ctx.source, false),
+        .is_not => predIsNot(args, query),
+    };
+}
+
+test "PredicateKind.fromName maps known predicates and rejects others" {
+    try std.testing.expectEqual(PredicateKind.eq, PredicateKind.fromName("eq?").?);
+    try std.testing.expectEqual(PredicateKind.not_eq, PredicateKind.fromName("not-eq?").?);
+    try std.testing.expectEqual(PredicateKind.any_of, PredicateKind.fromName("any-of?").?);
+    try std.testing.expectEqual(PredicateKind.not_any_of, PredicateKind.fromName("not-any-of?").?);
+    try std.testing.expectEqual(PredicateKind.match, PredicateKind.fromName("match?").?);
+    try std.testing.expectEqual(PredicateKind.not_match, PredicateKind.fromName("not-match?").?);
+    try std.testing.expectEqual(PredicateKind.lua_match, PredicateKind.fromName("lua-match?").?);
+    try std.testing.expectEqual(PredicateKind.is_not, PredicateKind.fromName("is-not?").?);
+
+    try std.testing.expectEqual(@as(?PredicateKind, null), PredicateKind.fromName("set!"));
+    try std.testing.expectEqual(@as(?PredicateKind, null), PredicateKind.fromName("unknown?"));
+    try std.testing.expectEqual(@as(?PredicateKind, null), PredicateKind.fromName(""));
 }
 
 fn predEq(
@@ -673,19 +699,28 @@ fn captureToStyle(name: []const u8, sp: theme.SyntaxPalette) ansi.TextStyle {
 /// grammars still emit as regular captures. Skipping them at collection time
 /// prevents them from overwriting real styles when two captures share the
 /// same byte range, e.g. `(comment) @comment @spell`.
-const meta_capture_names = [_][]const u8{
-    "spell",
-    "nospell",
-    "embedded",
-    "none",
-    "conceal",
-};
+const meta_capture_set = std.StaticStringMap(void).initComptime(.{
+    .{"spell"},
+    .{"nospell"},
+    .{"embedded"},
+    .{"none"},
+    .{"conceal"},
+});
 
 fn isMetaCapture(name: []const u8) bool {
-    for (meta_capture_names) |meta| {
-        if (std.mem.eql(u8, name, meta)) return true;
-    }
-    return false;
+    return meta_capture_set.has(name);
+}
+
+test "isMetaCapture recognizes meta names and rejects real captures" {
+    try std.testing.expect(isMetaCapture("spell"));
+    try std.testing.expect(isMetaCapture("nospell"));
+    try std.testing.expect(isMetaCapture("embedded"));
+    try std.testing.expect(isMetaCapture("none"));
+    try std.testing.expect(isMetaCapture("conceal"));
+
+    try std.testing.expect(!isMetaCapture("keyword"));
+    try std.testing.expect(!isMetaCapture(""));
+    try std.testing.expect(!isMetaCapture("spellx"));
 }
 
 test "Language.fromString recognizes all supported names and aliases" {
