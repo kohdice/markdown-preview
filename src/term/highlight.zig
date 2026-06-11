@@ -14,7 +14,6 @@ extern fn tree_sitter_rust() callconv(.c) *const ts.Language;
 extern fn tree_sitter_go() callconv(.c) *const ts.Language;
 extern fn tree_sitter_javascript() callconv(.c) *const ts.Language;
 extern fn tree_sitter_bash() callconv(.c) *const ts.Language;
-extern fn tree_sitter_cpp() callconv(.c) *const ts.Language;
 extern fn tree_sitter_typescript() callconv(.c) *const ts.Language;
 extern fn tree_sitter_tsx() callconv(.c) *const ts.Language;
 extern fn tree_sitter_json() callconv(.c) *const ts.Language;
@@ -26,7 +25,6 @@ pub const Language = enum {
     go,
     javascript,
     bash,
-    cpp,
     typescript,
     tsx,
     json,
@@ -55,13 +53,6 @@ const language_aliases = LanguageAliasMap.initComptime(.{
     .{ "bash", .bash },
     .{ "sh", .bash },
     .{ "shell", .bash },
-    .{ "cpp", .cpp },
-    .{ "c++", .cpp },
-    .{ "cxx", .cpp },
-    .{ "cc", .cpp },
-    .{ "hpp", .cpp },
-    .{ "hxx", .cpp },
-    .{ "h++", .cpp },
     .{ "typescript", .typescript },
     .{ "ts", .typescript },
     .{ "mts", .typescript },
@@ -523,10 +514,6 @@ fn languageSpec(lang: Language) LanguageSpec {
             .language_fn = tree_sitter_bash,
             .highlights = ts_queries.bash_highlights,
         },
-        .cpp => .{
-            .language_fn = tree_sitter_cpp,
-            .highlights = ts_queries.cpp_highlights,
-        },
         .typescript => .{
             .language_fn = tree_sitter_typescript,
             .highlights = ts_queries.typescript_highlights,
@@ -935,13 +922,6 @@ test "Language.fromString recognizes all supported names and aliases" {
     try std.testing.expectEqual(Language.bash, Language.fromString("bash").?);
     try std.testing.expectEqual(Language.bash, Language.fromString("sh").?);
     try std.testing.expectEqual(Language.bash, Language.fromString("shell").?);
-    try std.testing.expectEqual(Language.cpp, Language.fromString("cpp").?);
-    try std.testing.expectEqual(Language.cpp, Language.fromString("c++").?);
-    try std.testing.expectEqual(Language.cpp, Language.fromString("CXX").?);
-    try std.testing.expectEqual(Language.cpp, Language.fromString("cc").?);
-    try std.testing.expectEqual(Language.cpp, Language.fromString("hpp").?);
-    try std.testing.expectEqual(Language.cpp, Language.fromString("hxx").?);
-    try std.testing.expectEqual(Language.cpp, Language.fromString("h++").?);
     try std.testing.expectEqual(Language.typescript, Language.fromString("typescript").?);
     try std.testing.expectEqual(Language.typescript, Language.fromString("ts").?);
     try std.testing.expectEqual(Language.typescript, Language.fromString("mts").?);
@@ -1074,7 +1054,6 @@ test "Highlighter: highlights every supported language end-to-end" {
         .{ .lang = .go, .source = "package main\nfunc main() {}", .expected_token = "package" },
         .{ .lang = .javascript, .source = "const x = 1;\n", .expected_token = "const" },
         .{ .lang = .bash, .source = "echo hello\n", .expected_token = "echo" },
-        .{ .lang = .cpp, .source = "int main() { return 0; }", .expected_token = "return" },
         .{ .lang = .typescript, .source = "const x: number = 1;\n", .expected_token = "const" },
         .{ .lang = .tsx, .source = "const el = <div>hi</div>;\n", .expected_token = "const" },
         .{ .lang = .json, .source = "{\"k\": 1}\n", .expected_token = "1" },
@@ -1310,18 +1289,6 @@ fn renderHighlightedForTest(
     var list = buf.toArrayList();
     defer list.deinit(allocator);
     return try list.toOwnedSlice(allocator);
-}
-
-test "Highlighter: cpp keeps c primitive types via comptime query concat" {
-    var hl = Highlighter.init();
-    defer hl.deinit();
-
-    const allocator = std.testing.allocator;
-    const rendered = try renderHighlightedForTest(&hl, allocator, "int main() { return 0; }", .cpp);
-    defer allocator.free(rendered);
-
-    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, keyword_ansi ++ "return"));
-    try std.testing.expect(std.mem.containsAtLeast(u8, rendered, 1, type_name_ansi ++ "int"));
 }
 
 test "Highlighter: typescript highlights const and number type" {

@@ -11,7 +11,6 @@ const language_tags = [_][]const u8{
     "go",
     "javascript",
     "bash",
-    "cpp",
     "typescript",
     "tsx",
     "json",

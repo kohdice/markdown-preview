@@ -61,7 +61,6 @@ const package_specs = [_]PackageSpec{
     .{ .name = "tree_sitter_go" },
     .{ .name = "tree_sitter_javascript" },
     .{ .name = "tree_sitter_bash" },
-    .{ .name = "tree_sitter_cpp" },
     .{ .name = "tree_sitter_typescript" },
     .{ .name = "tree_sitter_json" },
 };
@@ -175,25 +174,6 @@ const grammar_specs = [_]GrammarSpec{
                 .dep_path = "queries/highlights.scm",
                 .output_name = "bash_highlights.scm",
                 .binding_name = "bash_highlights",
-            },
-        },
-    },
-    .{
-        .package_index = packageIndexByName("tree_sitter_cpp"),
-        .lib_name = "tree-sitter-cpp",
-        .has_scanner = true,
-        .query_assets = &.{
-            .{
-                .dep_path = "queries/highlights.scm",
-                .output_name = "cpp_extra_highlights.scm",
-                .binding_name = "cpp_extra_highlights",
-                .is_public = false,
-            },
-        },
-        .query_exports = &.{
-            .{
-                .name = "cpp_highlights",
-                .parts = &.{ "c_highlights", "cpp_extra_highlights" },
             },
         },
     },
