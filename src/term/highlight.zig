@@ -12,7 +12,6 @@ extern fn tree_sitter_zig() callconv(.c) *const ts.Language;
 extern fn tree_sitter_c() callconv(.c) *const ts.Language;
 extern fn tree_sitter_rust() callconv(.c) *const ts.Language;
 extern fn tree_sitter_go() callconv(.c) *const ts.Language;
-extern fn tree_sitter_python() callconv(.c) *const ts.Language;
 extern fn tree_sitter_javascript() callconv(.c) *const ts.Language;
 extern fn tree_sitter_bash() callconv(.c) *const ts.Language;
 extern fn tree_sitter_cpp() callconv(.c) *const ts.Language;
@@ -27,7 +26,6 @@ pub const Language = enum {
     c,
     rust,
     go,
-    python,
     javascript,
     bash,
     cpp,
@@ -54,8 +52,6 @@ const language_aliases = LanguageAliasMap.initComptime(.{
     .{ "rust", .rust },
     .{ "rs", .rust },
     .{ "go", .go },
-    .{ "python", .python },
-    .{ "py", .python },
     .{ "javascript", .javascript },
     .{ "js", .javascript },
     // tree-sitter-javascript parses JSX without TypeScript syntax.
@@ -526,10 +522,6 @@ fn languageSpec(lang: Language) LanguageSpec {
             .language_fn = tree_sitter_go,
             .highlights = ts_queries.go_highlights,
         },
-        .python => .{
-            .language_fn = tree_sitter_python,
-            .highlights = ts_queries.python_highlights,
-        },
         .javascript => .{
             .language_fn = tree_sitter_javascript,
             .highlights = ts_queries.javascript_highlights,
@@ -918,7 +910,7 @@ fn captureToStyle(name: []const u8, sp: theme.SyntaxPalette) ansi.TextStyle {
     if (std.mem.startsWith(u8, name, "operator") or std.mem.startsWith(u8, name, "punctuation")) return .{ .fg = sp.operator };
     // HTML/CSS prefixes; placed last so existing languages keep their
     // colors. `variable` and generic `constant` catch-alls are omitted
-    // because Rust and Python use those capture names too.
+    // because Rust uses those capture names too.
     if (std.mem.startsWith(u8, name, "tag")) return .{ .fg = sp.keyword };
     if (std.mem.startsWith(u8, name, "attribute")) return .{ .fg = sp.func };
     if (std.mem.startsWith(u8, name, "property")) return .{ .fg = sp.type_name };
@@ -952,8 +944,6 @@ test "Language.fromString recognizes all supported names and aliases" {
     try std.testing.expectEqual(Language.rust, Language.fromString("rust").?);
     try std.testing.expectEqual(Language.rust, Language.fromString("rs").?);
     try std.testing.expectEqual(Language.go, Language.fromString("go").?);
-    try std.testing.expectEqual(Language.python, Language.fromString("python").?);
-    try std.testing.expectEqual(Language.python, Language.fromString("py").?);
     try std.testing.expectEqual(Language.javascript, Language.fromString("javascript").?);
     try std.testing.expectEqual(Language.javascript, Language.fromString("js").?);
     try std.testing.expectEqual(Language.javascript, Language.fromString("jsx").?);
@@ -979,6 +969,11 @@ test "Language.fromString recognizes all supported names and aliases" {
     try std.testing.expectEqual(Language.json, Language.fromString("json").?);
     try std.testing.expectEqual(@as(?Language, null), Language.fromString(""));
     try std.testing.expectEqual(@as(?Language, null), Language.fromString("klingon"));
+}
+
+test "Language.fromString returns null for removed python tags" {
+    try std.testing.expectEqual(@as(?Language, null), Language.fromString("python"));
+    try std.testing.expectEqual(@as(?Language, null), Language.fromString("py"));
 }
 
 test "Highlighter: parser is created lazily" {
@@ -1100,7 +1095,6 @@ test "Highlighter: highlights every supported language end-to-end" {
         .{ .lang = .c, .source = "int main(void) { return 0; }", .expected_token = "return" },
         .{ .lang = .rust, .source = "fn main() { let x = 1; }", .expected_token = "let" },
         .{ .lang = .go, .source = "package main\nfunc main() {}", .expected_token = "package" },
-        .{ .lang = .python, .source = "def greet():\n    return 1\n", .expected_token = "def" },
         .{ .lang = .javascript, .source = "const x = 1;\n", .expected_token = "const" },
         .{ .lang = .bash, .source = "echo hello\n", .expected_token = "echo" },
         .{ .lang = .cpp, .source = "int main() { return 0; }", .expected_token = "return" },

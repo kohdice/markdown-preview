@@ -59,7 +59,6 @@ const package_specs = [_]PackageSpec{
     .{ .name = "tree_sitter_c" },
     .{ .name = "tree_sitter_rust" },
     .{ .name = "tree_sitter_go" },
-    .{ .name = "tree_sitter_python" },
     .{ .name = "tree_sitter_javascript" },
     .{ .name = "tree_sitter_bash" },
     .{ .name = "tree_sitter_cpp" },
@@ -136,18 +135,6 @@ const grammar_specs = [_]GrammarSpec{
                 .dep_path = "queries/highlights.scm",
                 .output_name = "go_highlights.scm",
                 .binding_name = "go_highlights",
-            },
-        },
-    },
-    .{
-        .package_index = packageIndexByName("tree_sitter_python"),
-        .lib_name = "tree-sitter-python",
-        .has_scanner = true,
-        .query_assets = &.{
-            .{
-                .dep_path = "queries/highlights.scm",
-                .output_name = "python_highlights.scm",
-                .binding_name = "python_highlights",
             },
         },
     },
