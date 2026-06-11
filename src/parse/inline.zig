@@ -1108,9 +1108,19 @@ fn tryParseBareUrl(text: []const u8, start: usize) ?BareUrlResult {
     if (start + prefix_len >= text.len) return null;
 
     var pos = start + prefix_len;
+    var open_count: usize = 0;
+    var close_count: usize = 0;
     while (pos < text.len) {
         switch (text[pos]) {
             ' ', '<', '>', 0...ascii_control_max, ascii_delete => break,
+            '(' => {
+                open_count += 1;
+                pos += 1;
+            },
+            ')' => {
+                close_count += 1;
+                pos += 1;
+            },
             else => pos += 1,
         }
     }
@@ -1119,14 +1129,9 @@ fn tryParseBareUrl(text: []const u8, start: usize) ?BareUrlResult {
         switch (text[pos - 1]) {
             '.', ',', ':', '!', '?', '*', '_', '~', '\'', '"' => pos -= 1,
             ')' => {
-                var open_count: usize = 0;
-                var close_count: usize = 0;
-                for (text[start..pos]) |c| {
-                    if (c == '(') open_count += 1;
-                    if (c == ')') close_count += 1;
-                }
                 if (close_count > open_count) {
                     pos -= 1;
+                    close_count -= 1;
                 } else {
                     break;
                 }

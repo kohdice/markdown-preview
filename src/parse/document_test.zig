@@ -74,6 +74,45 @@ fn expectLinkInlineNode(
     return &inline_node.link;
 }
 
+fn expectBareUrlAutolink(expected_url: []const u8, input: []const u8) !void {
+    const allocator = std.testing.allocator;
+    var doc = try parse.parse(allocator, .{ .borrowed = input });
+    defer doc.deinit();
+
+    try std.testing.expect(doc.blocks[0] == .paragraph);
+    var current = doc.blocks[0].paragraph.children;
+    while (ast.hasInline(current)) {
+        const node = doc.inlineNode(current);
+        if (node.* == .autolink) {
+            try std.testing.expectEqualStrings(expected_url, node.autolink);
+            return;
+        }
+        current = doc.inlineNext(current);
+    }
+    return error.NoAutolinkFound;
+}
+
+test "parseDocument keeps a balanced paren pair inside a bare URL" {
+    try expectBareUrlAutolink(
+        "https://en.wikipedia.org/wiki/Foo_(bar)",
+        "see https://en.wikipedia.org/wiki/Foo_(bar) end\n",
+    );
+}
+
+test "parseDocument trims unbalanced trailing parens until balanced" {
+    try expectBareUrlAutolink(
+        "https://example.com/a(b)",
+        "https://example.com/a(b))) tail\n",
+    );
+}
+
+test "parseDocument trims a run of unmatched trailing parens entirely" {
+    try expectBareUrlAutolink(
+        "https://example.com/x",
+        "https://example.com/x))))\n",
+    );
+}
+
 test "parseDocument produces a single Paragraph for plain text" {
     const allocator = std.testing.allocator;
     const input = "Hello world\n";
