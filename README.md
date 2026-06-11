@@ -12,7 +12,6 @@ mp [options] [--] <FILE>
 | ------------------- | --------------------------------------------------- |
 | `--width <COLUMNS>` | Override wrapping width for one-shot file rendering |
 | `--color <WHEN>`    | Color output: `auto`, `always`, or `never`          |
-| `--watch`           | Live-reload on file changes                         |
 | `--version`         | Show version number and quit                        |
 | `-h, --help`        | Show help and quit                                  |
 | `--`                | Treat the next argument as the file                 |
@@ -21,22 +20,6 @@ mp [options] [--] <FILE>
 escape sequences and disabled for pipes and file redirection. Use
 `--color=always` to preserve ANSI color through a pipe, such as `less -R`, or
 `--color=never` to force plain text.
-
-### Watch mode
-
-`--watch` enters a live-reload mode that re-renders whenever the file
-changes. The output is displayed in an interactive pager with scrolling
-support. Requires an interactive terminal (stdin and stdout must be a TTY).
-
-| Key        | Action       |
-| ---------- | ------------ |
-| `j` / `↓`  | Scroll down  |
-| `k` / `↑`  | Scroll up    |
-| `PageDown` | Page down    |
-| `PageUp`   | Page up      |
-| `g`        | Go to top    |
-| `G`        | Go to bottom |
-| `q`        | Quit         |
 
 ## Syntax highlighting
 

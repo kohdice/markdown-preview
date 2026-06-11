@@ -11,11 +11,6 @@ pub const AmbiguousWidth = term_width.AmbiguousWidth;
 
 pub const parse = parse_mod.parse;
 
-test {
-    _ = @import("watch/orchestrator.zig");
-    _ = @import("watch/session.zig");
-}
-
 test "parse re-exports parser entry point" {
     var doc = try parse(std.testing.allocator, .{ .borrowed = "# Title\n" });
     defer doc.deinit();

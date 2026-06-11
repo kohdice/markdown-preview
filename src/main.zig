@@ -16,7 +16,6 @@ pub fn main(init: std.process.Init) !u8 {
 
     const stdout_file = std.Io.File.stdout();
     const stderr_file = std.Io.File.stderr();
-    const stdin_file = std.Io.File.stdin();
 
     const stdout_buffer = try process_arena.alloc(u8, try stdout_buffer_mod.sizeFor(io, stdout_file));
     var stderr_buffer: [stderr_buffer_size]u8 = undefined;
@@ -40,8 +39,6 @@ pub fn main(init: std.process.Init) !u8 {
         .version = build_options.version,
         .stdout = &stdout_stream.interface,
         .stderr = &stderr_stream.interface,
-        .stdout_file = stdout_file,
-        .stdin_file = stdin_file,
         .enable_ansi = enable_ansi,
         .wrap_width = wrap_width,
         .ambiguous_width = ambiguous_default,

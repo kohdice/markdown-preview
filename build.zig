@@ -19,11 +19,6 @@ const test_roots = [_]TestRoot{
     .{ .path = "src/text.zig", .needs_tree_sitter = false },
     .{ .path = "src/term/width.zig", .needs_tree_sitter = false },
     .{ .path = "src/term/ansi.zig", .needs_tree_sitter = false },
-    .{ .path = "src/watch/file_watcher.zig", .needs_tree_sitter = false },
-    .{ .path = "src/term/raw.zig", .needs_tree_sitter = false },
-    .{ .path = "src/watch/render_buffer.zig", .needs_tree_sitter = false },
-    .{ .path = "src/watch/content_hash.zig", .needs_tree_sitter = false },
-    .{ .path = "src/watch/debounce.zig", .needs_tree_sitter = false },
     .{ .path = "src/mermaid.zig", .needs_tree_sitter = false },
     .{ .path = "src/source_loader.zig", .needs_tree_sitter = false },
     .{ .path = "src/stdout_buffer.zig", .needs_tree_sitter = false },
@@ -446,8 +441,6 @@ pub fn build(b: *std.Build) void {
     const memory_policy_mod = createModule(b, "src/memory_policy.zig", target, optimize);
     const bench_support_mod = createModule(b, "bench/bench_support.zig", target, optimize);
     const bench_fixtures_mod = createModule(b, "bench/fixtures.zig", target, optimize);
-    const render_buffer_mod = createModule(b, "src/watch/render_buffer.zig", target, optimize);
-    render_buffer_mod.addImport("memory_policy", memory_policy_mod);
 
     const mermaid_mod = createModule(b, "src/mermaid.zig", target, optimize);
     mermaid_mod.addImport("source", source_mod);
@@ -467,7 +460,6 @@ pub fn build(b: *std.Build) void {
     const benches = addBenchExecutables(b, target, optimize, .{
         .fixtures = bench_fixtures_mod,
         .mermaid = mermaid_mod,
-        .render_buffer = render_buffer_mod,
         .internals = internals_mod,
     });
 
@@ -482,7 +474,6 @@ pub fn build(b: *std.Build) void {
 const BenchModules = struct {
     fixtures: *std.Build.Module,
     mermaid: *std.Build.Module,
-    render_buffer: *std.Build.Module,
     internals: *std.Build.Module,
 };
 
@@ -491,16 +482,14 @@ const BenchArtifacts = struct {
     inline_bench: *std.Build.Step.Compile,
     render_bench: *std.Build.Step.Compile,
     mermaid_bench: *std.Build.Step.Compile,
-    watch_buffer_bench: *std.Build.Step.Compile,
     pipeline_bench: *std.Build.Step.Compile,
 
-    fn compileTargets(self: @This()) [6]*std.Build.Step.Compile {
+    fn compileTargets(self: @This()) [5]*std.Build.Step.Compile {
         return .{
             self.fixtures_bench,
             self.inline_bench,
             self.render_bench,
             self.mermaid_bench,
-            self.watch_buffer_bench,
             self.pipeline_bench,
         };
     }
@@ -584,9 +573,6 @@ fn addBenchExecutables(
     const mermaid_mod = createModule(b, "bench/bench_mermaid.zig", target, optimize);
     mermaid_mod.addImport("mermaid", bench_modules.mermaid);
 
-    const watch_buffer_mod = createModule(b, "bench/bench_watch_buffer.zig", target, optimize);
-    watch_buffer_mod.addImport("render_buffer", bench_modules.render_buffer);
-
     const pipeline_mod = createModule(b, "bench/bench_pipeline.zig", target, optimize);
     pipeline_mod.addImport("internals", bench_modules.internals);
     pipeline_mod.addImport("fixtures", bench_modules.fixtures);
@@ -596,7 +582,6 @@ fn addBenchExecutables(
         .inline_bench = addExecutableArtifact(b, "inline-bench", inline_mod),
         .render_bench = addExecutableArtifact(b, "render-bench", render_mod),
         .mermaid_bench = addExecutableArtifact(b, "mermaid-bench", mermaid_mod),
-        .watch_buffer_bench = addExecutableArtifact(b, "watch-buffer-bench", watch_buffer_mod),
         .pipeline_bench = addExecutableArtifact(b, "pipeline-bench", pipeline_mod),
     };
 }
@@ -627,7 +612,6 @@ fn addBenchSteps(b: *std.Build, benches: BenchArtifacts) void {
     addArtifactRunStep(b, "bench-inline", "Run inline parser/render benchmarks", benches.inline_bench, .{});
     addArtifactRunStep(b, "bench-render", "Run table render benchmarks", benches.render_bench, .{});
     addArtifactRunStep(b, "bench-mermaid", "Run Mermaid compile/paint benchmarks", benches.mermaid_bench, .{});
-    addArtifactRunStep(b, "bench-watch-buffer", "Run RenderBuffer microbenchmark", benches.watch_buffer_bench, .{});
     addArtifactRunStep(b, "bench-pipeline", "Run parse + render pipeline benchmark", benches.pipeline_bench, .{
         .forward_build_args = true,
     });

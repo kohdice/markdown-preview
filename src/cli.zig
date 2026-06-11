@@ -2,7 +2,6 @@ const std = @import("std");
 const parse = @import("parse.zig");
 const render = @import("render.zig");
 const term = @import("term.zig");
-const watch = @import("watch/orchestrator.zig");
 const source_loader = @import("source_loader.zig");
 const width = term.width;
 
@@ -17,8 +16,6 @@ pub const RunOptions = struct {
     version: []const u8,
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
-    stdout_file: std.Io.File,
-    stdin_file: std.Io.File,
     enable_ansi: bool,
     wrap_width: ?usize,
     ambiguous_width: width.AmbiguousWidth,
@@ -34,7 +31,6 @@ const usage_message =
     \\Options:
     \\  --width <COLUMNS>  Override wrapping width for one-shot file rendering
     \\  --color <WHEN>     Color output: auto, always, or never
-    \\  --watch            Live-reload in an interactive terminal
     \\  --version          Show version number and quit
     \\  -h, --help         Show this help and quit
     \\  --                 Treat the next argument as FILE
@@ -43,17 +39,12 @@ const usage_message =
 
 pub const Command = union(enum) {
     render: RenderCommand,
-    watch: WatchCommand,
     version,
     help,
 
     pub const RenderCommand = struct {
         path: []const u8,
         width_override: ?usize,
-        color_policy: ColorPolicy = .auto,
-    };
-    pub const WatchCommand = struct {
-        path: []const u8,
         color_policy: ColorPolicy = .auto,
     };
 };
@@ -63,7 +54,6 @@ const ParseError = error{
     MissingWidth,
     InvalidWidth,
     DuplicateWidth,
-    WidthWithWatch,
     TooManyPositional,
     UnknownFlag,
     MissingColor,
@@ -77,7 +67,6 @@ pub fn parseArgs(args: []const [:0]const u8) ParseError!Command {
     var color_policy: ColorPolicy = .auto;
     var color_policy_set = false;
     var positional_only = false;
-    var watch_flag = false;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -85,10 +74,6 @@ pub fn parseArgs(args: []const [:0]const u8) ParseError!Command {
         if (!positional_only) {
             if (std.mem.eql(u8, arg, "--")) {
                 positional_only = true;
-                continue;
-            }
-            if (std.mem.eql(u8, arg, "--watch")) {
-                watch_flag = true;
                 continue;
             }
             if (std.mem.eql(u8, arg, "--width")) {
@@ -123,8 +108,6 @@ pub fn parseArgs(args: []const [:0]const u8) ParseError!Command {
     }
 
     const resolved_path = path orelse return error.MissingPath;
-    if (watch_flag and width_override != null) return error.WidthWithWatch;
-    if (watch_flag) return .{ .watch = .{ .path = resolved_path, .color_policy = color_policy } };
     return .{ .render = .{ .path = resolved_path, .width_override = width_override, .color_policy = color_policy } };
 }
 
@@ -170,18 +153,6 @@ pub fn run(opts: RunOptions) !u8 {
 
 pub fn executeCommand(opts: RunOptions, command: Command) !u8 {
     return switch (command) {
-        .watch => |cmd| watch.run(.{
-            .app_allocator = opts.app_allocator,
-            .io = opts.io,
-            .cwd = opts.cwd,
-            .path = cmd.path,
-            .stdout = opts.stdout,
-            .stderr = opts.stderr,
-            .stdout_file = opts.stdout_file,
-            .stdin_file = opts.stdin_file,
-            .enable_ansi = resolveColorPolicy(opts.enable_ansi, cmd.color_policy),
-            .ambiguous_width = opts.ambiguous_width,
-        }),
         .render => |cmd| renderOnce(opts, cmd.path, cmd.width_override, cmd.color_policy),
         .version => writeVersion(opts.stdout, opts.version),
         .help => writeHelp(opts.stdout),
@@ -222,11 +193,6 @@ fn renderOnce(
     return exit_success;
 }
 
-const invalid_file: std.Io.File = .{
-    .handle = -1,
-    .flags = .{ .nonblocking = false },
-};
-
 test "parseArgs returns render command for plain positional path" {
     const args = [_][:0]const u8{ "mp", "foo.md" };
     const parsed = try parseArgs(&args);
@@ -263,13 +229,6 @@ test "parseArgs records color policy from --color=value" {
     const parsed = try parseArgs(&args);
     try std.testing.expect(parsed == .render);
     try std.testing.expectEqual(ColorPolicy.never, parsed.render.color_policy);
-}
-
-test "parseArgs records color policy for watch mode" {
-    const args = [_][:0]const u8{ "mp", "--watch", "--color=never", "foo.md" };
-    const parsed = try parseArgs(&args);
-    try std.testing.expect(parsed == .watch);
-    try std.testing.expectEqual(ColorPolicy.never, parsed.watch.color_policy);
 }
 
 test "parseArgs treats --width after -- as a render path" {
@@ -315,23 +274,9 @@ test "parseArgs rejects duplicate --color values" {
     try std.testing.expectError(error.DuplicateColor, parseArgs(&args));
 }
 
-test "parseArgs rejects --width with --watch" {
-    const args = [_][:0]const u8{ "mp", "--watch", "--width", "72", "foo.md" };
-    try std.testing.expectError(error.WidthWithWatch, parseArgs(&args));
-}
-
-test "parseArgs returns watch command when --watch precedes path" {
+test "parseArgs rejects removed --watch flag" {
     const args = [_][:0]const u8{ "mp", "--watch", "foo.md" };
-    const parsed = try parseArgs(&args);
-    try std.testing.expect(parsed == .watch);
-    try std.testing.expectEqualStrings("foo.md", parsed.watch.path);
-}
-
-test "parseArgs returns watch command when --watch follows path" {
-    const args = [_][:0]const u8{ "mp", "foo.md", "--watch" };
-    const parsed = try parseArgs(&args);
-    try std.testing.expect(parsed == .watch);
-    try std.testing.expectEqualStrings("foo.md", parsed.watch.path);
+    try std.testing.expectError(error.UnknownFlag, parseArgs(&args));
 }
 
 test "parseArgs returns version command for exact --version invocation" {
@@ -342,12 +287,6 @@ test "parseArgs returns version command for exact --version invocation" {
 
 test "parseArgs ignores trailing operands after --version" {
     const args = [_][:0]const u8{ "mp", "--version", "extra.md" };
-    const parsed = try parseArgs(&args);
-    try std.testing.expect(parsed == .version);
-}
-
-test "parseArgs lets --version take precedence over watch and render arguments" {
-    const args = [_][:0]const u8{ "mp", "--watch", "--version", "example.md" };
     const parsed = try parseArgs(&args);
     try std.testing.expect(parsed == .version);
 }
@@ -391,13 +330,6 @@ test "parseArgs treats --help after -- as a render path" {
     try std.testing.expectEqualStrings("--help", parsed.render.path);
 }
 
-test "parseArgs keeps version as a watch path when --watch is present" {
-    const args = [_][:0]const u8{ "mp", "--watch", "version" };
-    const parsed = try parseArgs(&args);
-    try std.testing.expect(parsed == .watch);
-    try std.testing.expectEqualStrings("version", parsed.watch.path);
-}
-
 test "parseArgs keeps version as a render path after the -- sentinel" {
     const args = [_][:0]const u8{ "mp", "--", "version" };
     const parsed = try parseArgs(&args);
@@ -408,18 +340,6 @@ test "parseArgs keeps version as a render path after the -- sentinel" {
 test "parseArgs rejects extra positional arguments after a bare version path" {
     const args = [_][:0]const u8{ "mp", "version", "extra" };
     try std.testing.expectError(error.TooManyPositional, parseArgs(&args));
-}
-
-test "parseArgs returns watch command when --watch precedes -- sentinel" {
-    const args = [_][:0]const u8{ "mp", "--watch", "--", "--notes.md" };
-    const parsed = try parseArgs(&args);
-    try std.testing.expect(parsed == .watch);
-    try std.testing.expectEqualStrings("--notes.md", parsed.watch.path);
-}
-
-test "parseArgs rejects --watch without path" {
-    const args = [_][:0]const u8{ "mp", "--watch" };
-    try std.testing.expectError(error.MissingPath, parseArgs(&args));
 }
 
 test "parseArgs rejects unknown flag" {
@@ -463,8 +383,6 @@ test "run reports usage errors" {
         .version = "",
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
-        .stdout_file = invalid_file,
-        .stdin_file = invalid_file,
         .enable_ansi = false,
         .wrap_width = null,
         .ambiguous_width = .narrow,
@@ -480,7 +398,6 @@ test "run reports usage errors" {
         \\Options:
         \\  --width <COLUMNS>  Override wrapping width for one-shot file rendering
         \\  --color <WHEN>     Color output: auto, always, or never
-        \\  --watch            Live-reload in an interactive terminal
         \\  --version          Show version number and quit
         \\  -h, --help         Show this help and quit
         \\  --                 Treat the next argument as FILE
@@ -490,7 +407,7 @@ test "run reports usage errors" {
     );
 }
 
-test "run writes help information for width and watch options" {
+test "run writes help information for supported options" {
     var stdout: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer stdout.deinit();
     var stderr: std.Io.Writer.Allocating = .init(std.testing.allocator);
@@ -504,8 +421,6 @@ test "run writes help information for width and watch options" {
         .version = "",
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
-        .stdout_file = invalid_file,
-        .stdin_file = invalid_file,
         .enable_ansi = false,
         .wrap_width = null,
         .ambiguous_width = .narrow,
@@ -520,7 +435,6 @@ test "run writes help information for width and watch options" {
         \\Options:
         \\  --width <COLUMNS>  Override wrapping width for one-shot file rendering
         \\  --color <WHEN>     Color output: auto, always, or never
-        \\  --watch            Live-reload in an interactive terminal
         \\  --version          Show version number and quit
         \\  -h, --help         Show this help and quit
         \\  --                 Treat the next argument as FILE
@@ -545,8 +459,6 @@ test "run writes compact version information for the version option" {
         .version = "1.2.3",
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
-        .stdout_file = invalid_file,
-        .stdin_file = invalid_file,
         .enable_ansi = false,
         .wrap_width = null,
         .ambiguous_width = .narrow,
@@ -580,8 +492,6 @@ test "run renders a file literally named version" {
         .version = "",
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
-        .stdout_file = invalid_file,
-        .stdin_file = invalid_file,
         .enable_ansi = false,
         .wrap_width = null,
         .ambiguous_width = .narrow,
@@ -610,8 +520,6 @@ test "run reports missing files" {
         .version = "",
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
-        .stdout_file = invalid_file,
-        .stdin_file = invalid_file,
         .enable_ansi = false,
         .wrap_width = null,
         .ambiguous_width = .narrow,
@@ -640,8 +548,6 @@ test "run reports missing files with --width like default file rendering" {
         .version = "",
         .stdout = &default_stdout.writer,
         .stderr = &default_stderr.writer,
-        .stdout_file = invalid_file,
-        .stdin_file = invalid_file,
         .enable_ansi = false,
         .wrap_width = null,
         .ambiguous_width = .narrow,
@@ -660,8 +566,6 @@ test "run reports missing files with --width like default file rendering" {
         .version = "",
         .stdout = &width_stdout.writer,
         .stderr = &width_stderr.writer,
-        .stdout_file = invalid_file,
-        .stdin_file = invalid_file,
         .enable_ansi = false,
         .wrap_width = null,
         .ambiguous_width = .narrow,
@@ -700,8 +604,6 @@ test "run renders markdown files" {
         .version = "",
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
-        .stdout_file = invalid_file,
-        .stdin_file = invalid_file,
         .enable_ansi = false,
         .wrap_width = null,
         .ambiguous_width = .narrow,
@@ -741,8 +643,6 @@ test "run lets --color always override auto color detection" {
         .version = "",
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
-        .stdout_file = invalid_file,
-        .stdin_file = invalid_file,
         .enable_ansi = false,
         .wrap_width = null,
         .ambiguous_width = .narrow,
@@ -776,8 +676,6 @@ test "run lets --color never override auto color detection" {
         .version = "",
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
-        .stdout_file = invalid_file,
-        .stdin_file = invalid_file,
         .enable_ansi = true,
         .wrap_width = null,
         .ambiguous_width = .narrow,
@@ -811,8 +709,6 @@ test "run uses detected wrap width when --width is not provided" {
         .version = "",
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
-        .stdout_file = invalid_file,
-        .stdin_file = invalid_file,
         .enable_ansi = false,
         .wrap_width = 8,
         .ambiguous_width = .narrow,
@@ -846,8 +742,6 @@ test "run applies --width when detected wrap width is absent" {
         .version = "",
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
-        .stdout_file = invalid_file,
-        .stdin_file = invalid_file,
         .enable_ansi = false,
         .wrap_width = null,
         .ambiguous_width = .narrow,
@@ -881,8 +775,6 @@ test "run lets --width override detected wrap width" {
         .version = "",
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
-        .stdout_file = invalid_file,
-        .stdin_file = invalid_file,
         .enable_ansi = false,
         .wrap_width = 80,
         .ambiguous_width = .narrow,
@@ -916,8 +808,6 @@ test "run threads ambiguous_width through to the renderer" {
         .version = "",
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
-        .stdout_file = invalid_file,
-        .stdin_file = invalid_file,
         .enable_ansi = false,
         .wrap_width = null,
         .ambiguous_width = .wide,
@@ -959,8 +849,6 @@ test "run frees the file buffer carried by the source loader" {
         .version = "",
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
-        .stdout_file = invalid_file,
-        .stdin_file = invalid_file,
         .enable_ansi = false,
         .wrap_width = null,
         .ambiguous_width = .narrow,
