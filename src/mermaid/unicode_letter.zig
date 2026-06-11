@@ -686,6 +686,14 @@ const letter_ranges: [675]Range = .{
     .{ 0x31350, 0x323AF },
 };
 
+comptime {
+    @setEvalBranchQuota(10_000);
+    for (letter_ranges) |r| std.debug.assert(r[0] <= r[1]);
+    for (letter_ranges[0 .. letter_ranges.len - 1], letter_ranges[1..]) |a, b| {
+        std.debug.assert(a[1] < b[0]);
+    }
+}
+
 pub fn isLetter(cp: u21) bool {
     var lo: usize = 0;
     var hi: usize = letter_ranges.len;

@@ -1014,6 +1014,20 @@ const wide_ranges = [_]CodepointRange{
     .{ 0x20000, 0x2FA1F },
 };
 
+fn assertSortedNonOverlapping(ranges: []const CodepointRange) void {
+    for (ranges) |r| std.debug.assert(r[0] <= r[1]);
+    for (ranges[0 .. ranges.len - 1], ranges[1..]) |a, b| {
+        std.debug.assert(a[1] < b[0]);
+    }
+}
+
+comptime {
+    @setEvalBranchQuota(10_000);
+    assertSortedNonOverlapping(&eaw_ambiguous_ranges);
+    assertSortedNonOverlapping(&zero_width_ranges);
+    assertSortedNonOverlapping(&wide_ranges);
+}
+
 fn rangeCompare(cp: u21, range: CodepointRange) std.math.Order {
     if (cp < range[0]) return .lt;
     if (cp > range[1]) return .gt;

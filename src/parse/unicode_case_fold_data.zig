@@ -66,6 +66,16 @@ const MultiMapping = struct {
     folded: []const u8,
 };
 
+comptime {
+    @setEvalBranchQuota(20_000);
+    for (single_mappings[0 .. single_mappings.len - 1], single_mappings[1..]) |a, b| {
+        std.debug.assert(a.codepoint < b.codepoint);
+    }
+    for (multi_mappings[0 .. multi_mappings.len - 1], multi_mappings[1..]) |a, b| {
+        std.debug.assert(a.codepoint < b.codepoint);
+    }
+}
+
 const single_mappings = [_]SingleMapping{
     .{ .codepoint = 0x0041, .folded = 0x0061 },
     .{ .codepoint = 0x0042, .folded = 0x0062 },
