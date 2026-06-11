@@ -54,18 +54,8 @@ pub fn paint(
     opts: PaintOptions,
 ) PaintError!void {
     return switch (diagram.*) {
-        inline else => |*d, tag| paintWithTag(tag, writer, allocator, d, opts),
+        inline else => |*d, tag| paintWithTarget(paintTargetForTag(tag), writer, allocator, d, opts),
     };
-}
-
-fn paintWithTag(
-    comptime tag: DiagramTag,
-    writer: *std.Io.Writer,
-    allocator: std.mem.Allocator,
-    diagram_data: anytype,
-    opts: PaintOptions,
-) PaintError!void {
-    return paintWithTarget(paintTargetForTag(tag), writer, allocator, diagram_data, opts);
 }
 
 fn paintWithTarget(
